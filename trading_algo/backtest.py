@@ -22,7 +22,13 @@ from .regions import Region
 
 
 def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
-                 initial_capital: float = INITIAL_CAPITAL) -> dict:
+                 initial_capital: float = INITIAL_CAPITAL,
+                 membership=None) -> dict:
+    """Walk-forward backtest for one sleeve.
+
+    `membership` (a constituents.MembershipTable) makes selection point-in-time:
+    at each rebalance only names in the index as-of that date are eligible. When
+    None the current universe is used (survivorship-biased)."""
     p = region.params
     prices = prices.dropna(how="all")
     rets = prices.pct_change(fill_method=None)
@@ -39,7 +45,9 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         if loc_idx < min_hist:
             continue
         asof = prices.index[loc_idx]
-        weight_schedule[asof] = strategy.compute_targets(prices, index_prices, p, asof=asof)
+        eligible = membership.members_asof(asof) if membership is not None else None
+        weight_schedule[asof] = strategy.compute_targets(
+            prices, index_prices, p, asof=asof, eligible=eligible)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index
@@ -98,5 +106,6 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "costs": pd.Series(dict(cost_log)),
         "total_cost_fraction": total_cost,
         "weights": weights_hist,
+        "point_in_time": membership is not None,
         "metrics": compute_metrics(ret_series, eq, currency=region.currency),
     }

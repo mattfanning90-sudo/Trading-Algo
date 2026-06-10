@@ -47,17 +47,24 @@ def vol_target(weights: pd.Series, vols: pd.Series, p: StrategyParams) -> pd.Ser
 
 
 def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
-                    p: StrategyParams, asof: pd.Timestamp | None = None) -> pd.Series:
+                    p: StrategyParams, asof: pd.Timestamp | None = None,
+                    eligible: set[str] | None = None) -> pd.Series:
     """Target weights for one rebalance date (default: the latest available).
 
     Uses only data up to and including `asof` — no lookahead. Returns a Series
     of weights summing to ≤ max_gross; an empty Series means "go to cash"
     (regime risk-off or nothing eligible).
+
+    `eligible`, if given, restricts the candidate set to those tickers — used
+    for point-in-time backtests so a name can't be picked before it was actually
+    an index member.
     """
     if asof is None:
         asof = prices.index[-1]
 
     scores = sig.momentum_score(prices, p).loc[asof]
+    if eligible is not None:
+        scores = scores[scores.index.isin(eligible)]
     trend = sig.stock_trend_ok(prices, p).loc[asof]
     vols = sig.realised_vol(prices, p).loc[asof]
     risk_on = bool(

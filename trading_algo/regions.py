@@ -33,6 +33,7 @@ class Region:
     price_scale: float             # multiply raw Yahoo price by this to get `currency`
     universe: list[str] = field(default_factory=list)
     params: StrategyParams = DEFAULT_PARAMS
+    constituents_file: str | None = None   # optional point-in-time membership (CSV/parquet)
 
     @property
     def all_tickers(self) -> list[str]:

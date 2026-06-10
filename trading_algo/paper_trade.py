@@ -117,6 +117,7 @@ def init_account(account: str, capital: float, synthetic: bool) -> None:
         "sleeves": sleeves,
         "trades": [],
         "equity_history": [],
+        "sleeve_history": [],
         "fx_snapshot": snap,
     }
     save_state(account, state)
@@ -217,6 +218,9 @@ def run_daily(account: str, synthetic: bool) -> None:
 
     if not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])
+        sleeve_row = {"date": report_date}
+        sleeve_row.update({k: round(v[2], 2) for k, v in breakdown.items()})
+        state.setdefault("sleeve_history", []).append(sleeve_row)
     save_state(account, state)
 
     pnl = combined / state["initial_capital_base"] - 1

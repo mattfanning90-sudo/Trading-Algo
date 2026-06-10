@@ -50,14 +50,22 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
 
 
 def load_region(region: Region, start: str, end: str | None = None,
-                use_cache: bool = True) -> tuple[pd.DataFrame, pd.Series]:
+                use_cache: bool = True,
+                tickers: list[str] | None = None) -> tuple[pd.DataFrame, pd.Series]:
     """Return (prices, index_prices) for a region in its local currency.
 
     Universe prices are scaled by `region.price_scale` (pence -> pounds for the
     LSE). The regime index is left in native points (the regime filter is
-    scale-invariant, so it doesn't need converting)."""
-    df = load_prices(region.all_tickers, start, end,
-                     cache_key=f"{region.key}:{start}:{end}", use_cache=use_cache)
+    scale-invariant, so it doesn't need converting).
+
+    `tickers` overrides the universe to download — used for point-in-time
+    backtests, where the download set is the union of all names ever in the
+    index (including since-delisted ones), not just today's members."""
+    universe = list(tickers) if tickers is not None else list(region.universe)
+    download = [*dict.fromkeys([*universe, region.index_ticker])]  # dedupe, keep order
+    df = load_prices(download, start, end,
+                     cache_key=f"{region.key}:{start}:{end}:{len(download)}",
+                     use_cache=use_cache)
     index_px = df[region.index_ticker]
     prices = df[[c for c in df.columns if c != region.index_ticker]]
     prices = prices * region.price_scale

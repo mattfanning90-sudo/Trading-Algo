@@ -9,11 +9,17 @@ from __future__ import annotations
 import argparse
 
 from . import config as cfg
-from . import data
+from . import constituents, data
 from .backtest import run_backtest
 from .portfolio_backtest import run_portfolio_backtest
 from .regions import get_region
 from .strategy import compute_targets
+
+
+def _universe_label(point_in_time: bool) -> str:
+    return ("point-in-time constituents (survivorship-bias corrected)"
+            if point_in_time else
+            "CURRENT universe — survivorship-biased, treat numbers as an upper bound")
 
 
 def _print_metrics(title: str, metrics: dict) -> None:
@@ -35,14 +41,24 @@ def _latest_picks(prices, index_px, region) -> None:
         print(f"      {t:<10} {wt:6.1%}")
 
 
-def run_single(region_key: str, synthetic: bool) -> None:
+def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
     region = get_region(region_key)
+    membership = None
+    if point_in_time:
+        membership = (constituents.synthetic_membership(region)
+                      if synthetic else constituents.get_membership(region))
+        if membership is None:
+            print(f"  ⚠ no constituents file for {region.key}; "
+                  f"falling back to current universe.")
+    pit_tickers = membership.all_tickers if membership is not None else None
+
     if synthetic:
         prices, index_px = data.synthetic_region(region)
     else:
-        prices, index_px = data.load_region(region, cfg.START)
-    result = run_backtest(prices, index_px, region)
+        prices, index_px = data.load_region(region, cfg.START, tickers=pit_tickers)
+    result = run_backtest(prices, index_px, region, membership=membership)
     _print_metrics(f"{region.name} sleeve — Backtest ({region.currency})", result["metrics"])
+    print(f"  Universe: {_universe_label(result['point_in_time'])}")
     if len(result["turnover"]):
         print(f"  Avg monthly turnover       {result['turnover'].mean():.1%}")
     print(f"  Cumulative cost drag       {result['total_cost_fraction']:.1%}")
@@ -51,10 +67,11 @@ def run_single(region_key: str, synthetic: bool) -> None:
     print(f"\n  Equity curve -> equity_curve_{region.key}.csv")
 
 
-def run_portfolio(synthetic: bool) -> None:
-    result = run_portfolio_backtest(synthetic=synthetic)
+def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
+    result = run_portfolio_backtest(synthetic=synthetic, point_in_time=point_in_time)
     _print_metrics(f"Multi-Region Portfolio — Backtest ({cfg.BASE_CURRENCY})",
                    result["metrics"])
+    print(f"  Universe: {_universe_label(result['point_in_time'])}")
     print("  Per-sleeve (standalone, local currency):")
     for k, s in result["sleeves"].items():
         m = s["metrics"]
@@ -74,14 +91,16 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", choices=list(cfg.ALLOCATIONS), help="single sleeve")
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--point-in-time", action="store_true",
+                    help="use point-in-time constituents (survivorship-bias corrected)")
     args = ap.parse_args(argv)
 
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, numbers are meaningless\n")
     if args.region:
-        run_single(args.region, args.synthetic)
+        run_single(args.region, args.synthetic, args.point_in_time)
     else:
-        run_portfolio(args.synthetic)
+        run_portfolio(args.synthetic, args.point_in_time)
 
 
 if __name__ == "__main__":

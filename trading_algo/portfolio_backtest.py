@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, fx
+from . import constituents, data, fx
 from .backtest import run_backtest
 from .metrics import compute_metrics
 from .regions import get_region
@@ -33,7 +33,8 @@ def _sleeve_base_returns(local_rets: pd.Series, fx_mult: pd.Series) -> pd.Series
 def run_portfolio_backtest(regions: list[str] | None = None,
                            synthetic: bool = False,
                            start: str = cfg.START,
-                           end: str | None = None) -> dict:
+                           end: str | None = None,
+                           point_in_time: bool = False) -> dict:
     regions = regions or list(cfg.ALLOCATIONS)
     syn_end = end or "2026-01-01"
 
@@ -48,11 +49,17 @@ def run_portfolio_backtest(regions: list[str] | None = None,
 
     for key in regions:
         region = get_region(key)
+        membership = None
+        if point_in_time:
+            membership = (constituents.synthetic_membership(region, start, syn_end)
+                          if synthetic else constituents.get_membership(region))
+        pit_tickers = membership.all_tickers if membership is not None else None
+
         if synthetic:
             prices, index_px = data.synthetic_region(region, start=start, end=syn_end)
         else:
-            prices, index_px = data.load_region(region, start, end)
-        bt = run_backtest(prices, index_px, region)
+            prices, index_px = data.load_region(region, start, end, tickers=pit_tickers)
+        bt = run_backtest(prices, index_px, region, membership=membership)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         sleeves[key] = bt
@@ -98,5 +105,6 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         "sleeves": sleeves,
         "allocations": alloc,
         "fx_rebalance_cost": fx_cost_total,
+        "point_in_time": point_in_time,
         "metrics": compute_metrics(returns, equity, currency=cfg.BASE_CURRENCY),
     }

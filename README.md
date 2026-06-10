@@ -49,7 +49,11 @@ trading_algo/
   paper_trade.py       persistent multi-region paper-trading simulator
   execution_ibkr.py    ib_insync execution, per-region exchange/currency routing
   engine.py            background scheduler — runs each sleeve after its market close
-tests/                 49 tests: invariants, FX, fees, calendars, end-to-end synthetic
+  dashboard/           zero-dependency live web UI (stdlib server + vanilla SPA)
+  constituents.py      point-in-time index membership (survivorship-bias fix)
+  sweep.py             walk-forward parameter robustness sweep
+tests/                 62 tests: invariants, FX, fees, calendars, PIT, sweep,
+                       dashboard, end-to-end synthetic
 ```
 
 ### Regional configuration
@@ -74,6 +78,13 @@ pip install -r requirements.txt
 python -m trading_algo.run_backtest                 # full AUD portfolio (all 3 sleeves)
 python -m trading_algo.run_backtest --region US     # single sleeve, local currency
 python -m trading_algo.run_backtest --synthetic     # offline pipeline test, no network
+python -m trading_algo.run_backtest --point-in-time # survivorship-bias corrected (needs a constituents file)
+
+# Robustness — is the edge a plateau or a curve-fit peak?
+python -m trading_algo.sweep --region US            # sweep TOP_N x lookback, print verdict
+
+# Live dashboard (zero-dependency web UI)
+python -m trading_algo.dashboard --account full     # serves http://127.0.0.1:8787
 
 # Paper trading (persistent, no broker needed)
 python -m trading_algo.paper_trade --account full --capital 100000 --init
@@ -102,6 +113,41 @@ first run of a new month and marks to market otherwise — so running it after
 every regional close is safe.
 
 ---
+
+## Live dashboard
+
+A self-contained web terminal (stdlib `http.server` + a hand-written vanilla-JS
+SPA — **no frameworks, no CDNs, fully offline**). It reads the persisted paper
+state, marks positions to the latest prices, and shows:
+
+- KPI strip: total equity (AUD), total return, day change, open positions,
+  trades, cash %.
+- A Canvas equity curve (combined + per-sleeve overlay) with hover tooltip.
+- An allocation donut (actual vs target weights, with drift).
+- Per-sleeve cards: **RISK_ON / RISK_OFF (CASH)** regime badge, cash-vs-invested
+  liquidity bar, sparkline, top holdings.
+- A sortable positions table and a live trades feed (BUY/SELL, commission, and
+  UK stamp duty on FTSE rows).
+
+```bash
+python -m trading_algo.dashboard --account full          # live prices
+python -m trading_algo.dashboard --account full --synthetic --port 8787
+```
+
+It polls `GET /api/state` every 5s; if the server is down it shows a
+"reconnecting…" state and keeps the last good data. The page renders a populated
+sample immediately so it's never blank.
+
+## Robustness sweep
+
+Don't tune to the best cell — check the *surface*. `sweep.py` runs the backtest
+across a grid of `TOP_N` × lookback and reports whether the edge is a broad
+plateau (robust) or an isolated peak (curve-fit):
+
+```bash
+python -m trading_algo.sweep --region ASX            # Sharpe grid + verdict
+python -m trading_algo.sweep --metric Calmar         # all sleeves, another metric
+```
 
 ## Going live (paper first)
 
@@ -155,9 +201,13 @@ r_AUD = (1 + r_local) · (fx_t / fx_{t-1}) − 1      (fx = AUD per local unit)
 ## Known limitations (read these)
 
 - **Survivorship bias.** Universes are *today's* liquid constituents, so the
-  backtest is an upper bound on the live edge. Fix: point the data layer at
-  point-in-time constituents (e.g. Norgate for ASX) before trusting absolute
-  numbers.
+  default backtest is an upper bound on the live edge. **Fix shipped:** supply a
+  point-in-time constituents file per region (`Region(constituents_file=...)`,
+  CSV/parquet of `date,ticker`; Norgate for ASX) and run `--point-in-time`. The
+  backtest then only selects names that were index members at each rebalance and
+  includes since-delisted names (if the data layer can fetch their prices).
+  Output is labelled "point-in-time" vs "survivorship-biased" so you always know
+  which you're looking at.
 - **yfinance data quirks.** Adjusted closes can carry split/dividend errors,
   especially on ASX/LSE names; LSE pence vs pounds is handled but spot-check
   anything that looks too good.

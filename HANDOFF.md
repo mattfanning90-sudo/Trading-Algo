@@ -49,7 +49,7 @@ ASX**. Decisions taken this session:
 
 ### State of the world
 - Whole pipeline smoke-tested end-to-end on **synthetic data** (sandbox had no
-  market data access — Yahoo 403). All 49 tests green. **Real-data backtest has
+  market data access — Yahoo 403). All 62 tests green. **Real-data backtest has
   NOT been run** — that's the first thing to do on a networked machine.
 - Synthetic portfolio run sanity-checks out: combined vol < each sleeve's vol
   (diversification working); FTSE buys show stamp duty, US/ASX don't.
@@ -64,11 +64,25 @@ ASX**. Decisions taken this session:
 4. Tackle survivorship bias (point-in-time constituents) before trusting
    absolute backtest numbers.
 
+### Added in the follow-up build (same session)
+- **Point-in-time constituents** (`constituents.py`): `--point-in-time` flag,
+  per-region `constituents_file`, eligibility threaded through `compute_targets`
+  and the backtest. Supply a `date,ticker` CSV/parquet (Norgate for ASX) to get
+  survivorship-bias-corrected numbers; output is labelled either way.
+- **Robustness sweep** (`sweep.py`): grid over TOP_N × lookback with a
+  flat-vs-peaky verdict. `python -m trading_algo.sweep`.
+- **Live dashboard** (`dashboard/`): zero-dependency stdlib server + vanilla-JS
+  SPA (Canvas/SVG charts, no CDNs). `python -m trading_algo.dashboard`.
+- **SessionStart hook** (`.claude/settings.json`): auto-`pip install` on web.
+
 ### Still open (roadmap)
-- Point-in-time constituents (survivorship bias) — the big one.
-- Walk-forward robustness sweep (flat surface, not a peak).
-- Equity-curve plotting / monthly reports.
+- Real index constituents files (the mechanism is in; the *data* still needs to
+  be dropped in for US/FTSE; ASX via Norgate).
+- Equity-curve plotting / monthly PDF reports (the live dashboard covers the
+  interactive view; static reports still TODO).
 - Cross-border allocation rebalancing in the paper sim (currently funded-once).
+- Can't render a dashboard screenshot in the sandbox (no headless browser); open
+  it locally with `python -m trading_algo.dashboard --account full --synthetic`.
 
 ## Bigger picture
 This is the "Strategy agent" sleeve of a larger multi-agent hedge-fund

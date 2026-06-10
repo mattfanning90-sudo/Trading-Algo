@@ -32,16 +32,22 @@ history and reasoning.
 - `paper_trade.py` — persistent sub-books per region (`paper_state_{name}.json`)
 - `execution_ibkr.py` — per-region exchange/currency routing; paper port 7497
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
+- `constituents.py` — point-in-time index membership (survivorship-bias fix)
+- `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
 ```bash
 python -m trading_algo.run_backtest                 # full AUD portfolio backtest
 python -m trading_algo.run_backtest --region US     # single sleeve
 python -m trading_algo.run_backtest --synthetic     # offline pipeline test
+python -m trading_algo.run_backtest --point-in-time # survivorship-bias corrected
+python -m trading_algo.sweep --region US            # parameter robustness sweep
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
-pytest -q                                           # 49 tests
+python -m trading_algo.dashboard --account full     # live web dashboard :8787
+pytest -q                                           # 62 tests
 ```
 
 ## Invariants — do not break these
