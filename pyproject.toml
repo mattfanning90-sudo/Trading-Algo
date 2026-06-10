@@ -17,6 +17,12 @@ dependencies = [
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86"]
 dev = ["pytest>=8.0"]
+# Native desktop app (macOS uses the WebKit backend); see packaging/.
+desktop = [
+    "pywebview>=5.0",
+    "pyobjc-framework-WebKit; sys_platform == 'darwin'",
+]
+mac-build = ["py2app>=0.28; sys_platform == 'darwin'"]
 
 [tool.setuptools.packages.find]
 include = ["trading_algo*"]

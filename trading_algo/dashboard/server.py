@@ -63,9 +63,17 @@ def make_handler(account: str, synthetic: bool):
     return Handler
 
 
+def create_server(account: str = "main", synthetic: bool = False,
+                  host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
+    """Bind and return a (not-yet-serving) server. Pass port=0 for an OS-assigned
+    free port (read it back from `.server_address[1]`). Used by the desktop app,
+    which serves it on a background thread."""
+    return ThreadingHTTPServer((host, port), make_handler(account, synthetic))
+
+
 def serve(account: str = "main", synthetic: bool = False,
           host: str = "127.0.0.1", port: int = 8787) -> None:
-    httpd = ThreadingHTTPServer((host, port), make_handler(account, synthetic))
+    httpd = create_server(account, synthetic, host, port)
     mode = "synthetic" if synthetic else "live"
     print(f"📊 Dashboard for account '{account}' ({mode}) → http://{host}:{port}")
     print("   Ctrl-C to stop.")

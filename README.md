@@ -138,6 +138,26 @@ It polls `GET /api/state` every 5s; if the server is down it shows a
 "reconnecting…" state and keeps the last good data. The page renders a populated
 sample immediately so it's never blank.
 
+## Run as a native Mac app
+
+The dashboard can be packaged as a native macOS `.app` — a thin launcher runs the
+stdlib server on a private loopback port and shows it in a real **WKWebView**
+window (via `pywebview`); no browser, no internet.
+
+```bash
+# try the native window straight from source first
+pip install pywebview pyobjc-framework-WebKit
+python -m trading_algo.dashboard.desktop --account full --synthetic
+
+# build the double-clickable bundle (ON A MAC — py2app can't cross-compile)
+bash packaging/build_mac_app.sh        # → dist/Momentum Dashboard.app
+open "dist/Momentum Dashboard.app"
+```
+
+The bundle reads `MOMENTUM_ACCOUNT` (default `full`) and `MOMENTUM_SYNTHETIC`
+(`1` for an offline demo). Full recipe, signing/notarization and icon notes are
+in [`packaging/README.md`](packaging/README.md).
+
 ## Robustness sweep
 
 Don't tune to the best cell — check the *surface*. `sweep.py` runs the backtest
