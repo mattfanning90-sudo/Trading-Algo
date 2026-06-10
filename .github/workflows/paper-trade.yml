@@ -1,0 +1,93 @@
+name: Paper Trade & Publish Dashboard
+
+# Runs the momentum engine in the cloud on a schedule (no machine of yours
+# needed), commits the updated paper state back to the repo, and publishes the
+# standalone dashboard to GitHub Pages.
+#
+# ONE-TIME SETUP (repo Settings):
+#   • Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   • Settings → Actions → General → Workflow permissions: "Read and write"
+# NOTE: `schedule:` only fires on the DEFAULT branch, so merge this to main for
+# the cron to start. Until then, use "Run workflow" (workflow_dispatch) to test.
+
+on:
+  schedule:
+    # Weekdays ~30 min after the US close (UTC; GitHub may delay a few minutes).
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode for this run"
+        type: choice
+        options: [real, synthetic]
+        default: real
+
+permissions:
+  contents: write      # commit updated paper state
+  pages: write         # publish the dashboard
+  id-token: write       # required by deploy-pages
+
+concurrency:
+  group: paper-trade
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      # synthetic only when explicitly dispatched as such; scheduled = real data
+      SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Initialise the 'full' account on first run
+        run: |
+          mkdir -p state
+          if [ ! -f state/paper_state_full.json ]; then
+            python -m trading_algo.paper_trade --account full --init --capital 100000 $SYNTH
+          fi
+
+      - name: Run one scheduler pass (rebalances monthly, marks daily)
+        run: python -m trading_algo.engine --once --account full $SYNTH
+
+      - name: Export the standalone dashboard for Pages
+        run: |
+          mkdir -p public
+          python -m trading_algo.dashboard.export --account full $SYNTH -o public/index.html
+
+      - name: Commit updated paper state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A state/
+          if git diff --cached --quiet; then
+            echo "No state change to commit."
+          else
+            git commit -m "chore: update paper state [skip ci]"
+            git push
+          fi
+
+      - name: Upload dashboard as a Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

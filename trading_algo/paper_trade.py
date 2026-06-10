@@ -36,7 +36,8 @@ from . import config as cfg
 from . import data, fees, fx, strategy
 from .regions import get_region
 
-STATE_DIR = os.path.join(os.path.dirname(__file__), "..")
+# State location: env override (used by CI to persist to a tracked dir), else repo root.
+STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
 MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
 
 

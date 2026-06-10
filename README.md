@@ -177,6 +177,26 @@ python -m trading_algo.sweep --region ASX            # Sharpe grid + verdict
 python -m trading_algo.sweep --metric Calmar         # all sleeves, another metric
 ```
 
+## Automated cloud runs (GitHub Actions)
+
+`.github/workflows/paper-trade.yml` runs the engine **in the cloud on a schedule**
+— no machine of yours needs to be on. Each run: rebalances/marks the `full`
+paper account, commits the updated state to `state/`, regenerates the standalone
+dashboard, and publishes it to **GitHub Pages** (a real URL you can visit).
+
+One-time setup in the repo's **Settings**:
+
+1. **Pages** → Build and deployment → Source: **GitHub Actions**.
+2. **Actions → General** → Workflow permissions: **Read and write**.
+3. `schedule:` only fires on the **default branch**, so merge this branch to
+   `main` for the cron to start. Until then, trigger it manually via
+   **Actions → Paper Trade & Publish Dashboard → Run workflow** (pick `real` or
+   `synthetic`).
+
+`ci.yml` runs the test suite on every push / PR. The scheduled job uses **real**
+market data by default; if Yahoo is rate-limiting in CI, run it in `synthetic`
+mode (the dashboard still publishes, just on synthetic prices).
+
 ## Going live (paper first)
 
 1. Run IB Gateway / TWS with the API enabled. Paper port = 7497, live = 7496.
