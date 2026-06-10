@@ -138,6 +138,14 @@ It polls `GET /api/state` every 5s; if the server is down it shows a
 "reconnecting…" state and keeps the last good data. The page renders a populated
 sample immediately so it's never blank.
 
+**Share it as one file.** Export the whole dashboard — CSS, JS and a baked-in
+state snapshot — into a single self-contained `.html` that opens in any browser
+with **no server and no network** (charts, sorting and tabs all work):
+
+```bash
+python -m trading_algo.dashboard.export --account full -o dashboard.html
+```
+
 ## Run as a native Mac app
 
 The dashboard can be packaged as a native macOS `.app` — a thin launcher runs the

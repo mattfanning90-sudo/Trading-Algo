@@ -6,9 +6,11 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
+import re
+
 from trading_algo import config as cfg
 from trading_algo import paper_trade as pt
-from trading_algo.dashboard import api, server
+from trading_algo.dashboard import api, export, server
 
 
 @pytest.fixture
@@ -43,6 +45,19 @@ def test_snapshot_positions_have_weights(account):
 def test_missing_account_raises():
     with pytest.raises(FileNotFoundError):
         api.build_snapshot("does_not_exist_xyz", synthetic=True)
+
+
+def test_export_is_self_contained(account, tmp_path):
+    out = tmp_path / "dash.html"
+    export.export(account, synthetic=True, out_path=str(out))
+    html = out.read_text(encoding="utf-8")
+    # inlined, not linked
+    assert "<style>" in html and "__SNAPSHOT__" in html
+    assert 'src="app.js"' not in html and 'href="styles.css"' not in html
+    # the baked snapshot is the real account's
+    assert account in html
+    # no external resources anywhere
+    assert not re.findall(r'(?:src|href)\s*=\s*"https?://', html)
 
 
 def test_server_serves_state_and_index(account):

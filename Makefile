@@ -14,6 +14,10 @@ dashboard:
 dashboard-app:
 	python -m trading_algo.dashboard.desktop --account full --synthetic
 
+# Export a single self-contained dashboard.html (no server needed to view)
+dashboard-export:
+	python -m trading_algo.dashboard.export --account full --synthetic -o dashboard.html
+
 # Build the macOS .app bundle (run on a Mac)
 mac-app:
 	bash packaging/build_mac_app.sh
