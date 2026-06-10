@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-algo"
+version = "0.2.0"
+description = "Multi-region (FTSE / US / ASX) cross-sectional momentum trading system with AUD portfolio layer"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "yfinance>=0.2.40",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+ibkr = ["ib_insync>=0.9.86"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["trading_algo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]

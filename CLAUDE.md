@@ -1,0 +1,75 @@
+# Multi-Region Momentum Trading System
+
+## What this is
+A monthly-rebalanced 12-1 cross-sectional momentum strategy run as three
+independent regional sleeves — FTSE (London), US (stocks + ETFs) and ASX
+(Australia) — with a portfolio layer that allocates capital (equal third each)
+and reports combined equity in a base currency (AUD). Includes a no-lookahead
+walk-forward backtester, a persistent multi-region paper-trading simulator, an
+IBKR (ib_insync) execution layer, and a timezone-aware background scheduler.
+
+Generalised from the original ASX-only sleeve — see `HANDOFF.md` for the design
+history and reasoning.
+
+## Architecture (everything region-specific lives in one `Region` record)
+- `config.py` — `StrategyParams` (all strategy knobs) + portfolio settings
+  (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital)
+- `regions.py` — Region registry: universe, regime index, currency, fee
+  schedule, market calendar, Yahoo suffix, IBKR exchange, price_scale, per-region
+  param overrides
+- `universes.py` — the per-region ticker lists
+- `data.py` — `load_region()` (prices in local currency, LSE pence→pounds) +
+  `synthetic_region()` for offline testing
+- `signals.py` — momentum score, trend/regime filters, inverse-vol selection.
+  Region-agnostic; takes a `StrategyParams`
+- `strategy.py` — **`compute_targets()`: the single source of truth for target
+  weights** (selection + vol targeting). Both backtest and paper trading call it
+- `fees.py` — per-region commission floor + UK stamp duty (buys only)
+- `calendars.py` — per-region hours/timezones for the scheduler
+- `fx.py` — convert each sleeve into the base currency (incl. FX P&L)
+- `backtest.py` — per-sleeve daily walk-forward sim
+- `portfolio_backtest.py` — combine sleeves in AUD, allocation rebalancing
+- `paper_trade.py` — persistent sub-books per region (`paper_state_{name}.json`)
+- `execution_ibkr.py` — per-region exchange/currency routing; paper port 7497
+- `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
+
+## Commands
+```bash
+python -m trading_algo.run_backtest                 # full AUD portfolio backtest
+python -m trading_algo.run_backtest --region US     # single sleeve
+python -m trading_algo.run_backtest --synthetic     # offline pipeline test
+python -m trading_algo.paper_trade --account full --init --capital 100000
+python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
+python -m trading_algo.engine --once --account full # one scheduler pass
+pytest -q                                           # 49 tests
+```
+
+## Invariants — do not break these
+1. **No lookahead**: signals at t use data ≤ t; trades execute t+1. Any change to
+   `signals.py`, `strategy.py` or `backtest.py` must preserve this.
+2. **Costs always on**: never report backtest metrics without commission +
+   slippage; UK stamp duty applies to FTSE buys.
+3. **One weight function**: backtest and paper trading must both route through
+   `strategy.compute_targets`. Do NOT add a second copy of the weight logic
+   (this is what invariant #4 used to warn about — now enforced by
+   `tests/test_consistency.py`).
+4. **Whole shares** in paper trading; per-region commission floor respected.
+5. **Synthetic-data results are pipeline tests only**; never present as performance.
+6. **Each sleeve trades in its local currency**; only the portfolio/reporting
+   layer converts to AUD via FX. Don't mix currencies inside a sleeve.
+
+## Adding a region
+Add one entry to `REGIONS` in `regions.py` (universe in `universes.py`, plus
+index/currency/fees/calendar/routing) and include its key in
+`config.ALLOCATIONS`. Everything else is parameterised.
+
+## Environment notes
+- Fresh containers do NOT ship numpy/pandas/yfinance — `pip install -r
+  requirements.txt` first (a SessionStart hook in `.claude/settings.json` does
+  this automatically on Claude Code web).
+- Sandboxes may block outbound internet (Yahoo 403). Use `--synthetic` to
+  smoke-test the pipeline offline; real backtests need network on your machine.
+
+## Style
+Python 3.11+, pandas/numpy, type hints, small testable modules, no heavy
+frameworks. Money is always in a known currency — label it.
