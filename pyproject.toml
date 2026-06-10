@@ -29,6 +29,9 @@ include = ["trading_algo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so `trading_algo` imports under the bare
+# `pytest` console script (CI), not just `python -m pytest`.
+pythonpath = ["."]
 addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning",
