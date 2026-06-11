@@ -28,6 +28,10 @@ backtest:
 sweep:
 	python -m trading_algo.sweep --region US --synthetic
 
+# Regenerate the in-repo Obsidian vault (Reference note is built from the code)
+obsidian:
+	python tools/build_obsidian_vault.py
+
 clean:
 	rm -rf build dist *.egg-info .pytest_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

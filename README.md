@@ -13,6 +13,11 @@ broker routing — lives in one `Region` record.
 > 📖 **New here?** Read **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** for a
 > step-by-step explanation of the algorithm — the maths, the decision flow,
 > diagrams, and how a price history turns into orders.
+>
+> 🗂️ **Use Obsidian?** The repo ships a self-contained vault in
+> **[`obsidian/`](obsidian/)** — open that folder as a vault (its `Reference`
+> note is generated from the code via `make obsidian`). See
+> [`obsidian/README.md`](obsidian/README.md) for sync setup.
 
 ---
 
