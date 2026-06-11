@@ -10,6 +10,10 @@ It started life as an ASX-only sleeve (see `HANDOFF.md`) and was generalised so
 every market-specific detail — universe, regime index, currency, fees, calendar,
 broker routing — lives in one `Region` record.
 
+> 📖 **New here?** Read **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** for a
+> step-by-step explanation of the algorithm — the maths, the decision flow,
+> diagrams, and how a price history turns into orders.
+
 ---
 
 ## Why this strategy
