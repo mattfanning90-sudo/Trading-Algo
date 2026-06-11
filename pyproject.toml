@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-algo"
+version = "0.2.0"
+description = "Multi-region (FTSE / US / ASX) cross-sectional momentum trading system with AUD portfolio layer"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "yfinance>=0.2.40",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+ibkr = ["ib_insync>=0.9.86"]
+dev = ["pytest>=8.0"]
+# Native desktop app (macOS uses the WebKit backend); see packaging/.
+desktop = [
+    "pywebview>=5.0",
+    "pyobjc-framework-WebKit; sys_platform == 'darwin'",
+]
+mac-build = ["py2app>=0.28; sys_platform == 'darwin'"]
+
+[tool.setuptools.packages.find]
+include = ["trading_algo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put the repo root on sys.path so `trading_algo` imports under the bare
+# `pytest` console script (CI), not just `python -m pytest`.
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]

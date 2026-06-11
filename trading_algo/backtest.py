@@ -1,0 +1,111 @@
+"""Per-sleeve walk-forward backtest (one region, local currency).
+
+Design principles (the invariants from CLAUDE.md):
+- No lookahead: weights are decided at month-end t using data ≤ t, and applied
+  from the next trading day t+1. Targets come from the shared
+  `strategy.compute_targets` — the same function paper trading uses.
+- Costs always on: commission + slippage charged on turnover every rebalance,
+  plus UK stamp duty on the buy side (asymmetric).
+- Returns are fractional, so the series is currency-agnostic; the portfolio
+  layer converts to the base currency via FX.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from . import fees
+from . import strategy
+from .config import INITIAL_CAPITAL
+from .metrics import compute_metrics
+from .regions import Region
+
+
+def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
+                 initial_capital: float = INITIAL_CAPITAL,
+                 membership=None) -> dict:
+    """Walk-forward backtest for one sleeve.
+
+    `membership` (a constituents.MembershipTable) makes selection point-in-time:
+    at each rebalance only names in the index as-of that date are eligible. When
+    None the current universe is used (survivorship-biased)."""
+    p = region.params
+    prices = prices.dropna(how="all")
+    rets = prices.pct_change(fill_method=None)
+
+    # Rebalance dates = last trading day on or before each period end.
+    rebal_marks = prices.resample(p.rebalance).last().index
+    min_hist = p.min_history_days
+    if len(prices) <= min_hist:
+        raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
+
+    weight_schedule: dict[pd.Timestamp, pd.Series] = {}
+    for d in rebal_marks:
+        loc_idx = prices.index.searchsorted(d, side="right") - 1
+        if loc_idx < min_hist:
+            continue
+        asof = prices.index[loc_idx]
+        eligible = membership.members_asof(asof) if membership is not None else None
+        weight_schedule[asof] = strategy.compute_targets(
+            prices, index_prices, p, asof=asof, eligible=eligible)
+
+    # ---- daily simulation ------------------------------------------------
+    dates = prices.index
+    cost_rate = fees.round_trip_cost_rate(region)
+    stamp_rate = region.stamp_duty_bps / 1e4
+
+    current_w = pd.Series(dtype=float)
+    equity = [initial_capital]
+    daily_ret: list[float] = []
+    turnover_log: list[tuple] = []
+    cost_log: list[tuple] = []
+    weights_hist: dict[pd.Timestamp, pd.Series] = {}
+    total_cost = 0.0
+    pending: pd.Series | None = None
+
+    for i in range(1, len(dates)):
+        today, yday = dates[i], dates[i - 1]
+
+        # Apply yesterday's signal at today's prices (t+1 execution).
+        cost = 0.0
+        if pending is not None:
+            names = current_w.index.union(pending.index)
+            delta = (pending.reindex(names, fill_value=0.0)
+                     - current_w.reindex(names, fill_value=0.0))
+            turnover = float(delta.abs().sum())
+            buy_turnover = float(delta.clip(lower=0).sum())
+            cost = turnover * cost_rate + buy_turnover * stamp_rate
+            turnover_log.append((today, turnover))
+            cost_log.append((today, cost))
+            total_cost += cost
+            current_w = pending
+            pending = None
+
+        day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
+        r = float((current_w * day_rets).sum()) - cost
+        daily_ret.append(r)
+        equity.append(equity[-1] * (1 + r))
+        weights_hist[today] = current_w
+
+        if yday in weight_schedule:
+            pending = weight_schedule[yday]
+
+        # Drift held weights with the day's returns.
+        if not current_w.empty:
+            grown = current_w * (1 + day_rets)
+            nav = 1 + float((current_w * day_rets).sum())
+            current_w = grown / nav if nav != 0 else grown
+
+    ret_series = pd.Series(daily_ret, index=dates[1:])
+    eq = pd.Series(equity[1:], index=dates[1:])
+    return {
+        "region": region.key,
+        "returns": ret_series,
+        "equity": eq,
+        "turnover": pd.Series(dict(turnover_log)),
+        "costs": pd.Series(dict(cost_log)),
+        "total_cost_fraction": total_cost,
+        "weights": weights_hist,
+        "point_in_time": membership is not None,
+        "metrics": compute_metrics(ret_series, eq, currency=region.currency),
+    }

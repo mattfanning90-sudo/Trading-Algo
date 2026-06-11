@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Region Momentum · Trading Terminal</title>
+  <!-- Dependency-free: only local stylesheet, no external URLs anywhere. -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Ambient background glow layers (pure CSS, no images). -->
+  <div class="bg-aurora" aria-hidden="true"></div>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <div class="shell">
+
+    <!-- ============================== TOP BAR ============================== -->
+    <header class="topbar glass">
+      <div class="topbar__brand">
+        <div class="logo" aria-hidden="true">
+          <span class="logo__spark"></span>
+        </div>
+        <div class="topbar__titles">
+          <h1 class="topbar__title">Multi-Region&nbsp;Momentum</h1>
+          <div class="topbar__sub">
+            <span class="muted">12-1 cross-sectional · monthly rebalanced</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar__meta">
+        <span class="pill pill--account" id="accountPill">account · —</span>
+        <span class="pill pill--ccy" id="ccyPill">BASE · —</span>
+        <span class="pill pill--synthetic hidden" id="syntheticPill">SYNTHETIC</span>
+        <span class="pill pill--asof" id="asOfPill">as of —</span>
+
+        <span class="status" id="statusEl" title="connection status">
+          <span class="status__dot" id="statusDot"></span>
+          <span class="status__text" id="statusText">connecting…</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- ============================== KPI STRIP ============================== -->
+    <section class="kpis" id="kpiStrip" aria-label="Key metrics">
+      <article class="kpi glass kpi--equity">
+        <div class="kpi__label">Total Equity</div>
+        <div class="kpi__value kpi__value--xl" id="kpiEquity">—</div>
+        <div class="kpi__foot"><span class="muted" id="kpiEquitySub">initial —</span></div>
+      </article>
+
+      <article class="kpi glass">
+        <div class="kpi__label">Total Return</div>
+        <div class="kpi__value" id="kpiReturn">—</div>
+        <div class="kpi__foot"><span class="muted">since inception</span></div>
+      </article>
+
+      <article class="kpi glass">
+        <div class="kpi__label">Day Change</div>
+        <div class="kpi__value" id="kpiDay">—</div>
+        <div class="kpi__foot"><span class="muted">vs prev. point</span></div>
+      </article>
+
+      <article class="kpi glass">
+        <div class="kpi__label">Open Positions</div>
+        <div class="kpi__value" id="kpiPositions">—</div>
+        <div class="kpi__foot"><span class="muted">across sleeves</span></div>
+      </article>
+
+      <article class="kpi glass">
+        <div class="kpi__label">Trades</div>
+        <div class="kpi__value" id="kpiTrades">—</div>
+        <div class="kpi__foot"><span class="muted">this run</span></div>
+      </article>
+
+      <article class="kpi glass kpi--cash">
+        <div class="kpi__label">Cash</div>
+        <div class="kpi__value" id="kpiCash">—</div>
+        <div class="kpi__bar"><span class="kpi__bar-fill" id="kpiCashBar"></span></div>
+      </article>
+    </section>
+
+    <!-- ============================== MAIN GRID ============================== -->
+    <section class="grid-main">
+
+      <!-- Equity curve ---------------------------------------------------- -->
+      <article class="panel glass panel--equity">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Equity Curve</h2>
+            <span class="muted" id="equityRange">— · base currency</span>
+          </div>
+          <label class="switch" title="Overlay per-sleeve curves">
+            <input type="checkbox" id="overlayToggle" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+            <span class="switch__label">Sleeves</span>
+          </label>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="equityCanvas"></canvas>
+          <div class="chart-tooltip hidden" id="equityTooltip"></div>
+        </div>
+        <div class="legend" id="equityLegend"></div>
+      </article>
+
+      <!-- Allocation donut ------------------------------------------------- -->
+      <article class="panel glass panel--donut">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Allocation</h2>
+            <span class="muted">actual vs target</span>
+          </div>
+        </div>
+        <div class="donut-wrap">
+          <div class="donut-svg" id="donutSvg"><!-- SVG injected --></div>
+          <ul class="donut-legend" id="donutLegend"></ul>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============================== SLEEVE CARDS ============================== -->
+    <section class="sleeves" id="sleeveCards" aria-label="Regional sleeves"></section>
+
+    <!-- ============================== LOWER GRID ============================== -->
+    <section class="grid-lower">
+
+      <!-- Positions table -------------------------------------------------- -->
+      <article class="panel glass panel--positions">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Positions</h2>
+            <span class="muted" id="positionsCount">— holdings</span>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="dtable" id="positionsTable">
+            <thead>
+              <tr>
+                <th data-sort="region"  class="sortable">Region</th>
+                <th data-sort="ticker"  class="sortable">Ticker</th>
+                <th data-sort="shares"  class="sortable num">Shares</th>
+                <th data-sort="price"   class="sortable num">Price (local)</th>
+                <th data-sort="value"   class="sortable num">Value (base)</th>
+                <th data-sort="weight"  class="sortable num">Weight</th>
+              </tr>
+            </thead>
+            <tbody id="positionsBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <!-- Live trades feed ------------------------------------------------- -->
+      <article class="panel glass panel--trades">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Live Trades</h2>
+            <span class="muted">newest first</span>
+          </div>
+        </div>
+        <ul class="feed" id="tradesFeed"></ul>
+      </article>
+    </section>
+
+    <!-- ============================== FEES PANEL ============================== -->
+    <section class="grid-fees">
+      <article class="panel glass panel--fees">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Fees by Currency</h2>
+            <span class="muted">commission + stamp duty (FTSE)</span>
+          </div>
+        </div>
+        <div class="fees" id="feesPanel"></div>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <span class="muted" id="footerNote">Multi-Region Momentum Trading System · all values labelled by currency</span>
+    </footer>
+  </div>
+
+  <!-- Dependency-free application script (local file only). -->
+  <script src="app.js"></script>
+</body>
+</html>
