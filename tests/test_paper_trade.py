@@ -57,6 +57,25 @@ def test_force_rebalance_resets_months(account):
     pt.run_daily(account, synthetic=True)
 
 
+def test_single_region_account(account):
+    """A US-only account holds just one sleeve and runs cleanly."""
+    pt.init_account(account, capital=1_000, synthetic=True, allocations={"US": 1.0})
+    state = pt.load_state(account)
+    assert list(state["sleeves"]) == ["US"]
+    assert list(state["allocations"]) == ["US"]
+    assert abs(state["allocations"]["US"] - 1.0) < 1e-9
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    assert state["equity_history"][-1][1] > 0
+    # only USD trades, never ASX/FTSE
+    assert all(t["region"] == "US" for t in state["trades"])
+
+
+def test_init_rejects_unknown_region(account):
+    with pytest.raises(SystemExit):
+        pt.init_account(account, capital=1000, synthetic=True, allocations={"XYZ": 1.0})
+
+
 def test_micro_account_does_not_crash(account):
     """A tiny account can't afford the full book — must handle gracefully."""
     pt.init_account(account, capital=100, synthetic=True)

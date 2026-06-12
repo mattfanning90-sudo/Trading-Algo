@@ -34,7 +34,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import data, fees, fx, strategy
-from .regions import get_region
+from .regions import REGIONS, get_region
 
 # State location: env override (used by CI to persist to a tracked dir), else repo root.
 STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
@@ -68,6 +68,11 @@ def _regions() -> list[str]:
     return list(cfg.ALLOCATIONS)
 
 
+def _account_regions(state: dict) -> list[str]:
+    """The regions this specific account trades (may be a subset of all)."""
+    return list(state.get("allocations") or cfg.ALLOCATIONS)
+
+
 def fx_snapshot(synthetic: bool) -> dict[str, float]:
     currencies = [get_region(k).currency for k in _regions()]
     if synthetic:
@@ -95,15 +100,24 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
     return sleeve["cash"] + holdings
 
 
-def init_account(account: str, capital: float, synthetic: bool) -> None:
+def init_account(account: str, capital: float, synthetic: bool,
+                 allocations: dict[str, float] | None = None) -> None:
+    """Open a paper account. `allocations` overrides which regions it trades and
+    their weights (e.g. {"US": 1.0} for a single-region small account). Default
+    is the global 3-region split from config."""
+    alloc_src = allocations if allocations is not None else cfg.ALLOCATIONS
+    regions = list(alloc_src)
+    unknown = [k for k in regions if k not in REGIONS]
+    if unknown:
+        raise SystemExit(f"Unknown region(s) {unknown}. Known: {list(REGIONS)}")
+
     snap = fx_snapshot(synthetic)
-    total = sum(cfg.ALLOCATIONS[k] for k in _regions())
+    total = sum(alloc_src[k] for k in regions)
+    norm = {k: alloc_src[k] / total for k in regions}
     sleeves = {}
-    for k in _regions():
+    for k in regions:
         region = get_region(k)
-        alloc = cfg.ALLOCATIONS[k] / total
-        base_amount = capital * alloc
-        local_cash = base_amount / snap[region.currency]
+        local_cash = (capital * norm[k]) / snap[region.currency]
         sleeves[k] = {
             "currency": region.currency,
             "cash": local_cash,
@@ -114,7 +128,7 @@ def init_account(account: str, capital: float, synthetic: bool) -> None:
         "account": account,
         "base_currency": cfg.BASE_CURRENCY,
         "initial_capital_base": capital,
-        "allocations": {k: cfg.ALLOCATIONS[k] / total for k in _regions()},
+        "allocations": norm,
         "sleeves": sleeves,
         "trades": [],
         "equity_history": [],
@@ -122,10 +136,12 @@ def init_account(account: str, capital: float, synthetic: bool) -> None:
         "fx_snapshot": snap,
     }
     save_state(account, state)
-    print(f"Paper account '{account}' opened with {capital:,.0f} {cfg.BASE_CURRENCY}")
-    for k in _regions():
+    where = "single region" if len(regions) == 1 else f"{len(regions)} regions"
+    print(f"Paper account '{account}' opened with {capital:,.0f} "
+          f"{cfg.BASE_CURRENCY} across {where}")
+    for k in regions:
         s = sleeves[k]
-        print(f"  {k:<5} funded {s['cash']:>12,.2f} {s['currency']}")
+        print(f"  {k:<5} ({norm[k]:.0%}) funded {s['cash']:>12,.2f} {s['currency']}")
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +212,7 @@ def run_daily(account: str, synthetic: bool) -> None:
     report_date = ""
     combined = 0.0
     breakdown = {}
-    for k in _regions():
+    for k in _account_regions(state):
         region = get_region(k)
         prices, index_px = latest_region_data(region, synthetic)
         px_today = prices.iloc[-1]
@@ -263,7 +279,7 @@ def status(account: str) -> None:
         print("  Fees paid        " + ", ".join(f"{v:,.2f} {c}"
                                                  for c, v in fees_by_ccy.items()))
     print("\n  Holdings by sleeve:")
-    for k in _regions():
+    for k in _account_regions(state):
         sleeve = state["sleeves"][k]
         print(f"    [{k}] cash {sleeve['cash']:,.2f} {sleeve['currency']}")
         for t, sh in sorted(sleeve["positions"].items()):
@@ -291,6 +307,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
     ap.add_argument("--init", action="store_true")
     ap.add_argument("--capital", type=float, default=cfg.INITIAL_CAPITAL)
+    ap.add_argument("--regions", nargs="+", metavar="KEY", choices=list(REGIONS),
+                    help="(--init) restrict the account to these regions, equal-weighted "
+                         "(e.g. --regions US). Default: all three.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
@@ -300,7 +319,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.compare:
         compare(args.compare)
     elif args.init:
-        init_account(args.account, args.capital, args.synthetic)
+        allocations = {r: 1.0 for r in args.regions} if args.regions else None
+        init_account(args.account, args.capital, args.synthetic, allocations)
     elif args.status:
         status(args.account)
     elif args.force_rebalance:

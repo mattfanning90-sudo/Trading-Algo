@@ -38,8 +38,9 @@ jobs:
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       # synthetic only when explicitly dispatched as such; scheduled = real data
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
-      # Paper accounts to run & publish. Add more here — everything else loops.
-      ACCOUNTS: '[{"name":"full","capital":100000},{"name":"small","capital":1000}]'
+      # Paper accounts to run & publish. "regions" (optional) restricts an account
+      # to a subset (a small account trades US-only to dodge fee drag). Add more here.
+      ACCOUNTS: '[{"name":"full","capital":100000,"regions":""},{"name":"small","capital":1000,"regions":"US"}]'
     steps:
       - uses: actions/checkout@v4
 
@@ -56,9 +57,10 @@ jobs:
           mkdir -p state public
           echo "$ACCOUNTS" | jq -c '.[]' | while read -r acct; do
             name=$(jq -r .name <<<"$acct"); cap=$(jq -r .capital <<<"$acct")
-            echo "::group::account $name (initial $cap)"
+            regions=$(jq -r '.regions // ""' <<<"$acct")
+            echo "::group::account $name (initial $cap${regions:+, regions $regions})"
             if [ ! -f "state/paper_state_${name}.json" ]; then
-              python -m trading_algo.paper_trade --account "$name" --init --capital "$cap" $SYNTH
+              python -m trading_algo.paper_trade --account "$name" --init --capital "$cap" ${regions:+--regions $regions} $SYNTH
             fi
             python -m trading_algo.engine --once --account "$name" $SYNTH
             python -m trading_algo.dashboard.export --account "$name" $SYNTH -o "public/${name}.html"
