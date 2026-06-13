@@ -30,7 +30,8 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
 
     state = paper_trade.load_state(account)
     snap_fx = paper_trade.fx_snapshot(synthetic)
-    regions = list(cfg.ALLOCATIONS)
+    # Iterate the account's OWN regions (a small account may trade only one).
+    regions = list(state.get("allocations") or cfg.ALLOCATIONS)
 
     sleeves_out, as_of = [], ""
     total_base = total_cash_base = 0.0

@@ -38,6 +38,9 @@ jobs:
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       # synthetic only when explicitly dispatched as such; scheduled = real data
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
+      # Paper accounts to run & publish. "regions" (optional) restricts an account
+      # to a subset (a small account trades US-only to dodge fee drag). Add more here.
+      ACCOUNTS: '[{"name":"full","capital":100000,"regions":""},{"name":"small","capital":1000,"regions":"US"}]'
     steps:
       - uses: actions/checkout@v4
 
@@ -49,20 +52,39 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Initialise the 'full' account on first run
+      - name: Run each account (init if new, one pass, export dashboard)
         run: |
-          mkdir -p state
-          if [ ! -f state/paper_state_full.json ]; then
-            python -m trading_algo.paper_trade --account full --init --capital 100000 $SYNTH
-          fi
+          mkdir -p state public
+          echo "$ACCOUNTS" | jq -c '.[]' | while read -r acct; do
+            name=$(jq -r .name <<<"$acct"); cap=$(jq -r .capital <<<"$acct")
+            regions=$(jq -r '.regions // ""' <<<"$acct")
+            echo "::group::account $name (initial $cap${regions:+, regions $regions})"
+            if [ ! -f "state/paper_state_${name}.json" ]; then
+              python -m trading_algo.paper_trade --account "$name" --init --capital "$cap" ${regions:+--regions $regions} $SYNTH
+            fi
+            python -m trading_algo.engine --once --account "$name" $SYNTH
+            python -m trading_algo.dashboard.export --account "$name" $SYNTH -o "public/${name}.html"
+            echo "::endgroup::"
+          done
 
-      - name: Run one scheduler pass (rebalances monthly, marks daily)
-        run: python -m trading_algo.engine --once --account full $SYNTH
-
-      - name: Export the standalone dashboard for Pages
+      - name: Build the dashboard landing page
         run: |
-          mkdir -p public
-          python -m trading_algo.dashboard.export --account full $SYNTH -o public/index.html
+          {
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            echo '<title>Multi-Region Momentum — Paper Accounts</title>'
+            echo '<style>body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;'
+            echo 'background:#0d1117;color:#e6edf3;margin:0;padding:3rem;max-width:720px}'
+            echo 'h1{font-weight:700;margin:0 0 .25rem}.sub{color:#8b949e;margin:0 0 2rem}'
+            echo 'a.card{display:block;margin:1rem 0;padding:1.25rem 1.5rem;border:1px solid #30363d;'
+            echo 'border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}'
+            echo 'a.card:hover{border-color:#58a6ff}.name{font-size:1.25rem;font-weight:600;color:#58a6ff}'
+            echo '.amt{color:#8b949e;font-size:.95rem}</style></head><body>'
+            echo '<h1>Multi-Region Momentum</h1>'
+            echo "<p class=sub>Paper accounts · base currency AUD · updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
+            echo "$ACCOUNTS" | jq -r '.[] | "<a class=card href=\"\(.name).html\"><div class=name>\(.name)</div><div class=amt>initial \(.capital) AUD</div></a>"'
+            echo '</body></html>'
+          } > public/index.html
 
       - name: Commit updated paper state
         run: |
