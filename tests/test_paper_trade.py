@@ -86,6 +86,28 @@ def test_init_rejects_unknown_region(account):
         pt.init_account(account, capital=1000, synthetic=True, allocations={"XYZ": 1.0})
 
 
+def test_min_size_gate_holds_cash(account):
+    # split three ways a tiny account sits below the viability floor → no trades
+    pt.init_account(account, capital=300, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    assert len(state["trades"]) == 0
+    assert all(not s["positions"] for s in state["sleeves"].values())
+
+
+def test_drawdown_halt_liquidates(account):
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)            # opens positions
+    state = pt.load_state(account)
+    state["risk_halted"] = True                      # force the breaker on
+    state["halt_cooldown"] = 5
+    pt.save_state(account, state)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    assert all(not s["positions"] for s in state["sleeves"].values())  # all cash
+    assert state["risk_halted"] is True              # still halted (cooldown remains)
+
+
 def test_micro_account_does_not_crash(account):
     """A tiny account can't afford the full book — must handle gracefully."""
     pt.init_account(account, capital=100, synthetic=True)

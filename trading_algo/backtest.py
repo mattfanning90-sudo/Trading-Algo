@@ -16,19 +16,25 @@ import pandas as pd
 
 from . import fees
 from . import strategy
-from .config import INITIAL_CAPITAL
+from .config import DRAWDOWN_COOLDOWN_DAYS, INITIAL_CAPITAL, MAX_DRAWDOWN_STOP
 from .metrics import compute_metrics
 from .regions import Region
 
 
 def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  initial_capital: float = INITIAL_CAPITAL,
-                 membership=None) -> dict:
+                 membership=None,
+                 max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
+                 cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
     at each rebalance only names in the index as-of that date are eligible. When
-    None the current universe is used (survivorship-biased)."""
+    None the current universe is used (survivorship-biased).
+
+    `max_drawdown_stop` is a circuit breaker: if equity falls more than this from
+    its peak, the book liquidates to cash and sits out for `cooldown_days` before
+    resuming. Pass None to disable."""
     p = region.params
     prices = prices.dropna(how="all")
     rets = prices.pct_change(fill_method=None)
@@ -63,6 +69,14 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     total_cost = 0.0
     pending: pd.Series | None = None
 
+    # Drawdown circuit breaker state
+    peak = float(initial_capital)
+    halted = False
+    cooldown = 0
+    halt_days = 0
+    halt_events = 0
+    CASH = pd.Series(dtype=float)
+
     for i in range(1, len(dates)):
         today, yday = dates[i], dates[i - 1]
 
@@ -87,7 +101,21 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         equity.append(equity[-1] * (1 + r))
         weights_hist[today] = current_w
 
-        if yday in weight_schedule:
+        # --- drawdown circuit breaker (decision at close, execute t+1) ---
+        peak = max(peak, equity[-1])
+        if halted:
+            halt_days += 1
+            cooldown -= 1
+            if cooldown <= 0:
+                halted = False
+        elif max_drawdown_stop is not None and equity[-1] / peak - 1 <= -max_drawdown_stop:
+            halted = True
+            cooldown = cooldown_days
+            halt_events += 1
+
+        if halted:
+            pending = CASH                       # liquidate / stay flat next day
+        elif yday in weight_schedule:
             pending = weight_schedule[yday]
 
         # Drift held weights with the day's returns.
@@ -107,5 +135,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "total_cost_fraction": total_cost,
         "weights": weights_hist,
         "point_in_time": membership is not None,
+        "drawdown_halts": halt_events,
+        "drawdown_halt_days": halt_days,
         "metrics": compute_metrics(ret_series, eq, currency=region.currency),
     }

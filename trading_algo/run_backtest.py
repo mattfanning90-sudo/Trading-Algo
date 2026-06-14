@@ -62,6 +62,9 @@ def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
     if len(result["turnover"]):
         print(f"  Avg monthly turnover       {result['turnover'].mean():.1%}")
     print(f"  Cumulative cost drag       {result['total_cost_fraction']:.1%}")
+    if result.get("drawdown_halts"):
+        print(f"  Drawdown halts             {result['drawdown_halts']} "
+              f"({result['drawdown_halt_days']} days in cash)")
     _latest_picks(prices, index_px, region)
     result["equity"].to_csv(f"equity_curve_{region.key}.csv")
     print(f"\n  Equity curve -> equity_curve_{region.key}.csv")

@@ -27,6 +27,25 @@ def test_costs_are_charged(synth_asx, asx_region):
         assert result["total_cost_fraction"] > 0
 
 
+def test_circuit_breaker_trips_and_limits_drawdown(synth_asx, asx_region):
+    prices, index_px = synth_asx
+    off = run_backtest(prices, index_px, asx_region, max_drawdown_stop=None)
+    tight = run_backtest(prices, index_px, asx_region, max_drawdown_stop=0.05,
+                         cooldown_days=21)
+    assert off["drawdown_halts"] == 0
+    assert tight["drawdown_halts"] >= 1
+    assert tight["drawdown_halt_days"] > 0
+    # the breaker should leave the worst drawdown no deeper than the no-stop run
+    assert tight["metrics"]["MaxDrawdown"] >= off["metrics"]["MaxDrawdown"]
+
+
+def test_circuit_breaker_disabled_by_default_param(synth_asx, asx_region):
+    prices, index_px = synth_asx
+    res = run_backtest(prices, index_px, asx_region, max_drawdown_stop=None)
+    assert res["drawdown_halts"] == 0 and res["drawdown_halt_days"] == 0
+    assert (res["equity"] > 0).all()
+
+
 def test_ftse_stamp_duty_raises_cost(synth_asx):
     """Same synthetic prices, but the FTSE sleeve pays stamp duty on buys, so
     its cumulative cost must exceed an otherwise-identical no-duty region."""
