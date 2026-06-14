@@ -61,7 +61,7 @@ trading_algo/
   dashboard/           zero-dependency live web UI (stdlib server + vanilla SPA)
   constituents.py      point-in-time index membership (survivorship-bias fix)
   sweep.py             walk-forward parameter robustness sweep
-tests/                 62 tests: invariants, FX, fees, calendars, PIT, sweep,
+tests/                 73 tests: invariants, FX, fees, calendars, PIT, sweep,
                        dashboard, end-to-end synthetic
 ```
 
@@ -129,14 +129,17 @@ A self-contained web terminal (stdlib `http.server` + a hand-written vanilla-JS
 SPA — **no frameworks, no CDNs, fully offline**). It reads the persisted paper
 state, marks positions to the latest prices, and shows:
 
-- KPI strip: total equity (AUD), total return, day change, open positions,
-  trades, cash %.
+- Two tabs: **Overview** (the live dashboard) and **How it works** (an in-app
+  explainer of the strategy — pipeline, filters, vol targeting, costs).
+- KPI strip: total equity (AUD), total return, day change, **open P&L**, open
+  positions, trades, cash %.
 - A Canvas equity curve (combined + per-sleeve overlay) with hover tooltip.
 - An allocation donut (actual vs target weights, with drift).
 - Per-sleeve cards: **RISK_ON / RISK_OFF (CASH)** regime badge, cash-vs-invested
   liquidity bar, sparkline, top holdings.
-- A sortable positions table and a live trades feed (BUY/SELL, commission, and
-  UK stamp duty on FTSE rows).
+- A sortable positions table — including each stock's **day change** and
+  **unrealized P&L** (green/red) — and a live trades feed (BUY/SELL, commission,
+  and UK stamp duty on FTSE rows).
 
 ```bash
 python -m trading_algo.dashboard --account full          # live prices

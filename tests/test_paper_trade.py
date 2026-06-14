@@ -57,6 +57,16 @@ def test_force_rebalance_resets_months(account):
     pt.run_daily(account, synthetic=True)
 
 
+def test_cost_basis_tracked(account):
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    for sleeve in state["sleeves"].values():
+        assert "cost_basis" in sleeve
+        for t in sleeve["positions"]:          # every holding has a positive avg cost
+            assert sleeve["cost_basis"].get(t, 0) > 0
+
+
 def test_single_region_account(account):
     """A US-only account holds just one sleeve and runs cleanly."""
     pt.init_account(account, capital=1_000, synthetic=True, allocations={"US": 1.0})
