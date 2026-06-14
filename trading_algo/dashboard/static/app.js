@@ -62,25 +62,27 @@ const SAMPLE_STATE = (() => {
   // --- Positions per sleeve ---------------------------------------------
   const fx = { AUD: 1.0, USD: 1.52, GBP: 1.92 };
 
+  // pos(ticker, shares, price, fxRate, dayChange, avgCost):
+  //   dayChange = today's price move as a fraction; avgCost = average entry.
   const asxPos = [
-    pos('BHP.AX', 38, 44.10, fx.AUD),
-    pos('CSL.AX', 4, 285.40, fx.AUD),
-    pos('WES.AX', 22, 68.75, fx.AUD),
-    pos('FMG.AX', 95, 21.30, fx.AUD),
-    pos('GMG.AX', 30, 34.55, fx.AUD),
+    pos('BHP.AX', 38, 44.10, fx.AUD, 0.0123, 40.85),
+    pos('CSL.AX', 4, 285.40, fx.AUD, -0.0064, 268.20),
+    pos('WES.AX', 22, 68.75, fx.AUD, 0.0081, 64.10),
+    pos('FMG.AX', 95, 21.30, fx.AUD, -0.0192, 22.40),
+    pos('GMG.AX', 30, 34.55, fx.AUD, 0.0035, 33.90),
   ];
   const usPos = [
-    pos('NVDA', 9, 138.20, fx.USD),
-    pos('GILD', 11, 92.16, fx.USD),
-    pos('LLY', 1, 812.40, fx.USD),
-    pos('XLE', 18, 92.80, fx.USD),
-    pos('AVGO', 6, 178.50, fx.USD),
+    pos('NVDA', 9, 138.20, fx.USD, 0.0246, 121.50),
+    pos('GILD', 11, 92.16, fx.USD, 0.0058, 90.40),
+    pos('LLY', 1, 812.40, fx.USD, -0.0117, 845.00),
+    pos('XLE', 18, 92.80, fx.USD, 0.0042, 89.95),
+    pos('AVGO', 6, 178.50, fx.USD, -0.0089, 172.10),
   ];
   const ftsePos = [
-    pos('SHEL.L', 60, 27.40, fx.GBP),
-    pos('AZN.L', 12, 112.30, fx.GBP),
-    pos('BP.L', 0, 40.74, fx.GBP),   // flat / exited (kept to show 0-weight handling)
-    pos('RIO.L', 22, 51.10, fx.GBP),
+    pos('SHEL.L', 60, 27.40, fx.GBP, 0.0071, 25.90),
+    pos('AZN.L', 12, 112.30, fx.GBP, -0.0048, 110.10),
+    pos('BP.L', 0, 40.74, fx.GBP, 0.0, 40.74),   // flat / exited (kept to show 0-weight handling)
+    pos('RIO.L', 22, 51.10, fx.GBP, 0.0156, 53.40),
   ].filter(p => p.shares > 0);
 
   const sleeves = [
@@ -123,6 +125,9 @@ const SAMPLE_STATE = (() => {
       day_change: totalEquity / prevEquity - 1,
       n_trades: recent_trades.length,
       n_positions: nPositions,
+      // Total open (unrealized) P&L across every holding, in base currency.
+      unrealized_base: round2(sleeves.reduce(
+        (sum, s) => sum + s.positions.reduce((a, p) => a + (p.unrealized_base || 0), 0), 0)),
       cash_pct: sleeves.reduce((c, s) => c + s.cash_local * fx[s.currency], 0) / baseSum,
       fees: [
         { currency: 'AUD', amount: 24.0 },
@@ -139,9 +144,20 @@ const SAMPLE_STATE = (() => {
   };
 
   // ---- local helpers for sample construction ----
-  function pos(ticker, shares, price, fxRate) {
+  function pos(ticker, shares, price, fxRate, day_change = 0, avg_cost = price) {
     const value_local = round2(shares * price);
-    return { ticker, shares, price, value_local, value_base: round2(value_local * fxRate), weight: 0 };
+    // Absolute per-share move today, derived from the prior session price.
+    const prev = price / (1 + day_change);
+    const change_local = round4(price - prev);
+    // Unrealized gain/loss since the position was opened.
+    const unrealized_pct = avg_cost ? price / avg_cost - 1 : 0;
+    const unrealized_base = round2((price - avg_cost) * shares * fxRate);
+    return {
+      ticker, shares, price, value_local,
+      value_base: round2(value_local * fxRate), weight: 0,
+      day_change, change_local, avg_cost,
+      unrealized_pct, unrealized_base,
+    };
   }
   function buildSleeve(key, name, ccy, regime, positions, fxRate, month) {
     const invested_local = round2(positions.reduce((s, p) => s + p.value_local, 0));
@@ -164,6 +180,7 @@ const SAMPLE_STATE = (() => {
     return { date, region, ticker, side, shares, fill, commission, stamp_duty, currency, value: round2(shares * fill) };
   }
   function round2(x) { return Math.round(x * 100) / 100; }
+  function round4(x) { return Math.round(x * 10000) / 10000; }
 })();
 
 /* ============================================================================
@@ -206,12 +223,24 @@ function setText(id, text) { const n = el(id); if (n) n.textContent = text; }
 function signClass(v) { return v > 0 ? 'val-pos' : v < 0 ? 'val-neg' : ''; }
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
 
+// Signed percentage with a ▲/▼ glyph and green/red colour class.
+// Returns { html, cls } so callers can place it where they like; renders
+// "—" defensively when the value is missing/NaN.
+function signedPctGlyph(frac, { digits = 2 } = {}) {
+  if (frac == null || isNaN(frac)) return { html: '—', cls: '' };
+  const glyph = frac > 0 ? '▲' : frac < 0 ? '▼' : '·';
+  const v = Math.abs(frac) * 100;
+  const s = frac > 0 ? '+' : frac < 0 ? '−' : '';
+  return { html: `${glyph} ${s}${v.toFixed(digits)}%`, cls: signClass(frac) };
+}
+
 /* ============================================================================
    App state + polling controller
    ============================================================================ */
 const App = {
   state: null,            // last good state rendered
   overlay: false,         // sleeve overlay toggle on equity chart
+  tab: 'overview',        // active top-level tab: 'overview' | 'howitworks'
   sort: { key: 'value', dir: -1 }, // positions table sort (-1 desc)
   lastUpdate: null,       // Date of last successful render
   connected: false,
@@ -304,6 +333,21 @@ function renderKpis(d) {
 
   setText('kpiCash', pct(k.cash_pct, { digits: 1 }));
   el('kpiCashBar').style.width = `${clamp01(k.cash_pct ?? 0) * 100}%`;
+
+  // Open (unrealized) P&L across all holdings, base currency. Defensive: if the
+  // payload predates this field, show "—" and no colour rather than throwing.
+  const pnl = el('kpiOpenPnl');
+  if (pnl) {
+    const up = k.unrealized_base;
+    if (up == null || isNaN(up)) {
+      pnl.textContent = '—';
+      pnl.className = 'kpi__value';
+    } else {
+      const s = up > 0 ? '+' : '';
+      pnl.textContent = `${s}${money(up, ccy)}`;
+      pnl.className = 'kpi__value ' + signClass(up);
+    }
+  }
 }
 
 /* ============================================================================
@@ -674,6 +718,9 @@ function flattenPositions(d) {
         region: s.key, currency: s.currency,
         ticker: p.ticker, shares: p.shares, price: p.price,
         value: p.value_base, weight: p.weight,
+        // New (contract-extended) fields; may be undefined on older payloads.
+        day: p.day_change, change_local: p.change_local, avg_cost: p.avg_cost,
+        pnl: p.unrealized_pct, pnl_base: p.unrealized_base,
       });
     }
   }
@@ -696,11 +743,26 @@ function renderPositions(d) {
   const body = el('positionsBody');
   body.innerHTML = rows.map(r => {
     const wPctOfMax = clamp01((r.weight || 0) / maxW) * 100;
+
+    // Day Δ column: signed % with glyph; small secondary = absolute local move.
+    const day = signedPctGlyph(r.day, { digits: 2 });
+    const daySub = (r.change_local == null || isNaN(r.change_local))
+      ? ''
+      : `<span class="cell-sub">${r.change_local >= 0 ? '+' : '−'}${money(Math.abs(r.change_local), r.currency, { code: false })}</span>`;
+
+    // P&L column: signed unrealized % with glyph; small secondary = base P&L.
+    const pnl = signedPctGlyph(r.pnl, { digits: 2 });
+    const pnlSub = (r.pnl_base == null || isNaN(r.pnl_base))
+      ? ''
+      : `<span class="cell-sub ${signClass(r.pnl_base)}">${r.pnl_base >= 0 ? '+' : '−'}${money(Math.abs(r.pnl_base), d.base_currency)}</span>`;
+
     return `<tr>
       <td class="col-region"><span class="rtag rtag--${r.region}">${r.region}</span></td>
       <td class="col-tk">${r.ticker}</td>
       <td class="num">${intFmt(r.shares)}</td>
       <td class="num">${money(r.price, r.currency, { code: false })}</td>
+      <td class="num"><span class="cell-stack ${day.cls}"><span>${day.html}</span>${daySub}</span></td>
+      <td class="num"><span class="cell-stack ${pnl.cls}"><span>${pnl.html}</span>${pnlSub}</span></td>
       <td class="num">${money(r.value, d.base_currency, { code: false })}</td>
       <td class="num"><span class="wbar">
         <span>${pct(r.weight, { digits: 1 })}</span>
@@ -789,11 +851,37 @@ function renderFees(d) {
 }
 
 /* ============================================================================
+   Tab switching — toggles which top-level view (.view) is visible. The chosen
+   tab is held in App.tab (module state). Switching to Overview re-renders the
+   equity chart so the canvas picks up its now-visible dimensions.
+   ============================================================================ */
+function setActiveTab(tab) {
+  App.tab = tab;
+  document.querySelectorAll('.tab').forEach(t => {
+    const on = t.dataset.tab === tab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const ov = el('viewOverview'), hiw = el('viewHowItWorks');
+  if (ov) ov.classList.toggle('active', tab === 'overview');
+  if (hiw) hiw.classList.toggle('active', tab === 'howitworks');
+  // The canvas can't size itself while display:none; refresh on return.
+  if (tab === 'overview') renderEquityChart();
+}
+
+function setupTabs() {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => setActiveTab(t.dataset.tab));
+  });
+}
+
+/* ============================================================================
    Bootstrap
    ============================================================================ */
 function init() {
   setupCanvas();
   setupTableSort();
+  setupTabs();
 
   // Overlay toggle re-renders the equity chart.
   el('overlayToggle').addEventListener('change', (e) => {

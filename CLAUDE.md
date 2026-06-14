@@ -47,7 +47,7 @@ python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 62 tests
+pytest -q                                           # 73 tests
 ```
 
 ## Invariants — do not break these

@@ -41,6 +41,15 @@
       </div>
     </header>
 
+    <!-- ============================== TAB BAR ============================== -->
+    <nav class="tabbar" role="tablist" aria-label="Views">
+      <button class="tab active" id="tabOverview" role="tab" aria-selected="true" data-tab="overview">Overview</button>
+      <button class="tab" id="tabHowItWorks" role="tab" aria-selected="false" data-tab="howitworks">How it works</button>
+    </nav>
+
+    <!-- ============================== OVERVIEW VIEW ============================== -->
+    <div class="view view--overview active" id="viewOverview" role="tabpanel" aria-labelledby="tabOverview">
+
     <!-- ============================== KPI STRIP ============================== -->
     <section class="kpis" id="kpiStrip" aria-label="Key metrics">
       <article class="kpi glass kpi--equity">
@@ -77,6 +86,12 @@
         <div class="kpi__label">Cash</div>
         <div class="kpi__value" id="kpiCash">—</div>
         <div class="kpi__bar"><span class="kpi__bar-fill" id="kpiCashBar"></span></div>
+      </article>
+
+      <article class="kpi glass">
+        <div class="kpi__label">Open P&amp;L</div>
+        <div class="kpi__value" id="kpiOpenPnl">—</div>
+        <div class="kpi__foot"><span class="muted">unrealized · base ccy</span></div>
       </article>
     </section>
 
@@ -140,6 +155,8 @@
                 <th data-sort="ticker"  class="sortable">Ticker</th>
                 <th data-sort="shares"  class="sortable num">Shares</th>
                 <th data-sort="price"   class="sortable num">Price (local)</th>
+                <th data-sort="day"     class="sortable num">Day Δ</th>
+                <th data-sort="pnl"     class="sortable num">P&amp;L</th>
                 <th data-sort="value"   class="sortable num">Value (base)</th>
                 <th data-sort="weight"  class="sortable num">Weight</th>
               </tr>
@@ -173,6 +190,111 @@
         <div class="fees" id="feesPanel"></div>
       </article>
     </section>
+
+    </div><!-- /viewOverview -->
+
+    <!-- ============================== HOW IT WORKS VIEW ============================== -->
+    <div class="view view--howitworks" id="viewHowItWorks" role="tabpanel" aria-labelledby="tabHowItWorks">
+
+      <article class="panel glass hiw">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>How the algorithm works</h2>
+            <span class="muted">12-1 cross-sectional momentum · three regional sleeves</span>
+          </div>
+        </div>
+
+        <!-- 1. Summary -->
+        <p class="hiw__lead">
+          Each month, in each region (<strong>FTSE</strong> / <strong>US</strong> / <strong>ASX</strong>),
+          rank stocks by <strong>12-1 momentum</strong>. Buy the strongest names that are in an uptrend
+          <em>while</em> the market index is also in an uptrend; otherwise hold cash. Size positions by
+          <strong>inverse volatility</strong>, then scale the whole book to a <strong>12% volatility target</strong>.
+          Run three regional books and report the combined equity in <strong>AUD</strong>.
+        </p>
+
+        <!-- 2. Pipeline -->
+        <h3 class="hiw__h">Pipeline · once per monthly rebalance</h3>
+        <div class="pipeline" aria-label="Strategy pipeline">
+          <div class="pipe-box">Prices</div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">12-1 Momentum</div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">Trend &amp; Regime filters</div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">Top-N select</div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">Inverse-vol weights <small>(cap 15%)</small></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">Volatility targeting <small>(12%)</small></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box">Target weights</div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-box pipe-box--accent">Trade t+1 <small>(costs on)</small></div>
+        </div>
+
+        <!-- 3. Concept cards -->
+        <div class="hiw__grid">
+          <section class="hiw-card">
+            <h4>12-1 Momentum</h4>
+            <p>The last-year return, skipping the most recent month (avoids short-term reversal).</p>
+            <div class="formula">score(t) = P(t&minus;21) / P(t&minus;252) &minus; 1</div>
+          </section>
+
+          <section class="hiw-card">
+            <h4>Trend &amp; regime filters</h4>
+            <p>
+              A stock must be above its <strong>200-day moving average</strong>, <strong>and</strong>
+              the regional index must be above its own 200-day MA. If the index is below, that entire
+              sleeve goes <strong>100% cash</strong> (crash protection).
+            </p>
+          </section>
+
+          <section class="hiw-card">
+            <h4>Selection &amp; weighting</h4>
+            <p>
+              Take the top <strong>N = 10</strong> names by momentum. Assign
+              <strong>inverse-volatility</strong> weights (calmer names get more), then
+              <strong>cap each name at 15%</strong> so no single position dominates.
+            </p>
+          </section>
+
+          <section class="hiw-card">
+            <h4>Volatility targeting</h4>
+            <p>
+              Scale the whole book so estimated portfolio volatility is about <strong>12% per year</strong>.
+              Gross exposure <strong>never exceeds 100%</strong> &mdash; no leverage.
+            </p>
+          </section>
+
+          <section class="hiw-card">
+            <h4>Costs</h4>
+            <p>
+              Commission + slippage on turnover at every rebalance, plus UK <strong>stamp duty (0.5%)</strong>
+              on FTSE <em>buys only</em>. Trades are whole-share lots and respect per-trade commission floors.
+            </p>
+          </section>
+
+          <section class="hiw-card">
+            <h4>Three sleeves &rarr; one AUD book</h4>
+            <p>
+              Each sleeve trades in its <strong>local currency</strong>. The combined equity is converted to
+              <strong>AUD</strong>, including the FX move, only at the portfolio/reporting layer.
+            </p>
+          </section>
+        </div>
+
+        <!-- 4. Callout -->
+        <div class="callout callout--warn">
+          <span class="callout__icon" aria-hidden="true">⚠</span>
+          <span class="callout__text">
+            <strong>Paper trading on real prices &mdash; places no real orders.</strong>
+            A backtest is a hypothesis, not a promise.
+          </span>
+        </div>
+      </article>
+
+    </div><!-- /viewHowItWorks -->
 
     <footer class="footer">
       <span class="muted" id="footerNote">Multi-Region Momentum Trading System · all values labelled by currency</span>

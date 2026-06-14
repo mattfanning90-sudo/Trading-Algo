@@ -42,6 +42,16 @@ def test_snapshot_positions_have_weights(account):
             assert isinstance(pos["shares"], int)
 
 
+def test_positions_have_change_and_pnl(account):
+    snap = api.build_snapshot(account, synthetic=True)
+    assert "unrealized_base" in snap["kpis"]
+    for sleeve in snap["sleeves"]:
+        for pos in sleeve["positions"]:
+            for key in ("day_change", "change_local", "avg_cost",
+                        "unrealized_pct", "unrealized_base"):
+                assert key in pos
+
+
 def test_missing_account_raises():
     with pytest.raises(FileNotFoundError):
         api.build_snapshot("does_not_exist_xyz", synthetic=True)

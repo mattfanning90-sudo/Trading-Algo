@@ -122,6 +122,7 @@ def init_account(account: str, capital: float, synthetic: bool,
             "currency": region.currency,
             "cash": local_cash,
             "positions": {},
+            "cost_basis": {},
             "last_rebalance_month": None,
         }
     state = {
@@ -187,9 +188,15 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         fee = fees.commission(region, notional)
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
         sleeve["cash"] -= delta * fill + fee + duty
+        cb = sleeve.setdefault("cost_basis", {})
         if tgt == 0:
             sleeve["positions"].pop(t, None)
+            cb.pop(t, None)
         else:
+            if delta > 0:   # buy: update the average cost per share (price basis)
+                old_avg = cb.get(t, fill)
+                cb[t] = (cur * old_avg + delta * fill) / tgt
+            # a partial sell leaves the average cost unchanged
             sleeve["positions"][t] = tgt
         side = "BUY" if delta > 0 else "SELL"
         trade_log.append({"date": today, "region": region.key, "ticker": t,

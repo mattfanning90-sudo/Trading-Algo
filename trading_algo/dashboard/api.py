@@ -34,15 +34,17 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     regions = list(state.get("allocations") or cfg.ALLOCATIONS)
 
     sleeves_out, as_of = [], ""
-    total_base = total_cash_base = 0.0
+    total_base = total_cash_base = total_unrealized_base = 0.0
     n_positions = 0
 
     for k in regions:
         region = get_region(k)
         prices, index_px = paper_trade.latest_region_data(region, synthetic)
         px = prices.iloc[-1]
+        px_prev = prices.iloc[-2] if len(prices) > 1 else px  # for day-change
         as_of = max(as_of, prices.index[-1].strftime("%Y-%m-%d"))
         sleeve = state["sleeves"][k]
+        cost_basis = sleeve.get("cost_basis", {})
         m = snap_fx[region.currency]
         regime = ("RISK_ON"
                   if bool(signals.index_risk_on(index_px, region.params).iloc[-1])
@@ -52,16 +54,28 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         positions = []
         for t, sh in sleeve["positions"].items():
             price = _safe_price(px, t)
+            prev_price = _safe_price(px_prev, t)
             val_local = sh * price
             invested_local += val_local
-            positions.append({"ticker": t, "shares": int(sh),
-                              "price": round(price, 4),
-                              "value_local": round(val_local, 2)})
+            avg = float(cost_basis.get(t) or price)         # fallback: no P&L
+            day_change = (price / prev_price - 1.0) if prev_price else 0.0
+            unrl_pct = (price / avg - 1.0) if avg else 0.0
+            unrl_base = sh * (price - avg) * m
+            total_unrealized_base += unrl_base
+            positions.append({
+                "ticker": t, "shares": int(sh),
+                "price": round(price, 4),
+                "value_local": round(val_local, 2),
+                "value_base": round(val_local * m, 2),
+                "day_change": round(day_change, 4),
+                "change_local": round(price - prev_price, 4),
+                "avg_cost": round(avg, 4),
+                "unrealized_pct": round(unrl_pct, 4),
+                "unrealized_base": round(unrl_base, 2),
+            })
         cash_local = float(sleeve["cash"])
         eq_local = cash_local + invested_local
         eq_base = eq_local * m
-        for p in positions:
-            p["value_base"] = round(p["value_local"] * m, 2)
 
         total_base += eq_base
         total_cash_base += cash_local * m
@@ -114,6 +128,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "n_trades": len(state["trades"]),
             "n_positions": n_positions,
             "cash_pct": round(total_cash_base / denom, 4),
+            "unrealized_base": round(total_unrealized_base, 2),
             "fees": [{"currency": c, "amount": round(v, 2)} for c, v in fees.items()],
         },
         "allocations": state.get("allocations", cfg.ALLOCATIONS),
