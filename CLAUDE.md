@@ -13,7 +13,8 @@ history and reasoning.
 
 ## Architecture (everything region-specific lives in one `Region` record)
 - `config.py` — `StrategyParams` (all strategy knobs) + portfolio settings
-  (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital)
+  (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital) +
+  risk controls (drawdown circuit breaker, min-viable-size gate)
 - `regions.py` — Region registry: universe, regime index, currency, fee
   schedule, market calendar, Yahoo suffix, IBKR exchange, price_scale, per-region
   param overrides

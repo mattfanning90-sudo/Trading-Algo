@@ -216,6 +216,14 @@ def run_daily(account: str, synthetic: bool) -> None:
     snap = fx_snapshot(synthetic)
     state["fx_snapshot"] = snap
 
+    # Drawdown circuit breaker: was the account halted by a prior run?
+    halted = state.get("risk_halted", False)
+    if halted:
+        state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
+        if state["halt_cooldown"] <= 0:
+            halted = False
+        state["risk_halted"] = halted
+
     report_date = ""
     combined = 0.0
     breakdown = {}
@@ -228,17 +236,41 @@ def run_daily(account: str, synthetic: bool) -> None:
         sleeve = state["sleeves"][k]
         this_month = today[:7]
 
-        if sleeve["last_rebalance_month"] != this_month:
-            targets = strategy.compute_targets(prices, index_px, region.params)
-            if targets.empty:
-                print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
-            rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
+        if halted:
+            if sleeve["positions"]:
+                print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
+                rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
+                                 px_today, today, state["trades"])
+            sleeve["last_rebalance_month"] = this_month
+        elif sleeve["last_rebalance_month"] != this_month:
+            eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
+            if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
+                print(f"  [{k}] below min viable size "
+                      f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
+            else:
+                targets = strategy.compute_targets(prices, index_px, region.params)
+                if targets.empty:
+                    print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
+                rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
             sleeve["last_rebalance_month"] = this_month
 
         eq_local = sleeve_equity_local(sleeve, px_today)
         eq_base = eq_local * snap[region.currency]
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
+
+    # Update peak and decide whether to trip the breaker for the next run.
+    peak = max(state.get("peak_equity_base", state["initial_capital_base"]), combined)
+    state["peak_equity_base"] = peak
+    if (not halted and cfg.MAX_DRAWDOWN_STOP is not None
+            and combined / peak - 1 <= -cfg.MAX_DRAWDOWN_STOP):
+        state["risk_halted"] = True
+        state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
+        print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
+              f"{cfg.MAX_DRAWDOWN_STOP:.0%} stop — halting for "
+              f"{cfg.DRAWDOWN_COOLDOWN_DAYS} runs.")
+    elif not halted:
+        state["risk_halted"] = False
 
     if not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])

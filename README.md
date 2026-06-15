@@ -209,6 +209,23 @@ One-time setup in the repo's **Settings**:
 market data by default; if Yahoo is rate-limiting in CI, run it in `synthetic`
 mode (the dashboard still publishes, just on synthetic prices).
 
+## Risk controls
+
+Two safety controls sit on top of the strategy (configurable in `config.py`):
+
+- **Drawdown circuit breaker** (`MAX_DRAWDOWN_STOP`, default 25%): if the book
+  falls more than this from its peak, it liquidates to cash and sits out for
+  `DRAWDOWN_COOLDOWN_DAYS` (~1 month) before resuming. It's a catastrophe
+  backstop *on top of* the 200-day regime filter — on calm history it rarely
+  trips. Enforced in both the backtest (per sleeve) and the live paper engine
+  (account level); set `None` to disable. The backtest reports any halts.
+- **Minimum-viable-size gate** (`MIN_VIABLE_EQUITY_BASE`, default 500 AUD): a
+  sleeve below this holds cash instead of bleeding the per-trade commission
+  floors (the lesson the $1k account taught). Set `0` to disable.
+
+The single-name cap (15%) and the no-leverage cap (gross ≤ 100%) are enforced
+inside `strategy.compute_targets`.
+
 ## Going live (paper first)
 
 1. Run IB Gateway / TWS with the API enabled. Paper port = 7497, live = 7496.
