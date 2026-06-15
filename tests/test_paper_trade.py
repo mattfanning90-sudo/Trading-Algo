@@ -1,10 +1,23 @@
 """Multi-region paper-trading engine (offline / synthetic)."""
 import json
 
+import pandas as pd
 import pytest
 
 from trading_algo import config as cfg
 from trading_algo import paper_trade as pt
+from trading_algo.regions import get_region
+
+
+def test_realized_pnl_on_sale():
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAPL": 10},
+              "cost_basis": {"AAPL": 100.0}, "realized_pnl": 0.0,
+              "last_rebalance_month": None}
+    px = pd.Series({"AAPL": 120.0})
+    pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(dtype=float),
+                        px, "2026-01-02", [])
+    assert sleeve["positions"] == {}            # fully sold
+    assert sleeve["realized_pnl"] > 150          # ~ (120−100)·10, minus slippage
 
 
 @pytest.fixture

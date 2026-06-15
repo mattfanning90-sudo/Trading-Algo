@@ -17,6 +17,13 @@ def test_allocations_normalised():
     assert abs(sum(result["allocations"].values()) - 1.0) < 1e-9
 
 
+def test_portfolio_has_benchmark():
+    result = run_portfolio_backtest(synthetic=True, start="2018-01-01", end="2021-01-01")
+    assert (result["benchmark"] > 0).all()
+    for k in ("BenchmarkCAGR", "Beta", "Alpha", "ActiveReturn", "InfoRatio"):
+        assert k in result["benchmark_stats"]
+
+
 def test_each_sleeve_has_base_returns():
     result = run_portfolio_backtest(synthetic=True, start="2016-01-01", end="2020-01-01")
     for s in result["sleeves"].values():

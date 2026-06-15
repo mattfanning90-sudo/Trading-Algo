@@ -81,6 +81,14 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
         sharpe_key = next((kk for kk in m if kk.startswith("Sharpe")), None)
         print(f"    {k:<5} CAGR {m['CAGR']:>7.1%}  Vol {m['AnnVol']:>6.1%}  "
               f"Sharpe {m.get(sharpe_key, float('nan')):>5}  MaxDD {m['MaxDrawdown']:>7.1%}")
+    bs = result.get("benchmark_stats") or {}
+    if bs:
+        bm = result["benchmark_metrics"]
+        print("\n  vs Benchmark (equal-weight indices, AUD buy & hold):")
+        print(f"    Benchmark CAGR {bm['CAGR']:>7.1%}  Vol {bm['AnnVol']:>6.1%}  "
+              f"MaxDD {bm['MaxDrawdown']:>7.1%}")
+        print(f"    Active {bs['ActiveReturn']:>+7.1%}  Alpha {bs['Alpha']:>+7.1%}  "
+              f"Beta {bs['Beta']}  InfoRatio {bs['InfoRatio']}")
     print(f"\n  Allocations: " + ", ".join(f"{k} {v:.0%}"
                                             for k, v in result["allocations"].items()))
     print(f"  FX rebalance cost (cum.):  {cfg.BASE_CURRENCY} "

@@ -9,9 +9,35 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from .. import config as cfg
-from .. import paper_trade, signals
+from .. import fx, paper_trade, signals
 from ..regions import get_region
+
+
+def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
+                     synthetic: bool) -> list[dict]:
+    """Equal-weight buy-and-hold of the regional indices (in AUD), normalised to
+    `initial` at the account's inception, sampled at the equity-history dates.
+    Returns [] on any failure (frontend treats it as optional)."""
+    if not eq_hist or not index_by_region:
+        return []
+    try:
+        dates = pd.to_datetime([d for d, _ in eq_hist])
+        currencies = sorted({ccy for _, ccy in index_by_region.values()})
+        fx_tbl = (fx.synthetic_fx(currencies, base=cfg.BASE_CURRENCY) if synthetic
+                  else fx.load_fx(currencies, cfg.START, base=cfg.BASE_CURRENCY, use_cache=False))
+        parts = []
+        for idx, ccy in index_by_region.values():
+            mult = fx.align_fx(fx_tbl, idx.index, ccy)
+            idx_aud = (idx * mult).reindex(dates, method="ffill").bfill()
+            parts.append(idx_aud / idx_aud.iloc[0])
+        norm = sum(parts) / len(parts)
+        return [{"date": d.strftime("%Y-%m-%d"), "value": round(float(initial * v), 2)}
+                for d, v in zip(dates, norm)]
+    except Exception:
+        return []
 
 
 def _safe_price(px, ticker: str) -> float:
@@ -35,6 +61,8 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
 
     sleeves_out, as_of = [], ""
     total_base = total_cash_base = total_unrealized_base = 0.0
+    total_invested_base = total_realized_base = 0.0
+    index_by_region: dict[str, tuple] = {}
     n_positions = 0
 
     for k in regions:
@@ -79,6 +107,9 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
 
         total_base += eq_base
         total_cash_base += cash_local * m
+        total_invested_base += invested_local * m
+        total_realized_base += float(sleeve.get("realized_pnl", 0.0)) * m
+        index_by_region[k] = (index_px, region.currency)
         n_positions += len(positions)
         sleeves_out.append({
             "key": k, "name": region.name, "currency": region.currency,
@@ -100,15 +131,17 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             p["weight"] = round(p["value_base"] / denom, 4)
         s["positions"] = s.pop("_positions")
 
-    # fees grouped by currency
+    # fees grouped by currency, and totalled into the base currency
     fees: dict[str, float] = {}
     for t in state["trades"]:
         fees[t["currency"]] = fees.get(t["currency"], 0.0) \
             + t.get("commission", 0.0) + t.get("stamp_duty", 0.0)
+    fees_base = sum(v * snap_fx.get(c, 1.0) for c, v in fees.items())
 
     eq_hist = state.get("equity_history", [])
     prev_equity = eq_hist[-1][1] if eq_hist else state["initial_capital_base"]
     initial = state["initial_capital_base"]
+    benchmark_curve = _benchmark_curve(index_by_region, eq_hist, initial, synthetic)
 
     recent = []
     for t in reversed(state["trades"][-40:]):
@@ -128,10 +161,18 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "n_trades": len(state["trades"]),
             "n_positions": n_positions,
             "cash_pct": round(total_cash_base / denom, 4),
+            # --- total financial position (all in base currency) ---
+            "invested_base": round(total_invested_base, 2),
+            "cash_base": round(total_cash_base, 2),
+            "fees_base": round(fees_base, 2),
+            "realized_base": round(total_realized_base, 2),
             "unrealized_base": round(total_unrealized_base, 2),
+            "net_pnl_base": round(total_base - initial, 2),
+            "gross_exposure": round(total_invested_base / denom, 4),
             "fees": [{"currency": c, "amount": round(v, 2)} for c, v in fees.items()],
         },
         "allocations": state.get("allocations", cfg.ALLOCATIONS),
+        "benchmark_curve": benchmark_curve,
         "fx": snap_fx,
         "equity_curve": [{"date": d, "equity": e} for d, e in eq_hist],
         "sleeve_curves": state.get("sleeve_history", []),

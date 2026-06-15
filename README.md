@@ -61,8 +61,8 @@ trading_algo/
   dashboard/           zero-dependency live web UI (stdlib server + vanilla SPA)
   constituents.py      point-in-time index membership (survivorship-bias fix)
   sweep.py             walk-forward parameter robustness sweep
-tests/                 73 tests: invariants, FX, fees, calendars, PIT, sweep,
-                       dashboard, end-to-end synthetic
+tests/                 79 tests: invariants, FX, fees, calendars, PIT, sweep,
+                       risk controls, benchmark, dashboard, end-to-end synthetic
 ```
 
 ### Regional configuration
@@ -133,7 +133,11 @@ state, marks positions to the latest prices, and shows:
   explainer of the strategy — pipeline, filters, vol targeting, costs).
 - KPI strip: total equity (AUD), total return, day change, **open P&L**, open
   positions, trades, cash %.
-- A Canvas equity curve (combined + per-sleeve overlay) with hover tooltip.
+- A Canvas equity curve (combined + per-sleeve overlay + **benchmark** line)
+  with hover tooltip, plus a **drawdown** chart, **rolling Sharpe**, and
+  per-sleeve **return attribution**.
+- A **Total Financial Position** panel: equity = invested + cash, with net /
+  realised / open P&L, total fees paid (AUD), and gross exposure.
 - An allocation donut (actual vs target weights, with drift).
 - Per-sleeve cards: **RISK_ON / RISK_OFF (CASH)** regime badge, cash-vs-invested
   liquidity bar, sparkline, top holdings.

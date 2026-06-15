@@ -17,7 +17,7 @@ import pandas as pd
 from . import config as cfg
 from . import constituents, data, fx
 from .backtest import run_backtest
-from .metrics import compute_metrics
+from .metrics import benchmark_stats, compute_metrics
 from .regions import get_region
 
 
@@ -39,6 +39,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     syn_end = end or "2026-01-01"
 
     sleeves: dict[str, dict] = {}
+    index_by_region: dict[str, tuple] = {}
     currencies = [get_region(r).currency for r in regions]
 
     if synthetic:
@@ -63,6 +64,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         sleeves[key] = bt
+        index_by_region[key] = (index_px, region.currency)
 
     # ---- combine on the union of trading dates ---------------------------
     union = sorted(set().union(*[set(s["base_returns"].index) for s in sleeves.values()]))
@@ -98,6 +100,15 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     returns = equity.pct_change(fill_method=None).fillna(0.0)
     sleeve_equity = pd.DataFrame({dt: row for dt, row in sleeve_rows}).T
 
+    # Benchmark: equal-weight buy-and-hold of the regional indices, in AUD.
+    parts = []
+    for idx, ccy in index_by_region.values():
+        mult = fx.align_fx(fx_tbl, idx.index, ccy)
+        idx_aud_ret = (idx * mult).pct_change(fill_method=None)
+        parts.append(idx_aud_ret.reindex(union).fillna(0.0))
+    bench_ret = sum(parts) / len(parts)
+    bench_equity = cfg.INITIAL_CAPITAL * (1 + bench_ret).cumprod()
+
     return {
         "equity": equity,
         "returns": returns,
@@ -106,5 +117,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         "allocations": alloc,
         "fx_rebalance_cost": fx_cost_total,
         "point_in_time": point_in_time,
+        "benchmark": bench_equity,
+        "benchmark_metrics": compute_metrics(bench_ret, bench_equity, currency=cfg.BASE_CURRENCY),
+        "benchmark_stats": benchmark_stats(returns, bench_ret),
         "metrics": compute_metrics(returns, equity, currency=cfg.BASE_CURRENCY),
     }
