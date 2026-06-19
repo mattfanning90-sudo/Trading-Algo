@@ -37,3 +37,31 @@ def compute_metrics(rets: pd.Series, equity: pd.Series,
         "WinRate(days)": round(float((rets > 0).mean()), 3),
         f"FinalEquity ({currency})": round(float(equity.iloc[-1]), 0),
     }
+
+
+def benchmark_stats(strat_rets: pd.Series, bench_rets: pd.Series,
+                    risk_free: float = RISK_FREE) -> dict:
+    """Strategy-vs-benchmark stats: benchmark CAGR, active return, beta, Jensen's
+    alpha, tracking error and information ratio. Both inputs are daily returns."""
+    df = pd.concat([strat_rets.rename("s"), bench_rets.rename("b")], axis=1).dropna()
+    if len(df) < 2:
+        return {}
+    s, b = df["s"], df["b"]
+
+    bench_cagr = (1 + b).prod() ** (252 / len(b)) - 1
+    strat_cagr = (1 + s).prod() ** (252 / len(s)) - 1
+    var_b = float(b.var())
+    beta = float(((s - s.mean()) * (b - b.mean())).mean() / var_b) if var_b > 0 else float("nan")
+    alpha = (s.mean() * 252 - risk_free) - beta * (b.mean() * 252 - risk_free)
+    active = s - b
+    te = float(active.std() * np.sqrt(252))
+    info = float(active.mean() * 252 / te) if te > 0 else float("nan")
+
+    return {
+        "BenchmarkCAGR": round(float(bench_cagr), 4),
+        "ActiveReturn": round(float(strat_cagr - bench_cagr), 4),
+        "Beta": round(beta, 2),
+        "Alpha": round(float(alpha), 4),
+        "TrackingError": round(te, 4),
+        "InfoRatio": round(info, 2),
+    }

@@ -95,6 +95,66 @@
       </article>
     </section>
 
+    <!-- ===================== TOTAL FINANCIAL POSITION ===================== -->
+    <section class="grid-tfp">
+      <article class="panel glass panel--tfp">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Total Financial Position</h2>
+            <span class="muted" id="tfpAsOf">book decomposition · base currency</span>
+          </div>
+        </div>
+        <div class="tfp">
+          <!-- Headline equity = invested + cash, with an exposure split bar. -->
+          <div class="tfp__headline">
+            <div class="tfp__equity">
+              <span class="tfp__equity-label">Total Equity</span>
+              <span class="tfp__equity-val num" id="tfpEquity">—</span>
+            </div>
+            <div class="tfp__eq">
+              <span class="tfp__eq-piece"><span class="muted">Invested</span> <span class="num" id="tfpInvested">—</span></span>
+              <span class="tfp__eq-plus">+</span>
+              <span class="tfp__eq-piece"><span class="muted">Cash</span> <span class="num" id="tfpCash">—</span></span>
+            </div>
+            <div class="tfp__expo">
+              <div class="tfp__expo-bar" title="invested vs cash">
+                <span class="tfp__expo-inv" id="tfpExpoInv"></span>
+                <span class="tfp__expo-cash" id="tfpExpoCash"></span>
+              </div>
+              <div class="tfp__expo-legend">
+                <span><span class="dot dot--inv"></span>Gross exposure <strong class="num" id="tfpGross">—</strong></span>
+                <span class="muted">cash <span class="num" id="tfpCashPct">—</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- P&L + fees breakdown rows. -->
+          <ul class="tfp__rows">
+            <li class="tfp__row">
+              <span class="tfp__row-label">Net P&amp;L</span>
+              <span class="tfp__row-val num" id="tfpNet">—</span>
+              <span class="tfp__row-sub num" id="tfpNetPct">—</span>
+            </li>
+            <li class="tfp__row">
+              <span class="tfp__row-label">Realised P&amp;L</span>
+              <span class="tfp__row-val num" id="tfpRealized">—</span>
+              <span class="tfp__row-sub muted">booked on sales</span>
+            </li>
+            <li class="tfp__row">
+              <span class="tfp__row-label">Open / Unrealised P&amp;L</span>
+              <span class="tfp__row-val num" id="tfpUnrealized">—</span>
+              <span class="tfp__row-sub muted">on current holdings</span>
+            </li>
+            <li class="tfp__row">
+              <span class="tfp__row-label">Fees paid</span>
+              <span class="tfp__row-val num" id="tfpFees">—</span>
+              <span class="tfp__row-sub muted">all ccys → base</span>
+            </li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
     <!-- ============================== MAIN GRID ============================== -->
     <section class="grid-main">
 
@@ -135,6 +195,51 @@
 
     <!-- ============================== SLEEVE CARDS ============================== -->
     <section class="sleeves" id="sleeveCards" aria-label="Regional sleeves"></section>
+
+    <!-- ============================== ANALYTICS GRID ============================== -->
+    <section class="grid-analytics" aria-label="Risk &amp; attribution">
+
+      <!-- Drawdown ------------------------------------------------------- -->
+      <article class="panel glass panel--dd">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Drawdown</h2>
+            <span class="muted">peak-to-trough · from equity</span>
+          </div>
+          <span class="panel__stat val-neg num" id="ddMinLabel">—</span>
+        </div>
+        <div class="mini-chart-wrap">
+          <canvas id="ddCanvas"></canvas>
+          <div class="mini-placeholder hidden" id="ddPlaceholder">needs more history</div>
+        </div>
+      </article>
+
+      <!-- Rolling Sharpe ------------------------------------------------- -->
+      <article class="panel glass panel--sharpe">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Rolling Sharpe</h2>
+            <span class="muted" id="sharpeWin">annualised · rf 3.5%</span>
+          </div>
+          <span class="panel__stat num" id="sharpeLast">—</span>
+        </div>
+        <div class="mini-chart-wrap">
+          <canvas id="sharpeCanvas"></canvas>
+          <div class="mini-placeholder hidden" id="sharpePlaceholder">needs more history</div>
+        </div>
+      </article>
+
+      <!-- Sleeve attribution -------------------------------------------- -->
+      <article class="panel glass panel--attr">
+        <div class="panel__head">
+          <div class="panel__title">
+            <h2>Sleeve Attribution</h2>
+            <span class="muted">contribution to net P&amp;L</span>
+          </div>
+        </div>
+        <div class="attr" id="attrPanel"></div>
+      </article>
+    </section>
 
     <!-- ============================== LOWER GRID ============================== -->
     <section class="grid-lower">

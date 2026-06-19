@@ -281,6 +281,11 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 .chart-tooltip .tt-key { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); }
 .chart-tooltip .tt-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+/* Benchmark swatch mimics the dashed muted-grey line drawn on the canvas. */
+.swatch--bench {
+  background: linear-gradient(90deg, var(--text-dim) 0 55%, transparent 55% 100%) 0 0 / 6px 100%;
+  border-radius: 1px;
+}
 
 .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
 .legend__item { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
@@ -450,6 +455,66 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
   background: linear-gradient(90deg, var(--accent-2), var(--accent));
   transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
 
+/* ---------------------- Total Financial Position ------------------------- */
+.grid-tfp { display: grid; }
+.panel--tfp { min-width: 0; }
+.panel__stat { font-family: var(--font-mono); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+.tfp { display: grid; gap: 18px; grid-template-columns: 1.1fr 1fr; align-items: start; }
+
+/* Headline block: total equity = invested + cash + exposure bar. */
+.tfp__headline { display: flex; flex-direction: column; gap: 14px; }
+.tfp__equity { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tfp__equity-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-mute); font-weight: 600; }
+.tfp__equity-val { font-size: clamp(22px, 2.4vw, 30px); font-weight: 600; letter-spacing: -0.01em; }
+.tfp__eq { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.tfp__eq-piece { display: inline-flex; align-items: baseline; gap: 6px; }
+.tfp__eq-piece .muted { font-size: 12px; }
+.tfp__eq-plus { color: var(--text-mute); font-family: var(--font-mono); }
+
+.tfp__expo { display: flex; flex-direction: column; gap: 7px; }
+.tfp__expo-bar { height: 10px; border-radius: 999px; overflow: hidden; display: flex; background: rgba(255,255,255,0.06); }
+.tfp__expo-inv { background: linear-gradient(90deg, var(--accent), var(--accent-3)); transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+.tfp__expo-cash { background: linear-gradient(90deg, rgba(255,255,255,0.22), rgba(255,255,255,0.32)); transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+.tfp__expo-legend { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); }
+.tfp__expo-legend strong { font-weight: 600; color: var(--text); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot--inv { background: linear-gradient(90deg, var(--accent), var(--accent-3)); }
+
+/* P&L / fees breakdown rows. */
+.tfp__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tfp__row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: 12px;
+  padding: 9px 4px; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.tfp__row:last-child { border-bottom: none; }
+.tfp__row-label { font-size: 13px; color: var(--text-dim); }
+.tfp__row-val { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tfp__row-sub { font-size: 11px; min-width: 64px; text-align: right; }
+
+/* ----------------------- Analytics (risk + attribution) ------------------ */
+.grid-analytics { display: grid; gap: var(--gap); grid-template-columns: 1fr 1fr 1fr; }
+.mini-chart-wrap { position: relative; flex: 1; min-height: 130px; }
+.panel--dd, .panel--sharpe, .panel--attr { min-height: 200px; }
+.panel--dd canvas, .panel--sharpe canvas { width: 100%; height: 100%; display: block; }
+.mini-placeholder {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 12px; color: var(--text-mute); font-style: italic;
+}
+.mini-placeholder--inline { position: static; min-height: 130px; }
+
+/* Sleeve attribution bars. */
+.attr { display: flex; flex-direction: column; gap: 14px; flex: 1; justify-content: center; }
+.attr-row { display: grid; grid-template-columns: 52px 1fr auto auto; align-items: center; gap: 10px; }
+.attr-row__name { display: inline-flex; }
+.attr-row__bar { height: 10px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden; position: relative; }
+.attr-row__fill { display: block; height: 100%; border-radius: inherit; background: var(--region, var(--accent)); opacity: 0.85;
+  transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+.attr-row__fill.val-neg { background: var(--neg); opacity: 0.85; }
+.attr-row__fill.val-pos { background: var(--pos); opacity: 0.9; }
+.attr-row__amt { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; min-width: 96px; }
+.attr-row__share { font-size: 11px; color: var(--text-mute); font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
 /* ------------------------------ How it works ----------------------------- */
 .hiw { gap: 4px; }
 .hiw__lead {
@@ -535,6 +600,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
   .grid-main { grid-template-columns: 1fr; }
   .grid-lower { grid-template-columns: 1fr; }
   .sleeves { grid-template-columns: 1fr; }
+  .grid-analytics { grid-template-columns: 1fr; }
+  .tfp { grid-template-columns: 1fr; }
   .hiw__grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 }
 @media (max-width: 640px) {

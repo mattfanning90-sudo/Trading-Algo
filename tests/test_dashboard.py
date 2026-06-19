@@ -52,6 +52,20 @@ def test_positions_have_change_and_pnl(account):
                 assert key in pos
 
 
+def test_financial_position_kpis(account):
+    k = api.build_snapshot(account, synthetic=True)["kpis"]
+    for key in ("invested_base", "cash_base", "fees_base", "realized_base",
+                "unrealized_base", "net_pnl_base", "gross_exposure"):
+        assert key in k
+    # the position decomposes: invested + cash == total equity
+    assert abs(k["invested_base"] + k["cash_base"] - k["total_equity"]) < 1.0
+
+
+def test_benchmark_curve_present(account):
+    snap = api.build_snapshot(account, synthetic=True)
+    assert isinstance(snap.get("benchmark_curve"), list)
+
+
 def test_missing_account_raises():
     with pytest.raises(FileNotFoundError):
         api.build_snapshot("does_not_exist_xyz", synthetic=True)

@@ -98,6 +98,30 @@ const SAMPLE_STATE = (() => {
 
   const nPositions = sleeves.reduce((n, s) => n + s.positions.length, 0);
 
+  // --- Book decomposition (all base ccy) — kept internally consistent ----
+  // invested + cash ≈ total_equity; net_pnl = total_equity − initial.
+  const investedBase = round2(sleeves.reduce((a, s) => a + s.invested_local * fx[s.currency], 0));
+  // Pin cash so invested + cash sums exactly to the curve total.
+  const cashBase = round2(totalEquity - investedBase);
+  const unrealizedBase = round2(sleeves.reduce(
+    (sum, s) => sum + s.positions.reduce((a, p) => a + (p.unrealized_base || 0), 0), 0));
+  const feesBase = round2(24.0 * 1.0 + 3.0 * fx.USD + 14.83 * fx.GBP); // AUD + USD + GBP fees → AUD
+  const netPnlBase = round2(totalEquity - init);
+  // Realised P&L is whatever net P&L isn't explained by open positions.
+  const realizedBase = round2(netPnlBase - unrealizedBase);
+  const grossExposure = totalEquity ? round4(investedBase / totalEquity) : 0;
+
+  // --- Benchmark curve: equal-weight buy-and-hold of regional indices in
+  // AUD, same dates as equity_curve, slightly underperforming the strategy.
+  const benchmark_curve = equity_curve.map((p, i) => {
+    const t = i / (N - 1);
+    // Steady drift below the strategy, with a deeper mid-period dip and a
+    // little independent noise so the two lines are visibly distinct.
+    const bdip = -0.07 * Math.exp(-Math.pow((i - 62) / 16, 2));
+    const trend = 1 + 0.00042 * i + bdip + 0.010 * Math.sin(t * 7.0 + 0.5);
+    return { date: p.date, value: round2(init * Math.max(0.6, trend)) };
+  });
+
   // --- Recent trades (newest first handled at render time) ---------------
   const recent_trades = [
     trade('2025-12-01', 'US', 'NVDA', 'BUY', 9, 138.20, 1.0, 0, 'USD'),
@@ -126,8 +150,14 @@ const SAMPLE_STATE = (() => {
       n_trades: recent_trades.length,
       n_positions: nPositions,
       // Total open (unrealized) P&L across every holding, in base currency.
-      unrealized_base: round2(sleeves.reduce(
-        (sum, s) => sum + s.positions.reduce((a, p) => a + (p.unrealized_base || 0), 0), 0)),
+      unrealized_base: unrealizedBase,
+      // Book decomposition (contract-extended), all base currency (AUD).
+      invested_base: investedBase,
+      cash_base: cashBase,
+      fees_base: feesBase,
+      realized_base: realizedBase,
+      net_pnl_base: netPnlBase,
+      gross_exposure: grossExposure,
       cash_pct: sleeves.reduce((c, s) => c + s.cash_local * fx[s.currency], 0) / baseSum,
       fees: [
         { currency: 'AUD', amount: 24.0 },
@@ -138,6 +168,7 @@ const SAMPLE_STATE = (() => {
     allocations: { ASX: 0.3333, US: 0.3333, FTSE: 0.3333 },
     fx,
     equity_curve,
+    benchmark_curve,
     sleeve_curves,
     sleeves,
     recent_trades,
@@ -234,6 +265,14 @@ function signedPctGlyph(frac, { digits = 2 } = {}) {
   return { html: `${glyph} ${s}${v.toFixed(digits)}%`, cls: signClass(frac) };
 }
 
+// Signed money string with a leading +/−, formatted with AUD code. Defensive:
+// returns "—" for missing/NaN. Pairs with signClass() for colouring.
+function signedMoney(value, ccy) {
+  if (value == null || isNaN(value)) return '—';
+  const s = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${s}${money(Math.abs(value), ccy)}`;
+}
+
 /* ============================================================================
    App state + polling controller
    ============================================================================ */
@@ -278,9 +317,13 @@ function render(data) {
   App.state = data;
   renderTopbar(data);
   renderKpis(data);
-  renderEquityChart();           // reads App.state + App.overlay
+  renderFinancialPosition(data); // book decomposition card
+  renderEquityChart();           // reads App.state + App.overlay (+ benchmark)
   renderDonut(data);
   renderSleeves(data);
+  renderDrawdown(data);          // derived from equity_curve (client-side)
+  renderRollingSharpe(data);     // derived from equity_curve (client-side)
+  renderAttribution(data);       // from sleeve_curves
   renderPositions(data);
   renderTrades(data);
   renderFees(data);
@@ -351,6 +394,61 @@ function renderKpis(d) {
 }
 
 /* ============================================================================
+   Total Financial Position — book decomposition: equity = invested + cash,
+   plus net / realised / unrealised P&L, fees paid, and a gross-exposure bar.
+   Every field is read defensively (shows "—" when missing).
+   ============================================================================ */
+function renderFinancialPosition(d) {
+  const k = d.kpis || {};
+  const ccy = d.base_currency;
+
+  // Headline: total equity = invested + cash.
+  setText('tfpEquity', money(k.total_equity, ccy));
+  setText('tfpInvested', money(k.invested_base, ccy));
+  setText('tfpCash', money(k.cash_base, ccy));
+
+  // Net P&L (coloured) with % from total_return.
+  const net = el('tfpNet');
+  if (net) {
+    net.textContent = signedMoney(k.net_pnl_base, ccy);
+    net.className = 'tfp__row-val num ' + signClass(k.net_pnl_base);
+  }
+  const netPct = el('tfpNetPct');
+  if (netPct) {
+    const g = signedPctGlyph(k.total_return);
+    netPct.innerHTML = g.html;
+    netPct.className = 'tfp__row-sub num ' + g.cls;
+  }
+
+  // Realised + unrealised P&L (coloured).
+  const realized = el('tfpRealized');
+  if (realized) {
+    realized.textContent = signedMoney(k.realized_base, ccy);
+    realized.className = 'tfp__row-val num ' + signClass(k.realized_base);
+  }
+  const unrl = el('tfpUnrealized');
+  if (unrl) {
+    unrl.textContent = signedMoney(k.unrealized_base, ccy);
+    unrl.className = 'tfp__row-val num ' + signClass(k.unrealized_base);
+  }
+
+  // Fees paid (always a cost — neutral colour, no sign).
+  setText('tfpFees', money(k.fees_base, ccy));
+
+  // Gross-exposure split bar: invested vs cash.
+  const gross = k.gross_exposure;
+  const invFrac = (gross == null || isNaN(gross)) ? null : clamp01(gross);
+  setText('tfpGross', invFrac == null ? '—' : pct(invFrac, { digits: 1 }));
+  setText('tfpCashPct', invFrac == null ? '—' : pct(1 - invFrac, { digits: 1 }));
+  const invBar = el('tfpExpoInv'), cashBar = el('tfpExpoCash');
+  if (invBar && cashBar) {
+    const p = invFrac == null ? 0 : invFrac * 100;
+    invBar.style.width = p.toFixed(1) + '%';
+    cashBar.style.width = (100 - p).toFixed(1) + '%';
+  }
+}
+
+/* ============================================================================
    Equity chart — hand-drawn Canvas line + gradient area, gridlines, axes,
    crosshair + tooltip, optional per-sleeve overlay lines.
    ============================================================================ */
@@ -376,6 +474,32 @@ function setupCanvas() {
     el('equityTooltip').classList.add('hidden');
     renderEquityChart();
   });
+
+  // Keep the mini analytics charts (drawdown / Sharpe) crisp on layout changes.
+  const ddCv = el('ddCanvas'), shCv = el('sharpeCanvas');
+  if (ddCv && ddCv.parentElement) {
+    new ResizeObserver(() => { if (App.state) renderDrawdown(App.state); }).observe(ddCv.parentElement);
+  }
+  if (shCv && shCv.parentElement) {
+    new ResizeObserver(() => { if (App.state) renderRollingSharpe(App.state); }).observe(shCv.parentElement);
+  }
+}
+
+// Shared HiDPI sizing for the small canvas charts. Returns the 2D context and
+// CSS-pixel geometry, or null if the element is missing / has no size yet.
+function prepMiniCanvas(canvasId) {
+  const cv = el(canvasId);
+  if (!cv || !cv.parentElement) return null;
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = cv.parentElement.clientWidth;
+  const cssH = cv.parentElement.clientHeight;
+  if (cssW <= 0 || cssH <= 0) return null;
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  return { cv, ctx, cssW, cssH };
 }
 
 function onChartMove(ev) {
@@ -409,9 +533,15 @@ function renderEquityChart() {
 
   // ---- Determine y-range across whichever series are visible ----
   const showOverlay = App.overlay && Array.isArray(d.sleeve_curves) && d.sleeve_curves.length;
+  // Benchmark line: optional second series sharing the same x/dates as equity.
+  const bench = Array.isArray(d.benchmark_curve) ? d.benchmark_curve : [];
+  const showBench = bench.length === curve.length && bench.length > 0;
   let vals = curve.map(p => p.equity);
   if (showOverlay) {
     for (const r of d.sleeve_curves) for (const k of REGION_ORDER) if (r[k] != null) vals.push(r[k]);
+  }
+  if (showBench) {
+    for (const b of bench) if (b && b.value != null) vals.push(b.value);
   }
   let min = Math.min(...vals), max = Math.max(...vals);
   const padFrac = (max - min) * 0.08 || max * 0.02 || 1;
@@ -466,6 +596,23 @@ function renderEquityChart() {
     ctx.globalAlpha = 1;
   }
 
+  // ---- Benchmark line (muted grey, dashed) — beneath the main equity line ----
+  if (showBench) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(154, 166, 196, 0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    bench.forEach((b, i) => {
+      const v = b ? b.value : null;
+      if (v == null) return;
+      const x = xAt(i), y = yAt(v);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // ---- Main equity area (gradient fill) ----
   const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
   grad.addColorStop(0, 'rgba(110,168,255,0.34)');
@@ -489,11 +636,11 @@ function renderEquityChart() {
   ctx.shadowBlur = 0;
 
   // Cache geometry for crosshair hit-testing.
-  equityChart.geom = { padL, padR, padT, padB, plotW, plotH, n, xAt, yAt, curve, cssW, cssH, showOverlay };
+  equityChart.geom = { padL, padR, padT, padB, plotW, plotH, n, xAt, yAt, curve, cssW, cssH, showOverlay, showBench, bench };
 
   // ---- Crosshair + tooltip ----
   drawCrosshair();
-  renderEquityLegend(d, showOverlay);
+  renderEquityLegend(d, showOverlay, showBench);
   setText('equityRange', `${curve.length} points · ${d.base_currency}`);
 }
 
@@ -538,6 +685,10 @@ function drawCrosshair() {
         `<span class="tt-val">${money(v, d.base_currency, { code: false })}</span></div>`;
     }
   }
+  if (g.showBench && g.bench[idx] && g.bench[idx].value != null) {
+    rows += `<div class="tt-row"><span class="tt-key"><span class="swatch swatch--bench"></span>Benchmark</span>` +
+      `<span class="tt-val">${money(g.bench[idx].value, d.base_currency, { code: false })}</span></div>`;
+  }
   tip.innerHTML = `<div class="tt-date">${fmtDate(p.date)}</div>${rows}`;
   tip.classList.remove('hidden');
   // Position the tooltip; clamp so it stays inside the plot horizontally.
@@ -546,9 +697,12 @@ function drawCrosshair() {
   tip.style.top = (y) + 'px';
 }
 
-function renderEquityLegend(d, showOverlay) {
+function renderEquityLegend(d, showOverlay, showBench) {
   const wrap = el('equityLegend');
   let html = `<span class="legend__item"><span class="swatch" style="background:#8ab6ff"></span>Combined (${d.base_currency})</span>`;
+  if (showBench) {
+    html += `<span class="legend__item"><span class="swatch swatch--bench"></span>Benchmark (indices)</span>`;
+  }
   if (showOverlay) {
     for (const key of REGION_ORDER) {
       html += `<span class="legend__item"><span class="swatch" style="background:${REGION_COLORS[key]}"></span>${key}</span>`;
@@ -565,6 +719,219 @@ function compactMoney(v) {
   return v.toFixed(0);
 }
 function getMono() { return 'ui-monospace, "SF Mono", Menlo, Consolas, monospace'; }
+
+/* ============================================================================
+   Drawdown chart — derived client-side from equity_curve. dd(t) = equity(t) /
+   runningMax − 1 (≤ 0). Red area below a 0% baseline + min-drawdown label.
+   ============================================================================ */
+function renderDrawdown(d) {
+  const curve = (d && d.equity_curve) || [];
+  const placeholder = el('ddPlaceholder');
+  const cv = el('ddCanvas');
+  // Need at least ~2 points to draw a meaningful series.
+  if (curve.length < 2) {
+    if (placeholder) placeholder.classList.remove('hidden');
+    if (cv) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    setText('ddMinLabel', '—');
+    return;
+  }
+  if (placeholder) placeholder.classList.add('hidden');
+
+  // Compute drawdown series.
+  let peak = -Infinity;
+  const dd = curve.map(p => {
+    peak = Math.max(peak, p.equity);
+    return peak > 0 ? p.equity / peak - 1 : 0;
+  });
+  const minDD = Math.min(...dd);                 // most negative value
+  setText('ddMinLabel', pct(minDD, { digits: 2 }));
+
+  const prep = prepMiniCanvas('ddCanvas');
+  if (!prep) return;
+  const { ctx, cssW, cssH } = prep;
+  const padL = 6, padR = 6, padT = 8, padB = 14;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+  if (plotW <= 0 || plotH <= 0) return;
+
+  // y range: 0 at top, the deepest drawdown (with a little headroom) at bottom.
+  const lo = Math.min(minDD * 1.1, -0.005);      // always show a sliver below 0
+  const n = dd.length;
+  const xAt = i => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const yAt = v => padT + (1 - (v - lo) / (0 - lo)) * plotH;  // v in [lo, 0]
+
+  // Zero baseline.
+  const y0 = yAt(0);
+  ctx.strokeStyle = 'rgba(150,166,196,0.30)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, y0 + 0.5); ctx.lineTo(cssW - padR, y0 + 0.5); ctx.stroke();
+  ctx.fillStyle = 'rgba(150,166,196,0.6)';
+  ctx.font = '10px ' + getMono();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillText('0%', padL, y0 - 2);
+
+  // Red area from the line down to the baseline.
+  const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+  grad.addColorStop(0, 'rgba(248,81,73,0.05)');
+  grad.addColorStop(1, 'rgba(248,81,73,0.32)');
+  ctx.beginPath();
+  ctx.moveTo(xAt(0), y0);
+  dd.forEach((v, i) => ctx.lineTo(xAt(i), yAt(v)));
+  ctx.lineTo(xAt(n - 1), y0);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Drawdown line.
+  ctx.beginPath();
+  dd.forEach((v, i) => { const x = xAt(i), y = yAt(v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+  ctx.strokeStyle = 'rgba(248,81,73,0.9)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+}
+
+/* ============================================================================
+   Rolling Sharpe — derived from equity_curve daily returns. Annualised over a
+   rolling window of min(63, n−1) points; rf ≈ 3.5%/yr → 0.035/252 per period.
+   ============================================================================ */
+function renderRollingSharpe(d) {
+  const curve = (d && d.equity_curve) || [];
+  const placeholder = el('sharpePlaceholder');
+  const cv = el('sharpeCanvas');
+
+  // Daily simple returns.
+  const rets = [];
+  for (let i = 1; i < curve.length; i++) {
+    const prev = curve[i - 1].equity;
+    rets.push(prev ? curve[i].equity / prev - 1 : 0);
+  }
+  const win = Math.min(63, curve.length - 1);
+  // Need enough returns to fill at least one window (and ≥2 points to plot).
+  if (win < 2 || rets.length < win) {
+    if (placeholder) placeholder.classList.remove('hidden');
+    if (cv) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    setText('sharpeLast', '—');
+    setText('sharpeWin', 'annualised · rf 3.5%');
+    return;
+  }
+  if (placeholder) placeholder.classList.add('hidden');
+  setText('sharpeWin', `${win}-day · annualised · rf 3.5%`);
+
+  const rfPer = 0.035 / 252;          // per-period risk-free rate
+  const series = [];                  // rolling annualised Sharpe values
+  for (let end = win; end <= rets.length; end++) {
+    const slice = rets.slice(end - win, end);
+    const mean = slice.reduce((a, b) => a + b, 0) / win;
+    let varSum = 0;
+    for (const r of slice) varSum += (r - mean) * (r - mean);
+    const sd = Math.sqrt(varSum / (win - 1));
+    const sharpe = sd > 0 ? (mean - rfPer) / sd * Math.sqrt(252) : 0;
+    series.push(sharpe);
+  }
+  if (series.length < 2) {
+    if (placeholder) placeholder.classList.remove('hidden');
+    setText('sharpeLast', series.length ? series[0].toFixed(2) : '—');
+    return;
+  }
+  const last = series[series.length - 1];
+  const lastEl = el('sharpeLast');
+  if (lastEl) {
+    lastEl.textContent = last.toFixed(2);
+    lastEl.className = 'panel__stat num ' + signClass(last);
+  }
+
+  const prep = prepMiniCanvas('sharpeCanvas');
+  if (!prep) return;
+  const { ctx, cssW, cssH } = prep;
+  const padL = 6, padR = 6, padT = 10, padB = 14;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+  if (plotW <= 0 || plotH <= 0) return;
+
+  let min = Math.min(...series), max = Math.max(...series);
+  // Ensure 0 is in range so the baseline is meaningful; pad a touch.
+  min = Math.min(min, 0); max = Math.max(max, 0);
+  const span = (max - min) || 1;
+  min -= span * 0.1; max += span * 0.1;
+  const n = series.length;
+  const xAt = i => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const yAt = v => padT + (1 - (v - min) / (max - min)) * plotH;
+
+  // Zero baseline.
+  const y0 = yAt(0);
+  ctx.strokeStyle = 'rgba(150,166,196,0.25)';
+  ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(padL, y0 + 0.5); ctx.lineTo(cssW - padR, y0 + 0.5); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Sharpe line (teal accent).
+  ctx.beginPath();
+  series.forEach((v, i) => { const x = xAt(i), y = yAt(v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+  ctx.strokeStyle = '#34e0d0';
+  ctx.lineWidth = 1.8;
+  ctx.shadowColor = 'rgba(52,224,208,0.4)'; ctx.shadowBlur = 6;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+/* ============================================================================
+   Sleeve attribution — each sleeve's contribution to net P&L: last − first of
+   its AUD curve. Horizontal green/red bars with AUD + % of total net P&L.
+   ============================================================================ */
+function renderAttribution(d) {
+  const wrap = el('attrPanel');
+  if (!wrap) return;
+  const curves = (d && d.sleeve_curves) || [];
+  if (!Array.isArray(curves) || curves.length < 2) {
+    wrap.innerHTML = `<div class="mini-placeholder mini-placeholder--inline">needs more history</div>`;
+    return;
+  }
+
+  // Discover which sleeve keys exist (any key besides "date"), ordered.
+  const keys = new Set();
+  for (const row of curves) for (const k of Object.keys(row)) if (k !== 'date') keys.add(k);
+  const ordered = REGION_ORDER.filter(k => keys.has(k))
+    .concat([...keys].filter(k => !REGION_ORDER.includes(k)));
+  if (!ordered.length) {
+    wrap.innerHTML = `<div class="mini-placeholder mini-placeholder--inline">no sleeve data</div>`;
+    return;
+  }
+
+  // Contribution = last value − first value (first/last non-null per sleeve).
+  const ccy = d.base_currency;
+  const contrib = ordered.map(key => {
+    let first = null, last = null;
+    for (const row of curves) {
+      if (row[key] == null) continue;
+      if (first == null) first = row[key];
+      last = row[key];
+    }
+    return { key, amt: (first == null || last == null) ? 0 : last - first };
+  });
+
+  const totalNet = d.kpis && d.kpis.net_pnl_base != null
+    ? d.kpis.net_pnl_base
+    : contrib.reduce((a, c) => a + c.amt, 0);
+  // Scale bars by the largest absolute contribution.
+  const maxAbs = Math.max(...contrib.map(c => Math.abs(c.amt)), 1);
+
+  wrap.innerHTML = contrib.map(c => {
+    const cls = signClass(c.amt);
+    const widthPct = clamp01(Math.abs(c.amt) / maxAbs) * 100;
+    const shareTxt = (totalNet && Math.abs(totalNet) > 1e-9)
+      ? `${(c.amt / totalNet * 100).toFixed(0)}%`
+      : '—';
+    const color = REGION_COLORS[c.key] || 'var(--accent)';
+    return `<div class="attr-row">
+      <span class="attr-row__name"><span class="rtag rtag--${c.key}">${c.key}</span></span>
+      <span class="attr-row__bar">
+        <span class="attr-row__fill ${cls}" style="width:${widthPct.toFixed(0)}%; --region:${color}"></span>
+      </span>
+      <span class="attr-row__amt num ${cls}">${signedMoney(c.amt, ccy)}</span>
+      <span class="attr-row__share num">${shareTxt}</span>
+    </div>`;
+  }).join('');
+}
 
 /* ============================================================================
    Allocation donut — inline SVG arcs, legend with actual/target + drift.
@@ -865,8 +1232,12 @@ function setActiveTab(tab) {
   const ov = el('viewOverview'), hiw = el('viewHowItWorks');
   if (ov) ov.classList.toggle('active', tab === 'overview');
   if (hiw) hiw.classList.toggle('active', tab === 'howitworks');
-  // The canvas can't size itself while display:none; refresh on return.
-  if (tab === 'overview') renderEquityChart();
+  // Canvases can't size themselves while display:none; refresh on return.
+  if (tab === 'overview' && App.state) {
+    renderEquityChart();
+    renderDrawdown(App.state);
+    renderRollingSharpe(App.state);
+  }
 }
 
 function setupTabs() {
@@ -896,8 +1267,11 @@ function init() {
   updateStatus();
   startPolling();
 
-  // Keep canvas crisp on window resize.
-  window.addEventListener('resize', () => renderEquityChart());
+  // Keep canvases crisp on window resize.
+  window.addEventListener('resize', () => {
+    renderEquityChart();
+    if (App.state) { renderDrawdown(App.state); renderRollingSharpe(App.state); }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

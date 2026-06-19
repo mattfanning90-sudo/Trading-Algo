@@ -123,6 +123,7 @@ def init_account(account: str, capital: float, synthetic: bool,
             "cash": local_cash,
             "positions": {},
             "cost_basis": {},
+            "realized_pnl": 0.0,
             "last_rebalance_month": None,
         }
     state = {
@@ -189,6 +190,9 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
         sleeve["cash"] -= delta * fill + fee + duty
         cb = sleeve.setdefault("cost_basis", {})
+        if delta < 0:   # realised P&L on shares sold (average-cost basis)
+            sleeve["realized_pnl"] = (sleeve.get("realized_pnl", 0.0)
+                                      + (fill - cb.get(t, fill)) * abs(delta))
         if tgt == 0:
             sleeve["positions"].pop(t, None)
             cb.pop(t, None)
