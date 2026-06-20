@@ -76,6 +76,9 @@ index/currency/fees/calendar/routing) and include its key in
   this automatically on Claude Code web).
 - Sandboxes may block outbound internet (Yahoo 403). Use `--synthetic` to
   smoke-test the pipeline offline; real backtests need network on your machine.
+- Data is fetched via a pluggable provider chain (`providers.py`): yfinance
+  (default), stooq (free fallback), polygon (`POLYGON_API_KEY`; US+FX+indices
+  only). Set `MOMENTUM_DATA_PROVIDER` to pick the primary; fallbacks auto-append.
 
 ## Style
 Python 3.11+, pandas/numpy, type hints, small testable modules, no heavy

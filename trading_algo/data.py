@@ -38,25 +38,10 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
         if have:
             return df.loc[start:end, have]
 
-    import time
-
-    import yfinance as yf  # imported lazily so the package works offline
-
-    raw = None
-    backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
-    for attempt, wait in enumerate(backoffs):
-        try:
-            raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
-                              progress=False)["Close"]
-            if raw is not None and len(raw):
-                break
-        except Exception:
-            if attempt == len(backoffs) - 1:
-                raise
-        time.sleep(wait)
-    if isinstance(raw, pd.Series):
-        raw = raw.to_frame(tickers[0])
-    raw = raw.reindex(columns=tickers)
+    # Route each ticker through the pluggable provider chain (primary + fallbacks);
+    # see providers.py. Imported lazily so the package works offline.
+    from . import providers
+    raw = providers.fetch_prices(tickers, start, end)
     raw = raw.dropna(how="all").dropna(axis=1, how="all")
     try:
         raw.to_parquet(cache_file)
