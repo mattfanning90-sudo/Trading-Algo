@@ -46,17 +46,25 @@ def min_history(p: FXParams) -> int:
 
 
 def target_weights_history(panel: dict[str, pd.DataFrame], p: FXParams,
-                           pool: AgentPool | None = None) -> pd.DataFrame:
-    """Full signed-weight history (index=time, columns=pairs)."""
+                           pool: AgentPool | None = None,
+                           return_parts: bool = False):
+    """Full signed-weight history (index=time, columns=pairs).
+
+    With ``return_parts=True`` also returns the intermediate (signals, tilts) so
+    the explainability layer can narrate a decision without recomputing — there
+    is still exactly one weight formula (this function), preserving invariant #3.
+    """
     if not panel:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        return (empty, {}, empty) if return_parts else empty
     pool = _pool(pool)
     contexts = {sym: PairContext(get_pair(sym)) for sym in panel}
     signals = pool.evaluate(panel, contexts, p)
     rets = closes(panel).pct_change(fill_method=None)
     tilts = ensemble.ensemble_tilts(signals, rets, p)
     vols = risk.pair_vols(panel, p)
-    return risk.size_book(tilts, vols, p)
+    weights = risk.size_book(tilts, vols, p)
+    return (weights, signals, tilts) if return_parts else weights
 
 
 def compute_targets(panel: dict[str, pd.DataFrame], p: FXParams,

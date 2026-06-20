@@ -63,7 +63,8 @@ python -m trading_algo.forex.engine --once              # one FX decision cycle 
 python -m trading_algo.forex.engine --once --ml         # ...including the deep-learning agent
 python -m trading_algo.forex.engine --benchmark         # live cycle latency
 python -m trading_algo.forex.train --synthetic          # train DL models + walk-forward report
-pytest -q                                           # 150 tests (80 equity + 70 FX/ML)
+python -m trading_algo.forex.dashboard --all --out-dir public  # candlestick dashboards + "why" callouts
+pytest -q                                           # 157 tests (80 equity + 77 FX/ML)
 ```
 
 The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a

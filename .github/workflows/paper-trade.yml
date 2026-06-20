@@ -24,8 +24,8 @@ on:
 
 permissions:
   contents: write      # commit updated paper state
-  pages: write         # publish the dashboard
-  id-token: write       # required by deploy-pages
+  # Pages publishing is consolidated in fx-paper.yml (one Pages deployer to avoid
+  # clobbering); this workflow only updates equity state + exports dashboards.
 
 concurrency:
   group: paper-trade
@@ -98,18 +98,5 @@ jobs:
             git push
           fi
 
-      - name: Upload dashboard as a Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-  deploy:
-    needs: run
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
+      # Dashboards are published to GitHub Pages by fx-paper.yml (single Pages
+      # deployer); this workflow exports them into public/ and updates state only.
