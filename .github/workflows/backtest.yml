@@ -10,6 +10,11 @@ name: Backtest (real data)
 on:
   workflow_dispatch:
     inputs:
+      task:
+        description: "What to run"
+        type: choice
+        options: [backtest, tune]
+        default: backtest
       mode:
         description: "Data mode"
         type: choice
@@ -34,12 +39,15 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run backtest report
+      - name: Run backtest / tune
         run: |
-          python -m trading_algo.report \
-            ${{ inputs.mode == 'synthetic' && '--synthetic' || '' }} \
-            ${{ inputs.point_in_time && '--point-in-time' || '' }} \
-            --out backtest_report.md
+          SYN="${{ inputs.mode == 'synthetic' && '--synthetic' || '' }}"
+          PIT="${{ inputs.point_in_time && '--point-in-time' || '' }}"
+          if [ "${{ inputs.task }}" = "tune" ]; then
+            python -m trading_algo.tune $SYN | tee backtest_report.md
+          else
+            python -m trading_algo.report $SYN $PIT --out backtest_report.md
+          fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat backtest_report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report + equity curves
