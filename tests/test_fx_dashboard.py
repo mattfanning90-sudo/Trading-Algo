@@ -70,13 +70,29 @@ def test_dashboard_export_offline(isolated):
     html = dashboard.export_account("matt", synthetic=True, out_path=str(out))
     assert out.exists()
     for token in ("addCandlestickSeries", "setMarkers", "Trade journal",
-                  "Today's read", "BTCUSD"):
+                  "Today's read", "BTCUSD", "Equity vs buy-and-hold",
+                  "Agent scorecard", "title="):
         assert token in html
-    # the embedded payload carries candles + at least one pair
-    payload = dashboard.build_payload("matt", synthetic=True)
-    assert payload["pairs"]
-    first = payload["data"][payload["pairs"][0]]
-    assert first["candles"] and "open" in first["candles"][0]
+
+
+def test_dashboard_payload_analytics(isolated):
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    p = dashboard.build_payload("matt", synthetic=True)
+    # Tier-1 analytics + attribution + glossary all present.
+    for key in ("book_curve", "bench_curve", "bench_metrics", "attribution",
+                "glossary", "gross"):
+        assert key in p
+    assert len(p["bench_curve"]) > 50                  # benchmark over the window
+    attr = p["attribution"]
+    assert {"ensemble", "buy&hold"} <= set(attr)       # references included
+    assert {"trend", "breakout", "carry"} <= set(attr) # per-agent contributions
+    # benchmark metrics are real numbers
+    assert "sharpe" in p["bench_metrics"]
+    # every trade carries an outcome field (open/win/loss)
+    for pair in p["data"].values():
+        for t in pair["trades"]:
+            assert t["outcome"] in ("open", "win", "loss")
 
 
 def test_dashboard_index(isolated):
