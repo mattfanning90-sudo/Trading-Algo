@@ -13,13 +13,18 @@ on:
       task:
         description: "What to run"
         type: choice
-        options: [backtest, tune]
+        options: [backtest, tune, defensive]
         default: backtest
       mode:
         description: "Data mode"
         type: choice
         options: [real, synthetic]
         default: real
+      region:
+        description: "Region for the defensive sweep (defensive task only)"
+        type: choice
+        options: [US, FTSE, ASX]
+        default: US
       point_in_time:
         description: "Point-in-time constituents (needs a constituents file per region)"
         type: boolean
@@ -45,6 +50,8 @@ jobs:
           PIT="${{ inputs.point_in_time && '--point-in-time' || '' }}"
           if [ "${{ inputs.task }}" = "tune" ]; then
             python -m trading_algo.tune $SYN | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "defensive" ]; then
+            python -m trading_algo.defensive_sweep --region "${{ inputs.region }}" $SYN | tee backtest_report.md
           else
             python -m trading_algo.report $SYN $PIT --out backtest_report.md
           fi

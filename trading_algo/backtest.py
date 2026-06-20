@@ -25,7 +25,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  initial_capital: float = INITIAL_CAPITAL,
                  membership=None,
                  max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
-                 cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS) -> dict:
+                 cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS,
+                 defensive_returns: pd.Series | None = None) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
@@ -34,10 +35,21 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     `max_drawdown_stop` is a circuit breaker: if equity falls more than this from
     its peak, the book liquidates to cash and sits out for `cooldown_days` before
-    resuming. Pass None to disable."""
+    resuming. Pass None to disable.
+
+    `defensive_returns` is the daily fractional return of the asset the idle /
+    risk-off fraction of the book is parked in (e.g. a bond or gold ETF, in the
+    sleeve's own currency). When None the idle fraction earns the constant
+    `params.cash_yield` instead (0% by default = plain cash). Either way, only
+    the *uninvested* fraction (1 − Σweights) earns it — equities are unaffected,
+    so this adds carry without adding equity-crash risk."""
     p = region.params
     prices = prices.dropna(how="all")
     rets = prices.pct_change(fill_method=None)
+    # Constant fallback yield as a per-trading-day rate (compounded to annual).
+    daily_cash_yield = (1.0 + p.cash_yield) ** (1.0 / 252.0) - 1.0
+    if defensive_returns is not None:
+        defensive_returns = defensive_returns.reindex(prices.index).fillna(0.0)
 
     # Rebalance dates = last trading day on or before each period end.
     rebal_marks = prices.resample(p.rebalance).last().index
@@ -104,7 +116,12 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
             pending = None
 
         day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
-        r = float((current_w * day_rets).sum()) - cost
+        equity_ret = float((current_w * day_rets).sum())
+        # Idle / risk-off fraction earns the defensive return (asset or cash_yield).
+        idle_frac = max(0.0, 1.0 - float(current_w.sum()))
+        cash_ret = (float(defensive_returns.loc[today])
+                    if defensive_returns is not None else daily_cash_yield)
+        r = equity_ret + idle_frac * cash_ret - cost
         daily_ret.append(r)
         equity.append(equity[-1] * (1 + r))
         weights_hist[today] = current_w
@@ -126,10 +143,12 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         elif yday in weight_schedule:
             pending = weight_schedule[yday]
 
-        # Drift held weights with the day's returns.
+        # Drift held weights with the day's returns. The idle fraction grows by
+        # the defensive return, so it's in the book's NAV growth factor too —
+        # keeping the equity weights honest fractions of total capital.
         if not current_w.empty:
             grown = current_w * (1 + day_rets)
-            nav = 1 + float((current_w * day_rets).sum())
+            nav = 1.0 + equity_ret + idle_frac * cash_ret
             current_w = grown / nav if nav != 0 else grown
 
     ret_series = pd.Series(daily_ret, index=dates[1:])

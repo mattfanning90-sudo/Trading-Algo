@@ -73,6 +73,20 @@ def load_region(region: Region, start: str, end: str | None = None,
     return prices, index_px
 
 
+def load_defensive_returns(ticker: str, start: str, end: str | None = None,
+                           use_cache: bool = True) -> pd.Series:
+    """Daily fractional returns for one defensive asset (e.g. a bond/gold ETF).
+
+    Used by the defensive sweep to credit the idle/risk-off fraction of the book
+    with a real asset's return instead of 0% cash. The asset must be quoted in
+    the sleeve's own currency (invariant #6) — callers pick a currency-matched
+    ticker from `region.defensive_assets`."""
+    px = load_prices([ticker], start, end, use_cache=use_cache)
+    if ticker not in px.columns:
+        raise ValueError(f"defensive asset {ticker!r} unavailable from providers")
+    return px[ticker].pct_change(fill_method=None)
+
+
 # ---------------------------------------------------------------------------
 # Synthetic data (offline pipeline testing only)
 # ---------------------------------------------------------------------------

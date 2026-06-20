@@ -45,6 +45,14 @@ class StrategyParams:
     # --- Rebalancing --------------------------------------------------------
     rebalance: str = "ME"            # pandas offset alias: month-end
 
+    # --- Defensive sleeve (what idle / risk-off capital earns) --------------
+    # The momentum book is only ~half invested on average (filters + vol target
+    # park the rest). By default that idle fraction earns 0% (cash drag). Set a
+    # positive annual rate to model parking it in T-bills; for a real asset
+    # (bonds/gold) the backtester takes an explicit `defensive_returns` series
+    # instead, which overrides this constant. 0.0 → unchanged (0% cash).
+    cash_yield: float = 0.0          # annualised yield on idle capital
+
     def with_overrides(self, **kwargs) -> "StrategyParams":
         """Return a copy with the given fields replaced (for per-region tuning)."""
         return replace(self, **kwargs)
