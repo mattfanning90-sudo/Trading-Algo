@@ -50,15 +50,15 @@ def _annual(ret: pd.Series) -> pd.Series:
     return (1 + ret.dropna()).resample("YE").prod() - 1
 
 
-def _load(synthetic: bool):
+def _load(synthetic: bool, start: str):
     us = get_region("US")
     if synthetic:
         eq_prices, eq_index = data.synthetic_region(us)
         raw = data.synthetic_prices(universes.TREND, "DUMMYIDX")
         tr_prices = raw[universes.TREND]
     else:
-        eq_prices, eq_index = data.load_region(us, cfg.START, None)
-        tr_prices = data.load_prices(universes.TREND, cfg.START, None)
+        eq_prices, eq_index = data.load_region(us, start, None)
+        tr_prices = data.load_prices(universes.TREND, start, None)
         tr_prices = tr_prices[[t for t in universes.TREND if t in tr_prices.columns]]
     return eq_prices, eq_index, tr_prices
 
@@ -66,9 +66,13 @@ def _load(synthetic: bool):
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Trend-diversifier report")
     ap.add_argument("--synthetic", action="store_true")
+    # Default to 2007 so the GFC (trend-following's best-ever year) is INCLUDED —
+    # starting at the usual 2012 would exclude it and sit on trend's lost decade,
+    # an unfairly hostile window for evaluating the diversifier.
+    ap.add_argument("--start", default="2007-01-01", help="history start (real mode)")
     args = ap.parse_args(argv)
 
-    eq_prices, eq_index, tr_prices = _load(args.synthetic)
+    eq_prices, eq_index, tr_prices = _load(args.synthetic, args.start)
 
     eq_bt = run_backtest(eq_prices, eq_index, get_region("US"))
     tr_bt = run_trend_backtest(tr_prices)
