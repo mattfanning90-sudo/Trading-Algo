@@ -4,9 +4,19 @@ import pytest
 from trading_algo.forex import pairs
 
 
-def test_default_universe_is_seven_majors():
+def test_default_universe_is_majors_plus_crypto():
     assert pairs.DEFAULT_UNIVERSE == ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
-                                      "USDCAD", "USDCHF", "NZDUSD"]
+                                      "USDCAD", "USDCHF", "NZDUSD",
+                                      "BTCUSD", "ETHUSD", "SOLUSD"]
+
+
+def test_crypto_pairs_registered():
+    btc = pairs.get_pair("BTCUSD")
+    assert btc.base == "BTC" and btc.quote == "USD"
+    assert btc.yahoo_ticker == "BTC-USD"
+    assert pairs.get_pair("ETHUSD").yahoo_ticker == "ETH-USD"
+    # crypto spot has no overnight swap
+    assert btc.swap_long_pips == 0.0 and btc.swap_short_pips == 0.0
 
 
 def test_jpy_pairs_have_larger_pip():

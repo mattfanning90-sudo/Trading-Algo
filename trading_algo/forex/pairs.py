@@ -62,6 +62,16 @@ PAIRS: dict[str, Pair] = {
     "NZDUSD": Pair("NZDUSD", "NZD", "USD", "NZDUSD=X", 0.0001, 1.2, 0.10, -0.35),
 }
 
+# Cryptocurrency (USD spot, via Yahoo "BTC-USD" etc.). Crypto trades 24/7, has
+# no overnight swap in spot, and runs far higher volatility than G10 FX — the
+# vol-targeting risk layer automatically sizes it down, so it slots into the same
+# ecosystem. Spreads are wider (~0.2% round trip) than majors.
+CRYPTO: dict[str, Pair] = {
+    "BTCUSD": Pair("BTCUSD", "BTC", "USD", "BTC-USD", 1.0, 120.0, 0.0, 0.0),
+    "ETHUSD": Pair("ETHUSD", "ETH", "USD", "ETH-USD", 1.0, 6.0, 0.0, 0.0),
+    "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0),
+}
+
 # Extra crosses available but off by default — flip into DEFAULT_UNIVERSE to use.
 CROSSES: dict[str, Pair] = {
     "EURGBP": Pair("EURGBP", "EUR", "GBP", "EURGBP=X", 0.0001, 0.9, -0.08, -0.15),
@@ -72,10 +82,10 @@ CROSSES: dict[str, Pair] = {
     "EURAUD": Pair("EURAUD", "EUR", "AUD", "EURAUD=X", 0.0001, 1.6, -0.15, -0.05),
 }
 
-ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CROSSES}
+ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES}
 
-# Default tradable universe: the seven majors.
-DEFAULT_UNIVERSE: list[str] = list(PAIRS)
+# Default tradable universe: the seven FX majors plus the three major cryptos.
+DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
 
 
 def get_pair(symbol: str) -> Pair:

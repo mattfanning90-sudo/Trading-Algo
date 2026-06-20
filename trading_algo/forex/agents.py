@@ -78,7 +78,10 @@ class BreakoutAgent(Agent):
         event = pd.Series(np.nan, index=close.index)
         event[close > upper] = 1.0
         event[close < lower] = -1.0
-        return _clip_signal(event.ffill())   # hold last breakout until it flips
+        # Hold the last breakout, but only for a bounded window — an un-confirmed
+        # breakout shouldn't persist forever (and unbounded ffill memory would
+        # break the windowed fast path's exactness).
+        return _clip_signal(event.ffill(limit=2 * p.donchian_window))
 
 
 class MeanReversionAgent(Agent):

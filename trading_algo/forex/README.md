@@ -65,6 +65,24 @@ the repo is the ledger).
   "Read and write"* so it can commit state back.
 * State lives in tracked `state/fx_state_*.json`; pull the repo to watch the books.
 
+It also publishes a **candlestick dashboard to GitHub Pages**: one page per book
+with candle charts, EMA overlays, BUY/SELL markers, a per-agent vote breakdown and
+a **trade journal explaining *why* each trade was made** (regime, which agents
+fired, the indicator readings) — built to learn from. Build it locally with:
+
+```bash
+python -m trading_algo.forex.dashboard --all --out-dir public   # one html per book + index
+python -m trading_algo.forex.dashboard --account matt -o matt.html
+```
+
+## Universe (FX majors + crypto)
+
+The default universe is the seven FX majors **plus the three major cryptos**
+(`BTCUSD`, `ETHUSD`, `SOLUSD`, via Yahoo `BTC-USD` etc.). Crypto trades 24/7, has
+no spot swap, and runs far hotter than G10 FX — the volatility-targeting risk
+layer sizes it down automatically, so it slots into the same agents/ensemble/book
+unchanged. Existing books pick up newly-added instruments on their next run.
+
 **Locally** (if your machine has internet) the same runs as a daemon:
 
 ```bash

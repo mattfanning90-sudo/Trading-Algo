@@ -28,8 +28,9 @@ import os
 import numpy as np
 import pandas as pd
 
+from . import explain
 from . import fx_config as cfg
-from . import fx_data, fx_strategy
+from . import fx_data
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -149,7 +150,9 @@ def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None) -> None:
     state = load_state(account)
     p = _params(state)
-    symbols = state["symbols"]
+    # Pick up any newly-added instruments (e.g. crypto) without losing history.
+    symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
+    state["symbols"] = symbols
     panel = _panel(symbols, synthetic)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
@@ -201,10 +204,11 @@ def run_once(account: str, synthetic: bool = False,
               f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} runs.")
 
     # --- target weights ----------------------------------------------------
+    rationale: dict[str, dict] = {}
     if halted:
         target = pd.Series(dtype=float)
     else:
-        target = fx_strategy.compute_targets(panel, p, pool=pool)
+        target, rationale = explain.decide_and_explain(panel, p, pool=pool)
     new_positions = {} if halted else _apply_band(positions, target, p)
 
     # --- turnover cost (cross half the spread on each weight change) -------
@@ -216,10 +220,16 @@ def run_once(account: str, synthetic: bool = False,
             continue
         price = px_last.get(s)
         cost_frac += abs(delta) * 0.5 * get_pair(s).spread_fraction(price)
+        why = rationale.get(s, {})
         trades.append({"date": bar_date, "pair": s,
                        "side": "BUY" if delta > 0 else "SELL",
                        "delta_weight": round(delta, 4),
-                       "price": round(float(price), 5) if price == price else None})
+                       "target_weight": round(new_positions.get(s, 0.0), 4),
+                       "price": round(float(price), 5) if price == price else None,
+                       "why": why.get("text"),
+                       "regime": why.get("regime"),
+                       "agents": why.get("agents"),
+                       "indicators": why.get("indicators")})
     equity *= (1.0 - cost_frac)
 
     # --- persist -----------------------------------------------------------
@@ -229,6 +239,7 @@ def run_once(account: str, synthetic: bool = False,
     state["last_bar_date"] = bar_date
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
+    state["decisions"] = rationale          # latest per-pair read (held or flat)
     state["trades"].extend(trades)
     if not state["equity_history"] or state["equity_history"][-1][0] != bar_date:
         state["equity_history"].append([bar_date, round(float(equity), 2)])

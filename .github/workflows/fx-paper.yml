@@ -1,17 +1,19 @@
 name: FX Paper Trading (live)
 
 # Runs the multi-agent FX paper books (matt + partner) unattended in the cloud
-# on REAL Yahoo FX data, then commits the updated state back to the repo so the
-# books compound across runs (the runner is ephemeral; the repo is the ledger).
+# on REAL Yahoo FX + crypto data, commits the updated state back to the repo so
+# the books compound across runs, then publishes a candlestick dashboard (with
+# the reasoning behind every trade) to GitHub Pages. This workflow is the single
+# Pages publisher — it also re-exports the equity dashboards so nothing is lost.
 #
-# ONE-TIME SETUP (repo Settings → Actions → General → Workflow permissions:
-# "Read and write"). NOTE: `schedule:` only fires on the DEFAULT branch, so merge
-# this to `main` for the daily cron to start. Until then use "Run workflow"
-# (workflow_dispatch) on main, or rely on the one-shot push trigger on this branch.
+# ONE-TIME SETUP (repo Settings):
+#   • Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   • Settings → Actions → General → Workflow permissions: "Read and write"
+# NOTE: schedule: only fires on the DEFAULT branch.
 
 on:
   schedule:
-    - cron: "0 23 * * 1-5"   # weekdays 23:00 UTC — after the NY close, daily bars settled
+    - cron: "0 23 * * 1-5"   # weekdays 23:00 UTC — after the NY close
   workflow_dispatch:
     inputs:
       mode:
@@ -23,12 +25,11 @@ on:
         description: "Include the deep-learning agent (retrained fresh each run)"
         type: boolean
         default: true
-  push:
-    branches: ["claude/practical-cray-luepjo"]
-    paths: [".github/workflows/fx-paper.yml"]   # one-shot: seed the first live run
 
 permissions:
-  contents: write
+  contents: write      # commit updated paper state
+  pages: write         # publish the dashboard
+  id-token: write      # required by deploy-pages
 
 concurrency:
   group: fx-paper
@@ -39,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FX_STATE_DIR: ${{ github.workspace }}/state
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}
     steps:
@@ -50,34 +52,50 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run the FX paper books (init if new, one daily pass)
+      - name: Advance the FX paper books (init if new, one daily pass)
         run: |
-          mkdir -p state
-          # Open matt + partner if they don't exist yet (idempotent).
+          mkdir -p state public
           python -m trading_algo.forex.paper --init $SYNTH
           ML_FLAG=""
           if [ "$USE_ML" = "true" ]; then
-            echo "::group::train deep-learning agent (best-effort; fresh walk-forward model)"
+            echo "::group::train deep-learning agent (best-effort)"
             python -m trading_algo.forex.train $SYNTH --seeds 2 --no-ml \
               --models-dir trading_algo/forex/models \
-              || echo "training failed — engine will fall back to the 5 technical agents"
+              || echo "training failed — falling back to the technical agents"
             echo "::endgroup::"
             ML_FLAG="--ml"
           fi
-          # One pass for every account (run_all); --ml uses the model if present.
           python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
 
-      - name: Status to run summary
+      - name: Export candlestick dashboards (FX) + equity dashboards
+        run: |
+          # FX books: candlesticks + per-trade rationale.
+          python -m trading_algo.forex.dashboard --all --out-dir public $SYNTH || true
+          # Equity books (best-effort) so the existing Pages site isn't lost.
+          for f in state/paper_state_*.json; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .json); name=${name#paper_state_}
+            python -m trading_algo.dashboard.export --account "$name" $SYNTH \
+              -o "public/eq_${name}.html" || echo "skip equity $name"
+          done
+
+      - name: Build combined landing page
         run: |
           {
-            echo "## FX paper books — $(date -u '+%Y-%m-%d %H:%M UTC')"
-            echo ""
-            echo '```'
-            python -m trading_algo.forex.paper --compare matt partner
-            echo '```'
-            echo ""
-            echo "<sub>Paper money. Synthetic runs are pipeline tests only.</sub>"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo '<!doctype html><meta charset=utf-8><title>Trading Paper Books</title>'
+            echo '<meta name=viewport content="width=device-width,initial-scale=1">'
+            echo '<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:3rem;max-width:760px}'
+            echo 'h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1rem;color:#8b949e}.s{color:#8b949e;margin:0 0 1rem}'
+            echo 'a.card{display:block;margin:.8rem 0;padding:1.1rem 1.4rem;border:1px solid #30363d;border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}'
+            echo 'a.card:hover{border-color:#58a6ff}.n{font-size:1.15rem;font-weight:600;color:#58a6ff}.d{color:#8b949e;font-size:.85rem}</style>'
+            echo "<h1>Trading Paper Books</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
+            echo '<h2>FX & crypto — candlesticks + the reasoning behind every trade</h2>'
+            for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
+              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>FX + crypto book</div></a>"; done
+            echo '<h2>Equity momentum (FTSE / US / ASX)</h2>'
+            for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
+              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>equity momentum book</div></a>"; done
+          } > public/index.html
 
       - name: Commit updated paper state
         run: |
@@ -90,3 +108,19 @@ jobs:
             git commit -m "chore: update FX paper state [skip ci]"
             git push
           fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

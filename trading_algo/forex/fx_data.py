@@ -105,7 +105,11 @@ _SYNTH_LEVEL = {
     "USDCAD": 1.36, "USDCHF": 0.90, "NZDUSD": 0.61, "EURGBP": 0.85,
     "EURJPY": 162.0, "GBPJPY": 190.0, "AUDJPY": 99.0, "AUDNZD": 1.08,
     "EURAUD": 1.63,
+    "BTCUSD": 60000.0, "ETHUSD": 3000.0, "SOLUSD": 150.0,
 }
+
+# Pairs that need a higher synthetic volatility path (crypto ≫ FX).
+_SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0}
 
 
 def synthetic_pair(pair: Pair, start: str = "2015-01-01", end: str = "2026-01-01",
@@ -115,15 +119,26 @@ def synthetic_pair(pair: Pair, start: str = "2015-01-01", end: str = "2026-01-01
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range(start, end)
     n = len(dates)
+    vmult = _SYNTH_VOL.get(pair.symbol, 1.0)        # crypto runs hotter than FX
 
     # AR(1) drift => trends that build and decay (gives breakouts & reversals).
     drift = np.zeros(n)
-    phi, sigma_d = 0.985, 0.00035
+    phi, sigma_d = 0.985, 0.00035 * vmult
     for t in range(1, n):
         drift[t] = phi * drift[t - 1] + rng.normal(0.0, sigma_d)
-    idio = rng.normal(0.0, 0.0045, n)
-    log_close = np.log(_SYNTH_LEVEL.get(pair.symbol, 1.0)) + np.cumsum(drift + idio)
-    close = np.exp(log_close)
+    idio = rng.normal(0.0, 0.0045 * vmult, n)
+    lvl = _SYNTH_LEVEL.get(pair.symbol, 1.0)
+    # Mean-reverting (OU) log-price: keeps the path within a realistic band of the
+    # reference (so spreads quoted in pips stay sane, esp. for crypto) while
+    # ALWAYS moving — a hard clip would stick the price dead-flat for long
+    # stretches, which is both unrealistic and breaks the windowed fast path.
+    kappa = 0.004
+    dev = np.empty(n)
+    acc = 0.0
+    for t in range(n):
+        acc = acc * (1.0 - kappa) + drift[t] + idio[t]
+        dev[t] = acc
+    close = lvl * np.exp(dev)
 
     open_ = np.empty(n)
     open_[0] = close[0]
