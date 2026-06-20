@@ -57,6 +57,23 @@ def test_select_requires_positive_momentum_and_trend():
     assert "C" in w
 
 
+def test_value_score_no_lookahead(synth_asx):
+    prices, _ = synth_asx
+    full = sig.value_score(prices, P)
+    i = 1500
+    truncated = sig.value_score(prices.iloc[: i + 1], P).iloc[-1]
+    pd.testing.assert_series_equal(full.iloc[i], truncated, check_names=False)
+
+
+def test_value_score_is_negated_long_term_return(synth_asx):
+    prices, _ = synth_asx
+    t = prices.index[-1]
+    v = sig.value_score(prices, P).loc[t]
+    expected = -(prices.shift(P.value_skip_days).loc[t]
+                 / prices.shift(P.value_lookback_days).loc[t] - 1.0)
+    pd.testing.assert_series_equal(v, expected, check_names=False)
+
+
 def test_index_risk_on_tracks_ma():
     up = pd.Series(np.linspace(100, 200, 300))
     assert bool(sig.index_risk_on(up, P).iloc[-1]) is True

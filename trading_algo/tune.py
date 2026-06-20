@@ -21,18 +21,18 @@ from .config import DEFAULT_PARAMS
 from .portfolio_backtest import run_portfolio_backtest
 
 # Allocation presets (benchmark is always the equal-weight index blend).
-_ALLOCS = {
-    "equal": None,
-    "US-tilt": {"US": 0.50, "ASX": 0.25, "FTSE": 0.25},
-}
+# US-tilt didn't help in earlier runs; keep it equal-weight.
+_ALLOCS = {"equal": None}
 
-# Grid of strategy knobs — focused on the highest-signal levers (cost + exposure)
-# so the whole grid runs quickly on one cached download. Broaden once we see it.
+# Grid of strategy knobs. Focused: best exposure settings (ME, vol 20%) x regime
+# on/off x momentum-only vs momentum+value blend, so we can see if adding the
+# value factor lifts the active return toward the goal.
 _GRID = {
-    "rebalance": ["ME", "QE"],        # monthly vs quarterly (turnover/cost)
-    "regime_filter": [True, False],   # crash gate on/off (cash drag)
-    "target_vol": [0.20],             # push toward fully invested
-    "top_n": [10],                    # diversification
+    "rebalance": ["ME"],
+    "regime_filter": [True, False],
+    "target_vol": [0.20],
+    "top_n": [10],
+    "use_value": [False, True],       # pure momentum vs 50/50 momentum+value
 }
 
 
@@ -68,15 +68,15 @@ def main(argv: list[str] | None = None) -> None:
     print("# Strategy tuning — active return vs the equal-weight index blend\n")
     if args.synthetic:
         print("> ⚠️ SYNTHETIC DATA — harness check only, numbers are meaningless.\n")
-    print("| rebal | regime | vol | top_n | alloc | CAGR | Bench | **Active** | Alpha | Beta | MaxDD |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| rebal | regime | vol | top_n | value | alloc | CAGR | Bench | **Active** | Alpha | Beta | MaxDD |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         if r["Active"] is None:
             print(f"| {r['rebalance']} | {r['regime_filter']} | {r['target_vol']:.0%} | "
-                  f"{r['top_n']} | {r['alloc']} | — | — | ERR | — | — | — |")
+                  f"{r['top_n']} | {r.get('use_value')} | {r['alloc']} | — | — | ERR | — | — | — |")
             continue
         print(f"| {r['rebalance']} | {r['regime_filter']} | {r['target_vol']:.0%} | "
-              f"{r['top_n']} | {r['alloc']} | {r['CAGR']:.1%} | {r['Bench']:.1%} | "
+              f"{r['top_n']} | {r.get('use_value')} | {r['alloc']} | {r['CAGR']:.1%} | {r['Bench']:.1%} | "
               f"**{r['Active']:+.1%}** | {r['Alpha']:+.1%} | {r['Beta']} | {r['MaxDD']:.1%} |")
 
     best = rows[0]
@@ -84,7 +84,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\n**Best active return: {best['Active']:+.1%}** — rebalance="
               f"{best['rebalance']}, regime_filter={best['regime_filter']}, "
               f"target_vol={best['target_vol']:.0%}, top_n={best['top_n']}, "
-              f"alloc={best['alloc']} (benchmark CAGR {best['Bench']:.1%}).")
+              f"use_value={best.get('use_value')}, alloc={best['alloc']} "
+              f"(benchmark CAGR {best['Bench']:.1%}).")
         print(f"\nGoal (beat by ≥ +2.0%): "
               f"{'✅ MET' if best['Active'] >= 0.02 else '❌ not yet'}")
 

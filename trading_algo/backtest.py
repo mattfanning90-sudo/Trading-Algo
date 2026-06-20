@@ -42,6 +42,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     # Rebalance dates = last trading day on or before each period end.
     rebal_marks = prices.resample(p.rebalance).last().index
     min_hist = p.min_history_days
+    if p.use_value:                              # need the long-term-reversal window
+        min_hist = max(min_hist, p.value_lookback_days + 5)
     if len(prices) <= min_hist:
         raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
 

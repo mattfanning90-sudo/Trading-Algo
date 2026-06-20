@@ -58,3 +58,14 @@ def test_regime_filter_off_stays_invested(synth_asx, asx_region):
 
 def test_vol_target_empty_is_empty():
     assert strategy.vol_target(pd.Series(dtype=float), pd.Series(dtype=float), P).empty
+
+
+def test_value_blend_compute_targets(synth_asx, asx_region):
+    """The momentum+value composite produces a valid, no-leverage book."""
+    prices, index_px = synth_asx
+    p = asx_region.params.with_overrides(use_value=True)
+    w = strategy.compute_targets(prices, index_px, p)
+    assert w.sum() <= P.max_gross + 1e-9
+    assert (w >= 0).all()
+    # value blend changes selection vs pure momentum (not guaranteed identical)
+    assert len(w) <= p.top_n

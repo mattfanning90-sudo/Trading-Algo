@@ -74,5 +74,14 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
         .loc[asof]
     ))
 
-    raw = sig.select_portfolio(scores, trend, vols, risk_on, p)
+    rank_score = None
+    if p.use_value:
+        val = sig.value_score(prices, p).loc[asof]
+        if eligible is not None:
+            val = val[val.index.isin(eligible)]
+        # cross-sectional percentile blend: high = strong momentum AND cheap
+        rank_score = (p.momentum_weight * scores.rank(pct=True)
+                      + p.value_weight * val.rank(pct=True))
+
+    raw = sig.select_portfolio(scores, trend, vols, risk_on, p, rank_score=rank_score)
     return vol_target(raw, vols, p)
