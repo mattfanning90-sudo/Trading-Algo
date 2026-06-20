@@ -163,6 +163,15 @@ def run_once(account: str, synthetic: bool = False,
     px_last = px.iloc[-1]
 
     if state["last_bar_date"] == bar_date:
+        # No new bar to trade, but keep the dashboard's "today's read" current by
+        # refreshing the per-pair reasoning snapshot.
+        if not state.get("risk_halted"):
+            try:
+                _, rationale = explain.decide_and_explain(panel, p, pool=pool)
+                state["decisions"] = rationale
+                save_state(account, state)
+            except Exception as exc:                       # never let display break a run
+                print(f"  [{account}] (decision refresh skipped: {exc!r})")
         print(f"  [{account}] no new bar ({bar_date}) — equity "
               f"{state['equity']:,.2f} {state['currency']}")
         return
