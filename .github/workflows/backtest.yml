@@ -13,7 +13,7 @@ on:
       task:
         description: "What to run"
         type: choice
-        options: [backtest, tune, defensive]
+        options: [backtest, tune, defensive, trend]
         default: backtest
       mode:
         description: "Data mode"
@@ -52,6 +52,8 @@ jobs:
             python -m trading_algo.tune $SYN | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "defensive" ]; then
             python -m trading_algo.defensive_sweep --region "${{ inputs.region }}" $SYN | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "trend" ]; then
+            python -m trading_algo.trend_report $SYN | tee backtest_report.md
           else
             python -m trading_algo.report $SYN $PIT --out backtest_report.md
           fi

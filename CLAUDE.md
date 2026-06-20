@@ -35,6 +35,12 @@ history and reasoning.
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `trend.py` — **time-series (trend) momentum diversifier sleeve**: each ETF
+  traded long/short on its own trend, vol-targeted, across equities/bonds/
+  commodities/FX. Own `compute_trend_targets` (single source) + `run_trend_backtest`.
+  A diversifier (low corr to equities, crisis alpha), not a return engine
+- `defensive_sweep.py` — compares what idle/risk-off capital earns (cash/T-bill/
+  bonds/gold) per sleeve; `trend_report.py` — equity-vs-trend-vs-blend comparison
 - `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
@@ -44,11 +50,13 @@ python -m trading_algo.run_backtest --region US     # single sleeve
 python -m trading_algo.run_backtest --synthetic     # offline pipeline test
 python -m trading_algo.run_backtest --point-in-time # survivorship-bias corrected
 python -m trading_algo.sweep --region US            # parameter robustness sweep
+python -m trading_algo.trend_report                 # equity vs trend vs blend (diversifier test)
+python -m trading_algo.defensive_sweep --region US  # what idle capital should earn
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 79 tests
+pytest -q                                           # 109 tests
 ```
 
 ## Invariants — do not break these

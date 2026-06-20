@@ -62,6 +62,34 @@ class StrategyParams:
 DEFAULT_PARAMS = StrategyParams()
 
 
+@dataclass(frozen=True)
+class TrendParams:
+    """Knobs for the time-series (trend) momentum diversifier sleeve.
+
+    Distinct from `StrategyParams` because trend is a different strategy: each
+    asset is traded long/short on its OWN trend (not ranked cross-sectionally),
+    sized by inverse volatility to a portfolio vol target. Defaults follow the
+    AQR "century of evidence" recipe (1/3/12-month signal blend, ~10% vol).
+    """
+    lookbacks: tuple = (21, 63, 252)   # 1/3/12-month trend horizons (trading days)
+    vol_lookback: int = 90             # days for the inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (diversified L/S; NOTE:
+    #                                    >1 needs futures/margin — see trend.py docstring)
+    avg_correlation: float = 0.20      # low: positions span 4 asset classes
+    long_only: bool = False            # True = long-or-flat (no shorting; ETF-only)
+    rebalance: str = "ME"              # month-end, like the equity sleeves
+    min_history_days: int = 260        # need ~12m before the first signal
+    cost_bps: float = 3.0              # per side (commission+slippage), liquid ETFs
+
+    def with_overrides(self, **kwargs) -> "TrendParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_TREND_PARAMS = TrendParams()
+
+
 # ---------------------------------------------------------------------------
 # Portfolio-level configuration
 # ---------------------------------------------------------------------------
