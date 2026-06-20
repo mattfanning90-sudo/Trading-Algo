@@ -209,6 +209,12 @@ One-time setup in the repo's **Settings**:
    **Actions → Paper Trade & Publish Dashboard → Run workflow** (pick `real` or
    `synthetic`).
 
+`backtest.yml` is a **manual real-data backtest**: Actions → "Backtest (real
+data)" → Run workflow. GitHub runners have internet, so it fetches live Yahoo
+prices, runs the full AUD portfolio backtest vs the benchmark, and posts the
+report to the run **Summary** (plus a downloadable artifact). Locally:
+`python -m trading_algo.report` (add `--point-in-time` / `--synthetic`).
+
 `ci.yml` runs the test suite on every push / PR. The scheduled job uses **real**
 market data by default; if Yahoo is rate-limiting in CI, run it in `synthetic`
 mode (the dashboard still publishes, just on synthetic prices).
