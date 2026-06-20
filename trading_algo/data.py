@@ -34,10 +34,21 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
         if all(t in df.columns for t in tickers):
             return df.loc[start:end, tickers]
 
+    import time
+
     import yfinance as yf  # imported lazily so the package works offline
 
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
-                      progress=False)["Close"]
+    raw = None
+    for attempt in range(3):                       # Yahoo can be flaky — retry
+        try:
+            raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                              progress=False)["Close"]
+            if raw is not None and len(raw):
+                break
+        except Exception:
+            if attempt == 2:
+                raise
+        time.sleep(2 * (attempt + 1))
     if isinstance(raw, pd.Series):
         raw = raw.to_frame(tickers[0])
     raw = raw.reindex(columns=tickers)

@@ -1,0 +1,53 @@
+name: Backtest (real data)
+
+# Manual real-data backtest. GitHub runners have internet, so this fetches live
+# Yahoo prices, runs the full AUD portfolio backtest vs the benchmark, and posts
+# the report to the run summary (Actions → this run → Summary). Also uploads the
+# report + equity curves as a downloadable artifact. Does not commit anything.
+#
+#   Actions → "Backtest (real data)" → Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode"
+        type: choice
+        options: [real, synthetic]
+        default: real
+      point_in_time:
+        description: "Point-in-time constituents (needs a constituents file per region)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run backtest report
+        run: |
+          python -m trading_algo.report \
+            ${{ inputs.mode == 'synthetic' && '--synthetic' || '' }} \
+            ${{ inputs.point_in_time && '--point-in-time' || '' }} \
+            --out backtest_report.md
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          cat backtest_report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report + equity curves
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-report
+          path: |
+            backtest_report.md
+            equity_curve_portfolio.csv
+            benchmark_curve.csv
+          if-no-files-found: warn
