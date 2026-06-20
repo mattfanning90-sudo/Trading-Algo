@@ -41,6 +41,12 @@ history and reasoning.
   A diversifier (low corr to equities, crisis alpha), not a return engine
 - `defensive_sweep.py` — compares what idle/risk-off capital earns (cash/T-bill/
   bonds/gold) per sleeve; `trend_report.py` — equity-vs-trend-vs-blend comparison
+- `robust.py` — overfitting controls (Probabilistic/Deflated Sharpe, PBO via CSCV);
+  `tradestats.py` — trade/period stats (win rate done right: profit factor, payoff,
+  expectancy, breakeven, Wilson CI, Kelly); `stress.py` — stationary-bootstrap
+  Monte-Carlo, regime-conditional stats, drawdown analytics, cost stress;
+  `validate.py` — one report combining all of the above. See
+  `docs/research/BACKTEST_VALIDATION.md`
 - `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
@@ -52,11 +58,12 @@ python -m trading_algo.run_backtest --point-in-time # survivorship-bias correcte
 python -m trading_algo.sweep --region US            # parameter robustness sweep
 python -m trading_algo.trend_report                 # equity vs trend vs blend (diversifier test)
 python -m trading_algo.defensive_sweep --region US  # what idle capital should earn
+python -m trading_algo.validate --region US         # win rate, Deflated Sharpe, PBO, regime, stress
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 109 tests
+pytest -q                                           # 125 tests
 ```
 
 ## Invariants — do not break these
