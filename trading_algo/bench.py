@@ -52,21 +52,29 @@ def benchmarks(region_key: str):
     vols = sig.realised_vol(prices, p).loc[asof]
     raw_w = sig.select_portfolio(scores, trend, vols, True, p)
 
+    # Precompute the indicator frames once — what the backtester reuses across
+    # every rebalance. The cached compute_targets shows the per-decision latency
+    # a walk-forward sim actually pays after the one-time precompute.
+    cache = strategy.precompute(prices, index_px, p)
+
     return [
         # micro-ops: operate on one as-of cross-section → genuine microseconds
         ("select_portfolio (1 rebalance)",
          lambda: sig.select_portfolio(scores, trend, vols, True, p), 2000),
         ("vol_target (1 rebalance)",
          lambda: strategy.vol_target(raw_w, vols, p), 5000),
-        # full-frame signal recompute (what compute_targets does each call)
+        # full-frame signal recompute (what an UNcached compute_targets does each call)
         ("momentum_score (full history)", lambda: sig.momentum_score(prices, p), 500),
         ("value_score (full history)", lambda: sig.value_score(prices, pv), 500),
         ("realised_vol (full history)", lambda: sig.realised_vol(prices, p), 300),
-        # the end-to-end per-rebalance decision
-        ("compute_targets — momentum",
+        # the end-to-end per-rebalance decision — cold (recompute) vs cached
+        ("compute_targets — momentum (cold)",
          lambda: strategy.compute_targets(prices, index_px, p, asof=asof), 200),
-        ("compute_targets — momentum+value",
+        ("compute_targets — momentum+value (cold)",
          lambda: strategy.compute_targets(prices, index_px, pv, asof=asof), 200),
+        ("compute_targets — momentum (cached)",
+         lambda: strategy.compute_targets(prices, index_px, p, asof=asof,
+                                          signals_cache=cache), 2000),
     ]
 
 

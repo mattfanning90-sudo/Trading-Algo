@@ -47,6 +47,11 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     if len(prices) <= min_hist:
         raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
 
+    # Build the heavy indicator frames once and reuse them for every rebalance
+    # (they're causal, so per-date .loc reads are identical to recomputing —
+    # see strategy.precompute). Keeps compute_targets the single weight builder.
+    signals_cache = strategy.precompute(prices, index_prices, p)
+
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     for d in rebal_marks:
         loc_idx = prices.index.searchsorted(d, side="right") - 1
@@ -55,7 +60,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         asof = prices.index[loc_idx]
         eligible = membership.members_asof(asof) if membership is not None else None
         weight_schedule[asof] = strategy.compute_targets(
-            prices, index_prices, p, asof=asof, eligible=eligible)
+            prices, index_prices, p, asof=asof, eligible=eligible,
+            signals_cache=signals_cache)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index

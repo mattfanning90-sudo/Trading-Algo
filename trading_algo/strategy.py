@@ -46,9 +46,36 @@ def vol_target(weights: pd.Series, vols: pd.Series, p: StrategyParams) -> pd.Ser
     return w
 
 
+def precompute(prices: pd.DataFrame, index_prices: pd.Series,
+               p: StrategyParams) -> dict:
+    """Precompute the full-history indicator frames once, for reuse across many
+    `compute_targets` calls (a walk-forward backtest evaluates one as-of date per
+    rebalance — dozens to hundreds of them).
+
+    Every indicator here is *causal* (rolling / shift only), so reading
+    ``frame.loc[asof]`` later returns exactly what recomputing from
+    ``prices.loc[:asof]`` would — see `test_strategy_cache`. Caching therefore
+    changes nothing about the result, only the cost: the heavy frame math runs
+    a single time instead of once per rebalance (~100× fewer passes over the
+    price history). The single-source-of-truth contract (invariant #3) is
+    preserved — `compute_targets` is still the only place weights are built.
+    """
+    cache = {
+        "momentum": sig.momentum_score(prices, p),
+        "trend": sig.stock_trend_ok(prices, p),
+        "vol": sig.realised_vol(prices, p),
+        # store the index regime pre-aligned to the price calendar (forward-filled)
+        "risk_on": sig.index_risk_on(index_prices, p).reindex(prices.index).ffill(),
+    }
+    if p.use_value:
+        cache["value"] = sig.value_score(prices, p)
+    return cache
+
+
 def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
                     p: StrategyParams, asof: pd.Timestamp | None = None,
-                    eligible: set[str] | None = None) -> pd.Series:
+                    eligible: set[str] | None = None,
+                    signals_cache: dict | None = None) -> pd.Series:
     """Target weights for one rebalance date (default: the latest available).
 
     Uses only data up to and including `asof` — no lookahead. Returns a Series
@@ -58,25 +85,27 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
     `eligible`, if given, restricts the candidate set to those tickers — used
     for point-in-time backtests so a name can't be picked before it was actually
     an index member.
+
+    `signals_cache`, if given (from `precompute`), supplies the full indicator
+    frames so they aren't rebuilt on this call. When omitted they are computed
+    on the fly — identical result, just slower. The backtester precomputes once
+    and passes the cache to every rebalance.
     """
     if asof is None:
         asof = prices.index[-1]
 
-    scores = sig.momentum_score(prices, p).loc[asof]
+    c = signals_cache if signals_cache is not None else precompute(prices, index_prices, p)
+
+    scores = c["momentum"].loc[asof]
     if eligible is not None:
         scores = scores[scores.index.isin(eligible)]
-    trend = sig.stock_trend_ok(prices, p).loc[asof]
-    vols = sig.realised_vol(prices, p).loc[asof]
-    risk_on = (True if not p.regime_filter else bool(
-        sig.index_risk_on(index_prices, p)
-        .reindex(prices.index)
-        .ffill()
-        .loc[asof]
-    ))
+    trend = c["trend"].loc[asof]
+    vols = c["vol"].loc[asof]
+    risk_on = True if not p.regime_filter else bool(c["risk_on"].loc[asof])
 
     rank_score = None
     if p.use_value:
-        val = sig.value_score(prices, p).loc[asof]
+        val = c["value"].loc[asof]
         if eligible is not None:
             val = val[val.index.isin(eligible)]
         # cross-sectional percentile blend: high = strong momentum AND cheap
