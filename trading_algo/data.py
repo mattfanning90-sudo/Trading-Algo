@@ -30,9 +30,13 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
 
     if use_cache and os.path.exists(cache_file):
+        # Reuse the cache for this key even if a few tickers persistently fail to
+        # download (else every call re-fetches the whole universe). Return the
+        # requested tickers that are present.
         df = pd.read_parquet(cache_file)
-        if all(t in df.columns for t in tickers):
-            return df.loc[start:end, tickers]
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
 
     import time
 

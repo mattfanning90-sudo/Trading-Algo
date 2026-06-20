@@ -26,12 +26,13 @@ _ALLOCS = {
     "US-tilt": {"US": 0.50, "ASX": 0.25, "FTSE": 0.25},
 }
 
-# Grid of strategy knobs (kept deliberately small / principled).
+# Grid of strategy knobs — focused on the highest-signal levers (cost + exposure)
+# so the whole grid runs quickly on one cached download. Broaden once we see it.
 _GRID = {
     "rebalance": ["ME", "QE"],        # monthly vs quarterly (turnover/cost)
     "regime_filter": [True, False],   # crash gate on/off (cash drag)
-    "target_vol": [0.12, 0.20],       # how fully invested
-    "top_n": [10, 6],                 # diversified vs concentrated
+    "target_vol": [0.20],             # push toward fully invested
+    "top_n": [10],                    # diversification
 }
 
 
