@@ -48,6 +48,30 @@ python -m trading_algo.forex.engine --once --ml        # paper-trade WITH the ne
 Each account is a self-contained `fx_state_{account}.json`. Add a third book
 with `python -m trading_algo.forex.paper --init --account jess --profile aggressive`.
 
+## Live paper trading (unattended)
+
+Run the books as a continuous paper exercise — no machine of yours needed. The
+**FX Paper Trading (live)** GitHub Action (`.github/workflows/fx-paper.yml`) runs
+on a weekday schedule, fetches real Yahoo FX data, advances both books one bar,
+includes the deep-learning agent (retrained fresh each run, best-effort), writes a
+status table to the run Summary, and **commits the updated `state/fx_state_*.json`
+back to the repo** so the books compound across runs (the runner is ephemeral —
+the repo is the ledger).
+
+* `schedule:` only fires on the **default branch**, so merge to `main` for the
+  daily cron to start; until then use *Run workflow* on `main` (the one-shot push
+  trigger seeds the first run on this branch).
+* One-time: repo *Settings → Actions → General → Workflow permissions →
+  "Read and write"* so it can commit state back.
+* State lives in tracked `state/fx_state_*.json`; pull the repo to watch the books.
+
+**Locally** (if your machine has internet) the same runs as a daemon:
+
+```bash
+python -m trading_algo.forex.paper --init                          # once
+python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
+```
+
 ## The parallel agent ecosystem
 
 | Agent | Edge | Acts when |
