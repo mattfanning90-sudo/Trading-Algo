@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, robust, stress, tradestats
+from . import constituents, data, robust, stress, tradestats
 from .backtest import run_backtest
 from .metrics import compute_metrics
 from .regions import get_region
@@ -36,7 +36,7 @@ def _sharpe(metrics: dict) -> float:
     return next((v for k, v in metrics.items() if k.startswith("Sharpe")), float("nan"))
 
 
-def _grid_trials(region, prices, index_px):
+def _grid_trials(region, prices, index_px, membership=None):
     """Run the (lookback × top_n) grid once, collecting each config's annualised
     Sharpe (for DSR) and monthly return series (for PBO's T×N matrix)."""
     sharpes, monthly = [], {}
@@ -45,7 +45,7 @@ def _grid_trials(region, prices, index_px):
             variant = replace(region, params=region.params.with_overrides(
                 lookback_days=lb, top_n=tn))
             try:
-                res = run_backtest(prices, index_px, variant)
+                res = run_backtest(prices, index_px, variant, membership=membership)
             except Exception:
                 continue
             sharpes.append(_sharpe(res["metrics"]))
@@ -55,21 +55,40 @@ def _grid_trials(region, prices, index_px):
     return sharpes, mat
 
 
-def build_report(region_key: str, synthetic: bool) -> str:
+def build_report(region_key: str, synthetic: bool, point_in_time: bool = False) -> str:
     region = get_region(region_key)
+    membership = None
+    pit_note = None
+    if point_in_time:
+        membership = (constituents.synthetic_membership(region) if synthetic
+                      else constituents.get_membership(region))
+        if membership is None:
+            pit_note = ("⚠️ --point-in-time requested but **no real constituents file** is "
+                        "configured for this region, so the survivorship-biased CURRENT "
+                        "universe was used. A genuine survivorship fix needs a PIT "
+                        "membership file *with delisted names* (e.g. Norgate / a CSV).")
+        elif synthetic:
+            pit_note = ("⚠️ Point-in-time uses SYNTHETIC membership (rotates today's names) — "
+                        "it exercises the PIT machinery but does **not** remove survivorship "
+                        "bias (the delisted graveyard is still missing).")
+        else:
+            pit_note = (f"Point-in-time membership: {len(membership)} snapshots, "
+                        f"{len(membership.all_tickers)} names ever in the index.")
+    pit_tickers = membership.all_tickers if membership is not None else None
+
     if synthetic:
         prices, index_px = data.synthetic_region(region)
     else:
-        prices, index_px = data.load_region(region, cfg.START, None)
+        prices, index_px = data.load_region(region, cfg.START, None, tickers=pit_tickers)
 
-    bt = run_backtest(prices, index_px, region)
+    bt = run_backtest(prices, index_px, region, membership=membership)
     rets = bt["returns"]
     m = compute_metrics(rets, bt["equity"], currency=region.currency)
 
     ts = tradestats.trade_stats(rets, period="ME")
     tim = tradestats.time_in_market(bt["weights"])
 
-    trial_sharpes, perf_mat = _grid_trials(region, prices, index_px)
+    trial_sharpes, perf_mat = _grid_trials(region, prices, index_px, membership)
     psr = robust.probabilistic_sharpe_ratio(rets)
     mintrl = robust.min_track_record_length(rets)
     dsr = robust.deflated_sharpe_ratio(rets, trial_sharpes)
@@ -85,6 +104,8 @@ def build_report(region_key: str, synthetic: bool) -> str:
     w(f"# Backtest validation — {region.name} ({region.currency})\n")
     if synthetic:
         w("> ⚠️ SYNTHETIC DATA — pipeline check only, numbers are meaningless.\n")
+    if pit_note:
+        w(f"> {pit_note}\n")
     n_obs = len(rets)
     w(f"Sample: {n_obs} days ({n_obs/_PPY:.1f}y). Headline CAGR {m['CAGR']:.1%}, "
       f"Sharpe {_sharpe(m):.2f}, MaxDD {m['MaxDrawdown']:.1%}.\n")
@@ -144,8 +165,10 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Backtest validation report")
     ap.add_argument("--region", default="US", choices=["ASX", "US", "FTSE"])
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--point-in-time", action="store_true",
+                    help="restrict to point-in-time index members (needs a constituents file)")
     args = ap.parse_args(argv)
-    print(build_report(args.region, args.synthetic))
+    print(build_report(args.region, args.synthetic, args.point_in_time))
 
 
 if __name__ == "__main__":

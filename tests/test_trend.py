@@ -53,6 +53,17 @@ def test_compute_trend_targets_no_lookahead():
     pd.testing.assert_series_equal(full, trunc)
 
 
+def test_trend_targets_ignore_corrupted_future():
+    """Shift-test lock-down for the trend sleeve: garbage prices after asof must
+    not change the weights decided at asof."""
+    prices = _synth_trend()
+    asof = prices.index[-40]
+    base = trend.compute_trend_targets(prices, TP, asof=asof)
+    p2 = prices.copy()
+    p2.iloc[p2.index.get_loc(asof) + 1:] *= 1000.0
+    pd.testing.assert_series_equal(base, trend.compute_trend_targets(p2, TP, asof=asof))
+
+
 def test_cached_equals_uncached():
     prices = _synth_trend()
     cache = trend.precompute(prices, TP)

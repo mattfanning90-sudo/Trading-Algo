@@ -29,6 +29,23 @@ def test_compute_targets_no_lookahead(synth_asx, asx_region):
     pd.testing.assert_series_equal(full, truncated)
 
 
+def test_compute_targets_ignores_corrupted_future(synth_asx, asx_region):
+    """Look-ahead lock-down (the 'shift test', strong form): poisoning every price
+    AFTER asof with garbage must NOT change the weights computed at asof. Same
+    index shape as the real run (unlike truncation), so it catches off-by-one
+    windows and any indicator that accidentally reaches into t+1."""
+    prices, index_px = synth_asx
+    asof = prices.index[-30]
+    base = strategy.compute_targets(prices, index_px, asx_region.params, asof=asof)
+
+    p2, i2 = prices.copy(), index_px.copy()
+    cut = p2.index.get_loc(asof) + 1
+    p2.iloc[cut:] *= 1000.0                 # detonate the future
+    i2.iloc[cut:] *= 1000.0
+    poisoned = strategy.compute_targets(p2, i2, asx_region.params, asof=asof)
+    pd.testing.assert_series_equal(base, poisoned)
+
+
 def test_vol_target_scales_down_high_vol():
     w = pd.Series({"A": 0.5, "B": 0.5})
     high = strategy.vol_target(w, pd.Series({"A": 0.8, "B": 0.8}), P)
