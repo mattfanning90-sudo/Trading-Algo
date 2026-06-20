@@ -67,12 +67,12 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
         scores = scores[scores.index.isin(eligible)]
     trend = sig.stock_trend_ok(prices, p).loc[asof]
     vols = sig.realised_vol(prices, p).loc[asof]
-    risk_on = bool(
+    risk_on = (True if not p.regime_filter else bool(
         sig.index_risk_on(index_prices, p)
         .reindex(prices.index)
         .ffill()
         .loc[asof]
-    )
+    ))
 
     raw = sig.select_portfolio(scores, trend, vols, risk_on, p)
     return vol_target(raw, vols, p)

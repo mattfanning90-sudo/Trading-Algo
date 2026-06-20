@@ -11,12 +11,15 @@ currencies. The result is one combined AUD equity curve plus per-sleeve detail.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 
 from . import config as cfg
 from . import constituents, data, fx
 from .backtest import run_backtest
+from .config import StrategyParams
 from .metrics import benchmark_stats, compute_metrics
 from .regions import get_region
 
@@ -34,8 +37,12 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            synthetic: bool = False,
                            start: str = cfg.START,
                            end: str | None = None,
-                           point_in_time: bool = False) -> dict:
-    regions = regions or list(cfg.ALLOCATIONS)
+                           point_in_time: bool = False,
+                           params: StrategyParams | None = None,
+                           allocations: dict[str, float] | None = None) -> dict:
+    """`params` overrides the strategy knobs for every sleeve; `allocations`
+    overrides the capital split (both used by the tuner)."""
+    regions = regions or list(allocations or cfg.ALLOCATIONS)
     syn_end = end or "2026-01-01"
 
     sleeves: dict[str, dict] = {}
@@ -50,6 +57,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
 
     for key in regions:
         region = get_region(key)
+        if params is not None:
+            region = replace(region, params=params)
         membership = None
         if point_in_time:
             membership = (constituents.synthetic_membership(region, start, syn_end)
@@ -71,7 +80,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     union = pd.DatetimeIndex(union)
     base_r = {k: s["base_returns"].reindex(union).fillna(0.0) for k, s in sleeves.items()}
 
-    alloc = {k: cfg.ALLOCATIONS[k] for k in regions}
+    alloc = {k: (allocations or cfg.ALLOCATIONS)[k] for k in regions}
     tot_alloc = sum(alloc.values())
     alloc = {k: v / tot_alloc for k, v in alloc.items()}  # normalise to 1.0
 

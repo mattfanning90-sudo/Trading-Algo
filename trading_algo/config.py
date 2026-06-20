@@ -33,6 +33,7 @@ class StrategyParams:
     abs_momentum_floor: float = 0.0  # require positive 12-1 return
     stock_trend_ma: int = 200        # stock must be above its N-day MA
     index_trend_ma: int = 200        # index below its N-day MA -> de-risk to cash
+    regime_filter: bool = True       # apply the index regime gate at all
 
     # --- Rebalancing --------------------------------------------------------
     rebalance: str = "ME"            # pandas offset alias: month-end

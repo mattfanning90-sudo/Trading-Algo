@@ -43,5 +43,18 @@ def test_vol_target_caps_leverage():
     assert low.sum() <= P.max_gross + 1e-9
 
 
+def test_regime_filter_off_stays_invested(synth_asx, asx_region):
+    """With the regime gate off, a risk-off index no longer forces cash."""
+    prices, index_px = synth_asx
+    # a falling index → regime ON would likely go to cash at the end
+    p_on = asx_region.params.with_overrides(regime_filter=True)
+    p_off = asx_region.params.with_overrides(regime_filter=False)
+    # pick an as-of where eligible names exist; off-config should hold >= on-config
+    asof = prices.index[-1]
+    w_on = strategy.compute_targets(prices, index_px, p_on, asof=asof)
+    w_off = strategy.compute_targets(prices, index_px, p_off, asof=asof)
+    assert w_off.sum() >= w_on.sum() - 1e-9
+
+
 def test_vol_target_empty_is_empty():
     assert strategy.vol_target(pd.Series(dtype=float), pd.Series(dtype=float), P).empty
