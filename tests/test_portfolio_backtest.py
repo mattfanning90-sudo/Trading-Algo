@@ -17,6 +17,18 @@ def test_allocations_normalised():
     assert abs(sum(result["allocations"].values()) - 1.0) < 1e-9
 
 
+def test_params_and_allocation_overrides():
+    from trading_algo.config import DEFAULT_PARAMS
+    base = run_portfolio_backtest(synthetic=True, start="2018-01-01", end="2021-01-01")
+    over = run_portfolio_backtest(
+        synthetic=True, start="2018-01-01", end="2021-01-01",
+        params=DEFAULT_PARAMS.with_overrides(rebalance="QE", regime_filter=False, top_n=6),
+        allocations={"US": 0.5, "ASX": 0.25, "FTSE": 0.25})
+    # the override changes the equity path and records the tilted allocation
+    assert abs(over["allocations"]["US"] - 0.5) < 1e-9
+    assert not base["equity"].equals(over["equity"])
+
+
 def test_portfolio_has_benchmark():
     result = run_portfolio_backtest(synthetic=True, start="2018-01-01", end="2021-01-01")
     assert (result["benchmark"] > 0).all()
