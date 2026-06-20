@@ -1,0 +1,81 @@
+name: FX Deep-Learning Train & Evaluate
+
+# Trains the FX deep-learning models (the Sharpe-loss NeuralAgent + the
+# meta-labeler) and runs the no-lookahead walk-forward comparison in the cloud.
+# GitHub runners have internet, so this fetches real Yahoo FX data; the report
+# (Sharpe / Probabilistic & Deflated Sharpe / PBO) is posted to the run Summary
+# and the trained models + report are uploaded as a downloadable artifact.
+#
+#   Actions → "FX Deep-Learning Train & Evaluate" → Run workflow
+#
+# Optional weekly retrain keeps the live models fresh (artifacts only; nothing is
+# committed automatically).
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode"
+        type: choice
+        options: [real, synthetic]
+        default: real
+      seeds:
+        description: "Models per seed-ensemble"
+        type: string
+        default: "3"
+      profile:
+        description: "Risk profile"
+        type: choice
+        options: [balanced, conservative, aggressive]
+        default: balanced
+  schedule:
+    - cron: "0 6 * * 1"     # Mondays 06:00 UTC — weekly retrain (artifacts only)
+  # Runs the real-data training on Actions whenever the FX code changes on the
+  # development branch (workflow_dispatch only works from the default branch).
+  # Inert on main after merge, where dispatch + schedule take over.
+  push:
+    branches: ["claude/practical-cray-luepjo"]
+    paths:
+      - "trading_algo/forex/**"
+      - ".github/workflows/fx-train.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Train + evaluate
+        run: |
+          MODE="${{ github.event.inputs.mode || 'real' }}"
+          SEEDS="${{ github.event.inputs.seeds || '3' }}"
+          PROFILE="${{ github.event.inputs.profile || 'balanced' }}"
+          python -m trading_algo.forex.train \
+            ${MODE:+$([ "$MODE" = synthetic ] && echo --synthetic)} \
+            --seeds "$SEEDS" --profile "$PROFILE" \
+            --models-dir trading_algo/forex/models \
+            --out fx_ml_report.md
+          {
+            echo "## FX Deep-Learning Walk-Forward Report"
+            echo ""
+            echo "Mode: \`$MODE\`  ·  Profile: \`$PROFILE\`  ·  Seeds: \`$SEEDS\`"
+            echo ""
+            cat fx_ml_report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload models + report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fx-models
+          path: |
+            fx_ml_report.md
+            trading_algo/forex/models/*.json
+          if-no-files-found: warn

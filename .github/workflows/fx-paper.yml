@@ -1,0 +1,92 @@
+name: FX Paper Trading (live)
+
+# Runs the multi-agent FX paper books (matt + partner) unattended in the cloud
+# on REAL Yahoo FX data, then commits the updated state back to the repo so the
+# books compound across runs (the runner is ephemeral; the repo is the ledger).
+#
+# ONE-TIME SETUP (repo Settings → Actions → General → Workflow permissions:
+# "Read and write"). NOTE: `schedule:` only fires on the DEFAULT branch, so merge
+# this to `main` for the daily cron to start. Until then use "Run workflow"
+# (workflow_dispatch) on main, or rely on the one-shot push trigger on this branch.
+
+on:
+  schedule:
+    - cron: "0 23 * * 1-5"   # weekdays 23:00 UTC — after the NY close, daily bars settled
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode"
+        type: choice
+        options: [real, synthetic]
+        default: real
+      use_ml:
+        description: "Include the deep-learning agent (retrained fresh each run)"
+        type: boolean
+        default: true
+  push:
+    branches: ["claude/practical-cray-luepjo"]
+    paths: [".github/workflows/fx-paper.yml"]   # one-shot: seed the first live run
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fx-paper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
+      USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the FX paper books (init if new, one daily pass)
+        run: |
+          mkdir -p state
+          # Open matt + partner if they don't exist yet (idempotent).
+          python -m trading_algo.forex.paper --init $SYNTH
+          ML_FLAG=""
+          if [ "$USE_ML" = "true" ]; then
+            echo "::group::train deep-learning agent (best-effort; fresh walk-forward model)"
+            python -m trading_algo.forex.train $SYNTH --seeds 2 --no-ml \
+              --models-dir trading_algo/forex/models \
+              || echo "training failed — engine will fall back to the 5 technical agents"
+            echo "::endgroup::"
+            ML_FLAG="--ml"
+          fi
+          # One pass for every account (run_all); --ml uses the model if present.
+          python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
+
+      - name: Status to run summary
+        run: |
+          {
+            echo "## FX paper books — $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo '```'
+            python -m trading_algo.forex.paper --compare matt partner
+            echo '```'
+            echo ""
+            echo "<sub>Paper money. Synthetic runs are pipeline tests only.</sub>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit updated paper state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A state/
+          if git diff --cached --quiet; then
+            echo "No state change to commit."
+          else
+            git commit -m "chore: update FX paper state [skip ci]"
+            git push
+          fi

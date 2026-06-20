@@ -11,6 +11,14 @@ IBKR (ib_insync) execution layer, and a timezone-aware background scheduler.
 Generalised from the original ASX-only sleeve — see `HANDOFF.md` for the design
 history and reasoning.
 
+There is also a **separate, self-contained FX subsystem** under
+`trading_algo/forex/` — a low-latency, multi-agent foreign-exchange trader
+(parallel technical agents → performance-weighted ensemble → vol-targeted
+long/short book → isolated multi-account paper books, e.g. you + your partner).
+It reuses this project's principles (no lookahead, costs always on, one shared
+`compute_targets`) but is otherwise independent of the equity sleeves. Full tour:
+`trading_algo/forex/README.md`.
+
 ## Architecture (everything region-specific lives in one `Region` record)
 - `config.py` — `StrategyParams` (all strategy knobs) + portfolio settings
   (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital) +
@@ -48,8 +56,20 @@ python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 79 tests
+# --- FX subsystem (independent; see trading_algo/forex/README.md) ---
+python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
+python -m trading_algo.forex.paper --init               # open matt + partner books
+python -m trading_algo.forex.engine --once              # one FX decision cycle (all accts)
+python -m trading_algo.forex.engine --once --ml         # ...including the deep-learning agent
+python -m trading_algo.forex.engine --benchmark         # live cycle latency
+python -m trading_algo.forex.train --synthetic          # train DL models + walk-forward report
+pytest -q                                           # 150 tests (80 equity + 70 FX/ML)
 ```
+
+The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
+Sharpe-ratio loss, Hedge ensemble, meta-labeling, purged walk-forward,
+Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
+It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
 
 ## Invariants — do not break these
 1. **No lookahead**: signals at t use data ≤ t; trades execute t+1. Any change to

@@ -3,11 +3,17 @@ __pycache__/
 .cache/
 *.parquet
 paper_state_*.json
+fx_state_*.json
 # …but DO track the CI-managed state (see .github/workflows/paper-trade.yml)
 !state/paper_state_*.json
+!state/fx_state_*.json
 paper.log
 equity_curve*.csv
 reports/
+# Derived ML artifacts (trained models + reports) — uploaded by the FX Action.
+trading_algo/forex/models/*.json
+fx_ml_report.md
+*_ml_report.md
 .pytest_cache/
 .venv/
 venv/
