@@ -153,6 +153,36 @@ simpler regularized models win on noisy daily FX, and vol-targeting beats RL for
 sizing. Daily FX is near-random-walk and factor edges decayed post-2008 — this
 layer is built to *measure honestly*, not to overclaim. See the research doc.
 
+## Quant-research agent
+
+`research.py` is the honest version of "find alpha": it **searches** a basket of
+candidate strategies — OU mean-reversion, trend/breakout parameter variants,
+cross-sectional momentum, and **statistical-arbitrage pairs** — and judges every
+one with the **Deflated Sharpe Ratio** and **Probability of Backtest Overfitting**
+(which penalise you for how many you tried). It mostly *disproves* edges — that's
+the point.
+
+```bash
+python -m trading_algo.forex.research --synthetic     # offline
+python -m trading_algo.forex.research --out report.md # real data
+```
+
+## Frequency: daily, intraday — and why not HFT
+
+The system is bar-agnostic. Default is **daily**; an **intraday / medium-frequency**
+mode runs on 15m/60m bars via the `intraday` profile and `--bar`:
+
+```bash
+python -m trading_algo.forex.run_backtest --bar 60m --profile intraday
+python -m trading_algo.forex.engine --once --bar 60m        # paper, medium-freq
+```
+
+The real prerequisite for *live* intraday is **data, not speed code** — Yahoo
+intraday is delayed and history-limited, so live use needs a real-time broker
+feed (OANDA/IBKR). **True high-frequency trading is out of scope and would be
+dishonest to fake here** — the honest reasoning (latency, colocation, cost,
+competition) is in [`docs/HFT_REALITY.md`](../../docs/HFT_REALITY.md).
+
 ## Design invariants
 
 1. **No lookahead.** Every indicator/agent value at bar t uses only data ≤ t;

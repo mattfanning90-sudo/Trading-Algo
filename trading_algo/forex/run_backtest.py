@@ -19,10 +19,14 @@ from .fx_config import profile, profile_names
 from .pairs import DEFAULT_UNIVERSE
 
 
-def _load(symbols, synthetic):
+def _load(symbols, synthetic, bar="1d"):
+    daily = bar in ("1d", "B")
     if synthetic:
-        return fx_data.synthetic_panel(symbols)
-    return fx_data.load_panel(symbols, cfg.START, use_cache=True)
+        if daily:
+            return fx_data.synthetic_panel(symbols)
+        return fx_data.synthetic_panel(symbols, start="2025-01-01", end="2025-04-01", freq=bar)
+    start = cfg.START if daily else "2024-06-01"
+    return fx_data.load_panel(symbols, start, interval=bar, use_cache=True)
 
 
 def _print_result(name: str, res: dict) -> None:
@@ -46,11 +50,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--capital", type=float, default=cfg.DEFAULT_CAPITAL)
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--compare", action="store_true", help="run every risk profile")
+    ap.add_argument("--bar", default="1d",
+                    help="data bar interval, e.g. 60m for intraday (metrics assume daily)")
     args = ap.parse_args(argv)
 
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, not performance.")
-    panel = _load(DEFAULT_UNIVERSE, args.synthetic)
+    panel = _load(DEFAULT_UNIVERSE, args.synthetic, bar=args.bar)
     if not panel:
         raise SystemExit("No FX data (offline? try --synthetic).")
     pool = AgentPool(default_agents(), max_workers=args.workers)

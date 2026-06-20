@@ -57,6 +57,7 @@ class FXParams:
     # --- Costs / execution -------------------------------------------------
     rebalance_min_delta: float = 0.02  # no-churn band: ignore tiny target moves
     include_carry: bool = True         # apply overnight swap/financing
+    bar: str = "1d"                    # informational: intended data bar interval
 
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
@@ -78,6 +79,14 @@ _PROFILES: dict[str, FXParams] = {
     "aggressive": FXParams(
         target_vol=0.18, max_gross=5.0, max_vol_scale=5.0,
         per_pair_cap=0.35, max_drawdown_stop=0.30, drawdown_cooldown_days=7,
+    ),
+    # Medium-frequency / intraday: shorter windows tuned for 15m–60m bars.
+    # NOT high-frequency — see docs/HFT_REALITY.md. Live use needs a real-time
+    # broker feed (OANDA/IBKR); Yahoo intraday is delayed/limited.
+    "intraday": FXParams(
+        ema_fast=10, ema_slow=40, donchian_window=20, roc_window=24,
+        vol_lookback=24, agent_lookback=48, bb_window=20,
+        target_vol=0.10, max_gross=3.0, bar="60m",
     ),
 }
 

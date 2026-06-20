@@ -64,13 +64,22 @@ python -m trading_algo.forex.engine --once --ml         # ...including the deep-
 python -m trading_algo.forex.engine --benchmark         # live cycle latency
 python -m trading_algo.forex.train --synthetic          # train DL models + walk-forward report
 python -m trading_algo.forex.dashboard --all --out-dir public  # candlestick dashboards + "why" callouts
-pytest -q                                           # 157 tests (80 equity + 77 FX/ML)
+python -m trading_algo.forex.research --synthetic       # quant-research search + Deflated-Sharpe/PBO
+python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
+pytest -q                                           # 170 tests (80 equity + 90 FX/ML)
 ```
 
 The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
 Sharpe-ratio loss, Hedge ensemble, meta-labeling, purged walk-forward,
 Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
 It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
+
+A **quant-research agent** (`research.py`) systematically searches candidate
+edges (OU mean-reversion, trend/breakout variants, cross-sectional momentum,
+stat-arb pairs) and judges each with the Deflated Sharpe + PBO. An **intraday /
+medium-frequency mode** (`--bar 60m`, `intraday` profile) is supported — NOT HFT;
+live intraday needs a real-time broker feed. The honest case against HFT here:
+`docs/HFT_REALITY.md`.
 
 ## Invariants — do not break these
 1. **No lookahead**: signals at t use data ≤ t; trades execute t+1. Any change to
