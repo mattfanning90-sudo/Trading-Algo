@@ -84,10 +84,26 @@ def _params(state: dict) -> FXParams:
     return profile(state.get("profile", "balanced"))
 
 
-def _panel(symbols: list[str], synthetic: bool):
+def _intraday_start(interval: str) -> str:
+    """How far back to fetch for an intraday interval (Yahoo's history limits)."""
+    days = {"60m": 700, "30m": 55, "15m": 55, "5m": 55}.get(interval, 700)
+    return (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _panel(symbols: list[str], synthetic: bool, interval: str = "1d"):
+    daily = interval in ("1d", "B")
     if synthetic:
-        return fx_data.synthetic_panel(symbols)
-    return fx_data.load_panel(symbols, cfg.START, use_cache=False)
+        if daily:
+            return fx_data.synthetic_panel(symbols)
+        start = (pd.Timestamp("2025-01-01")).strftime("%Y-%m-%d")
+        return fx_data.synthetic_panel(symbols, start=start, end="2025-04-01", freq=interval)
+    start = cfg.START if daily else _intraday_start(interval)
+    return fx_data.load_panel(symbols, start, interval=interval, use_cache=False)
+
+
+def _bar_key(ts, interval: str) -> str:
+    """Bar identifier — date for daily (unchanged), timestamp for intraday."""
+    return ts.strftime("%Y-%m-%d") if interval in ("1d", "B") else ts.strftime("%Y-%m-%d %H:%M")
 
 
 def _sign(x: float) -> int:
@@ -147,19 +163,19 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 
 def run_once(account: str, synthetic: bool = False,
-             pool: AgentPool | None = None) -> None:
+             pool: AgentPool | None = None, interval: str = "1d") -> None:
     state = load_state(account)
     p = _params(state)
     # Pick up any newly-added instruments (e.g. crypto) without losing history.
     symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
     state["symbols"] = symbols
-    panel = _panel(symbols, synthetic)
+    panel = _panel(symbols, synthetic, interval)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
         return
 
     px = fx_data.closes(panel)
-    bar_date = px.index[-1].strftime("%Y-%m-%d")
+    bar_date = _bar_key(px.index[-1], interval)
     px_last = px.iloc[-1]
 
     if state["last_bar_date"] == bar_date:
@@ -261,11 +277,12 @@ def run_once(account: str, synthetic: bool = False,
           f"{len(trades)} trades")
 
 
-def run_all(synthetic: bool = False, pool: AgentPool | None = None) -> None:
+def run_all(synthetic: bool = False, pool: AgentPool | None = None,
+            interval: str = "1d") -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if os.path.exists(_state_file(name)):
-            run_once(name, synthetic, pool=pool)
+            run_once(name, synthetic, pool=pool, interval=interval)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +344,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
+    ap.add_argument("--bar", default="1d",
+                    help="data bar interval, e.g. 60m / 15m for intraday (default daily). "
+                         "Live intraday needs a real-time feed; see docs/HFT_REALITY.md.")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -343,9 +363,9 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("--status needs --account")
         status(args.account)
     elif args.account:
-        run_once(args.account, args.synthetic)
+        run_once(args.account, args.synthetic, interval=args.bar)
     else:
-        run_all(args.synthetic)
+        run_all(args.synthetic, interval=args.bar)
 
 
 if __name__ == "__main__":

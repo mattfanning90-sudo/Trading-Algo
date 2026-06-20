@@ -111,13 +111,24 @@ _SYNTH_LEVEL = {
 # Pairs that need a higher synthetic volatility path (crypto ≫ FX).
 _SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0}
 
+# Yahoo interval -> pandas frequency (for the synthetic generator).
+_PD_FREQ = {"1d": "B", "60m": "1h", "30m": "30min", "15m": "15min", "5m": "5min"}
+
+
+def _date_index(start, end, freq):
+    if freq in ("B", "1d"):
+        return pd.bdate_range(start, end)
+    idx = pd.date_range(start, end, freq=_PD_FREQ.get(freq, freq))
+    return idx[idx.weekday < 5]          # FX trades on weekdays
+
 
 def synthetic_pair(pair: Pair, start: str = "2015-01-01", end: str = "2026-01-01",
-                   seed: int = 0) -> pd.DataFrame:
+                   seed: int = 0, freq: str = "B") -> pd.DataFrame:
     """One pair's OHLC with persistent trend regimes (AR(1) drift) plus ranging
-    stretches, so trend/breakout *and* mean-reversion agents all get exercised."""
+    stretches, so trend/breakout *and* mean-reversion agents all get exercised.
+    `freq` accepts a Yahoo interval (e.g. "60m") for intraday synthetic bars."""
     rng = np.random.default_rng(seed)
-    dates = pd.bdate_range(start, end)
+    dates = _date_index(start, end, freq)
     n = len(dates)
     vmult = _SYNTH_VOL.get(pair.symbol, 1.0)        # crypto runs hotter than FX
 
@@ -150,12 +161,13 @@ def synthetic_pair(pair: Pair, start: str = "2015-01-01", end: str = "2026-01-01
 
 
 def synthetic_panel(symbols: list[str], start: str = "2015-01-01",
-                    end: str = "2026-01-01", seed: int | None = None
-                    ) -> dict[str, pd.DataFrame]:
-    """Synthetic OHLC panel — one independent reproducible path per pair."""
+                    end: str = "2026-01-01", seed: int | None = None,
+                    freq: str = "B") -> dict[str, pd.DataFrame]:
+    """Synthetic OHLC panel — one independent reproducible path per pair.
+    Pass a Yahoo interval as `freq` (e.g. "60m") for intraday synthetic bars."""
     frames = {}
     for sym in symbols:
         pair = get_pair(sym)
         s = seed if seed is not None else 1000 + sum(ord(c) for c in sym)
-        frames[sym] = synthetic_pair(pair, start=start, end=end, seed=s)
+        frames[sym] = synthetic_pair(pair, start=start, end=end, seed=s, freq=freq)
     return _align(frames)
