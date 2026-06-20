@@ -1,0 +1,62 @@
+"""Risk & position sizing: turn directional tilts into actual portfolio weights.
+
+Three sequential controls, all vectorized across the time index so the backtest
+and the live path share one implementation:
+
+1. **Volatility targeting** — scale the whole book toward `target_vol` using the
+   constant-average-correlation variance approximation
+   ``var ≈ (1-ρ)·Σ(wᵢσᵢ)² + ρ·(Σ wᵢσᵢ)²`` (the same estimator the equity sleeve
+   uses, but with *signed* weights, so offsetting longs/shorts correctly reduce
+   estimated risk). The scale is capped at `max_vol_scale`.
+2. **Per-pair cap** — no single pair may exceed `per_pair_cap` of equity.
+3. **Gross-leverage cap** — Σ|wᵢ| is held at or below `max_gross`.
+
+A weight of +0.25 means "long 25% of equity of notional in this pair"; negative
+is short. The sum of |weights| is gross leverage.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from . import indicators as ind
+from .fx_config import FXParams
+
+
+def pair_vols(panel: dict[str, pd.DataFrame], p: FXParams) -> pd.DataFrame:
+    """Annualised realised vol per pair (time x symbol)."""
+    return pd.DataFrame({
+        sym: ind.realized_vol(df["close"], p.vol_lookback)
+        for sym, df in panel.items()
+    })
+
+
+def size_book(tilts: pd.DataFrame, vols: pd.DataFrame, p: FXParams) -> pd.DataFrame:
+    """Vectorized sizing: tilts (time x pair, [-1,1]) -> weights (time x pair).
+
+    Applies vol targeting, the per-pair cap and the gross-leverage cap, in that
+    order. Empty/unknown vols are treated as a neutral median so a single missing
+    estimate can't blow up the scale.
+    """
+    if tilts.empty:
+        return tilts
+
+    vols = vols.reindex_like(tilts)
+    # Fill missing vol with the row median (then a global fallback) so the
+    # variance estimate is finite even before every pair has enough history.
+    row_med = vols.median(axis=1)
+    vols = vols.apply(lambda col: col.fillna(row_med)).fillna(0.10)
+
+    wv = tilts * vols                                  # signed risk contributions
+    rho = p.avg_correlation
+    port_var = (1.0 - rho) * (wv ** 2).sum(axis=1) + rho * (wv.sum(axis=1) ** 2)
+    port_vol = np.sqrt(port_var.clip(lower=0.0))
+    scale = (p.target_vol / port_vol.replace(0.0, np.nan)).clip(upper=p.max_vol_scale)
+    scale = scale.fillna(0.0)
+
+    w = tilts.mul(scale, axis=0)
+    w = w.clip(-p.per_pair_cap, p.per_pair_cap)        # hard per-pair cap
+
+    gross = w.abs().sum(axis=1)
+    delever = (p.max_gross / gross.replace(0.0, np.nan)).clip(upper=1.0).fillna(1.0)
+    return w.mul(delever, axis=0)

@@ -18,6 +18,13 @@ broker routing — lives in one `Region` record.
 > **[`obsidian/`](obsidian/)** — open that folder as a vault (its `Reference`
 > note is generated from the code via `make obsidian`). See
 > [`obsidian/README.md`](obsidian/README.md) for sync setup.
+>
+> 💱 **Trading FX?** There's a separate **low-latency, multi-agent FX subsystem**
+> in **[`trading_algo/forex/`](trading_algo/forex/README.md)** — a parallel
+> ecosystem of technical agents (trend, breakout, mean-reversion, momentum,
+> carry) blended by a performance-weighted ensemble, sized by a vol-targeting
+> risk layer, and traded across isolated multi-account paper books (you + your
+> partner). `python -m trading_algo.forex.paper --init` to open the books.
 
 ---
 
