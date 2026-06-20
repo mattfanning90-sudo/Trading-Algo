@@ -183,6 +183,27 @@ feed (OANDA/IBKR). **True high-frequency trading is out of scope and would be
 dishonest to fake here** — the honest reasoning (latency, colocation, cost,
 competition) is in [`docs/HFT_REALITY.md`](../../docs/HFT_REALITY.md).
 
+### Crypto: the one honest home for "faster"
+
+Crypto is the exception: exchanges hand retail **institutional-grade data for
+free** (real-time 1-minute bars + funding rates via `ccxt`), so the data gate
+that blocks live intraday FX simply isn't there. The `hf_crypto` profile runs the
+same agent ecosystem on 1-minute crypto bars:
+
+```bash
+pip install ccxt
+python -m trading_algo.forex.run_backtest --synthetic --profile hf_crypto --bar 1m
+python -m trading_algo.forex.engine --once --account cryptohf --bar 1m --exchange binance
+python -m trading_algo.forex.engine --loop --interval 60 --bar 1m --exchange binance  # 24/7
+```
+
+This is still **not** microsecond HFT — you can't out-latency Wintermute/Jump.
+It's fast, high-turnover *systematic* crypto where the edge is signal + structure
+(minute-scale trend/reversion and **funding-rate / cash-and-carry** harvesting),
+not raw speed. Costs at this turnover are brutal, so every guardrail stays on.
+Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
+[`docs/CRYPTO_HF.md`](../../docs/CRYPTO_HF.md).
+
 ## Design invariants
 
 1. **No lookahead.** Every indicator/agent value at bar t uses only data ≤ t;

@@ -19,7 +19,13 @@ from .fx_config import profile, profile_names
 from .pairs import DEFAULT_UNIVERSE
 
 
-def _load(symbols, synthetic, bar="1d"):
+def _load(symbols, synthetic, bar="1d", exchange=None):
+    # Crypto exchange source (ccxt) — the high-frequency crypto path.
+    if exchange:
+        from . import crypto_data
+        if synthetic:
+            return crypto_data.synthetic_crypto_panel(symbols, timeframe=bar)
+        return crypto_data.load_ohlcv(symbols, timeframe=bar, exchange=exchange)
     daily = bar in ("1d", "B")
     if synthetic:
         if daily:
@@ -51,12 +57,22 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--compare", action="store_true", help="run every risk profile")
     ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m for intraday (metrics assume daily)")
+                    help="data bar interval, e.g. 60m for intraday, 1m for HF crypto "
+                         "(metrics assume daily)")
+    ap.add_argument("--exchange", default=None,
+                    help="crypto exchange via ccxt (e.g. binance) for HF crypto; "
+                         "default uses Yahoo. See docs/CRYPTO_HF.md.")
     args = ap.parse_args(argv)
 
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, not performance.")
-    panel = _load(DEFAULT_UNIVERSE, args.synthetic, bar=args.bar)
+    # An hf_crypto profile (or any --exchange source) trades the crypto universe.
+    if args.exchange or args.profile == "hf_crypto":
+        from . import crypto_data
+        universe = crypto_data.CRYPTO_UNIVERSE
+    else:
+        universe = DEFAULT_UNIVERSE
+    panel = _load(universe, args.synthetic, bar=args.bar, exchange=args.exchange)
     if not panel:
         raise SystemExit("No FX data (offline? try --synthetic).")
     pool = AgentPool(default_agents(), max_workers=args.workers)

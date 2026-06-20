@@ -112,7 +112,8 @@ _SYNTH_LEVEL = {
 _SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0}
 
 # Yahoo interval -> pandas frequency (for the synthetic generator).
-_PD_FREQ = {"1d": "B", "60m": "1h", "30m": "30min", "15m": "15min", "5m": "5min"}
+_PD_FREQ = {"1d": "B", "1h": "1h", "60m": "1h", "30m": "30min", "15m": "15min",
+            "5m": "5min", "1m": "1min"}
 
 
 def _date_index(start, end, freq):

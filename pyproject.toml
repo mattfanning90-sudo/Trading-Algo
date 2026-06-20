@@ -16,6 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86"]
+# Crypto market data + execution (free public OHLCV + funding rates); see
+# trading_algo/forex/crypto_data.py and docs/CRYPTO_HF.md.
+crypto = ["ccxt>=4.0"]
 dev = ["pytest>=8.0"]
 # Native desktop app (macOS uses the WebKit backend); see packaging/.
 desktop = [

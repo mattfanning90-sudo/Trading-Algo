@@ -90,7 +90,14 @@ def _intraday_start(interval: str) -> str:
     return (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
 
 
-def _panel(symbols: list[str], synthetic: bool, interval: str = "1d"):
+def _panel(symbols: list[str], synthetic: bool, interval: str = "1d",
+           exchange: str | None = None):
+    # Crypto exchange source (ccxt) — for the high-frequency crypto path.
+    if exchange:
+        from . import crypto_data
+        if synthetic:
+            return crypto_data.synthetic_crypto_panel(symbols, timeframe=interval)
+        return crypto_data.load_ohlcv(symbols, timeframe=interval, exchange=exchange)
     daily = interval in ("1d", "B")
     if synthetic:
         if daily:
@@ -163,13 +170,17 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 
 def run_once(account: str, synthetic: bool = False,
-             pool: AgentPool | None = None, interval: str = "1d") -> None:
+             pool: AgentPool | None = None, interval: str = "1d",
+             exchange: str | None = None) -> None:
     state = load_state(account)
     p = _params(state)
-    # Pick up any newly-added instruments (e.g. crypto) without losing history.
-    symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
+    if exchange:                                    # crypto HF book: trade its own symbols only
+        symbols = list(state.get("symbols") or [])
+    else:
+        # Pick up any newly-added instruments (e.g. crypto) without losing history.
+        symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
     state["symbols"] = symbols
-    panel = _panel(symbols, synthetic, interval)
+    panel = _panel(symbols, synthetic, interval, exchange)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
         return
@@ -203,15 +214,18 @@ def run_once(account: str, synthetic: bool = False,
         if lc and nc and lc == lc and nc == nc and lc > 0:
             pnl_frac += w * (nc / lc - 1.0)
 
-    # carry for the (business) days elapsed since the last mark
-    days = 1
+    # Carry scales with the actual elapsed time since the last mark (so it's
+    # correct for intraday/1-minute bars, not just daily). Daily is unchanged:
+    # consecutive days -> 1.0, a weekend gap -> 3.0.
+    elapsed = 1.0
     if state["last_bar_date"]:
-        days = int(np.clip((pd.Timestamp(bar_date) - pd.Timestamp(state["last_bar_date"])).days, 1, 7))
+        secs = (pd.Timestamp(bar_date) - pd.Timestamp(state["last_bar_date"])).total_seconds()
+        elapsed = float(np.clip(secs / 86400.0, 0.0, 7.0))
     carry_frac = 0.0
     if p.include_carry:
         for s, w in positions.items():
             if w:
-                carry_frac += abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * days
+                carry_frac += abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
 
     equity = state["equity"] * (1.0 + pnl_frac + carry_frac)
 
@@ -278,11 +292,11 @@ def run_once(account: str, synthetic: bool = False,
 
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
-            interval: str = "1d") -> None:
+            interval: str = "1d", exchange: str | None = None) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if os.path.exists(_state_file(name)):
-            run_once(name, synthetic, pool=pool, interval=interval)
+            run_once(name, synthetic, pool=pool, interval=interval, exchange=exchange)
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +359,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
     ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m for intraday (default daily). "
+                    help="data bar interval, e.g. 60m / 15m / 1m (default daily). "
                          "Live intraday needs a real-time feed; see docs/HFT_REALITY.md.")
+    ap.add_argument("--exchange", default=None,
+                    help="crypto exchange via ccxt (e.g. binance) for HF crypto; "
+                         "default uses Yahoo. See docs/CRYPTO_HF.md.")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -355,7 +372,14 @@ def main(argv: list[str] | None = None) -> None:
         compare(args.compare)
     elif args.init:
         if args.account:
-            init_account(args.account, args.capital, args.profile, force=args.force)
+            # An hf_crypto book trades the crypto universe only (BTC/ETH/SOL),
+            # not the FX majors — its agents/risk are tuned for crypto.
+            symbols = None
+            if args.profile == "hf_crypto":
+                from . import crypto_data
+                symbols = crypto_data.CRYPTO_UNIVERSE
+            init_account(args.account, args.capital, args.profile, symbols=symbols,
+                         force=args.force)
         else:
             init_defaults(args.synthetic, force=args.force)
     elif args.status:
@@ -363,9 +387,9 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("--status needs --account")
         status(args.account)
     elif args.account:
-        run_once(args.account, args.synthetic, interval=args.bar)
+        run_once(args.account, args.synthetic, interval=args.bar, exchange=args.exchange)
     else:
-        run_all(args.synthetic, interval=args.bar)
+        run_all(args.synthetic, interval=args.bar, exchange=args.exchange)
 
 
 if __name__ == "__main__":

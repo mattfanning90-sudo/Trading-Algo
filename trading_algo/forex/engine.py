@@ -46,25 +46,28 @@ def fx_market_open(dt: datetime | None = None) -> bool:
 
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,
-             bar: str = "1d") -> None:
+             bar: str = "1d", exchange: str | None = None) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  bar={bar} ===")
+    src = exchange or "yahoo"
+    print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  "
+          f"bar={bar}  src={src} ===")
     if account:
-        fx_book.run_once(account, synthetic, pool=pool, interval=bar)
+        fx_book.run_once(account, synthetic, pool=pool, interval=bar, exchange=exchange)
     else:
-        fx_book.run_all(synthetic, pool=pool, interval=bar)
+        fx_book.run_all(synthetic, pool=pool, interval=bar, exchange=exchange)
 
 
 async def run_loop(account: str | None, synthetic: bool, pool: AgentPool,
                    interval: float = 300.0, max_cycles: int | None = None,
-                   bar: str = "1d") -> None:
+                   bar: str = "1d", exchange: str | None = None) -> None:
     """Poll every `interval` seconds (`bar` = data interval); `max_cycles` bounds
-    the loop (tests)."""
+    the loop (tests). Crypto (`exchange` set) trades 24/7, so the FX-week gate is
+    skipped."""
     i = 0
     while max_cycles is None or i < max_cycles:
-        if synthetic or fx_market_open():
+        if synthetic or exchange or fx_market_open():
             try:
-                run_once(account, synthetic, pool, bar=bar)
+                run_once(account, synthetic, pool, bar=bar, exchange=exchange)
             except Exception as exc:                 # never let one bad cycle kill it
                 print(f"[engine] cycle failed: {exc!r}")
         else:
@@ -102,7 +105,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--loop", action="store_true", help="poll forever on --interval")
     ap.add_argument("--interval", type=float, default=300.0, help="loop poll seconds")
     ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m for intraday (default daily)")
+                    help="data bar interval, e.g. 60m / 15m for intraday, 1m for HF crypto "
+                         "(default daily)")
+    ap.add_argument("--exchange", default=None,
+                    help="crypto exchange via ccxt (e.g. binance) for HF crypto; "
+                         "default uses Yahoo. See docs/CRYPTO_HF.md.")
     ap.add_argument("--workers", type=int, default=None, help="agent-pool threads")
     ap.add_argument("--ml", action="store_true",
                     help="include the trained deep-learning agent (if a model exists)")
@@ -117,9 +124,11 @@ def main(argv: list[str] | None = None) -> None:
     pool = fx_book.ml_pool() if args.ml else AgentPool(max_workers=args.workers)
     if args.loop:
         asyncio.run(run_loop(args.account, args.synthetic, pool,
-                             interval=args.interval, bar=args.bar))
+                             interval=args.interval, bar=args.bar,
+                             exchange=args.exchange))
     else:
-        run_once(args.account, args.synthetic, pool, bar=args.bar)
+        run_once(args.account, args.synthetic, pool, bar=args.bar,
+                 exchange=args.exchange)
 
 
 if __name__ == "__main__":
