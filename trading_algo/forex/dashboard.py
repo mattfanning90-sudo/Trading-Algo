@@ -1,19 +1,15 @@
 """Static candlestick + analytics dashboard for the FX paper books (GitHub Pages).
 
-Per book it renders, all self-contained (data embedded; charts via lightweight-
-charts CDN):
-  • Performance: equity curve vs a 1/N buy-and-hold benchmark, drawdown, and a
-    metrics panel (Sharpe, vol, max drawdown, win rate, turnover).
-  • Candlesticks per instrument with EMA overlays + BUY/SELL markers.
-  • An agent scorecard — how each agent (and the ensemble vs buy-and-hold) would
-    have done over the window — so you can see *which* edge is working.
-  • A trade journal: the rationale behind every trade *and its outcome* (the
-    signed move over the next few bars, ✅/❌), so you learn whether the reasoning
-    paid off.
-  • Hover tooltips that define each metric (a built-in glossary).
+Per book: a performance card (equity vs 1/N buy-and-hold + metrics), candlesticks
+with EMA overlays and BUY/SELL markers, an agent scorecard, and a trade journal
+where every entry is explained in **plain English** — what we did, which agents
+drove it, the evidence (each technical term defined inline), and the outcome.
+Plus a "How it works" page with a flow diagram, and styled hover tooltips that
+define each metric.
 
-Everything except the raw candles is computed at export time, so no change to the
-live trading logic is needed.
+The plain-English explanations are generated at render time from the signals and
+indicator readings stored on each trade, so improvements show up immediately and
+apply to every trade (no re-seeding needed).
 
     python -m trading_algo.forex.dashboard --all --out-dir public
     python -m trading_algo.forex.dashboard --account matt -o matt.html
@@ -37,20 +33,44 @@ from .fx_strategy import target_weights_history
 from .pairs import get_pair
 
 _LWC = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
-_OUTCOME_BARS = 10   # horizon for judging whether a trade "worked"
+_MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+_OUTCOME_BARS = 10
 
-# Plain-language definitions surfaced as hover tooltips (the learning glossary).
+# One-line beginner role for each agent (full version, used in hover tooltips).
+_AGENT_ROLES = {
+    "trend": "trend-follower — compares a short-term vs long-term average to ride established moves",
+    "breakout": "breakout — buys/sells when price pushes past its recent high/low range",
+    "meanrev": "mean-reversion — bets an over-stretched price snaps back to its average",
+    "momentum": "momentum — assumes the recent direction tends to persist",
+    "carry": "carry — leans toward the currency that pays more interest",
+    "neural": "deep-learning model — a neural net trained on past patterns",
+}
+
+# Short clauses used inside the plain-English sentences.
+_AGENT_SHORT = {
+    "trend": "rides established up/down moves",
+    "breakout": "acts when price breaks its recent range",
+    "meanrev": "fades over-stretched prices back to average",
+    "momentum": "recent direction tends to persist",
+    "carry": "favours the higher-interest currency",
+    "neural": "a neural net trained on past patterns",
+}
+
+
+def _agent_phrase(name):
+    return f"the <b>{name}</b> agent ({_AGENT_SHORT.get(name, '')})"
+
 GLOSSARY = {
-    "Sharpe": "Return per unit of risk (annual return above cash, divided by volatility). ~1 good, >2 excellent.",
-    "Volatility": "How much the equity swings, annualised. Higher = bumpier.",
-    "Max drawdown": "The worst peak-to-trough drop — your maximum pain.",
-    "Win rate": "Share of days the book was up.",
-    "Turnover": "How much the book trades; more turnover = more cost.",
-    "Benchmark": "1/N buy-and-hold: hold every instrument equally, no model. The bar to beat.",
-    "Agent scorecard": "How each agent's raw signal would have done alone over this window (no leverage). Ensemble = the blend; buy&hold = passive.",
-    "Regime": "Trending (ADX high) vs ranging (ADX low) — which agents should be in charge.",
-    "Tilt": "The ensemble's net conviction for the pair, -1 (max short) to +1 (max long).",
-    "Outcome": "Signed price move over the next %d bars after the trade — did the call work?" % _OUTCOME_BARS,
+    "Sharpe": "Return per unit of risk (annual return above cash ÷ how much it swings). ~1 good, >2 excellent. The headline 'is this any good?' score.",
+    "Volatility": "How much the equity swings, per year. Higher = bumpier ride and bigger possible losses.",
+    "Max drawdown": "The worst peak-to-trough fall — your maximum pain if you'd bought at the top.",
+    "Win rate": "Share of days the book finished up. (High win rate ≠ profit — a few big losses can still sink it.)",
+    "Benchmark": "1/N buy-and-hold: just hold every instrument equally, no model. If the algo can't beat this, the model isn't adding value.",
+    "Agent scorecard": "How each agent's signal alone would have done over this window (no leverage). 'ensemble' is the blend; 'buy&hold' is passive. Shows which edge is working — but one good window is NOT proof.",
+    "Regime": "Whether the market is trending (ADX high) or ranging/choppy (ADX low). Trend agents shine in trends; mean-reversion shines in ranges.",
+    "Tilt": "The ensemble's net conviction for a pair, from -1 (max short) to +1 (max long).",
+    "Gross leverage": "Total size of all positions vs your capital. 3x = holding $15k of positions on $5k.",
+    "Outcome": "The signed price move over the next %d days after the trade — did the call actually work? (⏳ until enough days pass.)" % _OUTCOME_BARS,
 }
 
 
@@ -61,13 +81,72 @@ def _panel(symbols, synthetic):
     return fx_data.load_panel(symbols, start, use_cache=True)
 
 
+# ---------------------------------------------------------------------------
+# Plain-English explanation (generated from stored signals + indicators)
+# ---------------------------------------------------------------------------
+def _size_word(w):
+    a = abs(w)
+    return "no" if a < 0.02 else "a small" if a < 0.09 else "a medium" if a < 0.18 else "a large"
+
+
+def _beginner_explanation(side, weight, agents, indicators, pair):
+    weight = weight or 0.0
+    if not side or abs(weight) < 1e-6:
+        return (f"<b>No position in {pair}.</b> The agents disagree, or their signals are "
+                f"too weak to clear our minimum-trade threshold — so we stay out. "
+                f"Not trading is a valid, cost-saving decision.")
+    sgn = 1 if weight > 0 else -1
+    direction = "LONG" if weight > 0 else "SHORT"
+    bet = "rise" if weight > 0 else "fall"
+    parts = [f"<b>We're {direction} {pair}</b> — a bet the price will <b>{bet}</b> — at "
+             f"{_size_word(weight)} position (<b>{abs(weight)*100:.0f}%</b> of the book)."]
+
+    agents = agents or {}
+    agree = sorted(((n, v) for n, v in agents.items() if v * sgn > 0.1), key=lambda kv: -abs(kv[1]))
+    against = sorted(((n, v) for n, v in agents.items() if v * sgn < -0.1), key=lambda kv: -abs(kv[1]))
+    if agree:
+        names = " and ".join(_agent_phrase(n) for n, _ in agree[:2])
+        parts.append(f"<b>Why this direction:</b> {names} both point this way.")
+    if against:
+        ph = _agent_phrase(against[0][0])
+        parts.append(f"{ph[0].upper()}{ph[1:]} leaned the other way, "
+                     f"which is why the bet is kept modest.")
+
+    iv = indicators or {}
+    ev = []
+    ef, es = iv.get("ema_fast"), iv.get("ema_slow")
+    if ef is not None and es is not None:
+        rel = "above" if ef >= es else "below"
+        td = "an up-trend" if ef >= es else "a down-trend"
+        ev.append(f"the short-term average is {rel} the long-term average ({td}) "
+                  f"— this is what the orange/blue 'EMA' lines on the chart show")
+    adx = iv.get("adx")
+    if adx is not None:
+        strong = "a strong, established trend" if adx >= 20 else "a weak, choppy market"
+        ev.append(f"ADX is {adx:.0f} → {strong} (ADX = trend <i>strength</i>, 0–100; above 20 = real trend)")
+    rsi = iv.get("rsi")
+    if rsi is not None:
+        tag = "oversold/cheap" if rsi < 30 else "overbought/expensive" if rsi > 70 else "neutral"
+        ev.append(f"RSI is {rsi:.0f} ({tag}; RSI runs 0–100, under 30 = oversold, over 70 = overbought)")
+    roc = iv.get("roc")
+    if roc is not None:
+        ev.append(f"it has moved {roc*100:+.0f}% over the last ~60 days")
+    if ev:
+        parts.append("<b>The evidence:</b> " + "; ".join(ev) + ".")
+
+    vol = iv.get("ann_vol")
+    if vol is not None:
+        parts.append(f"<b>Why this size:</b> we use <i>volatility targeting</i> — when a market is "
+                     f"jumpy (here about {vol*100:.0f}%/year) we automatically trade smaller to keep "
+                     f"overall risk steady.")
+    return " ".join(parts)
+
+
 def _curve_metrics(dates, values) -> dict:
-    """Sharpe / vol / max-dd / win-rate / total return from an equity curve."""
     if not values or len(values) < 2:
         return {}
     s = pd.Series(values, index=pd.to_datetime(dates), dtype=float)
-    total = float(s.iloc[-1] / s.iloc[0] - 1.0)
-    out = {"total_return": round(total, 4)}
+    out = {"total_return": round(float(s.iloc[-1] / s.iloc[0] - 1.0), 4)}
     r = s.pct_change().dropna()
     if len(r) >= 5 and r.std() > 0:
         out["sharpe"] = round(float((r.mean() * ANNUALIZATION - FX_RISK_FREE)
@@ -79,8 +158,6 @@ def _curve_metrics(dates, values) -> dict:
 
 
 def _agent_attribution(panel, p, bars) -> dict:
-    """Cumulative return of each agent's raw signal over the window (equal-weight
-    across pairs, no leverage), plus the ensemble and 1/N buy-and-hold."""
     pool = AgentPool(max_workers=1)
     _, signals, tilts = target_weights_history(panel, p, pool=pool, return_parts=True)
     rets = fx_data.closes(panel).pct_change(fill_method=None)
@@ -114,7 +191,6 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
     line = lambda s: [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 6)}
                       for d, v in s.items() if v == v]
 
-    # Trade outcomes: signed move over the next N bars after each trade.
     pos_of = {d.strftime("%Y-%m-%d"): i for i, d in enumerate(df.index)}
     closes_arr = close.to_numpy()
     first = df.index[0].strftime("%Y-%m-%d")
@@ -126,13 +202,21 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
         fwd, outcome = None, "open"
         entry = t.get("price")
         if i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
-            sgn = 1.0 if t["side"] == "BUY" else -1.0
-            fwd = round(float(sgn * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
+            s = 1.0 if t["side"] == "BUY" else -1.0
+            fwd = round(float(s * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
             outcome = "win" if fwd > 0 else "loss"
+        why = _beginner_explanation(t.get("side"), t.get("target_weight"),
+                                    t.get("agents"), t.get("indicators"), sym)
         out_trades.append({"time": t["date"], "side": t["side"], "price": t.get("price"),
                            "weight": t.get("target_weight"), "regime": t.get("regime"),
-                           "why": t.get("why"), "agents": t.get("agents"),
+                           "why": why, "agents": t.get("agents"),
                            "fwd_return": fwd, "outcome": outcome})
+
+    if decision:
+        decision = {**decision, "text": _beginner_explanation(
+            "LONG" if decision.get("weight", 0) > 0 else "SHORT",
+            decision.get("weight"), decision.get("agents"),
+            decision.get("indicators"), sym)}
     return {"candles": candles, "ema_fast": line(ef), "ema_slow": line(es),
             "trades": out_trades, "decision": decision}
 
@@ -155,7 +239,6 @@ def build_payload(account, synthetic=False, bars=180):
             pairs.append(sym)
 
     eq = state.get("equity", state["initial_capital"])
-    # Book equity curve, indexed to 100 at inception.
     eqh = state.get("equity_history", [])
     book_curve, book_metrics = [], {}
     if eqh:
@@ -163,7 +246,6 @@ def build_payload(account, synthetic=False, bars=180):
         book_curve = [{"time": d, "value": round(100.0 * v / base, 4)} for d, v in eqh]
         book_metrics = _curve_metrics([d for d, _ in eqh], [v for _, v in eqh])
 
-    # 1/N buy-and-hold benchmark over the window, indexed to 100.
     closes_df = fx_data.closes(panel)
     bench_curve, bench_metrics = [], {}
     if not closes_df.empty:
@@ -187,13 +269,13 @@ def build_payload(account, synthetic=False, bars=180):
         "book_curve": book_curve, "book_metrics": book_metrics,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "attribution": _agent_attribution(panel, p, bars),
-        "glossary": GLOSSARY,
+        "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
     }
 
 
 # ---------------------------------------------------------------------------
-# HTML
+# Per-book HTML
 # ---------------------------------------------------------------------------
 _PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -204,45 +286,56 @@ _PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 --up:#26a69a;--dn:#ef5350;--accent:#58a6ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
 font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+.nav{display:flex;gap:1rem;padding:.6rem 1.5rem;border-bottom:1px solid var(--bd);font-size:.85rem}
 header{padding:1.1rem 1.5rem;border-bottom:1px solid var(--bd)}
 h1{margin:0;font-size:1.15rem}.sub{color:var(--mut);font-size:.82rem;margin-top:.25rem}
 .stats{display:flex;gap:1.4rem;flex-wrap:wrap;margin-top:.7rem}
-.stat .v{font-size:1.05rem;font-weight:600}.stat .k{color:var(--mut);font-size:.7rem;text-transform:uppercase;cursor:help;border-bottom:1px dotted var(--mut)}
+.stat .v{font-size:1.05rem;font-weight:600}.stat .k{color:var(--mut);font-size:.7rem;text-transform:uppercase}
 .pos{color:var(--up)}.neg{color:var(--dn)}
 .section{padding:1rem 1.5rem}.grid2{display:grid;grid-template-columns:1fr 320px;gap:1rem}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}}
 .card{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:1rem}
-.card h2{margin:0 0 .6rem;font-size:.9rem}.card h2 .h{cursor:help;border-bottom:1px dotted var(--mut)}
+.card h2{margin:0 0 .6rem;font-size:.9rem}
 #eqchart{height:240px}#chart{height:430px}
 .tabs{display:flex;gap:.4rem;flex-wrap:wrap;padding:0 1.5rem}
 .tab{padding:.35rem .7rem;border:1px solid var(--bd);border-radius:999px;background:var(--panel);
 color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accent);color:var(--accent)}
-.wrap{display:grid;grid-template-columns:1fr 380px;gap:1rem;padding:1rem 1.5rem}
+.wrap{display:grid;grid-template-columns:1fr 400px;gap:1rem;padding:1rem 1.5rem}
 @media(max-width:900px){.wrap{grid-template-columns:1fr}}
 .side{display:flex;flex-direction:column;gap:1rem;min-width:0}
-.muted{color:var(--mut)}.why{font-size:.85rem;line-height:1.45}
+.muted{color:var(--mut)}.why{font-size:.86rem;line-height:1.5}
+.legend{font-size:.72rem;color:var(--mut);margin-top:.5rem;line-height:1.5}
 .row{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;font-size:.78rem}
 .row .name{width:90px;color:var(--mut)}.bar{flex:1;height:9px;background:#21262d;border-radius:4px;position:relative}
 .bar i{position:absolute;top:0;bottom:0;border-radius:4px}.val{width:60px;text-align:right}
 .metrics{display:grid;grid-template-columns:auto 1fr 1fr;gap:.3rem .8rem;font-size:.82rem;align-items:center}
 .metrics .hd{color:var(--mut);font-size:.7rem;text-transform:uppercase}
-.metrics .lbl{color:var(--mut);cursor:help;border-bottom:1px dotted var(--mut)}
-.journal{max-height:520px;overflow:auto}
-.j{border:1px solid var(--bd);border-radius:10px;padding:.6rem .7rem;margin-bottom:.6rem;cursor:pointer}
-.j:hover{border-color:var(--accent)}.j .hd{display:flex;justify-content:space-between;font-size:.82rem;gap:.5rem}
+.journal{max-height:560px;overflow:auto}
+.j{border:1px solid var(--bd);border-radius:10px;padding:.7rem;margin-bottom:.6rem;cursor:pointer}
+.j:hover{border-color:var(--accent)}.j .hd{display:flex;justify-content:space-between;font-size:.84rem;gap:.5rem}
 .badge{font-size:.68rem;padding:.05rem .4rem;border-radius:6px;border:1px solid var(--bd);color:var(--mut)}
 .B{color:var(--up)}.S{color:var(--dn)}.win{color:var(--up)}.loss{color:var(--dn)}
 .foot{padding:1rem 1.5rem;color:var(--mut);font-size:.75rem}
+/* styled hover tooltip (replaces native title) */
+.tip{position:relative;cursor:help;border-bottom:1px dotted var(--mut)}
+.tip:hover::after{content:attr(data-tip);position:absolute;left:0;bottom:135%;z-index:30;
+  width:260px;white-space:normal;background:#0b0f14;border:1px solid var(--accent);color:var(--fg);
+  padding:.55rem .65rem;border-radius:8px;font-size:.74rem;font-weight:400;line-height:1.45;
+  text-transform:none;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.tip:hover::before{content:"";position:absolute;left:14px;bottom:128%;border:6px solid transparent;
+  border-top-color:var(--accent);z-index:30}
 </style></head><body>
+<div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
   <h1>FX Paper Book · <span style="color:var(--accent)">__ACCOUNT__</span>
     <span class="badge">__PROFILE__</span>__HALT__</h1>
-  <div class="sub">base __CCY__ · updated __UPDATED__ · candlesticks, performance vs buy-and-hold, and the reasoning + outcome of every trade</div>
+  <div class="sub">base __CCY__ · updated __UPDATED__ · candlesticks, performance vs buy-and-hold, and a plain-English reason + outcome for every trade. Hover any underlined word for its meaning.</div>
   <div class="stats" id="stats"></div>
 </header>
 
 <div class="section grid2">
-  <div class="card"><h2><span class="h" title="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(indexed to 100)</span></h2><div id="eqchart"></div></div>
+  <div class="card"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
   <div class="card"><h2>Performance</h2><div id="metrics" class="metrics"></div>
     <div id="agentcard" style="margin-top:1rem"></div></div>
 </div>
@@ -251,32 +344,33 @@ color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accen
 <div class="wrap">
   <div id="chart"></div>
   <div class="side">
-    <div class="card"><h2><span class="h" title="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
+    <div class="card"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
       <div id="decision" class="why muted"></div>
-      <div id="agents" style="margin-top:.6rem"></div></div>
-    <div class="card"><h2>Trade journal — why &amp; <span class="h" title="__T_OUT__">outcome</span></h2>
+      <div id="agents" style="margin-top:.7rem"></div>
+      <div class="legend" id="legend"></div></div>
+    <div class="card"><h2>Trade journal — plain-English reason &amp; <span class="tip" data-tip="__T_OUT__">outcome</span></h2>
       <div id="journal" class="journal"></div></div>
   </div>
 </div>
-<div class="foot">Paper money. Agents: trend · breakout · mean-reversion · momentum · carry · deep-learning,
-blended by a Hedge ensemble, sized by volatility targeting. Hover any underlined label for its definition.
-Out-of-sample testing found no statistically significant edge — treat this as a learning tool, not a forecast.</div>
+<div class="foot">Paper money. Six agents (trend · breakout · mean-reversion · momentum · carry · deep-learning),
+blended by a Hedge ensemble and sized by volatility targeting. Out-of-sample testing found no statistically
+significant edge — this is a learning tool, not a forecast. <a href="how.html">See how it all fits together →</a></div>
 <script>
 const DASH = __DATA__;
-const G = DASH.glossary || {};
+const G = DASH.glossary||{}, ROLES = DASH.agent_roles||{};
 const pct = v => v==null? "–" : (v>=0?"+":"")+(v*100).toFixed(2)+"%";
 const fmt = v => v==null? "–" : (Math.abs(v)>=100? v.toFixed(2) : v.toPrecision(5));
-let chart, current;
+const tip = (txt,term)=>`<span class="tip" data-tip="${(G[term]||'').replace(/"/g,'&quot;')}">${txt}</span>`;
+let chart;
 
-// header stats
 (function(){
-  const m=DASH.book_metrics||{}, s=DASH.stats=document.getElementById('stats');
+  const m=DASH.book_metrics||{};
   const items=[["Equity",DASH.equity.toLocaleString()+" "+DASH.currency,null],
-    ["Return",pct(DASH.ret),"Benchmark"],
-    ["Sharpe",(m.sharpe??"–"),"Sharpe"],["Max drawdown",(m.max_dd!=null?pct(m.max_dd):"–"),"Max drawdown"],
-    ["Gross lev.",DASH.gross+"x",null],["Trades",DASH.trades_total,null]];
-  s.innerHTML=items.map(([k,v,g])=>`<div class=stat><div class=v>${v}</div>`+
-    `<div class=k ${g?`title="${G[g]||''}"`:''}>${k}</div></div>`).join('');
+    ["Return",pct(DASH.ret),"Benchmark"],["Sharpe",(m.sharpe??"–"),"Sharpe"],
+    ["Max drawdown",(m.max_dd!=null?pct(m.max_dd):"–"),"Max drawdown"],
+    ["Gross lev.",DASH.gross+"x","Gross leverage"],["Trades",DASH.trades_total,null]];
+  document.getElementById('stats').innerHTML=items.map(([k,v,g])=>
+    `<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
 })();
 
 function bars(obj, hi){
@@ -285,93 +379,71 @@ function bars(obj, hi){
   return Object.entries(obj).map(([n,v])=>{
     const w=Math.min(Math.abs(v)/max,1)*50,left=v>=0?50:50-w,col=v>=0?'var(--up)':'var(--dn)';
     const em=(hi&&hi.includes(n))?'font-weight:700;color:var(--fg)':'';
-    return `<div class=row><div class=name style="${em}">${n}</div>`+
+    const nm=ROLES[n]?`<span class="tip" data-tip="${ROLES[n].replace(/"/g,'&quot;')}">${n}</span>`:n;
+    return `<div class=row><div class=name style="${em}">${nm}</div>`+
       `<div class=bar><i style="left:${left}%;width:${w}%;background:${col}"></i>`+
       `<i style="left:50%;width:1px;background:#555"></i></div>`+
       `<div class=val style="color:${col}">${pct(v)}</div></div>`;}).join('');
 }
-// agent vote bars (signals in [-1,1], not returns)
-function votes(agents){
-  if(!agents) return '<div class="muted">flat / no read</div>';
-  const o={}; Object.entries(agents).forEach(([n,v])=>o[n]=v/Math.max(1,Math.abs(v))*Math.abs(v));
-  return bars(agents);
-}
 
-// performance metrics + agent scorecard
 (function(){
-  const b=DASH.book_metrics||{}, k=DASH.bench_metrics||{};
-  const rows=[["Return","total_return",true],["Sharpe","sharpe",false],
-    ["Volatility","vol",true],["Max drawdown","max_dd",true],["Win rate","win_rate",true]];
-  const cell=(m,key,isPct)=>{const v=m[key]; if(v==null)return "–";
-    return isPct?pct(v):v;};
-  document.getElementById('metrics').innerHTML =
-    `<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
-    rows.map(([lbl,key,isPct])=>`<div class="lbl" title="${G[lbl]||''}">${lbl}</div>`+
-      `<div>${cell(b,key,isPct)}</div><div class=muted>${cell(k,key,isPct)}</div>`).join('');
-  document.getElementById('agentcard').innerHTML =
-    `<div style="font-size:.8rem;margin-bottom:.4rem" class="lbl" title="${G['Agent scorecard']}">Agent scorecard (this window)</div>`+
-    bars(DASH.attribution,["ensemble","buy&hold"]);
+  const b=DASH.book_metrics||{},k=DASH.bench_metrics||{};
+  const rows=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
+    ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],
+    ["Win rate","win_rate",true,"Win rate"]];
+  const cell=(m,key,isP)=>{const v=m[key];return v==null?"–":(isP?pct(v):v);};
+  document.getElementById('metrics').innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
+    rows.map(([lbl,key,isP,g])=>`<div>${tip(lbl,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');
+  document.getElementById('agentcard').innerHTML=`<div style="font-size:.8rem;margin-bottom:.4rem">${tip('Agent scorecard (this window)','Agent scorecard')}</div>`+bars(DASH.attribution,["ensemble","buy&hold"]);
 })();
 
-// equity vs benchmark line chart
 (function(){
   const el=document.getElementById('eqchart');
-  if(!(DASH.bench_curve||[]).length && !(DASH.book_curve||[]).length){el.innerHTML='<p class=muted style="padding:1rem">Curve builds as the book runs.</p>';return;}
+  if(!(DASH.bench_curve||[]).length&&!(DASH.book_curve||[]).length){el.innerHTML='<p class=muted style="padding:1rem">This fills in as the book trades over the coming days.</p>';return;}
   const c=LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
-    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},
-    rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
-  if((DASH.bench_curve||[]).length) c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'}).setData(DASH.bench_curve);
-  if((DASH.book_curve||[]).length) c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'}).setData(DASH.book_curve);
+    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
+  if((DASH.bench_curve||[]).length)c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'}).setData(DASH.bench_curve);
+  if((DASH.book_curve||[]).length)c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'}).setData(DASH.book_curve);
   c.timeScale().fitContent();
 })();
 
 function showPair(sym){
-  current=sym;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.s===sym));
   document.getElementById('curpair').textContent=sym;
   const d=DASH.data[sym];
   document.getElementById('chart').innerHTML='';
-  chart=LightweightCharts.createChart(document.getElementById('chart'),{
-    layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
-    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},
-    rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
-  const cs=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',
-    wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false});
+  chart=LightweightCharts.createChart(document.getElementById('chart'),{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
+    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
+  const cs=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false});
   cs.setData(d.candles);
   chart.addLineSeries({color:'#f5a623',lineWidth:1,priceLineVisible:false}).setData(d.ema_fast);
   chart.addLineSeries({color:'#58a6ff',lineWidth:1,priceLineVisible:false}).setData(d.ema_slow);
-  cs.setMarkers(d.trades.map(t=>({time:t.time,
-    position:t.side==='BUY'?'belowBar':'aboveBar',color:t.side==='BUY'?'#26a69a':'#ef5350',
-    shape:t.side==='BUY'?'arrowUp':'arrowDown',
+  cs.setMarkers(d.trades.map(t=>({time:t.time,position:t.side==='BUY'?'belowBar':'aboveBar',
+    color:t.side==='BUY'?'#26a69a':'#ef5350',shape:t.side==='BUY'?'arrowUp':'arrowDown',
     text:t.side+(t.weight!=null?' '+Math.round(t.weight*100)+'%':'')})));
   chart.timeScale().fitContent();
   const dec=d.decision||{};
-  document.getElementById('decision').innerHTML = dec.text || 'No active position — agents flat or conflicted here.';
-  document.getElementById('agents').innerHTML = votes(dec.agents);
+  document.getElementById('decision').innerHTML=dec.text||'No active position — agents flat or conflicted here.';
+  document.getElementById('agents').innerHTML=bars(dec.agents);
+  document.getElementById('legend').innerHTML='<b>Agent votes</b> above run −1 (max short) to +1 (max long). Hover a name for what it does. The orange/blue lines on the chart are the short- and long-term averages (EMAs).';
   const j=document.getElementById('journal');
   if(!d.trades.length){j.innerHTML='<div class="muted">No trades for '+sym+' yet.</div>';return;}
   j.innerHTML=d.trades.slice().reverse().map(t=>{
     const cls=t.side==='BUY'?'B':'S';
-    const oc=t.outcome==='win'?`<span class=win>✅ ${pct(t.fwd_return)}</span>`:
-      t.outcome==='loss'?`<span class=loss>❌ ${pct(t.fwd_return)}</span>`:`<span class=muted>⏳ open</span>`;
-    return `<div class="j" data-t="${t.time}"><div class=hd>`+
-      `<span class="${cls}">${t.side} ${sym} @ ${fmt(t.price)}</span><span>${oc}</span></div>`+
+    const oc=t.outcome==='win'?`<span class=win>✅ ${pct(t.fwd_return)}</span>`:t.outcome==='loss'?`<span class=loss>❌ ${pct(t.fwd_return)}</span>`:`<span class=muted>⏳ open</span>`;
+    return `<div class="j" data-t="${t.time}"><div class=hd><span class="${cls}">${t.side} ${sym} @ ${fmt(t.price)}</span><span>${oc}</span></div>`+
       `<div class=hd style="margin-top:.2rem"><span class=badge>${t.time}${t.regime?' · '+t.regime:''}</span></div>`+
-      `<div class="why" style="margin-top:.35rem">${t.why||'(no rationale recorded)'}</div>`+
-      `<div style="margin-top:.4rem">${votes(t.agents)}</div></div>`;}).join('');
-  j.querySelectorAll('.j').forEach(el=>el.onclick=()=>{
-    const times=d.candles.map(c=>c.time),i=times.indexOf(el.dataset.t);
+      `<div class="why" style="margin-top:.4rem">${t.why||'(no rationale)'}</div></div>`;}).join('');
+  j.querySelectorAll('.j').forEach(el=>el.onclick=()=>{const times=d.candles.map(c=>c.time),i=times.indexOf(el.dataset.t);
     if(i>=0)chart.timeScale().setVisibleRange({from:times[Math.max(0,i-30)],to:times[Math.min(times.length-1,i+8)]});});
 }
 const tabs=document.getElementById('tabs');
 DASH.pairs.forEach(s=>{const b=document.createElement('div');b.className='tab';b.dataset.s=s;b.textContent=s;b.onclick=()=>showPair(s);tabs.appendChild(b);});
-if(DASH.pairs.length)showPair(DASH.pairs[0]);
-else document.getElementById('chart').innerHTML='<p style="padding:2rem;color:#8b949e">No data yet.</p>';
+if(DASH.pairs.length)showPair(DASH.pairs[0]);else document.getElementById('chart').innerHTML='<p style="padding:2rem;color:#8b949e">No data yet.</p>';
 </script></body></html>"""
 
 
 def render(payload: dict) -> str:
-    ret = payload["ret"]
     g = payload["glossary"]
     repl = {
         "__ACCOUNT__": payload["account"], "__PROFILE__": payload["profile"],
@@ -395,9 +467,109 @@ def export_account(account, synthetic=False, out_path=None, bars=180) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         with open(out_path, "w") as f:
             f.write(html)
-        print(f"  wrote {out_path} ({len(payload['pairs'])} pairs, "
-              f"{payload['trades_total']} trades)")
+        print(f"  wrote {out_path} ({len(payload['pairs'])} pairs, {payload['trades_total']} trades)")
     return html
+
+
+# ---------------------------------------------------------------------------
+# "How it works" page (flow diagram + beginner explanation)
+# ---------------------------------------------------------------------------
+_HOW = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How it works — FX Paper Books</title>
+<script src="__MERMAID__"></script>
+<style>
+body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.6}
+.nav{display:flex;gap:1rem;padding:.6rem 1.5rem;border-bottom:1px solid #30363d;font-size:.85rem}
+a{color:#58a6ff}.wrap{max-width:860px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:2rem;border-bottom:1px solid #30363d;padding-bottom:.3rem}
+.diagram{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1rem;margin:1rem 0;overflow:auto}
+.step{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:.8rem 1rem;margin:.7rem 0}
+.step b{color:#58a6ff}.muted{color:#8b949e}
+table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1rem 0}
+td,th{border:1px solid #30363d;padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:#161b22}.warn{background:#1d1410;border:1px solid #5c4012;border-radius:10px;padding:1rem;margin:1.5rem 0}
+</style></head><body>
+<div class="nav"><a href="index.html">← All books</a></div>
+<div class="wrap">
+<h1>How this trading system works</h1>
+<p class="muted">A plain-English tour of what happens between "market data comes in" and "a position
+shows up on the dashboard" — and <i>why</i> each step exists.</p>
+
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  D["📈 Market data<br/>daily candles · 7 FX majors + 3 crypto"] --> AG
+  subgraph AG["🤖 6 agents — each hunts a different 'edge', in parallel"]
+    A1["Trend<br/>short vs long average"]
+    A2["Breakout<br/>new highs / lows"]
+    A3["Mean-reversion<br/>fade extremes"]
+    A4["Momentum<br/>recent direction persists"]
+    A5["Carry<br/>interest-rate gap"]
+    A6["Deep learning<br/>neural net"]
+  end
+  AG --> E["⚖️ Ensemble (Hedge blend)<br/>leans on agents that have been right lately"]
+  E --> R["🛡️ Risk sizing<br/>volatility target · per-pair &amp; leverage caps · drawdown breaker"]
+  R --> P["💼 Positions → paper book<br/>(matt &amp; partner, separate)"]
+  P --> DB["📊 Dashboard<br/>candles · why · outcome"]
+  P --> V["🔬 Validation<br/>walk-forward · Deflated Sharpe · PBO"]
+  V -. "is the edge real?" .-> E
+</pre></div>
+
+<h2>Step by step</h2>
+<div class="step"><b>1. Market data.</b> Every weekday we pull the latest daily price "candle" (open/high/low/close)
+for 7 major currency pairs and 3 cryptos. Everything downstream reads only data up to <i>now</i> — never the
+future. <span class="muted">Why: using future data ("lookahead") is the #1 way backtests lie.</span></div>
+
+<div class="step"><b>2. Six agents vote.</b> Each agent is a small, independent strategy that looks for one kind of
+edge and outputs a vote from −1 (strong sell) to +1 (strong buy). <span class="muted">Why diversify: trend and
+mean-reversion are opposites — blending weakly-related ideas is steadier than betting on one.</span></div>
+
+<div class="step"><b>3. The ensemble blends the votes.</b> A "Hedge" algorithm gives more weight to agents that
+have been right recently, with a floor so none is ever switched fully off. <span class="muted">Why: it adapts
+without wild swings, and has mathematical guarantees against over-trusting a lucky agent.</span></div>
+
+<div class="step"><b>4. Risk sizing turns the blended view into a position.</b> <i>Volatility targeting</i> scales
+the bet so total risk stays roughly constant (smaller in jumpy markets); per-pair and leverage caps limit any
+single bet; a drawdown breaker flattens everything if losses get too deep. <span class="muted">Why: surviving
+is the prerequisite for compounding — controlling losses matters more than picking winners.</span></div>
+
+<div class="step"><b>5. The paper book trades.</b> Two separate books (you &amp; your partner) hold the positions
+with realistic costs (the bid/ask spread on every trade, overnight financing). No real money.</div>
+
+<div class="step"><b>6. Validation keeps us honest.</b> We re-test on data the model never saw (walk-forward) and
+score it with the <i>Deflated Sharpe Ratio</i> and <i>Probability of Backtest Overfitting</i> — which penalise
+us for how many ideas we tried. <span class="muted">Why: it's easy to find a pretty pattern by luck; these tests
+tell us if an edge is <b>real</b>. So far, honestly, none clears the bar.</span></div>
+
+<h2>What each agent looks at</h2>
+<table><tr><th>Agent</th><th>What it does</th><th>Shines when…</th></tr>
+<tr><td>Trend</td><td>Compares a short-term vs long-term average; rides the direction</td><td>markets are trending</td></tr>
+<tr><td>Breakout</td><td>Acts when price pushes past its recent high/low range</td><td>a new move is starting</td></tr>
+<tr><td>Mean-reversion</td><td>Bets an over-stretched price snaps back to its average</td><td>markets are range-bound</td></tr>
+<tr><td>Momentum</td><td>Assumes recent direction persists</td><td>steady moves continue</td></tr>
+<tr><td>Carry</td><td>Leans toward the currency paying more interest</td><td>calm, risk-on markets</td></tr>
+<tr><td>Deep learning</td><td>A neural net trained to maximise risk-adjusted return</td><td>patterns repeat (use with care)</td></tr>
+</table>
+
+<h2>How to read a trade in the journal</h2>
+<div class="step">Each entry shows: <b>BUY/SELL pair @ price</b> · the <b>outcome</b> (✅ win / ❌ loss / ⏳ still open —
+the price move over the next ~10 days), then a plain-English paragraph: <b>what</b> we did, <b>which agents</b>
+drove it, <b>the evidence</b> (with each term defined), and <b>why that size</b>. The arrows on the candle chart
+mark where each trade happened.</div>
+
+<div class="warn"><b>Honest note.</b> This is paper money and a <b>learning tool</b>. Daily FX is extremely hard to
+beat, and our own out-of-sample tests found <b>no statistically significant edge</b>. The value here is seeing
+<i>how</i> systematic decisions are made and judged — not a promise of profit.</div>
+</div>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark'});</script>
+</body></html>"""
+
+
+def build_how_page(out_dir) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "how.html"), "w") as f:
+        f.write(_HOW.replace("__MERMAID__", _MERMAID))
+    print(f"  wrote {out_dir}/how.html")
 
 
 def build_index(accounts, out_dir) -> None:
@@ -416,13 +588,14 @@ def build_index(accounts, out_dir) -> None:
     html = ("<!doctype html><meta charset=utf-8><title>FX Paper Books</title>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
             "<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;"
-            "margin:0;padding:3rem;max-width:720px}h1{margin:0 0 .25rem}.s{color:#8b949e;margin:0 0 2rem}"
+            "margin:0;padding:3rem;max-width:720px}h1{margin:0 0 .25rem}.s{color:#8b949e;margin:0 0 1.5rem}"
             "a.card{display:block;margin:1rem 0;padding:1.25rem 1.5rem;border:1px solid #30363d;"
             "border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}"
             "a.card:hover{border-color:#58a6ff}.name{font-size:1.2rem;font-weight:600;color:#58a6ff}"
-            ".amt{color:#8b949e;font-size:.9rem}</style>"
-            "<h1>FX Paper Books</h1><p class=s>Candlesticks + performance + the reasoning behind every trade · "
-            f"updated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</p>" + "".join(cards))
+            ".amt{color:#8b949e;font-size:.9rem}.how{display:inline-block;margin-bottom:1.5rem;color:#58a6ff}</style>"
+            "<h1>FX Paper Books</h1><p class=s>Candlesticks + performance + plain-English reasons behind every trade · "
+            f"updated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</p>"
+            "<a class=how href='how.html'>📖 New here? Start with “How it works” →</a>" + "".join(cards))
     with open(os.path.join(out_dir, "index.html"), "w") as f:
         f.write(html)
     print(f"  wrote {out_dir}/index.html ({len(cards)} accounts)")
@@ -433,8 +606,8 @@ def main(argv=None):
     ap.add_argument("--account")
     ap.add_argument("-o", "--out")
     ap.add_argument("--out-dir", default="public")
-    ap.add_argument("--index", action="store_true", help="build the landing index for all accounts")
-    ap.add_argument("--all", action="store_true", help="export every account + index")
+    ap.add_argument("--index", action="store_true", help="build the landing index + how-it-works page")
+    ap.add_argument("--all", action="store_true", help="export every account + index + how page")
     ap.add_argument("--bars", type=int, default=180)
     ap.add_argument("--synthetic", action="store_true")
     args = ap.parse_args(argv)
@@ -445,6 +618,7 @@ def main(argv=None):
             for a in accts:
                 export_account(a, args.synthetic, os.path.join(args.out_dir, f"fx_{a}.html"), args.bars)
         build_index(accts, args.out_dir)
+        build_how_page(args.out_dir)
     elif args.account:
         out = args.out or os.path.join(args.out_dir, f"fx_{args.account}.html")
         export_account(args.account, args.synthetic, out, args.bars)

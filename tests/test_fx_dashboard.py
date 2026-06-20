@@ -71,8 +71,31 @@ def test_dashboard_export_offline(isolated):
     assert out.exists()
     for token in ("addCandlestickSeries", "setMarkers", "Trade journal",
                   "Today's read", "BTCUSD", "Equity vs buy-and-hold",
-                  "Agent scorecard", "title="):
+                  "Agent scorecard", "data-tip", "tip:hover::after", "how.html"):
         assert token in html
+
+
+def test_beginner_explanation_plain_english():
+    # long position with trend + momentum agreeing, in a trending regime
+    txt = dashboard._beginner_explanation(
+        "BUY", 0.18, {"trend": 0.8, "momentum": 0.7, "meanrev": -0.1},
+        {"ema_fast": 1.1, "ema_slow": 1.0, "adx": 30, "rsi": 62, "roc": 0.08, "ann_vol": 0.12},
+        "EURUSD")
+    assert "bet the price will" in txt and "EURUSD" in txt
+    assert "ADX" in txt and "RSI" in txt          # terms used…
+    assert "trend strength" in txt.lower() or "trend <i>strength</i>" in txt  # …and explained
+    assert "volatility targeting" in txt
+    # flat case explains why we DON'T trade
+    flat = dashboard._beginner_explanation("LONG", 0.0, {}, {}, "EURUSD")
+    assert "No position" in flat
+
+
+def test_how_page_built(isolated):
+    dashboard.build_how_page(str(isolated))
+    h = (isolated / "how.html").read_text()
+    assert "mermaid" in h and "flowchart TD" in h
+    assert "Validation" in h and "Deflated Sharpe" in h
+    assert "no statistically significant" in h    # honest caveat present
 
 
 def test_dashboard_payload_analytics(isolated):
