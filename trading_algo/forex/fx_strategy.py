@@ -36,9 +36,13 @@ def min_history(p: FXParams) -> int:
     rather than O(history) time — this is what keeps per-cycle latency flat as
     years of data accumulate.
     """
-    warmup = max(p.ema_slow, p.donchian_window, p.roc_window, p.bb_window,
-                 p.vol_lookback, p.adx_window * 4, p.rsi_window * 4)
-    return warmup + p.agent_lookback + p.vol_lookback + 10
+    # EWM indicators (ema/atr/adx/rsi) are IIR filters with exponentially-
+    # decaying infinite memory, so allow the slowest one to settle (~6 spans →
+    # seed error e^(-6) ≈ 1e-8, well below any trading threshold). Hedge/adaptive
+    # also chain a rolling loss over a rolling scale (~2·agent_lookback bars).
+    ewm_settle = 6 * p.ema_slow
+    chain = 2 * p.agent_lookback + 2 * p.vol_lookback + 20
+    return ewm_settle + chain
 
 
 def target_weights_history(panel: dict[str, pd.DataFrame], p: FXParams,

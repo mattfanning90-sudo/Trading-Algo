@@ -99,6 +99,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--loop", action="store_true", help="poll forever on --interval")
     ap.add_argument("--interval", type=float, default=300.0, help="loop poll seconds")
     ap.add_argument("--workers", type=int, default=None, help="agent-pool threads")
+    ap.add_argument("--ml", action="store_true",
+                    help="include the trained deep-learning agent (if a model exists)")
     ap.add_argument("--benchmark", action="store_true", help="measure cycle latency")
     ap.add_argument("--synthetic", action="store_true")
     args = ap.parse_args(argv)
@@ -107,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
         benchmark(synthetic=args.synthetic, workers=args.workers)
         return
 
-    pool = AgentPool(max_workers=args.workers)
+    pool = fx_book.ml_pool() if args.ml else AgentPool(max_workers=args.workers)
     if args.loop:
         asyncio.run(run_loop(args.account, args.synthetic, pool, interval=args.interval))
     else:

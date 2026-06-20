@@ -38,6 +38,11 @@ python -m trading_algo.forex.engine --loop --interval 300
 
 # Measure the live decision-cycle latency
 python -m trading_algo.forex.engine --benchmark
+
+# Deep-learning layer: train models + honest walk-forward evaluation
+python -m trading_algo.forex.train --synthetic         # offline pipeline check
+python -m trading_algo.forex.train --out report.md     # real data (needs internet)
+python -m trading_algo.forex.engine --once --ml        # paper-trade WITH the neural agent
 ```
 
 Each account is a self-contained `fx_state_{account}.json`. Add a third book
@@ -75,6 +80,36 @@ panel (OHLC) ─▶ AgentPool ─▶ ensemble tilts ─▶ risk sizing ─▶ we
 `fx_strategy.compute_targets()` is the **single source of truth** for target
 weights — both the backtest and the live paper book call it, so they agree by
 construction (pinned by `tests/test_fx_consistency.py`).
+
+## Deep-learning layer (research-backed)
+
+A deep-learning layer *augments* the five technical agents — it never replaces
+them. The full literature review and the reasoning behind every choice is in
+[`docs/FX_DEEP_RESEARCH.md`](../../docs/FX_DEEP_RESEARCH.md). The short version:
+
+* **`nn.py`** — a pure-NumPy MLP (real Adam back-prop, dropout, L2, He init) with
+  a first-class **Sharpe-ratio loss**: the net outputs a *position* and is trained
+  to maximise risk-adjusted return directly (Deep Momentum Networks, 2019), which
+  beats MSE-regression and direction-classification. Correctness is pinned by a
+  finite-difference gradient check.
+* **`NeuralAgent`** — the Sharpe-loss net as a 6th ecosystem agent (opt in with
+  `engine --ml`). Frozen at inference, so live prediction has no lookahead.
+* **`MetaLabeler`** — a secondary classifier (López de Prado meta-labeling) that
+  sizes the ensemble's side via triple-barrier labels and bet-sizing.
+* **Hedge ensemble** — agents are blended by multiplicative weights with a
+  fixed-share floor (provable regret, low overfitting), the new default.
+* **`walkforward.py`** — purged + embargoed expanding walk-forward, so every ML
+  prediction is strictly out-of-sample; scalers fit on train folds only.
+* **`validation.py`** — Probabilistic & **Deflated Sharpe** ratios and the
+  **Probability of Backtest Overfitting** (CSCV), so "the model found an edge" is
+  falsifiable, not hopeful.
+* **`ml_backtest.py`** — one report comparing every strategy (agents, ensembles,
+  neural, meta) out-of-sample with Sharpe/PSR/DSR/PBO and costs always on.
+
+Why a small MLP and not an LSTM/Transformer, and why no RL: the evidence says
+simpler regularized models win on noisy daily FX, and vol-targeting beats RL for
+sizing. Daily FX is near-random-walk and factor edges decayed post-2008 — this
+layer is built to *measure honestly*, not to overclaim. See the research doc.
 
 ## Design invariants
 
@@ -129,6 +164,13 @@ IBKR `Forex` contract, diff target notional vs live positions, and place orders.
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |
 | `fx_book.py` | persistent multi-account paper books |
-| `engine.py` | low-latency runner (`--once` / `--loop` / `--benchmark`) |
+| `engine.py` | low-latency runner (`--once` / `--loop` / `--benchmark` / `--ml`) |
+| `nn.py` | pure-NumPy MLP with Sharpe-loss + streaming scaler |
+| `features.py` | causal feature engineering + triple-barrier labels |
+| `walkforward.py` | purged + embargoed walk-forward prediction |
+| `validation.py` | PSR / Deflated Sharpe / PBO / bet sizing |
+| `ml_agent.py` | `NeuralAgent`, `MetaLabeler`, `ModelBundle`, pooled dataset |
+| `ml_backtest.py` | honest out-of-sample strategy comparison |
+| `train.py` | train + persist models, write the walk-forward report |
 | `run_backtest.py` / `paper.py` | CLIs |
 ```

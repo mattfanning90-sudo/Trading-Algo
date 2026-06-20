@@ -55,6 +55,19 @@ def save_state(account: str, state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
+def ml_pool(models_dir: str | None = None) -> "AgentPool":
+    """Build an AgentPool that includes the trained NeuralAgent if a model exists,
+    else the five technical agents only. Lets paper trading opt into the DL layer."""
+    from .ml_agent import ModelBundle, default_neural_agents
+    md = models_dir or os.path.join(os.path.dirname(__file__), "models")
+    path = os.path.join(md, "neural_sharpe.json")
+    if os.path.exists(path):
+        print(f"  using deep-learning agent from {path}")
+        return AgentPool(default_neural_agents(ModelBundle.load(path)), max_workers=1)
+    print("  (no trained model found — using the 5 technical agents only)")
+    return AgentPool(max_workers=1)
+
+
 def list_accounts() -> list[str]:
     out = []
     for fn in os.listdir(os.path.abspath(STATE_DIR)):

@@ -37,9 +37,14 @@ class FXParams:
     atr_window: int = 14
 
     # --- Ensemble (the parallel agent layer) -------------------------------
-    agent_weighting: str = "adaptive"  # "equal" | "adaptive"
-    agent_lookback: int = 120          # bars used to score each agent (adaptive)
-    agent_floor_weight: float = 0.1    # min relative weight any agent keeps
+    # "equal"    : straight average of agents (the robust 1/N baseline)
+    # "adaptive" : weight by trailing information ratio per pair
+    # "hedge"    : Hedge / multiplicative-weights (Cesa-Bianchi & Lugosi) with a
+    #              fixed-share floor — provable regret, low overfitting surface
+    agent_weighting: str = "hedge"
+    agent_lookback: int = 120          # bars used to score / window losses
+    agent_floor_weight: float = 0.1    # fixed-share floor (min relative weight)
+    hedge_eta: float = 1.0             # Hedge learning rate (small = more shrinkage)
     per_pair_cap: float = 0.25         # max |net weight| per pair (frac of equity)
 
     # --- Risk / position sizing --------------------------------------------

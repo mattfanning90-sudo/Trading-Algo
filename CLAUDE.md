@@ -60,9 +60,16 @@ python -m trading_algo.dashboard --account full     # live web dashboard :8787
 python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
 python -m trading_algo.forex.paper --init               # open matt + partner books
 python -m trading_algo.forex.engine --once              # one FX decision cycle (all accts)
+python -m trading_algo.forex.engine --once --ml         # ...including the deep-learning agent
 python -m trading_algo.forex.engine --benchmark         # live cycle latency
-pytest -q                                           # 119 tests (80 equity + 39 FX)
+python -m trading_algo.forex.train --synthetic          # train DL models + walk-forward report
+pytest -q                                           # 150 tests (80 equity + 70 FX/ML)
 ```
+
+The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
+Sharpe-ratio loss, Hedge ensemble, meta-labeling, purged walk-forward,
+Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
+It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
 
 ## Invariants — do not break these
 1. **No lookahead**: signals at t use data ≤ t; trades execute t+1. Any change to
