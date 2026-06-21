@@ -27,10 +27,15 @@ from __future__ import annotations
 
 import bisect
 import os
+import re
 
 import pandas as pd
 
 from .regions import Region
+
+# fja05680 tags non-current names with a "-YYYYMM" removal-month suffix
+# (e.g. ENRNQ-200411, AAMRQ-201312); strip it to recover the trading ticker.
+_REMOVAL_SUFFIX = re.compile(r"-\d{6}$")
 
 
 class MembershipTable:
@@ -64,9 +69,12 @@ class MembershipTable:
         tcol = "tickers" if "tickers" in df.columns else df.columns[-1]
         snaps: dict[pd.Timestamp, set[str]] = {}
         for _, row in df.iterrows():
-            toks = [t.strip().strip('"') for t in str(row[tcol]).split(",")]
-            members = {t.replace(".", "-") if normalize_us else t
-                       for t in toks if t and t.lower() != "nan"}
+            members = set()
+            for raw in str(row[tcol]).split(","):
+                base = _REMOVAL_SUFFIX.sub("", raw.strip().strip('"'))  # drop -YYYYMM
+                if not base or base.lower() == "nan":
+                    continue
+                members.add(base.replace(".", "-") if normalize_us else base)
             if members:
                 snaps[pd.Timestamp(row["date"])] = members
         return cls(snaps)
@@ -101,7 +109,7 @@ _CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 # delisted graveyard, 1996->now). Override with SP500_CONSTITUENTS_URL.
 FJA05680_SP500_URL = (
     "https://raw.githubusercontent.com/fja05680/sp500/master/"
-    "S%26P%20500%20Historical%20Components%20%26%20Changes(MM-DD-YYYY).csv"
+    "S%26P%20500%20Historical%20Components%20%26%20Changes.csv"
 )
 
 

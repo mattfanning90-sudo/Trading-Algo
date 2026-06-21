@@ -33,22 +33,25 @@ def test_chain_includes_tiingo_only_with_key(monkeypatch):
 def test_wide_format_constituents_with_graveyard():
     df = pd.DataFrame({
         "date": ["1996-01-02", "2015-01-02", "2020-01-02"],
-        "tickers": ['"AAPL,MSFT,ENRN"', '"AAPL,MSFT"', '"AAPL,MSFT,TSLA"'],
+        "tickers": ['"AAPL,MSFT,ENRNQ-200411"', '"AAPL,MSFT"', '"AAPL,MSFT,TSLA"'],
     })
     m = MembershipTable.from_wide_frame(df)
     assert len(m) == 3
-    # ENRN (a delisted name) is present in 1996 but gone by 2015 — the graveyard
-    assert "ENRN" in m.members_asof("1996-06-01")
-    assert "ENRN" not in m.members_asof("2016-01-01")
+    # ENRNQ (Enron) present in 1996 with its -200411 removal tag, gone by 2015
+    assert "ENRNQ" in m.members_asof("1996-06-01")     # -200411 suffix stripped
+    assert "ENRNQ-200411" not in m.members_asof("1996-06-01")
+    assert "ENRNQ" not in m.members_asof("2016-01-01")
     assert "TSLA" in m.members_asof("2021-01-01")
-    assert "ENRN" in m.all_tickers          # union includes since-removed names
+    assert "ENRNQ" in m.all_tickers          # union includes since-removed names
 
 
 def test_wide_format_normalizes_class_shares():
-    df = pd.DataFrame({"date": ["2020-01-02"], "tickers": ['"BRK.B,BF.B,AAPL"']})
+    # class-share dots -> Yahoo hyphen, AND a delisted class share with a tag
+    df = pd.DataFrame({"date": ["2020-01-02"], "tickers": ['"BRK.B,BF.B,AAPL,AZA.A-200106"']})
     members = MembershipTable.from_wide_frame(df).members_asof("2020-06-01")
     assert "BRK-B" in members and "BF-B" in members   # dot -> Yahoo hyphen
     assert "BRK.B" not in members
+    assert "AZA-A" in members                          # suffix stripped + dot fixed
 
 
 def test_from_file_detects_wide(tmp_path):
