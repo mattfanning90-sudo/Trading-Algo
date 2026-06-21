@@ -263,10 +263,20 @@ this is "low latency" for a per-bar systematic FX book, not microsecond colo.)
 
 ## Going live
 
-`compute_targets` already returns broker-agnostic signed target weights. To wire
-real execution, mirror `trading_algo/execution_ibkr.py`: map each pair to an
-IBKR `Forex` contract, diff target notional vs live positions, and place orders.
-**Start on the paper port and watch it for weeks first.**
+`compute_targets` already returns broker-agnostic signed target weights. For
+**crypto** (the cheapest real-time path) live execution is built: `crypto_exec.py`
+diffs target notional vs your live exchange balance and places ccxt orders —
+**dry-run by default**, spot long-only, with a per-order notional cap.
+
+```bash
+python -m trading_algo.forex.crypto_exec --account cryptohf --synthetic   # offline rehearsal
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance        # live data, dry-run
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance --live --max-notional 50
+```
+
+For **FX/equities**, mirror `trading_algo/execution_ibkr.py` (or use the
+`alpaca-py` / `oandapyV20` order APIs). **Start on paper / a tiny balance and
+watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 
 ## Files
 
@@ -276,6 +286,9 @@ IBKR `Forex` contract, diff target notional vs live positions, and place orders.
 | `fx_config.py` | `FXParams` + risk profiles + account presets |
 | `indicators.py` | vectorized indicators + streaming variants |
 | `fx_data.py` | OHLC panel loader + synthetic generator |
+| `feeds.py` | source resolver — yahoo / crypto / oanda / alpaca / openbb |
+| `crypto_data.py` / `oanda_data.py` / `alpaca_data.py` / `openbb_data.py` | per-source data adapters |
+| `crypto_exec.py` | live crypto order execution via ccxt (dry-run by default) |
 | `agents.py` | the five agents + concurrent `AgentPool` |
 | `ensemble.py` | performance-weighted agent blending |
 | `risk.py` | vol targeting + per-pair / gross caps |

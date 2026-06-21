@@ -103,6 +103,43 @@ want:
 * an exchange **API key with trade permission** for live execution (data needs
   none). Store it in the environment, never in the repo.
 
+## Live execution (placing real orders)
+
+`crypto_exec.py` turns the strategy's target weights into real exchange orders
+via ccxt — the crypto analogue of `execution_ibkr.py`, and the cheapest real-time
+path to actually trade. It is built **dry-run first**:
+
+```bash
+# 1. Offline rehearsal — synthetic prices, flat book, forced dry-run (no keys):
+python -m trading_algo.forex.crypto_exec --account cryptohf --synthetic --equity 5000
+
+# 2. Live data, real balances, but STILL only prints the plan (nothing sent):
+export BINANCE_API_KEY=...  BINANCE_API_SECRET=...      # trade-enabled key, in env
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance
+
+# 3. Actually place orders — only when you're satisfied with weeks of dry-runs:
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance \
+    --live --max-notional 50
+```
+
+Safety model, by design:
+
+* **Dry-run is the default** — `--live` is the only thing that sends an order.
+* **Spot is long-only.** You can't short or use leverage on a spot balance, so
+  negative target weights are clamped to zero and sells never exceed holdings.
+  The book's short/leveraged legs simply aren't expressed on spot — `--allow-short`
+  exists for a margin/perp account, but that's a bigger risk surface (out of scope
+  for a first live step). So spot execution is a **constrained projection** of the
+  strategy, not the full long/short book.
+* **`--max-notional` caps every order** (fat-finger guard); dust and sub-exchange
+  minimums are skipped; amounts are rounded to each market's precision.
+* It routes through the same `compute_targets` as the backtest and paper book
+  (invariant #3) — no second copy of the sizing logic.
+* Keys are read from the environment (`BINANCE_API_KEY/SECRET`, or generic
+  `CRYPTO_API_KEY/SECRET`, plus `*_API_PASSWORD` for OKX/KuCoin) — never the repo.
+
+**Start on a tiny balance and watch it for weeks**, exactly like the IBKR path.
+
 ## Risks specific to crypto (read before funding real money)
 
 * **Costs at turnover.** At 1-minute cadence you cross the spread constantly;
