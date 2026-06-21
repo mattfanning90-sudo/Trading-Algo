@@ -47,6 +47,11 @@ history and reasoning.
   Monte-Carlo, regime-conditional stats, drawdown analytics, cost stress;
   `validate.py` — one report combining all of the above. See
   `docs/research/BACKTEST_VALIDATION.md`
+- `multistrat.py` — **multi-strategy combiner**: reads N strategy return streams,
+  sizes by risk (inverse-vol / equal-risk-contribution), vol-targets the book →
+  an upside-taker + downside-mitigator. `multistrat_report.py` scores it (up/down
+  capture) vs SPY. The research conclusion: combine uncorrelated premia, don't
+  chase one signal
 - `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
@@ -59,11 +64,12 @@ python -m trading_algo.sweep --region US            # parameter robustness sweep
 python -m trading_algo.trend_report                 # equity vs trend vs blend (diversifier test)
 python -m trading_algo.defensive_sweep --region US  # what idle capital should earn
 python -m trading_algo.validate --region US         # win rate, Deflated Sharpe, PBO, regime, stress
+python -m trading_algo.multistrat_report            # combined upside-taker/downside-mitigator book
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 125 tests
+pytest -q                                           # 141 tests
 ```
 
 ## Invariants — do not break these

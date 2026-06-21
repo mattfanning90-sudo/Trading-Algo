@@ -13,7 +13,7 @@ on:
       task:
         description: "What to run"
         type: choice
-        options: [backtest, tune, defensive, trend, validate]
+        options: [backtest, tune, defensive, trend, validate, multistrat]
         default: backtest
       mode:
         description: "Data mode"
@@ -67,6 +67,8 @@ jobs:
             python -m trading_algo.trend_report $SYN | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "validate" ]; then
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "multistrat" ]; then
+            python -m trading_algo.multistrat_report $SYN | tee backtest_report.md
           else
             python -m trading_algo.report $SYN $PIT --out backtest_report.md
           fi
