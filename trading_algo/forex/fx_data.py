@@ -106,10 +106,12 @@ _SYNTH_LEVEL = {
     "EURJPY": 162.0, "GBPJPY": 190.0, "AUDJPY": 99.0, "AUDNZD": 1.08,
     "EURAUD": 1.63,
     "BTCUSD": 60000.0, "ETHUSD": 3000.0, "SOLUSD": 150.0,
+    "AAPL": 195.0, "MSFT": 420.0, "NVDA": 120.0, "SPY": 540.0, "QQQ": 470.0,
 }
 
-# Pairs that need a higher synthetic volatility path (crypto ≫ FX).
-_SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0}
+# Pairs that need a higher synthetic volatility path (crypto ≫ equities ≫ FX).
+_SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0,
+              "AAPL": 1.8, "MSFT": 1.6, "NVDA": 2.6, "SPY": 1.2, "QQQ": 1.4}
 
 # Yahoo interval -> pandas frequency (for the synthetic generator).
 _PD_FREQ = {"1d": "B", "1h": "1h", "60m": "1h", "30m": "30min", "15m": "15min",
@@ -172,3 +174,17 @@ def synthetic_panel(symbols: list[str], start: str = "2015-01-01",
         s = seed if seed is not None else 1000 + sum(ord(c) for c in sym)
         frames[sym] = synthetic_pair(pair, start=start, end=end, seed=s, freq=freq)
     return _align(frames)
+
+
+def synthetic_recent(symbols: list[str], timeframe: str = "1m", days: int = 3,
+                     seed: int | None = None) -> dict[str, pd.DataFrame]:
+    """A short recent window of synthetic intraday bars (offline pipeline tests).
+
+    Shared by every intraday data source (crypto / OANDA / Alpaca / OpenBB) so
+    they all fabricate the same panel shape with no network. Pipeline only —
+    never performance.
+    """
+    end = pd.Timestamp("2025-01-04")
+    start = (end - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+    return synthetic_panel(symbols, start=start, end=end.strftime("%Y-%m-%d"),
+                           seed=seed, freq=timeframe)

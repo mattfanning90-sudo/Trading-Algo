@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from . import explain
+from . import feeds
 from . import fx_config as cfg
 from . import fx_data
 from .agents import AgentPool
@@ -84,28 +85,11 @@ def _params(state: dict) -> FXParams:
     return profile(state.get("profile", "balanced"))
 
 
-def _intraday_start(interval: str) -> str:
-    """How far back to fetch for an intraday interval (Yahoo's history limits)."""
-    days = {"60m": 700, "30m": 55, "15m": 55, "5m": 55}.get(interval, 700)
-    return (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
-
-
 def _panel(symbols: list[str], synthetic: bool, interval: str = "1d",
-           exchange: str | None = None):
-    # Crypto exchange source (ccxt) — for the high-frequency crypto path.
-    if exchange:
-        from . import crypto_data
-        if synthetic:
-            return crypto_data.synthetic_crypto_panel(symbols, timeframe=interval)
-        return crypto_data.load_ohlcv(symbols, timeframe=interval, exchange=exchange)
-    daily = interval in ("1d", "B")
-    if synthetic:
-        if daily:
-            return fx_data.synthetic_panel(symbols)
-        start = (pd.Timestamp("2025-01-01")).strftime("%Y-%m-%d")
-        return fx_data.synthetic_panel(symbols, start=start, end="2025-04-01", freq=interval)
-    start = cfg.START if daily else _intraday_start(interval)
-    return fx_data.load_panel(symbols, start, interval=interval, use_cache=False)
+           source: str = "yahoo", exchange: str | None = None):
+    """Aligned OHLC panel from any data source (see feeds.SOURCES)."""
+    return feeds.load(symbols, synthetic=synthetic, interval=interval,
+                      source=source, exchange=exchange, use_cache=False)
 
 
 def _bar_key(ts, interval: str) -> str:
@@ -122,7 +106,8 @@ def _sign(x: float) -> int:
 # ---------------------------------------------------------------------------
 def init_account(account: str, capital: float, profile_name: str,
                  symbols: list[str] | None = None,
-                 currency: str = cfg.ACCOUNT_CURRENCY, force: bool = False) -> None:
+                 currency: str = cfg.ACCOUNT_CURRENCY, source: str = "yahoo",
+                 force: bool = False) -> None:
     if os.path.exists(_state_file(account)) and not force:
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
@@ -131,6 +116,7 @@ def init_account(account: str, capital: float, profile_name: str,
         "account": account,
         "currency": currency,
         "profile": profile_name,
+        "source": source,
         "symbols": list(symbols or DEFAULT_UNIVERSE),
         "initial_capital": float(capital),
         "equity": float(capital),
@@ -145,7 +131,8 @@ def init_account(account: str, capital: float, profile_name: str,
     }
     save_state(account, state)
     print(f"  FX account '{account}' opened: {capital:,.0f} {currency} "
-          f"[{profile_name}] over {len(state['symbols'])} pairs")
+          f"[{profile_name}] over {len(state['symbols'])} instruments "
+          f"(source: {source})")
 
 
 def init_defaults(synthetic: bool, force: bool = False) -> None:
@@ -171,16 +158,21 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None, interval: str = "1d",
-             exchange: str | None = None) -> None:
+             source: str | None = None, exchange: str | None = None) -> None:
     state = load_state(account)
     p = _params(state)
-    if exchange:                                    # crypto HF book: trade its own symbols only
-        symbols = list(state.get("symbols") or [])
-    else:
+    # Resolve the data source: explicit CLI override, else the book's own stored
+    # source (defaults to yahoo). `--exchange` implies crypto (back-compat).
+    src = feeds.resolve_source(source if source is not None
+                               else state.get("source", "yahoo"), exchange)
+    if src == "yahoo":
         # Pick up any newly-added instruments (e.g. crypto) without losing history.
         symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
+    else:
+        symbols = list(state.get("symbols") or [])  # non-default feeds trade their own book
     state["symbols"] = symbols
-    panel = _panel(symbols, synthetic, interval, exchange)
+    state["source"] = src
+    panel = _panel(symbols, synthetic, interval, source=src, exchange=exchange)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
         return
@@ -292,11 +284,13 @@ def run_once(account: str, synthetic: bool = False,
 
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
-            interval: str = "1d", exchange: str | None = None) -> None:
+            interval: str = "1d", source: str | None = None,
+            exchange: str | None = None) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if os.path.exists(_state_file(name)):
-            run_once(name, synthetic, pool=pool, interval=interval, exchange=exchange)
+            run_once(name, synthetic, pool=pool, interval=interval,
+                     source=source, exchange=exchange)
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +300,7 @@ def status(account: str) -> None:
     state = load_state(account)
     print("=" * 56)
     print(f"  FX Paper Account '{account}'  [{state['profile']}]  "
-          f"(base {state['currency']})")
+          f"(base {state['currency']}, source {state.get('source', 'yahoo')})")
     print("=" * 56)
     eq = pd.DataFrame(state["equity_history"], columns=["date", "equity"])
     if eq.empty:
@@ -361,9 +355,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--bar", default="1d",
                     help="data bar interval, e.g. 60m / 15m / 1m (default daily). "
                          "Live intraday needs a real-time feed; see docs/HFT_REALITY.md.")
+    ap.add_argument("--source", default=None, choices=feeds.SOURCES,
+                    help="market-data source: yahoo (default), crypto, oanda, "
+                         "alpaca, openbb. See docs/DATA_FEEDS.md.")
     ap.add_argument("--exchange", default=None,
-                    help="crypto exchange via ccxt (e.g. binance) for HF crypto; "
-                         "default uses Yahoo. See docs/CRYPTO_HF.md.")
+                    help="crypto exchange via ccxt (e.g. binance) for the crypto "
+                         "source; default binance. See docs/CRYPTO_HF.md.")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -372,14 +369,15 @@ def main(argv: list[str] | None = None) -> None:
         compare(args.compare)
     elif args.init:
         if args.account:
-            # An hf_crypto book trades the crypto universe only (BTC/ETH/SOL),
-            # not the FX majors — its agents/risk are tuned for crypto.
-            symbols = None
-            if args.profile == "hf_crypto":
-                from . import crypto_data
-                symbols = crypto_data.CRYPTO_UNIVERSE
+            # A non-yahoo source (or the hf_crypto profile) seeds that source's
+            # natural universe — crypto for ccxt, FX majors for OANDA, US equities
+            # for Alpaca/OpenBB — and the book remembers its source.
+            src = feeds.resolve_source(args.source, args.exchange)
+            if args.profile == "hf_crypto" and src == "yahoo":
+                src = "crypto"
+            symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
             init_account(args.account, args.capital, args.profile, symbols=symbols,
-                         force=args.force)
+                         source=src, force=args.force)
         else:
             init_defaults(args.synthetic, force=args.force)
     elif args.status:
@@ -387,9 +385,11 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("--status needs --account")
         status(args.account)
     elif args.account:
-        run_once(args.account, args.synthetic, interval=args.bar, exchange=args.exchange)
+        run_once(args.account, args.synthetic, interval=args.bar,
+                 source=args.source, exchange=args.exchange)
     else:
-        run_all(args.synthetic, interval=args.bar, exchange=args.exchange)
+        run_all(args.synthetic, interval=args.bar,
+                source=args.source, exchange=args.exchange)
 
 
 if __name__ == "__main__":

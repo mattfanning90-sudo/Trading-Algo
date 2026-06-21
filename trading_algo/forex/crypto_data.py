@@ -83,7 +83,4 @@ def synthetic_crypto_panel(symbols: list[str], timeframe: str = "1m",
                            days: int = 3, seed: int | None = None
                            ) -> dict[str, pd.DataFrame]:
     """Offline synthetic minute-bar crypto panel (pipeline testing only)."""
-    end = pd.Timestamp("2025-01-04")
-    start = (end - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
-    return fx_data.synthetic_panel(symbols, start=start, end=end.strftime("%Y-%m-%d"),
-                                   seed=seed, freq=timeframe)
+    return fx_data.synthetic_recent(symbols, timeframe=timeframe, days=days, seed=seed)

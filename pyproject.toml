@@ -16,9 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86"]
-# Crypto market data + execution (free public OHLCV + funding rates); see
-# trading_algo/forex/crypto_data.py and docs/CRYPTO_HF.md.
-crypto = ["ccxt>=4.0"]
+# Free intraday market-data sources (each lazily imported); see docs/DATA_FEEDS.md.
+crypto = ["ccxt>=4.0"]            # real-time crypto OHLCV + funding (free, no key)
+oanda = ["oandapyV20>=0.7.0"]    # real-time FX via a free practice account
+alpaca = ["alpaca-py>=0.20"]     # free real-time US equities (IEX) + paper trading
+openbb = ["openbb>=4.0"]         # open-source research aggregator
+feeds = ["ccxt>=4.0", "oandapyV20>=0.7.0", "alpaca-py>=0.20"]  # all live data feeds
 dev = ["pytest>=8.0"]
 # Native desktop app (macOS uses the WebKit backend); see packaging/.
 desktop = [

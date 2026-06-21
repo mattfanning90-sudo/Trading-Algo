@@ -90,6 +90,31 @@ python -m trading_algo.forex.paper --init                          # once
 python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
 ```
 
+## Data sources (`--source`)
+
+The system is **source-agnostic**: every feed returns the same aligned OHLC panel,
+so the agents/ensemble/risk/book/backtest are identical no matter the source. Pick
+one with `--source`; live sources need a (free) account + that source's optional
+dependency, and all ship a synthetic generator so the pipeline runs offline.
+
+| `--source` | Asset class | Real-time? | Cost | Library |
+|-----------|-------------|-----------|------|---------|
+| `yahoo` *(default)* | FX + crypto | delayed | free, no key | yfinance |
+| `crypto` | BTC/ETH/SOL | ✅ | free, no key | `ccxt` |
+| `oanda` | FX majors | ✅ | free practice acct + token | `oandapyV20` |
+| `alpaca` | US equities | ✅ (IEX) | free acct + keys | `alpaca-py` |
+| `openbb` | research | mostly delayed | free | `openbb` |
+
+```bash
+python -m trading_algo.forex.run_backtest --source alpaca --bar 1h     # US equities
+python -m trading_algo.forex.paper --init --account fx --source oanda --profile intraday
+python -m trading_algo.forex.engine --loop --account fx --source oanda --bar 1h
+```
+
+The honest distinction (open-source *software* vs free real-time *data*), the
+per-asset-class reality, credentials and caveats are all in
+[`docs/DATA_FEEDS.md`](../../docs/DATA_FEEDS.md).
+
 ## The parallel agent ecosystem
 
 | Agent | Edge | Acts when |
