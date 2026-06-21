@@ -80,6 +80,10 @@ def build_report(region_key: str, synthetic: bool, point_in_time: bool = False) 
         prices, index_px = data.synthetic_region(region)
     else:
         prices, index_px = data.load_region(region, cfg.START, None, tickers=pit_tickers)
+        if membership is not None:
+            # book a terminal loss for delisted names so losers don't vanish at
+            # their last quote (survivorship correction's second half)
+            prices = data.apply_delisting_returns(prices, set(region.universe))
 
     bt = run_backtest(prices, index_px, region, membership=membership)
     rets = bt["returns"]

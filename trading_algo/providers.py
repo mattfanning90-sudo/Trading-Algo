@@ -16,6 +16,9 @@ Coverage at a glance:
 - **stooq** — free, no key; US, LSE (.L) and ASX (.AX) EOD. Good redundancy.
 - **polygon** — needs ``POLYGON_API_KEY``; US equities/ETFs, FX, US indices only
   (NO London/Australia listings — those fall through to yfinance/stooq).
+- **tiingo** — needs ``TIINGO_API_KEY`` (free tier); US equities/ETFs, and
+  **retains DELISTED tickers** (the free path to a survivorship-bias-free US
+  backtest). Appended last so it prices delisted names yfinance/stooq drop.
 """
 from __future__ import annotations
 
@@ -165,17 +168,68 @@ class PolygonProvider(PriceProvider):
         return pd.DataFrame(cols).sort_index()
 
 
+class TiingoProvider(PriceProvider):
+    """Tiingo daily adjusted EOD. Needs ``TIINGO_API_KEY`` (free tier ~50
+    symbols/hour). US equities/ETFs only — but, crucially, **it RETAINS DELISTED
+    tickers**, which Yahoo purges. That makes it the free missing piece for a
+    survivorship-bias-free US backtest: the point-in-time universe includes names
+    that were later delisted, and Tiingo can still price them."""
+    name = "tiingo"
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.environ.get("TIINGO_API_KEY")
+
+    def supports(self, ticker: str) -> bool:
+        return bool(self.api_key) and self._symbol(ticker) is not None
+
+    @staticmethod
+    def _symbol(ticker: str) -> str | None:
+        # US equities/ETFs only; no LSE/ASX/index/FX. BRK-B stays BRK-B.
+        if ticker.startswith("^") or ticker.endswith("=X"):
+            return None
+        if ticker.endswith(".AX") or ticker.endswith(".L") or "." in ticker:
+            return None
+        return ticker.lower()
+
+    def fetch(self, tickers, start, end):
+        end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
+        cols = {}
+        for t in tickers:
+            sym = self._symbol(t)
+            if not sym:
+                continue
+            url = (f"https://api.tiingo.com/tiingo/daily/{sym}/prices"
+                   f"?startDate={start}&endDate={end}&format=csv&token={self.api_key}")
+            try:
+                df = pd.read_csv(io.BytesIO(_http_get(url)))
+                if "date" not in df or "adjClose" not in df or df.empty:
+                    continue
+                cols[t] = pd.Series(df["adjClose"].values,
+                                    index=pd.to_datetime(df["date"]), name=t)
+                time.sleep(0.05)              # respect the free-tier rate limit
+            except Exception:
+                continue
+        if not cols:
+            return pd.DataFrame()
+        return pd.DataFrame(cols).sort_index().loc[start:end]
+
+
 _REGISTRY = {
     "yfinance": YFinanceProvider,
     "stooq": StooqProvider,
     "polygon": PolygonProvider,
+    "tiingo": TiingoProvider,
 }
 
 
 def get_chain() -> list[PriceProvider]:
-    """Provider chain: the configured primary, then yfinance + stooq fallbacks."""
+    """Provider chain: the configured primary, then yfinance + stooq fallbacks,
+    plus tiingo last (only active when TIINGO_API_KEY is set — it's the fallback
+    that can price *delisted* US names the others can't)."""
     primary = os.environ.get("MOMENTUM_DATA_PROVIDER", "yfinance").lower()
     order = [primary, "yfinance", "stooq"]
+    if os.environ.get("TIINGO_API_KEY"):     # only useful with a key
+        order.append("tiingo")
     seen, chain = set(), []
     for name in order:
         if name in _REGISTRY and name not in seen:

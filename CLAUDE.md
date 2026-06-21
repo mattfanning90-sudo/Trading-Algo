@@ -93,7 +93,14 @@ index/currency/fees/calendar/routing) and include its key in
   smoke-test the pipeline offline; real backtests need network on your machine.
 - Data is fetched via a pluggable provider chain (`providers.py`): yfinance
   (default), stooq (free fallback), polygon (`POLYGON_API_KEY`; US+FX+indices
-  only). Set `MOMENTUM_DATA_PROVIDER` to pick the primary; fallbacks auto-append.
+  only), tiingo (`TIINGO_API_KEY`; US, **retains delisted tickers**). Set
+  `MOMENTUM_DATA_PROVIDER` to pick the primary; fallbacks auto-append.
+- **Survivorship-bias-free US**: `python -c "from trading_algo import constituents
+  as c; c.download_constituents('US')"` fetches free point-in-time S&P 500 history
+  (fja05680, incl. delisted) into the cache; then `validate --point-in-time` uses
+  it + Tiingo delisted prices + `data.apply_delisting_returns`. See
+  `docs/research/SURVIVORSHIP_FREE_DATA.md`. ASX/LSE delisted prices need a paid
+  feed (Norgate/EODHD).
 
 ## Style
 Python 3.11+, pandas/numpy, type hints, small testable modules, no heavy

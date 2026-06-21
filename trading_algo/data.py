@@ -73,6 +73,35 @@ def load_region(region: Region, start: str, end: str | None = None,
     return prices, index_px
 
 
+def apply_delisting_returns(prices: pd.DataFrame, still_listed: set[str],
+                            default_return: float = -0.30) -> pd.DataFrame:
+    """Book a terminal return for names that stop trading mid-backtest, so a
+    delisted loser doesn't silently exit at its last quote (which flatters the
+    book). For each column whose price ends before the frame's last date AND that
+    is NOT in `still_listed` (today's universe), inject one extra price point of
+    `last * (1 + default_return)` on the next available date.
+
+    `default_return` follows the Shumway / Alpha-Architect convention; −0.30 is a
+    conservative blanket figure for performance-related delistings (use −1.0 for
+    known bankruptcies, ~0 for clean acquisitions if you can classify them)."""
+    if not len(prices):
+        return prices
+    out = prices.copy()
+    last_date = out.index[-1]
+    all_dates = out.index
+    for t in out.columns:
+        col = out[t].dropna()
+        if col.empty:
+            continue
+        last_valid = col.index[-1]
+        if last_valid >= last_date or t in still_listed:
+            continue                                  # survived (or still listed)
+        loc = all_dates.searchsorted(last_valid) + 1  # next trading day
+        if loc < len(all_dates):
+            out.loc[all_dates[loc], t] = float(col.iloc[-1]) * (1.0 + default_return)
+    return out
+
+
 def load_defensive_returns(ticker: str, start: str, end: str | None = None,
                            use_cache: bool = True) -> pd.Series:
     """Daily fractional returns for one defensive asset (e.g. a bond/gold ETF).

@@ -45,9 +45,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run backtest / tune
+        env:
+          # Optional secrets: enable extra providers when configured in the repo.
+          # TIINGO_API_KEY unlocks delisted US prices (survivorship-free PIT runs).
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           SYN="${{ inputs.mode == 'synthetic' && '--synthetic' || '' }}"
           PIT="${{ inputs.point_in_time && '--point-in-time' || '' }}"
+          # For a real point-in-time run, fetch the free fja05680 S&P 500 history
+          # (incl. delisted names) into the cache; best-effort, never fails the job.
+          if [ -n "$PIT" ] && [ "${{ inputs.mode }}" != "synthetic" ] && [ "${{ inputs.region }}" = "US" ]; then
+            python -c "from trading_algo import constituents as c; print('constituents ->', c.download_constituents('US'))" \
+              || echo "constituents download failed — falling back to current universe"
+          fi
           if [ "${{ inputs.task }}" = "tune" ]; then
             python -m trading_algo.tune $SYN | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "defensive" ]; then
