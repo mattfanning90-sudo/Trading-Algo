@@ -249,9 +249,21 @@ def build_payload(account, synthetic=False, bars=180):
     closes_df = fx_data.closes(panel)
     bench_curve, bench_metrics = [], {}
     if not closes_df.empty:
-        w = closes_df.tail(bars)
+        # Honest day-one comparison: clip the buy-and-hold benchmark to the book's
+        # OWN live window and re-base it to 100 on the book's first day, so both
+        # lines start together and the metrics table compares the same period.
+        # Before the book has any history, fall back to a longer window so the
+        # chart still shows price context.
+        if eqh:
+            start = pd.Timestamp(eqh[0][0])
+            w = closes_df[closes_df.index >= start]
+            if len(w) < 2:
+                w = closes_df.tail(bars)
+        else:
+            w = closes_df.tail(bars)
         bh_ret = w.pct_change(fill_method=None).mean(axis=1).fillna(0.0)
-        bh_eq = 100.0 * (1 + bh_ret).cumprod()
+        bh_eq = (1 + bh_ret).cumprod()
+        bh_eq = 100.0 * bh_eq / bh_eq.iloc[0]            # start exactly at 100
         bench_curve = [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
                        for d, v in bh_eq.items()]
         bench_metrics = _curve_metrics([d.strftime("%Y-%m-%d") for d in bh_eq.index],
@@ -266,6 +278,9 @@ def build_payload(account, synthetic=False, bars=180):
         "gross": round(sum(abs(v) for v in state.get("positions", {}).values()), 2),
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "halted": state.get("risk_halted", False),
+        "positions": [{"sym": k, "w": round(float(v), 4)}
+                      for k, v in sorted(state.get("positions", {}).items(),
+                                         key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "attribution": _agent_attribution(panel, p, bars),
@@ -337,7 +352,8 @@ color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accen
 <div class="section grid2">
   <div class="card"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
   <div class="card"><h2>Performance</h2><div id="metrics" class="metrics"></div>
-    <div id="agentcard" style="margin-top:1rem"></div></div>
+    <div id="agentcard" style="margin-top:1rem"></div>
+    <div id="positionscard" style="margin-top:1rem"></div></div>
 </div>
 
 <div class="tabs" id="tabs"></div>
@@ -395,6 +411,9 @@ function bars(obj, hi){
   document.getElementById('metrics').innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
     rows.map(([lbl,key,isP,g])=>`<div>${tip(lbl,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');
   document.getElementById('agentcard').innerHTML=`<div style="font-size:.8rem;margin-bottom:.4rem">${tip('Agent scorecard (this window)','Agent scorecard')}</div>`+bars(DASH.attribution,["ensemble","buy&hold"]);
+  const pos=DASH.positions||[];
+  const posBars=pos.length?bars(Object.fromEntries(pos.map(p=>[p.sym,p.w]))):'<div class="muted">Flat — no open positions right now.</div>';
+  document.getElementById('positionscard').innerHTML=`<div style="font-size:.8rem;margin-bottom:.4rem">${tip('Open positions (signed % of equity)','Gross leverage')}</div>`+posBars;
 })();
 
 (function(){

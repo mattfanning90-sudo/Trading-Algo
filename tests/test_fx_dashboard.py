@@ -118,6 +118,31 @@ def test_dashboard_payload_analytics(isolated):
             assert t["outcome"] in ("open", "win", "loss")
 
 
+def test_benchmark_aligned_to_book_inception(isolated):
+    """The buy-and-hold benchmark is clipped to the book's live window and
+    re-based to 100 on day one, so book vs benchmark is an honest comparison."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    # Craft a 30-bar history whose dates fall inside the synthetic price panel.
+    dates = [d.strftime("%Y-%m-%d")
+             for d in synthetic_panel(["EURUSD"])["EURUSD"].index][-30:]
+    state = fx_book.load_state("matt")
+    state["equity_history"] = [[d, 5_000.0 + i] for i, d in enumerate(dates)]
+    state["positions"] = {"EURUSD": 0.2, "BTCUSD": -0.1}
+    fx_book.save_state("matt", state)
+
+    p = dashboard.build_payload("matt", synthetic=True)
+    bc, kc = p["book_curve"], p["bench_curve"]
+    assert bc and kc
+    # both curves start at 100 on the SAME day
+    assert bc[0]["time"] == dates[0] and abs(bc[0]["value"] - 100.0) < 1e-6
+    assert kc[0]["time"] == dates[0] and abs(kc[0]["value"] - 100.0) < 1e-6
+    # benchmark is clipped to the book window (~30 bars), not the full 180
+    assert len(kc) <= len(dates) + 2
+    # open positions are surfaced, sorted by absolute size
+    syms = [x["sym"] for x in p["positions"]]
+    assert syms[0] == "EURUSD" and "BTCUSD" in syms
+
+
 def test_dashboard_index(isolated):
     fx_book.init_account("matt", 5_000, "balanced")
     fx_book.init_account("partner", 5_000, "conservative")
