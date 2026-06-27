@@ -46,16 +46,22 @@ def _annual(r: pd.Series) -> pd.Series:
     return (1 + r.dropna()).resample("YE").prod() - 1
 
 
-def _build_streams(synthetic: bool, start: str, point_in_time: bool) -> tuple[dict, pd.Series, str]:
-    """Return (streams, spy_price_series, pit_note)."""
+def _build_streams(synthetic: bool, start: str, point_in_time: bool,
+                   include_carry: bool = False) -> tuple[dict, pd.Series, str]:
+    """Return (streams, spy_price_series, pit_note).
+
+    Carry is OFF by default: on real data the price-only income-yield carry proxy
+    behaved as a long-credit-risk bet (negative in 2008/2020/2022) and *dragged
+    the combined book down* — Sharpe 0.48→0.16, capture 3.68→1.33. Until it's
+    rebuilt with proper term-structure/roll data (or dollar-neutralised within
+    asset class), the headline book is equity + trend. Pass include_carry=True to
+    add it back for research."""
     us = get_region("US")
     pit_note = ""
 
     if synthetic:
         eq_p, eq_i = data.synthetic_region(us)
         tr_p = data.synthetic_prices(universes.TREND, "DUMMY")[universes.TREND]
-        ca_p = data.synthetic_prices(universes.CARRY, "DUMMY")[universes.CARRY]
-        ca_y = data.synthetic_carry_yields(universes.CARRY)
         membership = None
     else:
         membership = constituents.get_membership(us) if point_in_time else None
@@ -71,29 +77,35 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool) -> tuple[di
                         "for delisted prices. Falling back to the survivorship-biased universe.")
         tr_p = data.load_prices(universes.TREND, start, None)
         tr_p = tr_p[[t for t in universes.TREND if t in tr_p.columns]]
-        ca_p = data.load_prices(universes.CARRY, start, None)
-        ca_p = ca_p[[t for t in universes.CARRY if t in ca_p.columns]]
-        ca_y = data.load_carry_yields(universes.CARRY, start, None)
 
     equity = run_backtest(eq_p, eq_i, us, membership=membership)["returns"]
     trend = run_trend_backtest(tr_p)["returns"]
     streams = {"equity_momentum": equity, "trend": trend}
 
-    if not ca_y.empty and ca_p.shape[1] >= 3:
-        try:
-            streams["carry"] = carry_mod.run_carry_backtest(ca_p, ca_y)["returns"]
-        except Exception:
-            pit_note += "  (carry sleeve skipped: insufficient history)"
-    else:
-        pit_note += "  (carry sleeve skipped: yields unavailable)"
+    if include_carry:
+        if synthetic:
+            ca_p = data.synthetic_prices(universes.CARRY, "DUMMY")[universes.CARRY]
+            ca_y = data.synthetic_carry_yields(universes.CARRY)
+        else:
+            ca_p = data.load_prices(universes.CARRY, start, None)
+            ca_p = ca_p[[t for t in universes.CARRY if t in ca_p.columns]]
+            ca_y = data.load_carry_yields(universes.CARRY, start, None)
+        if not ca_y.empty and ca_p.shape[1] >= 3:
+            try:
+                streams["carry"] = carry_mod.run_carry_backtest(ca_p, ca_y)["returns"]
+            except Exception:
+                pit_note += "  (carry sleeve skipped: insufficient history)"
+        else:
+            pit_note += "  (carry sleeve skipped: yields unavailable)"
 
     spy = tr_p["SPY"] if "SPY" in tr_p else None
     return streams, spy, pit_note
 
 
 def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc",
-                 do_validate: bool = False, point_in_time: bool = False) -> str:
-    streams, spy, pit_note = _build_streams(synthetic, start, point_in_time)
+                 do_validate: bool = False, point_in_time: bool = False,
+                 include_carry: bool = False) -> str:
+    streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
     combo = multistrat.combine(streams, target_vol=0.12, method=method)
     cr = combo["returns"]
     common = cr.index
@@ -145,11 +157,12 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
     w(f"- Equity-only Sharpe {base['Sharpe']:.2f} (MaxDD {base['MaxDD']:.1%}) → "
       f"multi-strat Sharpe {combo_s['Sharpe']:.2f} (MaxDD {combo_s['MaxDD']:.1%}).")
     w(f"- SPY: CAGR {spy_s['CAGR']:.1%}, Sharpe {spy_s['Sharpe']:.2f}, MaxDD {spy_s['MaxDD']:.1%}.")
+    diversifiers = " + ".join(k for k in streams if k != "equity_momentum")
     if not point_in_time:
-        w("- NB: equity sleeve is survivorship-biased (current US names) so its return "
-          "is overstated; the drawdown/capture *shape* comes from trend + carry + vol-"
-          "targeting and survives de-biasing. Re-run with `--point-in-time` (needs "
-          "constituents cache + TIINGO_API_KEY) for the honest return level.")
+        w(f"- NB: equity sleeve is survivorship-biased (current US names) so its return "
+          f"is overstated; the drawdown/capture *shape* comes from {diversifiers} + vol-"
+          f"targeting and survives de-biasing. Re-run with `--point-in-time` (needs "
+          f"constituents cache + TIINGO_API_KEY) for the honest return level.")
 
     if do_validate:
         w("\n" + _validation_section(streams, bench, spy))
@@ -211,9 +224,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="append the overfitting/robustness gauntlet on the combined book")
     ap.add_argument("--point-in-time", action="store_true",
                     help="de-bias the equity sleeve (needs constituents cache + TIINGO_API_KEY)")
+    ap.add_argument("--with-carry", action="store_true",
+                    help="add the carry sleeve (off by default — it dragged the book down on real data)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
-                       do_validate=args.validate, point_in_time=args.point_in_time))
+                       do_validate=args.validate, point_in_time=args.point_in_time,
+                       include_carry=args.with_carry))
 
 
 if __name__ == "__main__":
