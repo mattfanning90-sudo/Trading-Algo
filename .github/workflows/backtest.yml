@@ -41,6 +41,10 @@ on:
         description: "Diversify the equity taker across US+ASX+FTSE (multistrat task)"
         type: boolean
         default: false
+      with_value:
+        description: "Add a value (long-term reversal) sleeve to the multistrat book"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -82,7 +86,8 @@ jobs:
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
             GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
-            python -m trading_algo.multistrat_report $SYN $PIT $GEQ --validate \
+            VAL="${{ inputs.with_value && '--with-value' || '' }}"
+            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL --validate \
               --target-vol "${{ inputs.target_vol }}" \
               --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else
