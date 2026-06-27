@@ -99,3 +99,26 @@ options/futures curves) and simple sizing. The honest, validated book stays **US
 + trend, ERC, vol 0.12, AUD → ~6.5% CAGR, Sharpe 0.28, −24.5% MaxDD, DSR 98.8%, positive
 every crisis**. Pushing materially higher needs genuinely new data or real factor infra —
 not another quick sleeve.
+
+### BAB follow-up + the 4-stream book (round 3)
+
+Adding a $5 penny-stock liquidity filter cut the BAB sleeve's vol (424%→38%) but it **still
+ruins** standalone (−100% MaxDD, Sharpe −0.21) — a single extreme up-day on the short leg
+still wipes it. The full **4-stream book (momentum + trend + value + BAB)** came out Sharpe
+**0.22** — *worse* than the clean 2-stream **0.28**. Fifth failed stream-add. Verdict:
+single-name L/S BAB is not safely buildable on this universe without a real risk model;
+adding weak/wash streams dilutes via ERC.
+
+### How to improve Sharpe (the levers that remain)
+
+New streams have failed 5×, so Sharpe must come from the **existing** book:
+- **Already done:** the momentum sleeve already constant-vol-targets (`strategy.vol_target`),
+  so "risk-managed momentum" (Barroso-Santa-Clara) is largely captured — confirming the weak
+  0.15 is a *signal* limit, not a vol-management gap.
+- **Buildable, modest, low-overfit:** (a) **turnover reduction** — a no-trade / rank-hysteresis
+  band in `signals.select_portfolio` so names aren't churned on marginal rank flips (net-of-cost
+  Sharpe); (b) **covariance shrinkage** (Ledoit-Wolf) in `multistrat.combine`'s ERC for steadier
+  risk weights.
+- **Honest ceiling:** the de-biased signals are genuinely weak (momentum 0.15, trend 0.12,
+  value 0.13); ERC already extracts the diversification (combined 0.28 ≈ √-uplift). ~0.28 is
+  near the limit for this data — materially higher Sharpe needs better data, not more code.
