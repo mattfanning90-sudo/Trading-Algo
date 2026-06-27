@@ -48,6 +48,10 @@ def lowrisk_signal(beta_row: pd.Series, long_short: bool = True) -> pd.Series:
 def precompute(prices: pd.DataFrame, index_prices: pd.Series, p: LowRiskParams) -> dict:
     """Low-risk signal + price-vol frames (causal: beta uses returns ≤ t)."""
     beta = rolling_beta(prices, index_prices, p.beta_lookback)
+    # liquidity filter: only rank names trading >= min_price on the date — drops the
+    # illiquid sub-$5 penny stocks whose 10x spikes wrecked the naive short leg.
+    if p.min_price:
+        beta = beta.where(prices >= p.min_price)
     sig = beta.apply(lambda row: lowrisk_signal(row, p.long_short), axis=1)
     # floor the per-name vol so inverse-vol sizing can't explode on a near-constant
     # or thinly-traded single name (the ETF sleeves never hit this).

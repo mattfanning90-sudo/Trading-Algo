@@ -142,6 +142,8 @@ class LowRiskParams:
     # name's weight so one short can't lose >100% in a day and blow up the book.
     vol_floor: float = 0.10            # min annualised vol for inverse-vol sizing
     max_weight_per_name: float = 0.05  # per-name weight cap (gross), L and S
+    min_price: float = 5.0             # exclude sub-$5 penny stocks (illiquid; the
+    #                                    high-beta shorts that blew up the naive sleeve)
 
     def with_overrides(self, **kwargs) -> "LowRiskParams":
         return replace(self, **kwargs)
