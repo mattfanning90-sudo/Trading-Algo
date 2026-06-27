@@ -78,3 +78,24 @@ drawdown budget. Honest levers, ranked:
 Bottom line: ship the **US-momentum + trend, ERC, vol 0.12, AUD** book as a low-drawdown,
 crisis-protective ~6.5% product, and treat 10% as a research aspiration contingent on a new,
 validated, uncorrelated edge — never on leverage or bias.
+
+## Edge hunt — round 2 (value, BAB)
+
+Two candidate new premia were built and CI-tested de-biased (AUD); both **failed to
+deliver a clean, validated win**:
+
+| Candidate | de-biased combined result | Verdict |
+|---|---|---|
+| **Value** (long-term reversal, separate ERC stream) | Sharpe 0.28→**0.29**, CAGR 6.5→6.6%, capture 2.29→2.01 | **Wash.** Value's own premium was weak 2007–2026 ("value winter") and it shares too much equity beta with momentum to diversify. |
+| **Low-risk / BAB** (long low-beta, short high-beta, single names) | standalone **−100% MaxDD / 424% vol** → combined book contaminated (vol 18.9% vs 12% target); DSR fell to 94.1% | **Broken / discarded.** Shorting high-beta single names from the delisted PIT universe = shorting illiquid penny stocks that spike 10×. Numerically hardened (per-name cap, vol floor, daily-loss guard) but still unsound. |
+
+The BAB lesson is real: a single-name long/short sleeve on a delisted-inclusive universe
+needs **liquidity/price filters + beta-and-dollar-neutral construction** (real infra), not
+the ETF-sleeve sizing. Left opt-in/off until built properly.
+
+**Conclusion after four edge attempts** (carry, global-equity, value, BAB): there is **no
+easy uncorrelated edge** to bolt on with the current data (price-only, no fundamentals/
+options/futures curves) and simple sizing. The honest, validated book stays **US-momentum
++ trend, ERC, vol 0.12, AUD → ~6.5% CAGR, Sharpe 0.28, −24.5% MaxDD, DSR 98.8%, positive
+every crisis**. Pushing materially higher needs genuinely new data or real factor infra —
+not another quick sleeve.
