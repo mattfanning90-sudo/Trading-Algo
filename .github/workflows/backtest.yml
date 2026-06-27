@@ -59,8 +59,9 @@ jobs:
       - name: Run backtest / tune
         env:
           # Optional secrets: enable extra providers when configured in the repo.
-          # TIINGO_API_KEY unlocks delisted US prices (survivorship-free PIT runs).
-          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          # TIINGO unlocks delisted US prices (survivorship-free PIT runs). Accept
+          # either secret name (TIINGO_API_KEY or TIINGO_API_SECRET) for convenience.
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY || secrets.TIINGO_API_SECRET }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           SYN="${{ inputs.mode == 'synthetic' && '--synthetic' || '' }}"
