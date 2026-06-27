@@ -86,3 +86,20 @@ TREND_ETFS: dict[str, list[str]] = {
 # Flat list of all trend instruments.
 TREND = [t for group in TREND_ETFS.values() for t in group]
 
+# ---------------------------------------------------------------------------
+# Carry sleeve — a cross-section of yield-bearing US-listed ETFs spanning the
+# duration/credit/asset-class spectrum, so the *spread* of income yields (and
+# its time-variation) is a meaningful cross-sectional signal: SHY/SPY/GLD sit at
+# the low-carry end, HYG/VNG/EMB/TLT at the high-carry end, and the ranking
+# rotates as credit spreads and the curve move. Traded L/S on carry (see carry.py).
+# ---------------------------------------------------------------------------
+CARRY_ETFS: dict[str, list[str]] = {
+    "rates":     ["SHY", "IEF", "TLT", "TIP"],   # short/7-10y/20y+ UST, TIPS
+    "credit":    ["LQD", "HYG", "EMB"],          # IG, high-yield, EM USD bonds
+    "equity":    ["SPY", "EFA", "EEM"],          # US, developed ex-US, emerging
+    "real":      ["VNQ", "GLD"],                 # REITs (high yield), gold (~zero)
+}
+
+# Flat list of all carry instruments.
+CARRY = [t for group in CARRY_ETFS.values() for t in group]
+

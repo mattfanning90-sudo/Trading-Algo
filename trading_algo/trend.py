@@ -103,10 +103,9 @@ def run_trend_backtest(prices: pd.DataFrame, p: TrendParams = DEFAULT_TREND_PARA
     month-end t from data <= t, apply them from t+1, charge commission+slippage
     on turnover (gross of long+short). Returns a result dict shaped like
     `backtest.run_backtest` (returns / equity / metrics / weights)."""
-    from .metrics import compute_metrics
+    from .lsbacktest import run_ls_backtest
 
     prices = prices.dropna(how="all")
-    rets = prices.pct_change(fill_method=None)
     if len(prices) <= p.min_history_days:
         raise ValueError(f"trend: not enough history ({len(prices)} rows)")
 
@@ -121,57 +120,5 @@ def run_trend_backtest(prices: pd.DataFrame, p: TrendParams = DEFAULT_TREND_PARA
         asof = prices.index[loc]
         schedule[asof] = compute_trend_targets(prices, p, asof=asof, signals_cache=cache)
 
-    cost_rate = 2.0 * p.cost_bps / 1e4          # round-trip on turnover
-    dates = prices.index
-    current_w = pd.Series(dtype=float)
-    equity = [initial_capital]
-    daily_ret: list[float] = []
-    turnover_log, cost_log = [], []
-    weights_hist: dict[pd.Timestamp, pd.Series] = {}
-    total_cost = 0.0
-    pending: pd.Series | None = None
-
-    for i in range(1, len(dates)):
-        today, yday = dates[i], dates[i - 1]
-        cost = 0.0
-        if pending is not None:
-            names = current_w.index.union(pending.index)
-            delta = (pending.reindex(names, fill_value=0.0)
-                     - current_w.reindex(names, fill_value=0.0))
-            turnover = float(delta.abs().sum())
-            cost = turnover * cost_rate
-            turnover_log.append((today, turnover))
-            cost_log.append((today, cost))
-            total_cost += cost
-            current_w = pending
-            pending = None
-
-        day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
-        r = float((current_w * day_rets).sum()) - cost
-        daily_ret.append(r)
-        equity.append(equity[-1] * (1 + r))
-        weights_hist[today] = current_w
-
-        if yday in schedule:
-            pending = schedule[yday]
-
-        # Drift held (signed) positions with the day's returns.
-        if not current_w.empty:
-            grown = current_w * (1 + day_rets)
-            nav = 1.0 + float((current_w * day_rets).sum())
-            current_w = grown / nav if nav != 0 else grown
-
-    ret_series = pd.Series(daily_ret, index=dates[1:])
-    eq = pd.Series(equity[1:], index=dates[1:])
-    avg_gross = float(pd.DataFrame(weights_hist).abs().sum().mean()) if weights_hist else 0.0
-    return {
-        "sleeve": "TREND",
-        "returns": ret_series,
-        "equity": eq,
-        "turnover": pd.Series(dict(turnover_log)),
-        "costs": pd.Series(dict(cost_log)),
-        "total_cost_fraction": total_cost,
-        "avg_gross_exposure": avg_gross,
-        "weights": weights_hist,
-        "metrics": compute_metrics(ret_series, eq, currency=currency),
-    }
+    return run_ls_backtest(prices, schedule, p.cost_bps, "TREND",
+                           currency=currency, initial_capital=initial_capital)

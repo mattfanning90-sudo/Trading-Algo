@@ -39,6 +39,12 @@ history and reasoning.
   traded long/short on its own trend, vol-targeted, across equities/bonds/
   commodities/FX. Own `compute_trend_targets` (single source) + `run_trend_backtest`.
   A diversifier (low corr to equities, crisis alpha), not a return engine
+- `carry.py` — **cross-asset carry diversifier sleeve**: long high-yield / short
+  low-yield across yield-bearing ETFs (rates/credit/equity/real), income-yield
+  carry from the total-vs-price-return gap (`data.load_carry_yields`). Own
+  `compute_carry_targets` (single source) + `run_carry_backtest`. The 3rd premium
+- `lsbacktest.py` — **shared long/short walk-forward engine** (`run_ls_backtest`):
+  both trend and carry route through it (one L/S engine, no duplicated loop)
 - `defensive_sweep.py` — compares what idle/risk-off capital earns (cash/T-bill/
   bonds/gold) per sleeve; `trend_report.py` — equity-vs-trend-vs-blend comparison
 - `robust.py` — overfitting controls (Probabilistic/Deflated Sharpe, PBO via CSCV);
@@ -49,9 +55,11 @@ history and reasoning.
   `docs/research/BACKTEST_VALIDATION.md`
 - `multistrat.py` — **multi-strategy combiner**: reads N strategy return streams,
   sizes by risk (inverse-vol / equal-risk-contribution), vol-targets the book →
-  an upside-taker + downside-mitigator. `multistrat_report.py` scores it (up/down
-  capture) vs SPY. The research conclusion: combine uncorrelated premia, don't
-  chase one signal
+  an upside-taker + downside-mitigator. `multistrat_report.py` combines equity +
+  trend + carry, scores it (up/down capture) vs SPY, and with `--validate` runs the
+  overfitting gauntlet on the combined book (DSR/PBO deflated across the combiner's
+  own knobs). The research conclusion: combine uncorrelated premia, don't chase one
+  signal
 - `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
@@ -64,12 +72,12 @@ python -m trading_algo.sweep --region US            # parameter robustness sweep
 python -m trading_algo.trend_report                 # equity vs trend vs blend (diversifier test)
 python -m trading_algo.defensive_sweep --region US  # what idle capital should earn
 python -m trading_algo.validate --region US         # win rate, Deflated Sharpe, PBO, regime, stress
-python -m trading_algo.multistrat_report            # combined upside-taker/downside-mitigator book
+python -m trading_algo.multistrat_report --validate  # equity+trend+carry book + overfitting gauntlet
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
-pytest -q                                           # 141 tests
+pytest -q                                           # 147 tests
 ```
 
 ## Invariants — do not break these

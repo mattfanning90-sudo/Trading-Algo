@@ -116,6 +116,31 @@ def load_defensive_returns(ticker: str, start: str, end: str | None = None,
     return px[ticker].pct_change(fill_method=None)
 
 
+def load_carry_yields(tickers: list[str], start: str, end: str | None = None,
+                      lookback: int = 252) -> pd.DataFrame:
+    """Trailing income (distribution) yield per asset — the carry signal.
+
+    Adjusted close reinvests distributions; raw close does not. So over a window,
+    (AdjClose_t/AdjClose_{t-N}) / (Close_t/Close_{t-N}) − 1 is the cumulative
+    distribution yield — clean carry, no separate dividend feed. Computed over a
+    trailing `lookback` (~1y → ~annual yield). Network-only (needs both price
+    series from yfinance); returns an empty frame on any failure so the carry
+    sleeve degrades gracefully rather than crashing the portfolio run."""
+    try:
+        import yfinance as yf
+        raw = yf.download(tickers, start=start, end=end, auto_adjust=False,
+                          progress=False)
+        close, adj = raw["Close"], raw["Adj Close"]
+    except Exception:
+        return pd.DataFrame()
+    if isinstance(close, pd.Series):
+        close, adj = close.to_frame(tickers[0]), adj.to_frame(tickers[0])
+    tr = adj / adj.shift(lookback)            # total-return factor over the window
+    pr = close / close.shift(lookback)        # price-return factor
+    y = (tr / pr) - 1.0                        # cumulative distribution yield
+    return y.reindex(columns=[t for t in tickers if t in y.columns]).dropna(how="all")
+
+
 # ---------------------------------------------------------------------------
 # Synthetic data (offline pipeline testing only)
 # ---------------------------------------------------------------------------
@@ -144,6 +169,24 @@ def synthetic_prices(tickers: list[str], index_ticker: str,
     df = pd.DataFrame(prices, index=dates, columns=tickers)
     df[index_ticker] = index_base * np.exp(np.cumsum(market))
     return df
+
+
+def synthetic_carry_yields(tickers: list[str], start: str = "2012-01-01",
+                           end: str = "2026-01-01", seed: int = 7) -> pd.DataFrame:
+    """Synthetic per-asset income yields (offline carry pipeline tests only).
+
+    Each asset gets a distinct base yield (so the cross-section has a real spread)
+    plus a slow random walk (so the carry ranking rotates over time). Meaningless
+    for performance — plumbing only."""
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range(start, end)
+    n = len(dates)
+    cols = {}
+    for i, t in enumerate(tickers):
+        base = 0.005 + 0.045 * ((i + 1) / len(tickers))      # 0.5%..5% spread
+        walk = np.cumsum(rng.normal(0, 0.0004, n))
+        cols[t] = pd.Series(np.clip(base + walk, 0.0, 0.12), index=dates, name=t)
+    return pd.DataFrame(cols)
 
 
 def synthetic_region(region: Region, start: str = "2012-01-01",

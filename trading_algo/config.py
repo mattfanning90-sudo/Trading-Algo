@@ -90,6 +90,34 @@ class TrendParams:
 DEFAULT_TREND_PARAMS = TrendParams()
 
 
+@dataclass(frozen=True)
+class CarryParams:
+    """Knobs for the cross-asset carry diversifier sleeve.
+
+    Carry = the return earned if prices don't move (here proxied by trailing
+    income/distribution yield across a basket of yield-bearing ETFs). Traded
+    cross-sectionally — long the high-carry assets, short the low-carry ones —
+    inverse-vol-sized to a portfolio vol target, same L/S engine as trend.
+    A third, largely uncorrelated premium for the multi-strategy book.
+    """
+    yield_lookback: int = 252          # trailing window for the income-yield estimate
+    vol_lookback: int = 90             # days for inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (L/S; >1 needs margin)
+    avg_correlation: float = 0.30      # carry assets share more beta than trend's
+    long_short: bool = True            # True = demean (L/S); False = long-only tilt
+    rebalance: str = "ME"              # month-end, like the other sleeves
+    min_history_days: int = 260        # need ~12m before the first yield estimate
+    cost_bps: float = 3.0              # per side (commission+slippage), liquid ETFs
+
+    def with_overrides(self, **kwargs) -> "CarryParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_CARRY_PARAMS = CarryParams()
+
+
 # ---------------------------------------------------------------------------
 # Portfolio-level configuration
 # ---------------------------------------------------------------------------

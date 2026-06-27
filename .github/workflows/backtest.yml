@@ -68,7 +68,7 @@ jobs:
           elif [ "${{ inputs.task }}" = "validate" ]; then
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
-            python -m trading_algo.multistrat_report $SYN | tee backtest_report.md
+            python -m trading_algo.multistrat_report $SYN $PIT --validate | tee backtest_report.md
           else
             python -m trading_algo.report $SYN $PIT --out backtest_report.md
           fi

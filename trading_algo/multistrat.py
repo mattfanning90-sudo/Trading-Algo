@@ -117,6 +117,30 @@ def combine(streams: dict[str, pd.Series], target_vol: float = 0.10,
             "gross": weights.abs().sum(axis=1)}
 
 
+def validate_combo(streams: dict[str, pd.Series], target_vol: float = 0.12,
+                   base_method: str = "erc") -> dict:
+    """Run the combiner across its own hyperparameter grid (method × lookback ×
+    vol target) to feed the overfitting tests: Deflated Sharpe needs the trial
+    Sharpes, PBO needs the monthly return matrix. This asks the honest question —
+    does the multi-strat book's edge survive selection over ITS OWN knobs, or did
+    we just pick the lucky combiner config? Returns the base combined returns plus
+    the trial Sharpes and the T×N monthly matrix."""
+    base = combine(streams, target_vol=target_vol, method=base_method)["returns"]
+    sharpes: list[float] = []
+    monthly: dict[str, pd.Series] = {}
+    for m in ("invvol", "erc", "equal"):
+        for lb in (63, 126, 252):
+            for tv in (0.08, 0.10, 0.12):
+                r = combine(streams, target_vol=tv, method=m, lookback=lb)["returns"]
+                r = r.dropna()
+                if len(r) < 60:
+                    continue
+                sharpes.append(float(r.mean() / r.std() * np.sqrt(_PPY)) if r.std() else float("nan"))
+                monthly[f"{m}_{lb}_{int(tv*100)}"] = (1 + r).resample("ME").prod() - 1.0
+    mat = pd.DataFrame(monthly).dropna(how="any")
+    return {"base": base, "trial_sharpes": sharpes, "perf_matrix": mat}
+
+
 def capture_ratios(returns: pd.Series, benchmark: pd.Series,
                    period: str = "ME") -> dict:
     """Upside/downside capture vs a benchmark (the upside-taker / downside-mitigator
