@@ -122,3 +122,29 @@ New streams have failed 5×, so Sharpe must come from the **existing** book:
 - **Honest ceiling:** the de-biased signals are genuinely weak (momentum 0.15, trend 0.12,
   value 0.13); ERC already extracts the diversification (combined 0.28 ≈ √-uplift). ~0.28 is
   near the limit for this data — materially higher Sharpe needs better data, not more code.
+
+## The honest path to a 10% CAGR target — asset allocation, not alpha
+
+A higher CAGR is not an alpha problem (the active book's honest ceiling is ~6.5% / Sharpe
+0.28). It is an **asset-allocation choice**: hold equity beta for the return, and use the
+active book — which is genuinely uncorrelated to equities — to cut the drawdown. De-biased
+frontier (AUD, 2007–2026, no leverage, no bias; blends of SPY-in-AUD with the active book):
+
+| equity / active | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| 0% / 100% active | 6.5% | 0.28 | −24.5% |
+| 30% / 70% | 8.4% | 0.42 | **−21.0%** |
+| 50% / 50% | 9.5% | 0.46 | −23.7% |
+| **70% / 30%** | **10.4%** | **0.48** | **−26.4%** |
+| 100% equity | 11.6% | 0.48 | −40.2% |
+
+- **~70% equity / 30% active → 10.4% CAGR honestly**, at −26.4% MaxDD vs pure equity's
+  −40.2% — the active book cuts ~14 points of drawdown for ~1 point of CAGR.
+- The **30/70 blend raises Sharpe to 0.42 AND lowers MaxDD to −21%** vs the active book alone
+  — diversification cuts both ways (equity diversifies the active book; the active book
+  diversifies the equity holder).
+- This is the original brief realised: **equities = upside taker, active book = downside
+  mitigator.** Pick the blend that matches your drawdown tolerance; 10% CAGR sits at ~70/30.
+
+The report prints this frontier on every run (`multistrat_report`), so the return/drawdown
+tradeoff is always explicit and the target is a deliberate risk choice — never leverage or bias.
