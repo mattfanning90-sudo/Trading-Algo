@@ -105,12 +105,18 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
 def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc",
                  do_validate: bool = False, point_in_time: bool = False,
                  include_carry: bool = False, target_vol: float = 0.12,
-                 max_leverage: float = 1.5) -> str:
+                 max_leverage: float = 1.5, drawdown_stop: float | None = None) -> str:
+    # Financing on the leveraged portion is ALWAYS charged (leverage isn't free).
+    # The reactive drawdown stop is OFF by default: real-data evidence showed it
+    # WHIPSAWS a levered book (cuts at the 2020/2022 bottoms, misses the V-recovery
+    # → deeper drawdown AND lower return). Risk is controlled EX-ANTE here (vol
+    # target + diversification + not over-levering), per the investment-council.
+    # Pass --drawdown-stop to study it as an optional backstop.
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
     combo = multistrat.combine(streams, target_vol=target_vol, method=method,
                                max_leverage=max_leverage,
                                financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
-                               drawdown_stop=cfg.MAX_DRAWDOWN_STOP,
+                               drawdown_stop=drawdown_stop,
                                cooldown_days=cfg.DRAWDOWN_COOLDOWN_DAYS)
     cr = combo["returns"]
     common = cr.index
@@ -169,19 +175,26 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
           f"targeting and survives de-biasing. Re-run with `--point-in-time` (needs "
           f"constituents cache + TIINGO_API_KEY) for the honest return level.")
 
+    if max_leverage > 1.6:
+        w("- ⚠️ Leverage risk: gross >1.6 means borrowing (financing charged here at "
+          f"{cfg.LEVERAGE_FINANCING_SPREAD:.0%} over rf) and drawdowns scale up. A "
+          "reactive drawdown stop WHIPSAWS a levered book (cuts at crash bottoms, "
+          "misses the recovery) — control risk by NOT over-levering, not by a stop.")
     if do_validate:
-        w("\n" + _validation_section(streams, bench, spy, target_vol, max_leverage))
+        w("\n" + _validation_section(streams, bench, spy, target_vol, max_leverage,
+                                     drawdown_stop))
     return "\n".join(L)
 
 
 def _validation_section(streams: dict, bench: pd.Series, spy: pd.Series,
-                        target_vol: float = 0.12, max_leverage: float = 1.5) -> str:
+                        target_vol: float = 0.12, max_leverage: float = 1.5,
+                        drawdown_stop: float | None = None) -> str:
     """The overfitting/robustness gauntlet, run on the COMBINED book — the same
     panel `validate.py` runs on a single sleeve, adapted to the multi-strat."""
     v = multistrat.validate_combo(streams, target_vol=target_vol, base_method="erc",
                                   max_leverage=max_leverage,
                                   financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
-                                  drawdown_stop=cfg.MAX_DRAWDOWN_STOP,
+                                  drawdown_stop=drawdown_stop,
                                   cooldown_days=cfg.DRAWDOWN_COOLDOWN_DAYS)
     rets, sharpes, mat = v["base"], v["trial_sharpes"], v["perf_matrix"]
     n = len(rets)
@@ -240,11 +253,14 @@ def main(argv: list[str] | None = None) -> None:
                     help="annualised vol target for the combined book (the risk/return dial)")
     ap.add_argument("--max-leverage", type=float, default=1.5,
                     help="gross-exposure cap on the combined book (leverage needs margin + financing cost)")
+    ap.add_argument("--drawdown-stop", type=float, default=0.0,
+                    help="optional reactive drawdown circuit breaker (0=off; it whipsaws a levered book)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
                        include_carry=args.with_carry, target_vol=args.target_vol,
-                       max_leverage=args.max_leverage))
+                       max_leverage=args.max_leverage,
+                       drawdown_stop=(args.drawdown_stop or None)))
 
 
 if __name__ == "__main__":
