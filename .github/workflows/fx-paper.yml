@@ -1,0 +1,127 @@
+name: FX Paper Trading (live)
+
+# Runs the multi-agent FX paper books (matt + partner) unattended in the cloud
+# on REAL Yahoo FX + crypto data, commits the updated state back to the repo so
+# the books compound across runs, then publishes a candlestick dashboard (with
+# the reasoning behind every trade) to GitHub Pages. This workflow is the single
+# Pages publisher — it also re-exports the equity dashboards so nothing is lost.
+#
+# ONE-TIME SETUP (repo Settings):
+#   • Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   • Settings → Actions → General → Workflow permissions: "Read and write"
+# NOTE: schedule: only fires on the DEFAULT branch.
+
+on:
+  schedule:
+    - cron: "0 23 * * 1-5"   # weekdays 23:00 UTC — after the NY close
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode"
+        type: choice
+        options: [real, synthetic]
+        default: real
+      use_ml:
+        description: "Include the deep-learning agent (retrained fresh each run)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write      # commit updated paper state
+  pages: write         # publish the dashboard
+  id-token: write      # required by deploy-pages
+
+concurrency:
+  group: fx-paper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
+      USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Advance the FX paper books (init if new, one daily pass)
+        run: |
+          mkdir -p state public
+          python -m trading_algo.forex.paper --init $SYNTH
+          ML_FLAG=""
+          if [ "$USE_ML" = "true" ]; then
+            echo "::group::train deep-learning agent (best-effort)"
+            python -m trading_algo.forex.train $SYNTH --seeds 2 --no-ml \
+              --models-dir trading_algo/forex/models \
+              || echo "training failed — falling back to the technical agents"
+            echo "::endgroup::"
+            ML_FLAG="--ml"
+          fi
+          python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
+
+      - name: Export candlestick dashboards (FX) + equity dashboards
+        run: |
+          # FX books: candlesticks + per-trade rationale.
+          python -m trading_algo.forex.dashboard --all --out-dir public $SYNTH || true
+          # Equity books (best-effort) so the existing Pages site isn't lost.
+          for f in state/paper_state_*.json; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .json); name=${name#paper_state_}
+            python -m trading_algo.dashboard.export --account "$name" $SYNTH \
+              -o "public/eq_${name}.html" || echo "skip equity $name"
+          done
+
+      - name: Build combined landing page
+        run: |
+          {
+            echo '<!doctype html><meta charset=utf-8><title>Trading Paper Books</title>'
+            echo '<meta name=viewport content="width=device-width,initial-scale=1">'
+            echo '<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:3rem;max-width:760px}'
+            echo 'h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1rem;color:#8b949e}.s{color:#8b949e;margin:0 0 1rem}'
+            echo 'a.card{display:block;margin:.8rem 0;padding:1.1rem 1.4rem;border:1px solid #30363d;border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}'
+            echo 'a.card:hover{border-color:#58a6ff}.n{font-size:1.15rem;font-weight:600;color:#58a6ff}.d{color:#8b949e;font-size:.85rem}</style>'
+            echo "<h1>Trading Paper Books</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
+            echo '<a class=card href="how.html" style="border-color:#1f6feb"><div class=n>📖 How it works — start here</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
+            echo '<h2>FX & crypto — candlesticks + the reasoning behind every trade</h2>'
+            for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
+              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>FX + crypto book</div></a>"; done
+            echo '<h2>Equity momentum (FTSE / US / ASX)</h2>'
+            for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
+              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>equity momentum book</div></a>"; done
+          } > public/index.html
+
+      - name: Commit updated paper state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A state/
+          if git diff --cached --quiet; then
+            echo "No state change to commit."
+          else
+            git commit -m "chore: update FX paper state [skip ci]"
+            git push
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
