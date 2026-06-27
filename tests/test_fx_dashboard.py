@@ -72,9 +72,10 @@ def test_dashboard_export_offline(isolated):
     for token in ("addCandlestickSeries", "setMarkers", "Trade journal",
                   "Today's read", "BTCUSD", "Equity vs buy-and-hold",
                   "Agent scorecard", "data-tip", "tip:hover::after", "how.html",
-                  "Transactions — full blotter", 'id="txntable"', "Spread bps",
+                  "Full blotter", 'id="txntable"', "Spread bps",
                   'id="riskstats"', "Drawdown (underwater)", "is it luck?",
-                  'id="ddchart"', 'id="costchart"'):
+                  'id="ddchart"', 'id="costchart"',
+                  'class="subnav"', 'id="overview"', 'class="cards"'):
         assert token in html
 
 
