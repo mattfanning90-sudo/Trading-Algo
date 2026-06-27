@@ -480,8 +480,9 @@ _PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>FX Paper · __ACCOUNT__</title>
 <script src="__LWC__"></script>
 <style>
-:root{--bg:#0d1117;--panel:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;
---up:#26a69a;--dn:#ef5350;--accent:#58a6ff}
+:root{--bg:#0d1117;--panel:#161b22;--bd:#2b313b;--fg:#e6edf3;--mut:#8b949e;
+--up:#26a69a;--dn:#ef5350;--accent:#58a6ff;--amber:#f5a623;
+--mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
 font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent)}
@@ -494,8 +495,12 @@ h1{margin:0;font-size:1.15rem}.sub{color:var(--mut);font-size:.82rem;margin-top:
 .section{padding:1rem 1.5rem}.grid2{display:grid;grid-template-columns:1fr 320px;gap:1rem}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}}
 .card{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:1rem;
-  display:flex;flex-direction:column;min-width:0}
-.card h2{margin:0 0 .6rem;font-size:.9rem}
+  display:flex;flex-direction:column;min-width:0;box-shadow:0 1px 2px rgba(0,0,0,.35);
+  transition:border-color .15s ease}
+.card:hover{border-color:#3d4654}
+.card h2{margin:0 0 .6rem;font-size:.82rem;letter-spacing:.02em;color:#c9d1d9}
+.acc-amber{color:var(--amber);border-bottom-color:var(--amber)}
+.flag{border-left:2px solid var(--amber)}
 .card>.fill{flex:1;min-height:0}
 #eqchart{flex:1;min-height:300px}#chart{min-height:440px}
 #ddchart,#costchart{flex:1;min-height:200px}
@@ -554,9 +559,10 @@ section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
 .kpis{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.8rem}
 .kpi{flex:1 1 120px;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:.6rem .8rem}
 .kpi .v{font-size:1.1rem;font-weight:600}.kpi .k{color:var(--mut);font-size:.66rem;text-transform:uppercase;margin-top:.15rem}
-/* tabular figures everywhere numbers live (pro-desk feel, no jitter) */
-.stat .v,.kpi .v,.metrics,.val,.row,.txn,#riskstats .v{font-variant-numeric:tabular-nums;
-  font-feature-settings:"tnum" 1}
+/* terminal numerics: monospace + tabular figures (pro-desk feel, no jitter) */
+.stat .v,.kpi .v,.metrics,.val,.row,table.txn,#riskstats .v{font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;font-family:var(--mono)}
+.stat .v,.kpi .v,#riskstats .v{letter-spacing:-.01em}
 section{padding:1rem 1.5rem 1.25rem}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
@@ -587,7 +593,7 @@ section{padding:1rem 1.5rem 1.25rem}
 <section id="risk">
   <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span></div>
   <div class="cards">
-    <div class="card c8"><h2>Costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
+    <div class="card c8 flag"><h2>Costs &amp; <span class="tip acc-amber" data-tip="__T_PSR__">is it luck?</span></h2>
       <div class="stats" id="riskstats"></div>
       <div id="sigtext" class="why" style="margin-top:.7rem"></div></div>
     <div class="card c4"><h2><span class="tip" data-tip="__T_EXP__">Net currency exposure</span></h2><div id="exposurecard"></div></div>
