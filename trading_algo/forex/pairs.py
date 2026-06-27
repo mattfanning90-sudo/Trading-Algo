@@ -82,10 +82,27 @@ CROSSES: dict[str, Pair] = {
     "EURAUD": Pair("EURAUD", "EUR", "AUD", "EURAUD=X", 0.0001, 1.6, -0.15, -0.05),
 }
 
-ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES}
+# US equities (USD-quoted), for the Alpaca / OpenBB intraday feeds. Modelled as
+# "pairs" so the same agents/ensemble/book/backtest run unchanged: base = the
+# ticker, quote = USD. `pip` is one cent; `spread_pips` is a conservative
+# round-trip retail spread in cents (a couple of cents on a liquid name ≈ a basis
+# point or two). Equity borrow/financing is not modelled here, so swap = 0 — the
+# book's carry term is just zero for these (documented in docs/DATA_FEEDS.md).
+EQUITIES: dict[str, Pair] = {
+    "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0),
+    "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0),
+    "NVDA": Pair("NVDA", "NVDA", "USD", "NVDA", 0.01, 2.0, 0.0, 0.0),
+    "SPY":  Pair("SPY",  "SPY",  "USD", "SPY",  0.01, 1.0, 0.0, 0.0),
+    "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0),
+}
+
+ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES}
 
 # Default tradable universe: the seven FX majors plus the three major cryptos.
 DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
+
+# A liquid US-equity universe for the Alpaca / OpenBB feeds (off by default).
+EQUITY_UNIVERSE: list[str] = list(EQUITIES)
 
 
 def get_pair(symbol: str) -> Pair:

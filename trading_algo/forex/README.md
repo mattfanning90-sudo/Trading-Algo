@@ -90,6 +90,31 @@ python -m trading_algo.forex.paper --init                          # once
 python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
 ```
 
+## Data sources (`--source`)
+
+The system is **source-agnostic**: every feed returns the same aligned OHLC panel,
+so the agents/ensemble/risk/book/backtest are identical no matter the source. Pick
+one with `--source`; live sources need a (free) account + that source's optional
+dependency, and all ship a synthetic generator so the pipeline runs offline.
+
+| `--source` | Asset class | Real-time? | Cost | Library |
+|-----------|-------------|-----------|------|---------|
+| `yahoo` *(default)* | FX + crypto | delayed | free, no key | yfinance |
+| `crypto` | BTC/ETH/SOL | ✅ | free, no key | `ccxt` |
+| `oanda` | FX majors | ✅ | free practice acct + token | `oandapyV20` |
+| `alpaca` | US equities | ✅ (IEX) | free acct + keys | `alpaca-py` |
+| `openbb` | research | mostly delayed | free | `openbb` |
+
+```bash
+python -m trading_algo.forex.run_backtest --source alpaca --bar 1h     # US equities
+python -m trading_algo.forex.paper --init --account fx --source oanda --profile intraday
+python -m trading_algo.forex.engine --loop --account fx --source oanda --bar 1h
+```
+
+The honest distinction (open-source *software* vs free real-time *data*), the
+per-asset-class reality, credentials and caveats are all in
+[`docs/DATA_FEEDS.md`](../../docs/DATA_FEEDS.md).
+
 ## The parallel agent ecosystem
 
 | Agent | Edge | Acts when |
@@ -183,6 +208,27 @@ feed (OANDA/IBKR). **True high-frequency trading is out of scope and would be
 dishonest to fake here** — the honest reasoning (latency, colocation, cost,
 competition) is in [`docs/HFT_REALITY.md`](../../docs/HFT_REALITY.md).
 
+### Crypto: the one honest home for "faster"
+
+Crypto is the exception: exchanges hand retail **institutional-grade data for
+free** (real-time 1-minute bars + funding rates via `ccxt`), so the data gate
+that blocks live intraday FX simply isn't there. The `hf_crypto` profile runs the
+same agent ecosystem on 1-minute crypto bars:
+
+```bash
+pip install ccxt
+python -m trading_algo.forex.run_backtest --synthetic --profile hf_crypto --bar 1m
+python -m trading_algo.forex.engine --once --account cryptohf --bar 1m --exchange binance
+python -m trading_algo.forex.engine --loop --interval 60 --bar 1m --exchange binance  # 24/7
+```
+
+This is still **not** microsecond HFT — you can't out-latency Wintermute/Jump.
+It's fast, high-turnover *systematic* crypto where the edge is signal + structure
+(minute-scale trend/reversion and **funding-rate / cash-and-carry** harvesting),
+not raw speed. Costs at this turnover are brutal, so every guardrail stays on.
+Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
+[`docs/CRYPTO_HF.md`](../../docs/CRYPTO_HF.md).
+
 ## Design invariants
 
 1. **No lookahead.** Every indicator/agent value at bar t uses only data ≤ t;
@@ -217,10 +263,20 @@ this is "low latency" for a per-bar systematic FX book, not microsecond colo.)
 
 ## Going live
 
-`compute_targets` already returns broker-agnostic signed target weights. To wire
-real execution, mirror `trading_algo/execution_ibkr.py`: map each pair to an
-IBKR `Forex` contract, diff target notional vs live positions, and place orders.
-**Start on the paper port and watch it for weeks first.**
+`compute_targets` already returns broker-agnostic signed target weights. For
+**crypto** (the cheapest real-time path) live execution is built: `crypto_exec.py`
+diffs target notional vs your live exchange balance and places ccxt orders —
+**dry-run by default**, spot long-only, with a per-order notional cap.
+
+```bash
+python -m trading_algo.forex.crypto_exec --account cryptohf --synthetic   # offline rehearsal
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance        # live data, dry-run
+python -m trading_algo.forex.crypto_exec --account cryptohf --exchange binance --live --max-notional 50
+```
+
+For **FX/equities**, mirror `trading_algo/execution_ibkr.py` (or use the
+`alpaca-py` / `oandapyV20` order APIs). **Start on paper / a tiny balance and
+watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 
 ## Files
 
@@ -230,6 +286,9 @@ IBKR `Forex` contract, diff target notional vs live positions, and place orders.
 | `fx_config.py` | `FXParams` + risk profiles + account presets |
 | `indicators.py` | vectorized indicators + streaming variants |
 | `fx_data.py` | OHLC panel loader + synthetic generator |
+| `feeds.py` | source resolver — yahoo / crypto / oanda / alpaca / openbb |
+| `crypto_data.py` / `oanda_data.py` / `alpaca_data.py` / `openbb_data.py` | per-source data adapters |
+| `crypto_exec.py` | live crypto order execution via ccxt (dry-run by default) |
 | `agents.py` | the five agents + concurrent `AgentPool` |
 | `ensemble.py` | performance-weighted agent blending |
 | `risk.py` | vol targeting + per-pair / gross caps |

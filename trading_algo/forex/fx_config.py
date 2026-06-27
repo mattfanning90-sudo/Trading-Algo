@@ -88,6 +88,17 @@ _PROFILES: dict[str, FXParams] = {
         vol_lookback=24, agent_lookback=48, bb_window=20,
         target_vol=0.10, max_gross=3.0, bar="60m",
     ),
+    # High-frequency-CAPABLE crypto (minute scale; NOT microsecond HFT — see
+    # docs/CRYPTO_HF.md). Short windows, crypto-sized risk, a churn band to keep
+    # 1-minute turnover (and cost) sane. Run via `engine --loop` on a low-latency
+    # VPS with `--exchange binance --bar 1m`.
+    "hf_crypto": FXParams(
+        ema_fast=12, ema_slow=48, donchian_window=24, roc_window=30,
+        vol_lookback=60, agent_lookback=120, bb_window=20,
+        target_vol=0.20, max_gross=3.0, per_pair_cap=0.40,
+        max_drawdown_stop=0.15, drawdown_cooldown_days=240,
+        rebalance_min_delta=0.05, include_carry=True, bar="1m",
+    ),
 }
 
 

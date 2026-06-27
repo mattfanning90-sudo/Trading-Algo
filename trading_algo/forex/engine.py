@@ -24,6 +24,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 
+from . import feeds
 from . import fx_book
 from .agents import AgentPool
 from .fx_config import START
@@ -46,25 +47,37 @@ def fx_market_open(dt: datetime | None = None) -> bool:
 
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,
-             bar: str = "1d") -> None:
+             bar: str = "1d", source: str | None = None,
+             exchange: str | None = None) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  bar={bar} ===")
+    src = source or ("crypto" if exchange else "yahoo")
+    print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  "
+          f"bar={bar}  src={src} ===")
     if account:
-        fx_book.run_once(account, synthetic, pool=pool, interval=bar)
+        fx_book.run_once(account, synthetic, pool=pool, interval=bar,
+                         source=source, exchange=exchange)
     else:
-        fx_book.run_all(synthetic, pool=pool, interval=bar)
+        fx_book.run_all(synthetic, pool=pool, interval=bar,
+                        source=source, exchange=exchange)
+
+
+def _is_24_7(source: str | None, exchange: str | None) -> bool:
+    """Crypto trades round the clock, so skip the FX-week idle gate for it."""
+    return bool(exchange) or source == "crypto"
 
 
 async def run_loop(account: str | None, synthetic: bool, pool: AgentPool,
                    interval: float = 300.0, max_cycles: int | None = None,
-                   bar: str = "1d") -> None:
+                   bar: str = "1d", source: str | None = None,
+                   exchange: str | None = None) -> None:
     """Poll every `interval` seconds (`bar` = data interval); `max_cycles` bounds
-    the loop (tests)."""
+    the loop (tests). Crypto trades 24/7, so the FX-week gate is skipped."""
     i = 0
     while max_cycles is None or i < max_cycles:
-        if synthetic or fx_market_open():
+        if synthetic or _is_24_7(source, exchange) or fx_market_open():
             try:
-                run_once(account, synthetic, pool, bar=bar)
+                run_once(account, synthetic, pool, bar=bar,
+                         source=source, exchange=exchange)
             except Exception as exc:                 # never let one bad cycle kill it
                 print(f"[engine] cycle failed: {exc!r}")
         else:
@@ -102,7 +115,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--loop", action="store_true", help="poll forever on --interval")
     ap.add_argument("--interval", type=float, default=300.0, help="loop poll seconds")
     ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m for intraday (default daily)")
+                    help="data bar interval, e.g. 60m / 15m for intraday, 1m for HF crypto "
+                         "(default daily)")
+    ap.add_argument("--source", default=None, choices=feeds.SOURCES,
+                    help="market-data source: yahoo (default), crypto, oanda, "
+                         "alpaca, openbb. See docs/DATA_FEEDS.md.")
+    ap.add_argument("--exchange", default=None,
+                    help="crypto exchange via ccxt (e.g. binance) for the crypto "
+                         "source; default binance. See docs/CRYPTO_HF.md.")
     ap.add_argument("--workers", type=int, default=None, help="agent-pool threads")
     ap.add_argument("--ml", action="store_true",
                     help="include the trained deep-learning agent (if a model exists)")
@@ -117,9 +137,11 @@ def main(argv: list[str] | None = None) -> None:
     pool = fx_book.ml_pool() if args.ml else AgentPool(max_workers=args.workers)
     if args.loop:
         asyncio.run(run_loop(args.account, args.synthetic, pool,
-                             interval=args.interval, bar=args.bar))
+                             interval=args.interval, bar=args.bar,
+                             source=args.source, exchange=args.exchange))
     else:
-        run_once(args.account, args.synthetic, pool, bar=args.bar)
+        run_once(args.account, args.synthetic, pool, bar=args.bar,
+                 source=args.source, exchange=args.exchange)
 
 
 if __name__ == "__main__":
