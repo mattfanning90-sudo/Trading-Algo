@@ -262,6 +262,26 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
           f"{cfg.LEVERAGE_FINANCING_SPREAD:.0%} over rf) and drawdowns scale up. A "
           "reactive drawdown stop WHIPSAWS a levered book (cuts at crash bottoms, "
           "misses the recovery) — control risk by NOT over-levering, not by a stop.")
+
+    # Equity-allocation frontier: the HONEST path to a CAGR target is asset
+    # allocation, not alpha. A higher CAGR comes from holding more equity beta; the
+    # active book's role is to cut the drawdown vs holding pure equity. No leverage,
+    # no bias — just the return-for-drawdown tradeoff, laid out so a target is a choice.
+    if spy is not None and len(common):
+        w(f"\n## Equity-allocation frontier (vs CAGR target)\n")
+        w(f"Blends of passive global equity (SPY in {base}, the upside taker) with the "
+          f"active book (the downside mitigator). Pick your point on the return/drawdown "
+          f"tradeoff — a CAGR target is a risk choice, not an alpha problem.\n")
+        w(f"| equity / active | CAGR | Vol | Sharpe | MaxDD |")
+        w("|---|---|---|---|---|")
+        for we in (0.0, 0.3, 0.5, 0.7, 1.0):
+            blend = (we * bench + (1.0 - we) * cr).dropna()
+            s = _stats(blend)
+            w(f"| {we:.0%} equity / {1-we:.0%} active | {s['CAGR']:.1%} | {s['Vol']:.1%} | "
+              f"{s['Sharpe']:.2f} | {s['MaxDD']:.1%} |")
+        w("\n*Reaching ~10% CAGR means holding mostly equity beta and accepting near-"
+          "equity drawdown; the active book buys a shallower drawdown at a lower CAGR.*")
+
     if do_validate:
         w("\n" + _validation_section(streams, bench, spy, target_vol, max_leverage,
                                      drawdown_stop))
