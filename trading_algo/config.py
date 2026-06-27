@@ -118,6 +118,33 @@ class CarryParams:
 DEFAULT_CARRY_PARAMS = CarryParams()
 
 
+@dataclass(frozen=True)
+class LowRiskParams:
+    """Knobs for the low-risk / betting-against-beta (BAB) diversifier sleeve.
+
+    Long low-beta names, short high-beta names — the leverage-constraint premium
+    (Frazzini-Pedersen). Sorts on a *risk characteristic* (rolling beta to the
+    regime index), so it is structurally orthogonal to the return-based momentum/
+    value/trend sleeves. Inverse-vol sized to a vol target via the shared L/S engine.
+    """
+    beta_lookback: int = 252           # window for the rolling beta estimate (~1y)
+    vol_lookback: int = 90             # days for inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (L/S; >1 needs margin)
+    avg_correlation: float = 0.40      # low-beta names co-move (defensive cluster)
+    long_short: bool = True            # True = demean (L/S); False = long-only tilt
+    rebalance: str = "ME"              # month-end, like the other sleeves
+    min_history_days: int = 300        # need ~12m+ before the first beta estimate
+    cost_bps: float = 5.0              # per side; higher than ETFs (single-name turnover)
+
+    def with_overrides(self, **kwargs) -> "LowRiskParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_LOWRISK_PARAMS = LowRiskParams()
+
+
 # ---------------------------------------------------------------------------
 # Portfolio-level configuration
 # ---------------------------------------------------------------------------

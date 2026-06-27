@@ -45,6 +45,10 @@ on:
         description: "Add a value (long-term reversal) sleeve to the multistrat book"
         type: boolean
         default: false
+      with_lowrisk:
+        description: "Add a low-risk / betting-against-beta sleeve to the multistrat book"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -87,7 +91,8 @@ jobs:
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
             GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
             VAL="${{ inputs.with_value && '--with-value' || '' }}"
-            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL --validate \
+            LR="${{ inputs.with_lowrisk && '--with-lowrisk' || '' }}"
+            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL $LR --validate \
               --target-vol "${{ inputs.target_vol }}" \
               --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else

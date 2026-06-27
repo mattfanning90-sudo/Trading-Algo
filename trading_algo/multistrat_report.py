@@ -21,6 +21,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import carry as carry_mod
+from . import lowrisk as lowrisk_mod
 from . import fx as fx_mod
 from . import constituents, data, multistrat, robust, stress, tradestats, universes
 from .backtest import run_backtest
@@ -88,7 +89,8 @@ def _region_returns_base(region_key: str, base: str, synthetic: bool, start: str
 def _build_streams(synthetic: bool, start: str, point_in_time: bool,
                    include_carry: bool = False, global_equity: bool = False,
                    base: str = cfg.BASE_CURRENCY,
-                   include_value: bool = False) -> tuple[dict, pd.Series, str]:
+                   include_value: bool = False,
+                   include_lowrisk: bool = False) -> tuple[dict, pd.Series, str]:
     """Return (streams, spy_price_series, pit_note).
 
     Carry is OFF by default: on real data the price-only income-yield carry proxy
@@ -142,6 +144,15 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
         val = run_backtest(eq_p, eq_i, val_region, membership=membership)["returns"]
         streams["equity_value"] = _to_base_returns(val, us.currency, base, synthetic, start)
 
+    if include_lowrisk:
+        # BAB / low-risk sleeve: sorts on beta (a risk characteristic), so it's
+        # orthogonal to the return-based sleeves. Same US universe + de-biasing path.
+        try:
+            lr = lowrisk_mod.run_lowrisk_backtest(eq_p, eq_i)["returns"]
+            streams["lowrisk_bab"] = _to_base_returns(lr, us.currency, base, synthetic, start)
+        except Exception:
+            pit_note += "  (low-risk sleeve skipped: insufficient history)"
+
     if include_carry:
         if synthetic:
             ca_p = data.synthetic_prices(universes.CARRY, "DUMMY")[universes.CARRY]
@@ -168,7 +179,7 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
                  include_carry: bool = False, target_vol: float = 0.12,
                  max_leverage: float = 1.5, drawdown_stop: float | None = None,
                  global_equity: bool = False, base: str = cfg.BASE_CURRENCY,
-                 include_value: bool = False) -> str:
+                 include_value: bool = False, include_lowrisk: bool = False) -> str:
     # Financing on the leveraged portion is ALWAYS charged (leverage isn't free).
     # The reactive drawdown stop is OFF by default: real-data evidence showed it
     # WHIPSAWS a levered book (cuts at the 2020/2022 bottoms, misses the V-recovery
@@ -177,7 +188,8 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
     # Pass --drawdown-stop to study it as an optional backstop.
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time,
                                             include_carry, global_equity, base,
-                                            include_value=include_value)
+                                            include_value=include_value,
+                                            include_lowrisk=include_lowrisk)
     combo = multistrat.combine(streams, target_vol=target_vol, method=method,
                                max_leverage=max_leverage,
                                financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
@@ -331,6 +343,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="reporting/base currency (default AUD); foreign sleeves are unhedged")
     ap.add_argument("--with-value", action="store_true",
                     help="add a value (long-term reversal) sleeve — uncorrelated to momentum")
+    ap.add_argument("--with-lowrisk", action="store_true",
+                    help="add a low-risk / betting-against-beta sleeve (risk-sorted, orthogonal)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
@@ -338,7 +352,7 @@ def main(argv: list[str] | None = None) -> None:
                        max_leverage=args.max_leverage,
                        drawdown_stop=(args.drawdown_stop or None),
                        global_equity=args.global_equity, base=args.base_currency,
-                       include_value=args.with_value))
+                       include_value=args.with_value, include_lowrisk=args.with_lowrisk))
 
 
 if __name__ == "__main__":
