@@ -20,6 +20,13 @@ class StrategyParams:
     skip_days: int = 21             # skip most recent month (short-term reversal)
     min_history_days: int = 300     # exclude names with insufficient history
 
+    # --- Value factor (price-based long-term reversal; blends with momentum) -
+    use_value: bool = False         # off by default → pure momentum (unchanged)
+    value_lookback_days: int = 756  # ~3y window for long-term reversal
+    value_skip_days: int = 252      # skip the most recent year (momentum's domain)
+    momentum_weight: float = 0.5    # composite = w_mom·rank(mom) + w_val·rank(value)
+    value_weight: float = 0.5
+
     # --- Portfolio construction --------------------------------------------
     top_n: int = 10                 # hold top N momentum names
     max_weight: float = 0.15        # single-name cap

@@ -30,25 +30,30 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
 
     if use_cache and os.path.exists(cache_file):
+        # Reuse the cache for this key even if a few tickers persistently fail to
+        # download (else every call re-fetches the whole universe). Return the
+        # requested tickers that are present.
         df = pd.read_parquet(cache_file)
-        if all(t in df.columns for t in tickers):
-            return df.loc[start:end, tickers]
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
 
     import time
 
     import yfinance as yf  # imported lazily so the package works offline
 
     raw = None
-    for attempt in range(3):                       # Yahoo can be flaky — retry
+    backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
+    for attempt, wait in enumerate(backoffs):
         try:
             raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
                               progress=False)["Close"]
             if raw is not None and len(raw):
                 break
         except Exception:
-            if attempt == 2:
+            if attempt == len(backoffs) - 1:
                 raise
-        time.sleep(2 * (attempt + 1))
+        time.sleep(wait)
     if isinstance(raw, pd.Series):
         raw = raw.to_frame(tickers[0])
     raw = raw.reindex(columns=tickers)
