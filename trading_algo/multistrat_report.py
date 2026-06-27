@@ -104,9 +104,9 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
 
 def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc",
                  do_validate: bool = False, point_in_time: bool = False,
-                 include_carry: bool = False) -> str:
+                 include_carry: bool = False, target_vol: float = 0.12) -> str:
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
-    combo = multistrat.combine(streams, target_vol=0.12, method=method)
+    combo = multistrat.combine(streams, target_vol=target_vol, method=method)
     cr = combo["returns"]
     common = cr.index
     bench = (spy.pct_change(fill_method=None).reindex(common).fillna(0.0)
@@ -121,8 +121,8 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
         w(f"> {pit_note}\n")
     span = f"{common[0].date()} → {common[-1].date()}" if len(common) else "n/a"
     names = " + ".join(streams.keys())
-    w(f"Streams: **{names}**, combined by **{method.upper()}** at 12% vol target. "
-      f"History {span} (USD).\n")
+    w(f"Streams: **{names}**, combined by **{method.upper()}** at {target_vol:.0%} vol "
+      f"target. History {span} (USD).\n")
 
     rows = {k: v.reindex(common).fillna(0.0) for k, v in streams.items()}
     rows["MULTI-STRAT (combined)"] = cr
@@ -165,14 +165,15 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
           f"constituents cache + TIINGO_API_KEY) for the honest return level.")
 
     if do_validate:
-        w("\n" + _validation_section(streams, bench, spy))
+        w("\n" + _validation_section(streams, bench, spy, target_vol))
     return "\n".join(L)
 
 
-def _validation_section(streams: dict, bench: pd.Series, spy: pd.Series) -> str:
+def _validation_section(streams: dict, bench: pd.Series, spy: pd.Series,
+                        target_vol: float = 0.12) -> str:
     """The overfitting/robustness gauntlet, run on the COMBINED book — the same
     panel `validate.py` runs on a single sleeve, adapted to the multi-strat."""
-    v = multistrat.validate_combo(streams, target_vol=0.12, base_method="erc")
+    v = multistrat.validate_combo(streams, target_vol=target_vol, base_method="erc")
     rets, sharpes, mat = v["base"], v["trial_sharpes"], v["perf_matrix"]
     n = len(rets)
 
@@ -226,10 +227,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="de-bias the equity sleeve (needs constituents cache + TIINGO_API_KEY)")
     ap.add_argument("--with-carry", action="store_true",
                     help="add the carry sleeve (off by default — it dragged the book down on real data)")
+    ap.add_argument("--target-vol", type=float, default=0.12,
+                    help="annualised vol target for the combined book (the risk/return dial)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
-                       include_carry=args.with_carry))
+                       include_carry=args.with_carry, target_vol=args.target_vol))
 
 
 if __name__ == "__main__":
