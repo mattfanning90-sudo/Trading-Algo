@@ -108,7 +108,10 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
                  max_leverage: float = 1.5) -> str:
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
     combo = multistrat.combine(streams, target_vol=target_vol, method=method,
-                               max_leverage=max_leverage)
+                               max_leverage=max_leverage,
+                               financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
+                               drawdown_stop=cfg.MAX_DRAWDOWN_STOP,
+                               cooldown_days=cfg.DRAWDOWN_COOLDOWN_DAYS)
     cr = combo["returns"]
     common = cr.index
     bench = (spy.pct_change(fill_method=None).reindex(common).fillna(0.0)
@@ -176,7 +179,10 @@ def _validation_section(streams: dict, bench: pd.Series, spy: pd.Series,
     """The overfitting/robustness gauntlet, run on the COMBINED book — the same
     panel `validate.py` runs on a single sleeve, adapted to the multi-strat."""
     v = multistrat.validate_combo(streams, target_vol=target_vol, base_method="erc",
-                                  max_leverage=max_leverage)
+                                  max_leverage=max_leverage,
+                                  financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
+                                  drawdown_stop=cfg.MAX_DRAWDOWN_STOP,
+                                  cooldown_days=cfg.DRAWDOWN_COOLDOWN_DAYS)
     rets, sharpes, mat = v["base"], v["trial_sharpes"], v["perf_matrix"]
     n = len(rets)
 

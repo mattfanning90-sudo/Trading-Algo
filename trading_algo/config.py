@@ -154,6 +154,11 @@ RISK_FREE = 0.035
 MAX_DRAWDOWN_STOP = 0.25            # 25% peak-to-trough
 DRAWDOWN_COOLDOWN_DAYS = 21         # ~1 month flat after a breach before re-entry
 
+# Annual borrow spread (over the risk-free rate) charged on the leveraged portion
+# (gross exposure > 1) of the multi-strategy book. Leverage is not free; the
+# combiner charges this so a levered CAGR isn't silently overstated.
+LEVERAGE_FINANCING_SPREAD = 0.01   # 1% over rf on the borrowed fraction
+
 # Minimum viable equity (in BASE_CURRENCY) for a sleeve to trade. Below this the
 # per-trade commission floors dominate, so the sleeve holds cash instead of
 # bleeding fees. Set 0 to disable the gate.

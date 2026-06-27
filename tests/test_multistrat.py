@@ -62,6 +62,29 @@ def test_combine_no_lookahead_weights_shifted():
     assert (w.iloc[0].abs().sum() == 0) or np.isnan(w.iloc[0].abs().sum())
 
 
+def test_drawdown_stop_caps_loss():
+    # steady decline then recovery — the stop should liquidate near the threshold
+    idx = pd.bdate_range("2020-01-01", periods=60)
+    r = pd.Series([-0.01] * 30 + [0.01] * 30, index=idx)
+    stopped = ms._apply_drawdown_stop(r, max_dd=0.10, cooldown=21)
+    def maxdd(s):
+        eq = (1 + s).cumprod()
+        return float((eq / eq.cummax() - 1).min())
+    assert maxdd(stopped) > -0.13          # bounded just past the 10% stop
+    assert maxdd(r) < -0.20                # unstopped breaches far deeper
+    assert (stopped == 0).sum() >= 15      # sat in cash during the cooldown
+
+
+def test_financing_reduces_levered_return():
+    a = _stream(900, 0.0005, 0.005, 1)
+    b = _stream(900, 0.0004, 0.006, 2)
+    base = ms.combine({"a": a, "b": b}, target_vol=0.30, max_leverage=3.0)
+    fin = ms.combine({"a": a, "b": b}, target_vol=0.30, max_leverage=3.0,
+                     financing_spread=0.05)
+    assert base["gross"].mean() > 1.0                       # genuinely levered
+    assert fin["returns"].mean() < base["returns"].mean()  # borrow cost bites
+
+
 def test_capture_ratios_asymmetry():
     # one move per calendar month so monthly resampling recovers the construction:
     # full upside, half the downside → up_capture 1, down_capture 0.5, ratio 2
