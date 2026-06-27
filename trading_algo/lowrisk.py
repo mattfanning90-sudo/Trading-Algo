@@ -49,7 +49,9 @@ def precompute(prices: pd.DataFrame, index_prices: pd.Series, p: LowRiskParams) 
     """Low-risk signal + price-vol frames (causal: beta uses returns ≤ t)."""
     beta = rolling_beta(prices, index_prices, p.beta_lookback)
     sig = beta.apply(lambda row: lowrisk_signal(row, p.long_short), axis=1)
-    vol = trend._realised_vol(prices, p)              # reuses the inverse-vol estimator
+    # floor the per-name vol so inverse-vol sizing can't explode on a near-constant
+    # or thinly-traded single name (the ETF sleeves never hit this).
+    vol = trend._realised_vol(prices, p).clip(lower=p.vol_floor)
     return {"signal": sig, "vol": vol}
 
 
@@ -62,7 +64,12 @@ def compute_lowrisk_targets(prices: pd.DataFrame, index_prices: pd.Series,
     if asof is None:
         asof = prices.index[-1]
     c = signals_cache if signals_cache is not None else precompute(prices, index_prices, p)
-    return trend.size_positions(c["signal"].loc[asof], c["vol"].loc[asof], p)
+    w = trend.size_positions(c["signal"].loc[asof], c["vol"].loc[asof], p)
+    # cap each name's weight so one short can't lose >100% in a day and blow up the
+    # book (single-name L/S hazard; ETF sleeves don't need this).
+    if p.max_weight_per_name:
+        w = w.clip(lower=-p.max_weight_per_name, upper=p.max_weight_per_name)
+    return w
 
 
 def run_lowrisk_backtest(prices: pd.DataFrame, index_prices: pd.Series,

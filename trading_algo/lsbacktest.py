@@ -59,6 +59,7 @@ def run_ls_backtest(prices: pd.DataFrame, schedule: dict, cost_bps: float,
 
         day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
         r = float((current_w * day_rets).sum()) - cost
+        r = max(r, -0.999)            # guard: a book can't lose >100% in a day
         daily_ret.append(r)
         equity.append(equity[-1] * (1 + r))
         weights_hist[today] = current_w

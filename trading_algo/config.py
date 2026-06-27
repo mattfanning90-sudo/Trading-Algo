@@ -137,6 +137,11 @@ class LowRiskParams:
     rebalance: str = "ME"              # month-end, like the other sleeves
     min_history_days: int = 300        # need ~12m+ before the first beta estimate
     cost_bps: float = 5.0              # per side; higher than ETFs (single-name turnover)
+    # Single-name L/S needs guards the ETF sleeves don't: floor the per-name vol so
+    # inverse-vol sizing can't hand a near-constant name a huge weight, and cap each
+    # name's weight so one short can't lose >100% in a day and blow up the book.
+    vol_floor: float = 0.10            # min annualised vol for inverse-vol sizing
+    max_weight_per_name: float = 0.05  # per-name weight cap (gross), L and S
 
     def with_overrides(self, **kwargs) -> "LowRiskParams":
         return replace(self, **kwargs)
