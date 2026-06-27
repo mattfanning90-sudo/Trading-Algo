@@ -885,6 +885,25 @@ tell us if an edge is <b>real</b>. So far, honestly, none clears the bar.</span>
 <tr><td>Deep learning</td><td>A neural net trained to maximise risk-adjusted return</td><td>patterns repeat (use with care)</td></tr>
 </table>
 
+<h2>From AUD to a trade — and back</h2>
+<p class="muted">Your account is in <b>AUD</b>, but the pairs settle in other currencies (EUR/USD trades in
+US dollars, USD/JPY in yen). So every position is a two-step currency journey, and AUD/USD moves are part of
+your real P&amp;L — not just the pair's move.</p>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  A["🇦🇺 AUD account<br/>your capital"] -->|"leg 1: convert AUD→USD<br/>at today's AUD/USD"| U["💵 USD<br/>(the quote currency)"]
+  U -->|"buy the pair"| POS["📈 EUR/USD position<br/>P&amp;L builds up in USD"]
+  POS -->|"close / mark to market"| U2["💵 USD proceeds + P&amp;L"]
+  U2 -->|"leg 2: convert USD→AUD<br/>at AUD/USD now"| A2["🇦🇺 back to AUD<br/>your real P&amp;L"]
+  A2 -. "if AUD/USD moved while you held,<br/>your AUD P&amp;L changes even if the pair didn't" .-> A
+</pre></div>
+<div class="step"><b>Two FX legs, always.</b> To open a USD-quoted pair from AUD you first buy USD (leg 1);
+when you close you convert the USD result back to AUD (leg 2). If the Aussie strengthens against the US dollar
+while you hold, you get fewer AUD back — a genuine loss even if the pair itself was flat (and a gain if it weakens).
+<span class="muted">The books and backtest now apply this translation for every pair (AUD/USD, AUD/JPY, …) using
+the majors already in the panel, so the equity you see is <b>true AUD</b> — pair move, currency move and costs all
+included.</span></div>
+
 <h2>How to read a trade in the journal</h2>
 <div class="step">Each entry shows: <b>BUY/SELL pair @ price</b> · the <b>outcome</b> (✅ win / ❌ loss / ⏳ still open —
 the price move over the next ~10 days), then a plain-English paragraph: <b>what</b> we did, <b>which agents</b>

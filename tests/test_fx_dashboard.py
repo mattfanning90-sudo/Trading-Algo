@@ -100,6 +100,7 @@ def test_how_page_built(isolated):
     assert "mermaid" in h and "flowchart TD" in h
     assert "Validation" in h and "Deflated Sharpe" in h
     assert "no statistically significant" in h    # honest caveat present
+    assert "From AUD to a trade" in h and "flowchart LR" in h   # AUD currency flow
 
 
 def test_dashboard_payload_analytics(isolated):
