@@ -68,3 +68,38 @@ UNIVERSES: dict[str, list[str]] = {
     "US": US,
     "FTSE": FTSE,
 }
+
+# ---------------------------------------------------------------------------
+# Trend / multi-asset sleeve — a diversified basket of liquid US-listed ETFs
+# spanning four asset classes. Traded *time-series* (each asset long/short on
+# its own trend), this is the diversifier sleeve (see trend.py). All USD, all
+# deep-liquidity; common history starts ~2007 (UUP launched Feb-2007), which
+# conveniently spans the 2008, 2020 and 2022 stress tests.
+# ---------------------------------------------------------------------------
+TREND_ETFS: dict[str, list[str]] = {
+    "equity":      ["SPY", "EFA", "EEM"],   # US, developed ex-US, emerging
+    "bond":        ["IEF", "TLT", "LQD"],   # 7-10y UST, 20y+ UST, IG credit
+    "commodity":   ["DBC", "GLD"],          # broad commodities, gold
+    "currency":    ["UUP"],                 # US dollar index (FX proxy)
+}
+
+# Flat list of all trend instruments.
+TREND = [t for group in TREND_ETFS.values() for t in group]
+
+# ---------------------------------------------------------------------------
+# Carry sleeve — a cross-section of yield-bearing US-listed ETFs spanning the
+# duration/credit/asset-class spectrum, so the *spread* of income yields (and
+# its time-variation) is a meaningful cross-sectional signal: SHY/SPY/GLD sit at
+# the low-carry end, HYG/VNG/EMB/TLT at the high-carry end, and the ranking
+# rotates as credit spreads and the curve move. Traded L/S on carry (see carry.py).
+# ---------------------------------------------------------------------------
+CARRY_ETFS: dict[str, list[str]] = {
+    "rates":     ["SHY", "IEF", "TLT", "TIP"],   # short/7-10y/20y+ UST, TIPS
+    "credit":    ["LQD", "HYG", "EMB"],          # IG, high-yield, EM USD bonds
+    "equity":    ["SPY", "EFA", "EEM"],          # US, developed ex-US, emerging
+    "real":      ["VNQ", "GLD"],                 # REITs (high yield), gold (~zero)
+}
+
+# Flat list of all carry instruments.
+CARRY = [t for group in CARRY_ETFS.values() for t in group]
+

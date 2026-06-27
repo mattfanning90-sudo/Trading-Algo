@@ -30,28 +30,18 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
 
     if use_cache and os.path.exists(cache_file):
+        # Reuse the cache for this key even if a few tickers persistently fail to
+        # download (else every call re-fetches the whole universe). Return the
+        # requested tickers that are present.
         df = pd.read_parquet(cache_file)
-        if all(t in df.columns for t in tickers):
-            return df.loc[start:end, tickers]
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
 
-    import time
-
-    import yfinance as yf  # imported lazily so the package works offline
-
-    raw = None
-    for attempt in range(3):                       # Yahoo can be flaky — retry
-        try:
-            raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
-                              progress=False)["Close"]
-            if raw is not None and len(raw):
-                break
-        except Exception:
-            if attempt == 2:
-                raise
-        time.sleep(2 * (attempt + 1))
-    if isinstance(raw, pd.Series):
-        raw = raw.to_frame(tickers[0])
-    raw = raw.reindex(columns=tickers)
+    # Route each ticker through the pluggable provider chain (primary + fallbacks);
+    # see providers.py. Imported lazily so the package works offline.
+    from . import providers
+    raw = providers.fetch_prices(tickers, start, end)
     raw = raw.dropna(how="all").dropna(axis=1, how="all")
     try:
         raw.to_parquet(cache_file)
@@ -83,6 +73,74 @@ def load_region(region: Region, start: str, end: str | None = None,
     return prices, index_px
 
 
+def apply_delisting_returns(prices: pd.DataFrame, still_listed: set[str],
+                            default_return: float = -0.30) -> pd.DataFrame:
+    """Book a terminal return for names that stop trading mid-backtest, so a
+    delisted loser doesn't silently exit at its last quote (which flatters the
+    book). For each column whose price ends before the frame's last date AND that
+    is NOT in `still_listed` (today's universe), inject one extra price point of
+    `last * (1 + default_return)` on the next available date.
+
+    `default_return` follows the Shumway / Alpha-Architect convention; −0.30 is a
+    conservative blanket figure for performance-related delistings (use −1.0 for
+    known bankruptcies, ~0 for clean acquisitions if you can classify them)."""
+    if not len(prices):
+        return prices
+    out = prices.copy()
+    last_date = out.index[-1]
+    all_dates = out.index
+    for t in out.columns:
+        col = out[t].dropna()
+        if col.empty:
+            continue
+        last_valid = col.index[-1]
+        if last_valid >= last_date or t in still_listed:
+            continue                                  # survived (or still listed)
+        loc = all_dates.searchsorted(last_valid) + 1  # next trading day
+        if loc < len(all_dates):
+            out.loc[all_dates[loc], t] = float(col.iloc[-1]) * (1.0 + default_return)
+    return out
+
+
+def load_defensive_returns(ticker: str, start: str, end: str | None = None,
+                           use_cache: bool = True) -> pd.Series:
+    """Daily fractional returns for one defensive asset (e.g. a bond/gold ETF).
+
+    Used by the defensive sweep to credit the idle/risk-off fraction of the book
+    with a real asset's return instead of 0% cash. The asset must be quoted in
+    the sleeve's own currency (invariant #6) — callers pick a currency-matched
+    ticker from `region.defensive_assets`."""
+    px = load_prices([ticker], start, end, use_cache=use_cache)
+    if ticker not in px.columns:
+        raise ValueError(f"defensive asset {ticker!r} unavailable from providers")
+    return px[ticker].pct_change(fill_method=None)
+
+
+def load_carry_yields(tickers: list[str], start: str, end: str | None = None,
+                      lookback: int = 252) -> pd.DataFrame:
+    """Trailing income (distribution) yield per asset — the carry signal.
+
+    Adjusted close reinvests distributions; raw close does not. So over a window,
+    (AdjClose_t/AdjClose_{t-N}) / (Close_t/Close_{t-N}) − 1 is the cumulative
+    distribution yield — clean carry, no separate dividend feed. Computed over a
+    trailing `lookback` (~1y → ~annual yield). Network-only (needs both price
+    series from yfinance); returns an empty frame on any failure so the carry
+    sleeve degrades gracefully rather than crashing the portfolio run."""
+    try:
+        import yfinance as yf
+        raw = yf.download(tickers, start=start, end=end, auto_adjust=False,
+                          progress=False)
+        close, adj = raw["Close"], raw["Adj Close"]
+    except Exception:
+        return pd.DataFrame()
+    if isinstance(close, pd.Series):
+        close, adj = close.to_frame(tickers[0]), adj.to_frame(tickers[0])
+    tr = adj / adj.shift(lookback)            # total-return factor over the window
+    pr = close / close.shift(lookback)        # price-return factor
+    y = (tr / pr) - 1.0                        # cumulative distribution yield
+    return y.reindex(columns=[t for t in tickers if t in y.columns]).dropna(how="all")
+
+
 # ---------------------------------------------------------------------------
 # Synthetic data (offline pipeline testing only)
 # ---------------------------------------------------------------------------
@@ -111,6 +169,24 @@ def synthetic_prices(tickers: list[str], index_ticker: str,
     df = pd.DataFrame(prices, index=dates, columns=tickers)
     df[index_ticker] = index_base * np.exp(np.cumsum(market))
     return df
+
+
+def synthetic_carry_yields(tickers: list[str], start: str = "2012-01-01",
+                           end: str = "2026-01-01", seed: int = 7) -> pd.DataFrame:
+    """Synthetic per-asset income yields (offline carry pipeline tests only).
+
+    Each asset gets a distinct base yield (so the cross-section has a real spread)
+    plus a slow random walk (so the carry ranking rotates over time). Meaningless
+    for performance — plumbing only."""
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range(start, end)
+    n = len(dates)
+    cols = {}
+    for i, t in enumerate(tickers):
+        base = 0.005 + 0.045 * ((i + 1) / len(tickers))      # 0.5%..5% spread
+        walk = np.cumsum(rng.normal(0, 0.0004, n))
+        cols[t] = pd.Series(np.clip(base + walk, 0.0, 0.12), index=dates, name=t)
+    return pd.DataFrame(cols)
 
 
 def synthetic_region(region: Region, start: str = "2012-01-01",

@@ -34,6 +34,10 @@ class Region:
     universe: list[str] = field(default_factory=list)
     params: StrategyParams = DEFAULT_PARAMS
     constituents_file: str | None = None   # optional point-in-time membership (CSV/parquet)
+    # Defensive assets the idle/risk-off sleeve can rotate into, in the region's
+    # OWN currency (invariant #6 — never import another currency into a sleeve).
+    # Logical name -> ticker, e.g. {"tbill": "BIL", "bonds": "IEF", "gold": "GLD"}.
+    defensive_assets: dict[str, str] = field(default_factory=dict)
 
     @property
     def all_tickers(self) -> list[str]:
@@ -83,6 +87,10 @@ REGIONS: dict[str, Region] = {
         stamp_duty_bps=0.0,
         price_scale=1.0,
         universe=universes.US,
+        # USD-denominated defensive assets (match the sleeve currency):
+        # BIL = 1-3m T-bills (carry), IEF = 7-10y Treasuries (carry + crash rally),
+        # GLD = gold (crisis hedge, no yield).
+        defensive_assets={"tbill": "BIL", "bonds": "IEF", "gold": "GLD"},
     ),
     "FTSE": Region(
         key="FTSE",

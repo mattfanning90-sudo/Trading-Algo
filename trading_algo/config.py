@@ -20,6 +20,13 @@ class StrategyParams:
     skip_days: int = 21             # skip most recent month (short-term reversal)
     min_history_days: int = 300     # exclude names with insufficient history
 
+    # --- Value factor (price-based long-term reversal; blends with momentum) -
+    use_value: bool = False         # off by default → pure momentum (unchanged)
+    value_lookback_days: int = 756  # ~3y window for long-term reversal
+    value_skip_days: int = 252      # skip the most recent year (momentum's domain)
+    momentum_weight: float = 0.5    # composite = w_mom·rank(mom) + w_val·rank(value)
+    value_weight: float = 0.5
+
     # --- Portfolio construction --------------------------------------------
     top_n: int = 10                 # hold top N momentum names
     max_weight: float = 0.15        # single-name cap
@@ -38,6 +45,14 @@ class StrategyParams:
     # --- Rebalancing --------------------------------------------------------
     rebalance: str = "ME"            # pandas offset alias: month-end
 
+    # --- Defensive sleeve (what idle / risk-off capital earns) --------------
+    # The momentum book is only ~half invested on average (filters + vol target
+    # park the rest). By default that idle fraction earns 0% (cash drag). Set a
+    # positive annual rate to model parking it in T-bills; for a real asset
+    # (bonds/gold) the backtester takes an explicit `defensive_returns` series
+    # instead, which overrides this constant. 0.0 → unchanged (0% cash).
+    cash_yield: float = 0.0          # annualised yield on idle capital
+
     def with_overrides(self, **kwargs) -> "StrategyParams":
         """Return a copy with the given fields replaced (for per-region tuning)."""
         return replace(self, **kwargs)
@@ -45,6 +60,96 @@ class StrategyParams:
 
 # Shared default used by every sleeve unless a region overrides it.
 DEFAULT_PARAMS = StrategyParams()
+
+
+@dataclass(frozen=True)
+class TrendParams:
+    """Knobs for the time-series (trend) momentum diversifier sleeve.
+
+    Distinct from `StrategyParams` because trend is a different strategy: each
+    asset is traded long/short on its OWN trend (not ranked cross-sectionally),
+    sized by inverse volatility to a portfolio vol target. Defaults follow the
+    AQR "century of evidence" recipe (1/3/12-month signal blend, ~10% vol).
+    """
+    lookbacks: tuple = (21, 63, 252)   # 1/3/12-month trend horizons (trading days)
+    vol_lookback: int = 90             # days for the inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (diversified L/S; NOTE:
+    #                                    >1 needs futures/margin — see trend.py docstring)
+    avg_correlation: float = 0.20      # low: positions span 4 asset classes
+    long_only: bool = False            # True = long-or-flat (no shorting; ETF-only)
+    rebalance: str = "ME"              # month-end, like the equity sleeves
+    min_history_days: int = 260        # need ~12m before the first signal
+    cost_bps: float = 3.0              # per side (commission+slippage), liquid ETFs
+
+    def with_overrides(self, **kwargs) -> "TrendParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_TREND_PARAMS = TrendParams()
+
+
+@dataclass(frozen=True)
+class CarryParams:
+    """Knobs for the cross-asset carry diversifier sleeve.
+
+    Carry = the return earned if prices don't move (here proxied by trailing
+    income/distribution yield across a basket of yield-bearing ETFs). Traded
+    cross-sectionally — long the high-carry assets, short the low-carry ones —
+    inverse-vol-sized to a portfolio vol target, same L/S engine as trend.
+    A third, largely uncorrelated premium for the multi-strategy book.
+    """
+    yield_lookback: int = 252          # trailing window for the income-yield estimate
+    vol_lookback: int = 90             # days for inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (L/S; >1 needs margin)
+    avg_correlation: float = 0.30      # carry assets share more beta than trend's
+    long_short: bool = True            # True = demean (L/S); False = long-only tilt
+    rebalance: str = "ME"              # month-end, like the other sleeves
+    min_history_days: int = 260        # need ~12m before the first yield estimate
+    cost_bps: float = 3.0              # per side (commission+slippage), liquid ETFs
+
+    def with_overrides(self, **kwargs) -> "CarryParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_CARRY_PARAMS = CarryParams()
+
+
+@dataclass(frozen=True)
+class LowRiskParams:
+    """Knobs for the low-risk / betting-against-beta (BAB) diversifier sleeve.
+
+    Long low-beta names, short high-beta names — the leverage-constraint premium
+    (Frazzini-Pedersen). Sorts on a *risk characteristic* (rolling beta to the
+    regime index), so it is structurally orthogonal to the return-based momentum/
+    value/trend sleeves. Inverse-vol sized to a vol target via the shared L/S engine.
+    """
+    beta_lookback: int = 252           # window for the rolling beta estimate (~1y)
+    vol_lookback: int = 90             # days for inverse-vol position sizing
+    target_vol: float = 0.10           # annualised portfolio vol target
+    max_vol_scale: float = 2.0         # cap on vol-target leverage of the raw book
+    max_gross: float = 3.0             # gross-exposure cap (L/S; >1 needs margin)
+    avg_correlation: float = 0.40      # low-beta names co-move (defensive cluster)
+    long_short: bool = True            # True = demean (L/S); False = long-only tilt
+    rebalance: str = "ME"              # month-end, like the other sleeves
+    min_history_days: int = 300        # need ~12m+ before the first beta estimate
+    cost_bps: float = 5.0              # per side; higher than ETFs (single-name turnover)
+    # Single-name L/S needs guards the ETF sleeves don't: floor the per-name vol so
+    # inverse-vol sizing can't hand a near-constant name a huge weight, and cap each
+    # name's weight so one short can't lose >100% in a day and blow up the book.
+    vol_floor: float = 0.10            # min annualised vol for inverse-vol sizing
+    max_weight_per_name: float = 0.05  # per-name weight cap (gross), L and S
+    min_price: float = 5.0             # exclude sub-$5 penny stocks (illiquid; the
+    #                                    high-beta shorts that blew up the naive sleeve)
+
+    def with_overrides(self, **kwargs) -> "LowRiskParams":
+        return replace(self, **kwargs)
+
+
+DEFAULT_LOWRISK_PARAMS = LowRiskParams()
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +187,11 @@ RISK_FREE = 0.035
 # liquidate to cash and sit out for a cooldown, then resume. Set None to disable.
 MAX_DRAWDOWN_STOP = 0.25            # 25% peak-to-trough
 DRAWDOWN_COOLDOWN_DAYS = 21         # ~1 month flat after a breach before re-entry
+
+# Annual borrow spread (over the risk-free rate) charged on the leveraged portion
+# (gross exposure > 1) of the multi-strategy book. Leverage is not free; the
+# combiner charges this so a levered CAGR isn't silently overstated.
+LEVERAGE_FINANCING_SPREAD = 0.01   # 1% over rf on the borrowed fraction
 
 # Minimum viable equity (in BASE_CURRENCY) for a sleeve to trade. Below this the
 # per-trade commission floors dominate, so the sleeve holds cash instead of

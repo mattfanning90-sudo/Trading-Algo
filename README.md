@@ -226,6 +226,29 @@ report to the run **Summary** (plus a downloadable artifact). Locally:
 market data by default; if Yahoo is rate-limiting in CI, run it in `synthetic`
 mode (the dashboard still publishes, just on synthetic prices).
 
+## Data sources
+
+Market data goes through a **pluggable provider chain with per-ticker routing and
+fallback** (`providers.py`), so a single request — US names + LSE/ASX names + FX —
+is served by whichever provider covers each symbol, and one flaky vendor doesn't
+sink the run. Everything still speaks Yahoo tickers; providers translate.
+
+| Provider | Setup | Covers |
+|---|---|---|
+| `yfinance` | none (default) | everything; flaky / rate-limited |
+| `stooq` | none (free) | US, LSE (`.L`), ASX (`.AX`) EOD — good redundancy |
+| `polygon` | `POLYGON_API_KEY` | **US equities/ETFs, FX, US indices only** — *no* LSE/ASX |
+
+```bash
+export MOMENTUM_DATA_PROVIDER=polygon   # primary; yfinance + stooq auto-appended as fallback
+export POLYGON_API_KEY=...              # required for polygon
+```
+
+> ⚠️ **Polygon does not list London or Australian equities**, so it upgrades the
+> US sleeve + FX + S&P index; FTSE/ASX automatically fall through to yfinance/
+> stooq. For a single global, survivorship-free + point-in-time source, EODHD or
+> Norgate would be the upgrade (see `docs/research/COMBATING_BACKTEST_BIAS.md`).
+
 ## Risk controls
 
 Two safety controls sit on top of the strategy (configurable in `config.py`):
