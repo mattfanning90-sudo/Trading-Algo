@@ -118,20 +118,22 @@ def combine(streams: dict[str, pd.Series], target_vol: float = 0.10,
 
 
 def validate_combo(streams: dict[str, pd.Series], target_vol: float = 0.12,
-                   base_method: str = "erc") -> dict:
+                   base_method: str = "erc", max_leverage: float = 1.5) -> dict:
     """Run the combiner across its own hyperparameter grid (method × lookback ×
     vol target) to feed the overfitting tests: Deflated Sharpe needs the trial
     Sharpes, PBO needs the monthly return matrix. This asks the honest question —
     does the multi-strat book's edge survive selection over ITS OWN knobs, or did
     we just pick the lucky combiner config? Returns the base combined returns plus
     the trial Sharpes and the T×N monthly matrix."""
-    base = combine(streams, target_vol=target_vol, method=base_method)["returns"]
+    base = combine(streams, target_vol=target_vol, method=base_method,
+                   max_leverage=max_leverage)["returns"]
     sharpes: list[float] = []
     monthly: dict[str, pd.Series] = {}
     for m in ("invvol", "erc", "equal"):
         for lb in (63, 126, 252):
             for tv in (0.08, 0.10, 0.12):
-                r = combine(streams, target_vol=tv, method=m, lookback=lb)["returns"]
+                r = combine(streams, target_vol=tv, method=m, lookback=lb,
+                            max_leverage=max_leverage)["returns"]
                 r = r.dropna()
                 if len(r) < 60:
                     continue

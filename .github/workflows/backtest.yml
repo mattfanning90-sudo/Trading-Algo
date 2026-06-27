@@ -33,6 +33,10 @@ on:
         description: "Vol target for the multistrat book (risk/return dial, e.g. 0.12)"
         type: string
         default: "0.12"
+      max_leverage:
+        description: "Gross-exposure cap on the multistrat book (e.g. 1.5; >1 needs margin)"
+        type: string
+        default: "1.5"
 
 permissions:
   contents: read
@@ -73,7 +77,8 @@ jobs:
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
             python -m trading_algo.multistrat_report $SYN $PIT --validate \
-              --target-vol "${{ inputs.target_vol }}" | tee backtest_report.md
+              --target-vol "${{ inputs.target_vol }}" \
+              --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else
             python -m trading_algo.report $SYN $PIT --out backtest_report.md
           fi

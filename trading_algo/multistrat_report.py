@@ -104,9 +104,11 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
 
 def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc",
                  do_validate: bool = False, point_in_time: bool = False,
-                 include_carry: bool = False, target_vol: float = 0.12) -> str:
+                 include_carry: bool = False, target_vol: float = 0.12,
+                 max_leverage: float = 1.5) -> str:
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
-    combo = multistrat.combine(streams, target_vol=target_vol, method=method)
+    combo = multistrat.combine(streams, target_vol=target_vol, method=method,
+                               max_leverage=max_leverage)
     cr = combo["returns"]
     common = cr.index
     bench = (spy.pct_change(fill_method=None).reindex(common).fillna(0.0)
@@ -165,15 +167,16 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
           f"constituents cache + TIINGO_API_KEY) for the honest return level.")
 
     if do_validate:
-        w("\n" + _validation_section(streams, bench, spy, target_vol))
+        w("\n" + _validation_section(streams, bench, spy, target_vol, max_leverage))
     return "\n".join(L)
 
 
 def _validation_section(streams: dict, bench: pd.Series, spy: pd.Series,
-                        target_vol: float = 0.12) -> str:
+                        target_vol: float = 0.12, max_leverage: float = 1.5) -> str:
     """The overfitting/robustness gauntlet, run on the COMBINED book — the same
     panel `validate.py` runs on a single sleeve, adapted to the multi-strat."""
-    v = multistrat.validate_combo(streams, target_vol=target_vol, base_method="erc")
+    v = multistrat.validate_combo(streams, target_vol=target_vol, base_method="erc",
+                                  max_leverage=max_leverage)
     rets, sharpes, mat = v["base"], v["trial_sharpes"], v["perf_matrix"]
     n = len(rets)
 
@@ -229,10 +232,13 @@ def main(argv: list[str] | None = None) -> None:
                     help="add the carry sleeve (off by default — it dragged the book down on real data)")
     ap.add_argument("--target-vol", type=float, default=0.12,
                     help="annualised vol target for the combined book (the risk/return dial)")
+    ap.add_argument("--max-leverage", type=float, default=1.5,
+                    help="gross-exposure cap on the combined book (leverage needs margin + financing cost)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
-                       include_carry=args.with_carry, target_vol=args.target_vol))
+                       include_carry=args.with_carry, target_vol=args.target_vol,
+                       max_leverage=args.max_leverage))
 
 
 if __name__ == "__main__":
