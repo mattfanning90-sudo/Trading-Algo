@@ -37,6 +37,10 @@ on:
         description: "Gross-exposure cap on the multistrat book (e.g. 1.5; >1 needs margin)"
         type: string
         default: "1.5"
+      global_equity:
+        description: "Diversify the equity taker across US+ASX+FTSE (multistrat task)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -76,7 +80,8 @@ jobs:
           elif [ "${{ inputs.task }}" = "validate" ]; then
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
-            python -m trading_algo.multistrat_report $SYN $PIT --validate \
+            GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
+            python -m trading_algo.multistrat_report $SYN $PIT $GEQ --validate \
               --target-vol "${{ inputs.target_vol }}" \
               --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else

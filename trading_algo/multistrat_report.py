@@ -20,10 +20,13 @@ import pandas as pd
 
 from . import config as cfg
 from . import carry as carry_mod
+from . import fx as fx_mod
 from . import constituents, data, multistrat, robust, stress, tradestats, universes
 from .backtest import run_backtest
 from .regions import get_region
 from .trend import run_trend_backtest
+
+GLOBAL_EQUITY_REGIONS = ("US", "ASX", "FTSE")
 
 CRISIS_YEARS = [2008, 2020, 2022]
 _PPY = 252
@@ -46,8 +49,29 @@ def _annual(r: pd.Series) -> pd.Series:
     return (1 + r.dropna()).resample("YE").prod() - 1
 
 
+def _region_returns_usd(region_key: str, synthetic: bool, start: str) -> pd.Series:
+    """One regional momentum sleeve's daily returns converted to USD (incl. FX P&L).
+
+    Each sleeve trades in its LOCAL currency (invariant #6); we convert the local
+    equity curve to USD via the FX multiplier and take returns — so the combined
+    book sees a currency-consistent, FX-aware return stream."""
+    reg = get_region(region_key)
+    if synthetic:
+        p, i = data.synthetic_region(reg)
+    else:
+        p, i = data.load_region(reg, start, None)
+    eq = run_backtest(p, i, reg)["equity"]            # local-currency equity curve
+    if reg.currency == "USD":
+        return eq.pct_change(fill_method=None)
+    fx = (fx_mod.synthetic_fx([reg.currency], base="USD") if synthetic
+          else fx_mod.load_fx([reg.currency], start, None, base="USD"))
+    m = fx_mod.align_fx(fx, eq.index, reg.currency)
+    return (eq * m).pct_change(fill_method=None)       # USD return incl. FX move
+
+
 def _build_streams(synthetic: bool, start: str, point_in_time: bool,
-                   include_carry: bool = False) -> tuple[dict, pd.Series, str]:
+                   include_carry: bool = False,
+                   global_equity: bool = False) -> tuple[dict, pd.Series, str]:
     """Return (streams, spy_price_series, pit_note).
 
     Carry is OFF by default: on real data the price-only income-yield carry proxy
@@ -79,6 +103,14 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
         tr_p = tr_p[[t for t in universes.TREND if t in tr_p.columns]]
 
     equity = run_backtest(eq_p, eq_i, us, membership=membership)["returns"]
+    if global_equity:
+        # globally-diversified equity TAKER: equal-third US/ASX/FTSE (matching
+        # config.ALLOCATIONS), each FX-converted to USD. Real diversification that
+        # doesn't lean on the (biased) US sleeve alone — the council's #1 lever.
+        regional = [equity if k == "US" else _region_returns_usd(k, synthetic, start)
+                    for k in GLOBAL_EQUITY_REGIONS]
+        equity = pd.concat(regional, axis=1).mean(axis=1).dropna()
+        pit_note += f"  (equity = equal-third {'+'.join(GLOBAL_EQUITY_REGIONS)}, FX→USD)"
     trend = run_trend_backtest(tr_p)["returns"]
     streams = {"equity_momentum": equity, "trend": trend}
 
@@ -105,14 +137,16 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
 def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc",
                  do_validate: bool = False, point_in_time: bool = False,
                  include_carry: bool = False, target_vol: float = 0.12,
-                 max_leverage: float = 1.5, drawdown_stop: float | None = None) -> str:
+                 max_leverage: float = 1.5, drawdown_stop: float | None = None,
+                 global_equity: bool = False) -> str:
     # Financing on the leveraged portion is ALWAYS charged (leverage isn't free).
     # The reactive drawdown stop is OFF by default: real-data evidence showed it
     # WHIPSAWS a levered book (cuts at the 2020/2022 bottoms, misses the V-recovery
     # → deeper drawdown AND lower return). Risk is controlled EX-ANTE here (vol
     # target + diversification + not over-levering), per the investment-council.
     # Pass --drawdown-stop to study it as an optional backstop.
-    streams, spy, pit_note = _build_streams(synthetic, start, point_in_time, include_carry)
+    streams, spy, pit_note = _build_streams(synthetic, start, point_in_time,
+                                            include_carry, global_equity)
     combo = multistrat.combine(streams, target_vol=target_vol, method=method,
                                max_leverage=max_leverage,
                                financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
@@ -255,12 +289,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="gross-exposure cap on the combined book (leverage needs margin + financing cost)")
     ap.add_argument("--drawdown-stop", type=float, default=0.0,
                     help="optional reactive drawdown circuit breaker (0=off; it whipsaws a levered book)")
+    ap.add_argument("--global-equity", action="store_true",
+                    help="diversify the equity taker across US+ASX+FTSE (equal-third, FX→USD)")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
                        include_carry=args.with_carry, target_vol=args.target_vol,
                        max_leverage=args.max_leverage,
-                       drawdown_stop=(args.drawdown_stop or None)))
+                       drawdown_stop=(args.drawdown_stop or None),
+                       global_equity=args.global_equity))
 
 
 if __name__ == "__main__":
