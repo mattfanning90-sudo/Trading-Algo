@@ -493,9 +493,12 @@ h1{margin:0;font-size:1.15rem}.sub{color:var(--mut);font-size:.82rem;margin-top:
 .pos{color:var(--up)}.neg{color:var(--dn)}
 .section{padding:1rem 1.5rem}.grid2{display:grid;grid-template-columns:1fr 320px;gap:1rem}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}}
-.card{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:1rem}
+.card{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:1rem;
+  display:flex;flex-direction:column;min-width:0}
 .card h2{margin:0 0 .6rem;font-size:.9rem}
-#eqchart{height:240px}#chart{height:430px}
+.card>.fill{flex:1;min-height:0}
+#eqchart{flex:1;min-height:300px}#chart{min-height:440px}
+#ddchart,#costchart{flex:1;min-height:200px}
 .tabs{display:flex;gap:.4rem;flex-wrap:wrap;padding:0 1.5rem}
 .tab{padding:.35rem .7rem;border:1px solid var(--bd);border-radius:999px;background:var(--panel);
 color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accent);color:var(--accent)}
@@ -543,11 +546,18 @@ table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;b
 section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
 .band{display:flex;align-items:baseline;gap:.6rem;margin:0 0 .9rem;font-size:1.05rem;font-weight:600}
 .band .h{color:var(--mut);font-size:.78rem;font-weight:400}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:1rem;align-items:start}
-.span2{grid-column:span 2}@media(max-width:680px){.span2{grid-column:span 1}}
+/* 12-col equal-height grid: rows sum to 12 so there are no trailing gaps */
+.cards{display:grid;grid-template-columns:repeat(12,1fr);gap:1rem;align-items:stretch}
+.c12{grid-column:span 12}.c8{grid-column:span 8}.c6{grid-column:span 6}.c4{grid-column:span 4}
+.span2{grid-column:span 8}
+@media(max-width:900px){.c8,.c6,.c4,.span2{grid-column:span 12}}
 .kpis{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.8rem}
 .kpi{flex:1 1 120px;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:.6rem .8rem}
 .kpi .v{font-size:1.1rem;font-weight:600}.kpi .k{color:var(--mut);font-size:.66rem;text-transform:uppercase;margin-top:.15rem}
+/* tabular figures everywhere numbers live (pro-desk feel, no jitter) */
+.stat .v,.kpi .v,.metrics,.val,.row,.txn,#riskstats .v{font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1}
+section{padding:1rem 1.5rem 1.25rem}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -567,22 +577,22 @@ section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
 <section id="overview">
   <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span></div>
   <div class="cards">
-    <div class="card span2"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
-    <div class="card"><h2>Performance <span class="muted" style="font-weight:400">vs buy &amp; hold</span></h2><div id="metrics" class="metrics"></div></div>
-    <div class="card"><h2>Open positions <span class="muted" style="font-weight:400">(signed % of equity)</span></h2><div id="positionscard"></div></div>
-    <div class="card"><h2><span class="tip" data-tip="__T_SCORE__">Agent scorecard</span> <span class="muted" style="font-weight:400">(this window)</span></h2><div id="agentcard"></div></div>
+    <div class="card c8"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
+    <div class="card c4"><h2>Performance <span class="muted" style="font-weight:400">vs buy &amp; hold</span></h2><div id="metrics" class="metrics"></div></div>
+    <div class="card c6"><h2>Open positions <span class="muted" style="font-weight:400">(signed % of equity)</span></h2><div id="positionscard"></div></div>
+    <div class="card c6"><h2><span class="tip" data-tip="__T_SCORE__">Agent scorecard</span> <span class="muted" style="font-weight:400">(this window)</span></h2><div id="agentcard"></div></div>
   </div>
 </section>
 
 <section id="risk">
   <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span></div>
   <div class="cards">
-    <div class="card span2"><h2>Costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
+    <div class="card c8"><h2>Costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
       <div class="stats" id="riskstats"></div>
       <div id="sigtext" class="why" style="margin-top:.7rem"></div></div>
-    <div class="card"><h2><span class="tip" data-tip="__T_EXP__">Net currency exposure</span></h2><div id="exposurecard"></div></div>
-    <div class="card"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2><div id="ddchart" style="height:200px"></div></div>
-    <div class="card"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2><div id="costchart" style="height:200px"></div></div>
+    <div class="card c4"><h2><span class="tip" data-tip="__T_EXP__">Net currency exposure</span></h2><div id="exposurecard"></div></div>
+    <div class="card c6"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2><div id="ddchart"></div></div>
+    <div class="card c6"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2><div id="costchart"></div></div>
   </div>
 </section>
 
