@@ -49,29 +49,44 @@ def _annual(r: pd.Series) -> pd.Series:
     return (1 + r.dropna()).resample("YE").prod() - 1
 
 
-def _region_returns_usd(region_key: str, synthetic: bool, start: str) -> pd.Series:
-    """One regional momentum sleeve's daily returns converted to USD (incl. FX P&L).
+def _to_base_returns(returns: pd.Series, from_ccy: str, base: str,
+                     synthetic: bool, start: str) -> pd.Series:
+    """Convert a local-currency return stream into the base currency, incl. FX P&L.
+
+    base_return = (1+local_return)·(1+fx_return) − 1, where fx_return is the daily
+    move of the (base-per-local) multiplier. For an AUD-based investor this is what
+    actually lands in the account: unhedged foreign assets carry their FX move."""
+    if from_ccy == base:
+        return returns
+    fx = (fx_mod.synthetic_fx([from_ccy], base=base) if synthetic
+          else fx_mod.load_fx([from_ccy], start, None, base=base))
+    m = fx_mod.align_fx(fx, returns.index, from_ccy)
+    rm = m.pct_change(fill_method=None).fillna(0.0)
+    return (1.0 + returns) * (1.0 + rm) - 1.0
+
+
+def _region_returns_base(region_key: str, base: str, synthetic: bool, start: str) -> pd.Series:
+    """One regional momentum sleeve's daily returns in the BASE currency (incl. FX).
 
     Each sleeve trades in its LOCAL currency (invariant #6); we convert the local
-    equity curve to USD via the FX multiplier and take returns — so the combined
-    book sees a currency-consistent, FX-aware return stream."""
+    equity curve via the FX multiplier and take returns — currency-consistent."""
     reg = get_region(region_key)
     if synthetic:
         p, i = data.synthetic_region(reg)
     else:
         p, i = data.load_region(reg, start, None)
     eq = run_backtest(p, i, reg)["equity"]            # local-currency equity curve
-    if reg.currency == "USD":
+    if reg.currency == base:
         return eq.pct_change(fill_method=None)
-    fx = (fx_mod.synthetic_fx([reg.currency], base="USD") if synthetic
-          else fx_mod.load_fx([reg.currency], start, None, base="USD"))
+    fx = (fx_mod.synthetic_fx([reg.currency], base=base) if synthetic
+          else fx_mod.load_fx([reg.currency], start, None, base=base))
     m = fx_mod.align_fx(fx, eq.index, reg.currency)
-    return (eq * m).pct_change(fill_method=None)       # USD return incl. FX move
+    return (eq * m).pct_change(fill_method=None)       # base return incl. FX move
 
 
 def _build_streams(synthetic: bool, start: str, point_in_time: bool,
-                   include_carry: bool = False,
-                   global_equity: bool = False) -> tuple[dict, pd.Series, str]:
+                   include_carry: bool = False, global_equity: bool = False,
+                   base: str = cfg.BASE_CURRENCY) -> tuple[dict, pd.Series, str]:
     """Return (streams, spy_price_series, pit_note).
 
     Carry is OFF by default: on real data the price-only income-yield carry proxy
@@ -102,16 +117,17 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
         tr_p = data.load_prices(universes.TREND, start, None)
         tr_p = tr_p[[t for t in universes.TREND if t in tr_p.columns]]
 
-    equity = run_backtest(eq_p, eq_i, us, membership=membership)["returns"]
     if global_equity:
         # globally-diversified equity TAKER: equal-third US/ASX/FTSE (matching
-        # config.ALLOCATIONS), each FX-converted to USD. Real diversification that
-        # doesn't lean on the (biased) US sleeve alone — the council's #1 lever.
-        regional = [equity if k == "US" else _region_returns_usd(k, synthetic, start)
-                    for k in GLOBAL_EQUITY_REGIONS]
+        # config.ALLOCATIONS), each converted to the BASE currency incl. FX P&L.
+        regional = [_region_returns_base(k, base, synthetic, start) for k in GLOBAL_EQUITY_REGIONS]
         equity = pd.concat(regional, axis=1).mean(axis=1).dropna()
-        pit_note += f"  (equity = equal-third {'+'.join(GLOBAL_EQUITY_REGIONS)}, FX→USD)"
-    trend = run_trend_backtest(tr_p)["returns"]
+        pit_note += f"  (equity = equal-third {'+'.join(GLOBAL_EQUITY_REGIONS)}, →{base})"
+    else:
+        # US sleeve in USD → base currency (unhedged FX, as an investor actually holds)
+        equity = run_backtest(eq_p, eq_i, us, membership=membership)["returns"]
+        equity = _to_base_returns(equity, us.currency, base, synthetic, start)
+    trend = _to_base_returns(run_trend_backtest(tr_p)["returns"], "USD", base, synthetic, start)
     streams = {"equity_momentum": equity, "trend": trend}
 
     if include_carry:
@@ -124,7 +140,8 @@ def _build_streams(synthetic: bool, start: str, point_in_time: bool,
             ca_y = data.load_carry_yields(universes.CARRY, start, None)
         if not ca_y.empty and ca_p.shape[1] >= 3:
             try:
-                streams["carry"] = carry_mod.run_carry_backtest(ca_p, ca_y)["returns"]
+                ca_r = carry_mod.run_carry_backtest(ca_p, ca_y)["returns"]
+                streams["carry"] = _to_base_returns(ca_r, "USD", base, synthetic, start)
             except Exception:
                 pit_note += "  (carry sleeve skipped: insufficient history)"
         else:
@@ -138,7 +155,7 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
                  do_validate: bool = False, point_in_time: bool = False,
                  include_carry: bool = False, target_vol: float = 0.12,
                  max_leverage: float = 1.5, drawdown_stop: float | None = None,
-                 global_equity: bool = False) -> str:
+                 global_equity: bool = False, base: str = cfg.BASE_CURRENCY) -> str:
     # Financing on the leveraged portion is ALWAYS charged (leverage isn't free).
     # The reactive drawdown stop is OFF by default: real-data evidence showed it
     # WHIPSAWS a levered book (cuts at the 2020/2022 bottoms, misses the V-recovery
@@ -146,7 +163,7 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
     # target + diversification + not over-levering), per the investment-council.
     # Pass --drawdown-stop to study it as an optional backstop.
     streams, spy, pit_note = _build_streams(synthetic, start, point_in_time,
-                                            include_carry, global_equity)
+                                            include_carry, global_equity, base)
     combo = multistrat.combine(streams, target_vol=target_vol, method=method,
                                max_leverage=max_leverage,
                                financing_spread=cfg.LEVERAGE_FINANCING_SPREAD,
@@ -154,8 +171,12 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
                                cooldown_days=cfg.DRAWDOWN_COOLDOWN_DAYS)
     cr = combo["returns"]
     common = cr.index
-    bench = (spy.pct_change(fill_method=None).reindex(common).fillna(0.0)
-             if spy is not None else pd.Series(0.0, index=common))
+    # benchmark = SPY held UNHEDGED by a base-currency investor (USD return + FX)
+    if spy is not None:
+        bench = _to_base_returns(spy.pct_change(fill_method=None).fillna(0.0),
+                                 "USD", base, synthetic, start).reindex(common).fillna(0.0)
+    else:
+        bench = pd.Series(0.0, index=common)
 
     L = []
     w = L.append
@@ -167,11 +188,11 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
     span = f"{common[0].date()} → {common[-1].date()}" if len(common) else "n/a"
     names = " + ".join(streams.keys())
     w(f"Streams: **{names}**, combined by **{method.upper()}** at {target_vol:.0%} vol "
-      f"target. History {span} (USD).\n")
+      f"target. History {span} (base **{base}**, foreign sleeves unhedged).\n")
 
     rows = {k: v.reindex(common).fillna(0.0) for k, v in streams.items()}
     rows["MULTI-STRAT (combined)"] = cr
-    rows["SPY (buy & hold)"] = bench
+    rows[f"SPY in {base} (buy & hold)"] = bench
     w("| stream | CAGR | Vol | Sharpe | MaxDD |")
     w("|---|---|---|---|---|")
     for name, r in rows.items():
@@ -197,11 +218,12 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
             cells.append(f"{m.iloc[0]:+.1%}" if len(m) else "n/a")
         w(f"| {yr} | " + " | ".join(cells) + " |")
 
-    base, combo_s, spy_s = _stats(rows["equity_momentum"]), _stats(cr), _stats(bench)
+    eq_s, combo_s, spy_s = _stats(rows["equity_momentum"]), _stats(cr), _stats(bench)
     w("\n## Honest read\n")
-    w(f"- Equity-only Sharpe {base['Sharpe']:.2f} (MaxDD {base['MaxDD']:.1%}) → "
+    w(f"- Equity-only Sharpe {eq_s['Sharpe']:.2f} (MaxDD {eq_s['MaxDD']:.1%}) → "
       f"multi-strat Sharpe {combo_s['Sharpe']:.2f} (MaxDD {combo_s['MaxDD']:.1%}).")
-    w(f"- SPY: CAGR {spy_s['CAGR']:.1%}, Sharpe {spy_s['Sharpe']:.2f}, MaxDD {spy_s['MaxDD']:.1%}.")
+    w(f"- SPY (in {base}): CAGR {spy_s['CAGR']:.1%}, Sharpe {spy_s['Sharpe']:.2f}, "
+      f"MaxDD {spy_s['MaxDD']:.1%}.")
     diversifiers = " + ".join(k for k in streams if k != "equity_momentum")
     if not point_in_time:
         w(f"- NB: equity sleeve is survivorship-biased (current US names) so its return "
@@ -290,14 +312,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--drawdown-stop", type=float, default=0.0,
                     help="optional reactive drawdown circuit breaker (0=off; it whipsaws a levered book)")
     ap.add_argument("--global-equity", action="store_true",
-                    help="diversify the equity taker across US+ASX+FTSE (equal-third, FX→USD)")
+                    help="diversify the equity taker across US+ASX+FTSE (equal-third, →base ccy)")
+    ap.add_argument("--base-currency", default=cfg.BASE_CURRENCY,
+                    help="reporting/base currency (default AUD); foreign sleeves are unhedged")
     args = ap.parse_args(argv)
     print(build_report(args.synthetic, args.start, args.method,
                        do_validate=args.validate, point_in_time=args.point_in_time,
                        include_carry=args.with_carry, target_vol=args.target_vol,
                        max_leverage=args.max_leverage,
                        drawdown_stop=(args.drawdown_stop or None),
-                       global_equity=args.global_equity))
+                       global_equity=args.global_equity, base=args.base_currency))
 
 
 if __name__ == "__main__":
