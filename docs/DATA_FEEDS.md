@@ -87,10 +87,15 @@ again; pass `--source` at run time only to override.
 
 ## Notes & caveats
 
-* **US equities in an AUD book**: equities are USD-quoted and the book reports in
-  AUD without converting per-name FX — the same simplification already used for FX
-  crosses. Equity **borrow/financing carry is not modelled** (swap = 0); treat
-  equity P&L as price-only. Fine for paper/research, not a financing model.
+* **AUD currency translation is on**: a pair settles in its quote currency (EURUSD
+  in USD, USDJPY in JPY), so the AUD book now translates every position's
+  quote-currency P&L back to AUD using the majors in the panel (AUDUSD as the hub)
+  — AUD/USD moves are part of your real P&L. See `fxconv.py` and the "From AUD to a
+  trade" flow on the dashboard's How page. Crypto/equity-only books (no AUDUSD in
+  their panel) fall back to no translation until an AUD/USD rate is present.
+* **US equities in an AUD book**: equity **borrow/financing carry is not modelled**
+  (swap = 0); treat equity P&L as price-only. Fine for paper/research, not a
+  financing model.
 * **Costs still always on**: every source crosses half the dealing spread defined
   in `pairs.py`. Intraday turnover makes costs bite harder — believe the net line.
 * **Market hours**: the engine idles outside the FX week for FX/equities but runs

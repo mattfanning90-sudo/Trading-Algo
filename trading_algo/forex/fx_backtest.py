@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from . import fx_strategy
+from . import fxconv
 from .agents import AgentPool
 from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
 from .fx_data import closes
@@ -43,6 +44,15 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
     pairs = list(weights.columns)
     specs = {s: get_pair(s) for s in pairs}
     dates = weights.index
+
+    # AUD account: translate each pair's quote-currency return into AUD (see
+    # fxconv). audq_ratioₜ = aud_per_quoteₜ / aud_per_quoteₜ₋₁ per pair; the AUD
+    # return of a pair over a bar is (1+pair_ret)*ratio − 1. Falls back to the raw
+    # return wherever the AUD/quote rate isn't derivable from the panel.
+    audq = fxconv.aud_per_quote_frame(px, [specs[s].quote for s in pairs])
+    audq_pair = pd.DataFrame({s: audq[specs[s].quote] for s in pairs})
+    audq_ratio = (audq_pair / audq_pair.shift(1)).reindex(columns=pairs).fillna(1.0)
+    aud_rets = (1.0 + rets) * audq_ratio - 1.0
 
     held = pd.Series(0.0, index=pairs)
     equity = [float(initial_capital)]
@@ -86,7 +96,7 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
                 if w:
                     carry += abs(w) * specs[s].carry_fraction(price_d[s], _sign(w))
 
-        ret_nxt = rets.loc[nxt]
+        ret_nxt = aud_rets.loc[nxt]              # AUD-translated pair returns
         pair_pnl = held * ret_nxt.reindex(pairs).fillna(0.0)
         attribution += pair_pnl
         day_ret = float(pair_pnl.sum()) + carry - cost

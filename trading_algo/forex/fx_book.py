@@ -32,6 +32,7 @@ from . import explain
 from . import feeds
 from . import fx_config as cfg
 from . import fx_data
+from . import fxconv
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -204,7 +205,12 @@ def run_once(account: str, synthetic: bool = False,
         lc = last_close.get(s)
         nc = px_last.get(s)
         if lc and nc and lc == lc and nc == nc and lc > 0:
-            pnl_frac += w * (nc / lc - 1.0)
+            # Translate the position's quote-currency P&L into AUD: an AUD account
+            # converts to the quote currency to hold the pair, so AUD/quote moves
+            # (esp. AUD/USD) are part of the real P&L. Falls back to 1.0 when the
+            # AUD/quote rate can't be derived (e.g. a crypto-only book).
+            fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
+            pnl_frac += w * ((nc / lc) * fxf - 1.0)
 
     # Carry scales with the actual elapsed time since the last mark (so it's
     # correct for intraday/1-minute bars, not just daily). Daily is unchanged:
@@ -266,7 +272,8 @@ def run_once(account: str, synthetic: bool = False,
     # --- persist -----------------------------------------------------------
     state["equity"] = float(equity)
     state["positions"] = {k: round(v, 5) for k, v in new_positions.items()}
-    state["last_close"] = {s: float(px_last[s]) for s in symbols if px_last.get(s) == px_last.get(s)}
+    state["last_close"] = {s: float(px_last[s]) for s in symbols
+                           if s in px_last.index and px_last[s] == px_last[s]}
     state["last_bar_date"] = bar_date
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
