@@ -533,6 +533,21 @@ table.txn tbody tr:hover{background:#1b2230}
 table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;border-top:1px solid var(--bd)}
 .txnsearch{margin:.2rem 0 .6rem;padding:.35rem .6rem;background:#0b0f14;border:1px solid var(--bd);
   border-radius:8px;color:var(--fg);font-size:.8rem;width:200px}
+/* layout: sticky in-page nav + responsive card bands */
+.subnav{position:sticky;top:0;z-index:20;display:flex;gap:.4rem;flex-wrap:wrap;
+  padding:.5rem 1.5rem;background:rgba(13,17,23,.93);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--bd)}
+.subnav a{padding:.3rem .75rem;border-radius:999px;border:1px solid var(--bd);
+  color:var(--mut);text-decoration:none;font-size:.8rem}
+.subnav a:hover{border-color:var(--accent);color:var(--accent)}
+section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
+.band{display:flex;align-items:baseline;gap:.6rem;margin:0 0 .9rem;font-size:1.05rem;font-weight:600}
+.band .h{color:var(--mut);font-size:.78rem;font-weight:400}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:1rem;align-items:start}
+.span2{grid-column:span 2}@media(max-width:680px){.span2{grid-column:span 1}}
+.kpis{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.8rem}
+.kpi{flex:1 1 120px;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:.6rem .8rem}
+.kpi .v{font-size:1.1rem;font-weight:600}.kpi .k{color:var(--mut);font-size:.66rem;text-transform:uppercase;margin-top:.15rem}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -542,51 +557,63 @@ table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;b
   <div class="stats" id="stats"></div>
 </header>
 
-<div class="section grid2">
-  <div class="card"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
-  <div class="card"><h2>Performance</h2><div id="metrics" class="metrics"></div>
-    <div id="agentcard" style="margin-top:1rem"></div>
-    <div id="positionscard" style="margin-top:1rem"></div></div>
+<div class="subnav">
+  <a href="#overview">Overview</a>
+  <a href="#risk">Risk &amp; costs</a>
+  <a href="#pairs">Pair explorer</a>
+  <a href="#txns">Transactions</a>
 </div>
 
-<div class="section">
-  <div class="card">
-    <h2>Risk, costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
-    <div class="stats" id="riskstats"></div>
-    <div id="sigtext" class="why" style="margin-top:.7rem"></div>
+<section id="overview">
+  <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span></div>
+  <div class="cards">
+    <div class="card span2"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
+    <div class="card"><h2>Performance <span class="muted" style="font-weight:400">vs buy &amp; hold</span></h2><div id="metrics" class="metrics"></div></div>
+    <div class="card"><h2>Open positions <span class="muted" style="font-weight:400">(signed % of equity)</span></h2><div id="positionscard"></div></div>
+    <div class="card"><h2><span class="tip" data-tip="__T_SCORE__">Agent scorecard</span> <span class="muted" style="font-weight:400">(this window)</span></h2><div id="agentcard"></div></div>
   </div>
-</div>
-<div class="section grid2">
-  <div class="card"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2>
-    <div id="ddchart" style="height:200px"></div></div>
-  <div class="card"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2>
-    <div id="costchart" style="height:200px"></div>
-    <div id="exposurecard" style="margin-top:.7rem"></div></div>
-</div>
+</section>
 
-<div class="tabs" id="tabs"></div>
-<div class="wrap">
-  <div id="chart"></div>
-  <div class="side">
-    <div class="card"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
-      <div id="decision" class="why muted"></div>
-      <div id="agents" style="margin-top:.7rem"></div>
-      <div class="legend" id="legend"></div></div>
-    <div class="card"><h2>Trade journal — plain-English reason &amp; <span class="tip" data-tip="__T_OUT__">outcome</span></h2>
-      <div id="journal" class="journal"></div></div>
+<section id="risk">
+  <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span></div>
+  <div class="cards">
+    <div class="card span2"><h2>Costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
+      <div class="stats" id="riskstats"></div>
+      <div id="sigtext" class="why" style="margin-top:.7rem"></div></div>
+    <div class="card"><h2><span class="tip" data-tip="__T_EXP__">Net currency exposure</span></h2><div id="exposurecard"></div></div>
+    <div class="card"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2><div id="ddchart" style="height:200px"></div></div>
+    <div class="card"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2><div id="costchart" style="height:200px"></div></div>
   </div>
-</div>
+</section>
 
-<div class="section">
+<section id="pairs">
+  <div class="band">Pair explorer <span class="h">candlesticks · today's read · the reason for every trade</span></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="wrap">
+    <div id="chart"></div>
+    <div class="side">
+      <div class="card"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
+        <div id="decision" class="why muted"></div>
+        <div id="agents" style="margin-top:.7rem"></div>
+        <div class="legend" id="legend"></div></div>
+      <div class="card"><h2>Trade journal — plain-English reason &amp; <span class="tip" data-tip="__T_OUT__">outcome</span></h2>
+        <div id="journal" class="journal"></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="txns">
+  <div class="band">Transactions <span class="h">full blotter · price economics &amp; P&amp;L</span></div>
   <div class="card">
-    <h2>Transactions — full blotter <span class="muted" style="font-weight:400" id="txnsub"></span></h2>
+    <h2>Full blotter <span class="muted" style="font-weight:400" id="txnsub"></span></h2>
     <input class="txnsearch" id="txnsearch" placeholder="filter by pair, e.g. BTC">
     <div class="txnwrap"><table class="txn" id="txntable"></table></div>
     <div class="legend">Every column is hover-defined. <b>P&amp;L since</b> is each trade's running
       mark-to-market contribution (Δweight × price move since × equity) — an honest marginal figure
       for a weight-based book, not lot-by-lot realised profit. Costs are always on.</div>
   </div>
-</div>
+</section>
+
 <div class="foot">Paper money. Six agents (trend · breakout · mean-reversion · momentum · carry · deep-learning),
 blended by a Hedge ensemble and sized by volatility targeting. Out-of-sample testing found no statistically
 significant edge — this is a learning tool, not a forecast. <a href="how.html">See how it all fits together →</a></div>
@@ -629,10 +656,9 @@ function bars(obj, hi){
   const cell=(m,key,isP)=>{const v=m[key];return v==null?"–":(isP?pct(v):v);};
   document.getElementById('metrics').innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
     rows.map(([lbl,key,isP,g])=>`<div>${tip(lbl,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');
-  document.getElementById('agentcard').innerHTML=`<div style="font-size:.8rem;margin-bottom:.4rem">${tip('Agent scorecard (this window)','Agent scorecard')}</div>`+bars(DASH.attribution,["ensemble","buy&hold"]);
+  document.getElementById('agentcard').innerHTML=bars(DASH.attribution,["ensemble","buy&hold"]);
   const pos=DASH.positions||[];
-  const posBars=pos.length?bars(Object.fromEntries(pos.map(p=>[p.sym,p.w]))):'<div class="muted">Flat — no open positions right now.</div>';
-  document.getElementById('positionscard').innerHTML=`<div style="font-size:.8rem;margin-bottom:.4rem">${tip('Open positions (signed % of equity)','Gross leverage')}</div>`+posBars;
+  document.getElementById('positionscard').innerHTML=pos.length?bars(Object.fromEntries(pos.map(p=>[p.sym,p.w]))):'<div class="muted">Flat — no open positions right now.</div>';
 })();
 
 (function(){
@@ -661,7 +687,7 @@ function bars(obj, hi){
     sig=`<b>PSR ${psrTxt}</b> — the probability the true Sharpe is above zero, from ${rk.n_obs} days of returns. To be 95% confident this isn't luck you'd need ≈ <b>${rk.min_track_days}</b> trading days (~${Math.round(rk.min_track_days/21)} months) — about <b>${more}</b> more. Until then, treat the P&L as noise. ${tip('Why?','Significance')}`;}
   const st=document.getElementById('sigtext'); if(st)st.innerHTML=sig;
   const exp=rk.exposure||{}, ec=document.getElementById('exposurecard');
-  if(ec)ec.innerHTML=`<div style="font-size:.8rem;margin:.2rem 0 .4rem">${tip('Net currency exposure','Net exposure')}</div>`+(Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>');
+  if(ec)ec.innerHTML=Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>';
   const mk=el=>LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
   const dd=rk.drawdown||[], de=document.getElementById('ddchart');
   if(de&&dd.length){const ch=mk(de);ch.addAreaSeries({lineColor:'#ef5350',topColor:'rgba(239,83,80,.0)',bottomColor:'rgba(239,83,80,.35)',lineWidth:2}).setData(dd.map(d=>({time:d.time,value:+(d.value*100).toFixed(3)})));ch.timeScale().fitContent();}
@@ -759,6 +785,7 @@ def render(payload: dict) -> str:
         "__LWC__": _LWC,
         "__T_BENCH__": g["Benchmark"], "__T_TILT__": g["Tilt"], "__T_OUT__": g["Outcome"],
         "__T_PSR__": g["PSR"], "__T_DD__": g["Drawdown curve"], "__T_WEDGE__": g["Cost wedge"],
+        "__T_SCORE__": g["Agent scorecard"], "__T_EXP__": g["Net exposure"],
         "__DATA__": json.dumps(payload, separators=(",", ":")),
     }
     html = _PAGE
