@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
+import math
+
 from . import fx_data
 from . import indicators as ind
 from .agents import AgentPool
@@ -31,6 +33,7 @@ from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
 from .fx_strategy import target_weights_history
 from .pairs import get_pair
+from .validation import _norm_ppf, probabilistic_sharpe_ratio
 
 _LWC = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
 _MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
@@ -79,6 +82,13 @@ GLOSSARY = {
     "Transaction cost": "What this trade actually cost you in spread: half the spread × the notional traded. Always charged — there is no free trade.",
     "P&L since": "Mark-to-market of this weight change since it was made: Δweight × the price move since × equity. It's this trade's running contribution to the book — NOT lot-by-lot realised profit (this is a weight-based book).",
     "Delta weight": "How much the position in this pair changed on this trade, as a fraction of equity (+ = bought/added long, − = sold/added short).",
+    "PSR": "Probabilistic Sharpe Ratio — the probability the TRUE Sharpe is above zero given how few days we have and how lumpy the returns are (accounts for skew/fat tails). A short run of gains has a low PSR: it's the honest 'is this skill or luck?' gauge. >95% = confident.",
+    "Significance": "How long until we could tell this edge from luck. The Minimum Track Record Length: the number of trading days needed for PSR to clear 95%. Until then, treat the P&L as noise.",
+    "Cost drag": "Total spread paid as a share of gross profit — how big a bite trading costs take out of what the strategy made before costs. Lower is better; over 100% means costs exceeded the gross gain.",
+    "Cost wedge": "Gross equity (before spread) vs net equity (after). The gap between the two lines IS the cumulative trading cost — watch it widen with turnover.",
+    "Drawdown curve": "How far below the previous peak the book is, every day (the 'underwater' plot). Flat at 0 = at a new high; deep dips = the painful stretches.",
+    "Net exposure": "Your true bet per CURRENCY once the pairs are decomposed (long EURUSD = long EUR + short USD). Reveals hidden concentration — e.g. several pairs all leaving you short USD.",
+    "Realized vol": "How much the book has actually swung (annualised), vs the profile's target. Far below target = under-risked; far above = the vol-targeting isn't keeping up.",
 }
 
 
@@ -294,6 +304,104 @@ def _transactions(state, panel, max_rows=400) -> dict:
                        "pnl": round(tot_pnl, 2)}}
 
 
+def _exposure(state) -> dict:
+    """Net exposure per CURRENCY from the open pairs: long EURUSD = +EUR, −USD.
+    This is the real risk concentration an FX book carries (hidden in the pairs)."""
+    exp: dict[str, float] = {}
+    for sym, w in state.get("positions", {}).items():
+        try:
+            pair = get_pair(sym)
+        except KeyError:
+            continue
+        exp[pair.base] = exp.get(pair.base, 0.0) + float(w)
+        exp[pair.quote] = exp.get(pair.quote, 0.0) - float(w)
+    return {k: round(v, 4) for k, v in
+            sorted(exp.items(), key=lambda kv: -abs(kv[1])) if abs(v) > 1e-4}
+
+
+def _min_track_record_days(returns) -> int | None:
+    """Bailey & López de Prado Minimum Track Record Length: how many observations
+    you need before PSR clears 95% (i.e. before an apparent edge is distinguishable
+    from luck). None if the strategy isn't beating cash (no length would confirm)."""
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    if len(r) < 3 or r.std() == 0:
+        return None
+    sr = float(r.mean() / r.std())
+    if sr <= 0:
+        return None
+    g3 = float(((r - r.mean()) ** 3).mean() / r.std() ** 3)
+    g4 = float(((r - r.mean()) ** 4).mean() / r.std() ** 4)
+    z = _norm_ppf(0.95)
+    mintrl = 1.0 + (1.0 - g3 * sr + (g4 - 1.0) / 4.0 * sr ** 2) * (z / sr) ** 2
+    return int(math.ceil(mintrl))
+
+
+def _risk_costs(state, p) -> dict:
+    """Risk, cost-efficiency and statistical-significance analytics for one book.
+
+    Honest by design: the cost wedge shows how much spread eats gross P&L, and the
+    PSR / minimum-track-record figures say plainly when results are still just noise.
+    """
+    eqh = state.get("equity_history", [])
+    eq_map = {d: e for d, e in eqh}
+    eq_dates = [d for d, _ in eqh]
+    cur_eq = float(state.get("equity", state.get("initial_capital", 0.0)))
+
+    def equity_on(date: str) -> float:
+        if date in eq_map:
+            return float(eq_map[date])
+        prior = [d for d in eq_dates if d <= date]
+        return float(eq_map[prior[-1]]) if prior else cur_eq
+
+    total_cost = 0.0
+    cost_on_date: dict[str, float] = {}
+    for t in state.get("trades", []):
+        sym, price = t.get("pair"), t.get("price")
+        if not sym or not price:
+            continue
+        try:
+            pair = get_pair(sym)
+        except KeyError:
+            continue
+        c = (abs(float(t.get("delta_weight") or 0.0)) * 0.5
+             * pair.spread_fraction(price) * equity_on(t.get("date", "")))
+        total_cost += c
+        cost_on_date[t.get("date", "")] = cost_on_date.get(t.get("date", ""), 0.0) + c
+
+    out = {"target_vol": round(p.target_vol, 4), "exposure": _exposure(state),
+           "total_cost": round(total_cost, 2), "n_obs": max(len(eqh) - 1, 0),
+           "currency": state.get("currency", "AUD"),
+           "drawdown": [], "cost_curve": [], "psr": None, "realized_vol": None,
+           "vol_ratio": None, "cost_drag": None, "min_track_days": None}
+    if len(eqh) < 2:
+        return out
+
+    s = pd.Series([float(e) for _, e in eqh], index=[d for d, _ in eqh], dtype=float)
+    dd = s / s.cummax() - 1.0
+    out["drawdown"] = [{"time": d, "value": round(float(v), 4)} for d, v in dd.items()]
+
+    base = float(s.iloc[0]) or float(state["initial_capital"])
+    cum, curve = 0.0, []
+    for d, e in zip(s.index, s.values):
+        cum += cost_on_date.get(d, 0.0)
+        curve.append({"time": d, "net": round(100.0 * e / base, 4),
+                      "gross": round(100.0 * (e + cum) / base, 4),
+                      "cum_cost": round(cum, 2)})
+    out["cost_curve"] = curve
+
+    r = s.pct_change().dropna()
+    if len(r) >= 2 and r.std() > 0:
+        out["realized_vol"] = round(float(r.std() * np.sqrt(ANNUALIZATION)), 4)
+        out["vol_ratio"] = round(out["realized_vol"] / p.target_vol, 2) if p.target_vol else None
+    if len(r) >= 3:
+        out["psr"] = round(float(probabilistic_sharpe_ratio(r.values)), 3)
+        out["min_track_days"] = _min_track_record_days(r.values)
+    gross_profit = float(s.iloc[-1]) + cum - base
+    out["cost_drag"] = round(total_cost / gross_profit, 3) if gross_profit > 0 else None
+    return out
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -357,6 +465,7 @@ def build_payload(account, synthetic=False, bars=180):
         "book_curve": book_curve, "book_metrics": book_metrics,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": _transactions(state, panel),
+        "risk": _risk_costs(state, p),
         "attribution": _agent_attribution(panel, p, bars),
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
@@ -440,6 +549,21 @@ table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;b
     <div id="positionscard" style="margin-top:1rem"></div></div>
 </div>
 
+<div class="section">
+  <div class="card">
+    <h2>Risk, costs &amp; <span class="tip" data-tip="__T_PSR__">is it luck?</span></h2>
+    <div class="stats" id="riskstats"></div>
+    <div id="sigtext" class="why" style="margin-top:.7rem"></div>
+  </div>
+</div>
+<div class="section grid2">
+  <div class="card"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2>
+    <div id="ddchart" style="height:200px"></div></div>
+  <div class="card"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2>
+    <div id="costchart" style="height:200px"></div>
+    <div id="exposurecard" style="margin-top:.7rem"></div></div>
+</div>
+
 <div class="tabs" id="tabs"></div>
 <div class="wrap">
   <div id="chart"></div>
@@ -519,6 +643,35 @@ function bars(obj, hi){
   if((DASH.bench_curve||[]).length)c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'}).setData(DASH.bench_curve);
   if((DASH.book_curve||[]).length)c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'}).setData(DASH.book_curve);
   c.timeScale().fitContent();
+})();
+
+(function(){
+  const rk=DASH.risk||{}, C=rk.currency||DASH.currency;
+  const volTxt=rk.realized_vol==null?"–":pct(rk.realized_vol)+(rk.vol_ratio!=null?` (${rk.vol_ratio}× target)`:"");
+  const dragTxt=rk.cost_drag==null?"–":(rk.cost_drag*100).toFixed(0)+"% of gross";
+  const psrTxt=rk.psr==null?"–":(rk.psr*100).toFixed(0)+"%";
+  const items=[["Spread cost",(rk.total_cost!=null?rk.total_cost.toLocaleString()+" "+C:"–"),null],
+    ["Cost drag",dragTxt,"Cost drag"],["Realized vol",volTxt,"Realized vol"],["PSR",psrTxt,"PSR"]];
+  const rs=document.getElementById('riskstats');
+  if(rs)rs.innerHTML=items.map(([k,v,g])=>`<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
+  let sig;
+  if(rk.psr==null) sig="Not enough history yet to judge significance — give it a few more days of returns.";
+  else if(rk.min_track_days==null) sig=`PSR ${psrTxt}: the book isn't beating cash yet, so no length of track record would confirm a real edge at this rate. ${tip('What is this?','Significance')}`;
+  else{const more=Math.max(0,rk.min_track_days-rk.n_obs);
+    sig=`<b>PSR ${psrTxt}</b> — the probability the true Sharpe is above zero, from ${rk.n_obs} days of returns. To be 95% confident this isn't luck you'd need ≈ <b>${rk.min_track_days}</b> trading days (~${Math.round(rk.min_track_days/21)} months) — about <b>${more}</b> more. Until then, treat the P&L as noise. ${tip('Why?','Significance')}`;}
+  const st=document.getElementById('sigtext'); if(st)st.innerHTML=sig;
+  const exp=rk.exposure||{}, ec=document.getElementById('exposurecard');
+  if(ec)ec.innerHTML=`<div style="font-size:.8rem;margin:.2rem 0 .4rem">${tip('Net currency exposure','Net exposure')}</div>`+(Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>');
+  const mk=el=>LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
+  const dd=rk.drawdown||[], de=document.getElementById('ddchart');
+  if(de&&dd.length){const ch=mk(de);ch.addAreaSeries({lineColor:'#ef5350',topColor:'rgba(239,83,80,.0)',bottomColor:'rgba(239,83,80,.35)',lineWidth:2}).setData(dd.map(d=>({time:d.time,value:+(d.value*100).toFixed(3)})));ch.timeScale().fitContent();}
+  else if(de)de.innerHTML='<p class=muted style="padding:1rem">Fills in as the book trades.</p>';
+  const cc=rk.cost_curve||[], ce=document.getElementById('costchart');
+  if(ce&&cc.length>1){const ch=mk(ce);
+    ch.addLineSeries({color:'#8b949e',lineWidth:1,title:'Gross (pre-cost)'}).setData(cc.map(d=>({time:d.time,value:d.gross})));
+    ch.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Net'}).setData(cc.map(d=>({time:d.time,value:d.net})));
+    ch.timeScale().fitContent();}
+  else if(ce)ce.innerHTML='<p class=muted style="padding:1rem">The gap between gross &amp; net = cumulative spread cost. Fills in as the book trades.</p>';
 })();
 
 (function(){
@@ -605,6 +758,7 @@ def render(payload: dict) -> str:
                     if payload["halted"] else "",
         "__LWC__": _LWC,
         "__T_BENCH__": g["Benchmark"], "__T_TILT__": g["Tilt"], "__T_OUT__": g["Outcome"],
+        "__T_PSR__": g["PSR"], "__T_DD__": g["Drawdown curve"], "__T_WEDGE__": g["Cost wedge"],
         "__DATA__": json.dumps(payload, separators=(",", ":")),
     }
     html = _PAGE
