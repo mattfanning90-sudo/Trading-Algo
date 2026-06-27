@@ -72,7 +72,9 @@ def test_dashboard_export_offline(isolated):
     for token in ("addCandlestickSeries", "setMarkers", "Trade journal",
                   "Today's read", "BTCUSD", "Equity vs buy-and-hold",
                   "Agent scorecard", "data-tip", "tip:hover::after", "how.html",
-                  "Transactions — full blotter", 'id="txntable"', "Spread bps"):
+                  "Transactions — full blotter", 'id="txntable"', "Spread bps",
+                  'id="riskstats"', "Drawdown (underwater)", "is it luck?",
+                  'id="ddchart"', 'id="costchart"'):
         assert token in html
 
 
@@ -117,6 +119,42 @@ def test_dashboard_payload_analytics(isolated):
     for pair in p["data"].values():
         for t in pair["trades"]:
             assert t["outcome"] in ("open", "win", "loss")
+
+
+def test_risk_costs_significance(isolated):
+    """Risk/cost/significance analytics: drawdown, cost wedge, per-currency
+    exposure, realized vol, PSR and minimum-track-record honesty."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    # Craft a multi-day rising history + a couple of trades on those dates so the
+    # drawdown curve, cost wedge and PSR all populate deterministically.
+    st = fx_book.load_state("matt")
+    st["equity_history"] = [[f"2025-01-{i:02d}", 5_000.0 * (1 + 0.001 * i)]
+                            for i in range(1, 8)]
+    st["trades"] = st["trades"] + [
+        {"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+         "delta_weight": 0.2, "target_weight": 0.2, "price": 1.08, "regime": "trending"},
+        {"date": "2025-01-04", "pair": "BTCUSD", "side": "SELL",
+         "delta_weight": -0.1, "target_weight": -0.1, "price": 60000.0, "regime": "ranging"}]
+    fx_book.save_state("matt", st)
+
+    rk = dashboard.build_payload("matt", synthetic=True)["risk"]
+    for key in ("drawdown", "cost_curve", "exposure", "total_cost", "target_vol",
+                "psr", "realized_vol", "min_track_days", "n_obs"):
+        assert key in rk
+    assert len(rk["drawdown"]) == 7 and len(rk["cost_curve"]) == 7
+    assert rk["n_obs"] == 6
+    # cost wedge: both start at 100, gross never below net, and ends above (costs paid)
+    assert abs(rk["cost_curve"][0]["net"] - 100.0) < 1e-6
+    assert all(r["gross"] >= r["net"] - 1e-9 for r in rk["cost_curve"])
+    assert rk["cost_curve"][-1]["gross"] > rk["cost_curve"][-1]["net"]
+    assert rk["total_cost"] > 0
+    # drawdown is never positive; rising history => flat at 0
+    assert all(d["value"] <= 1e-9 for d in rk["drawdown"])
+    # PSR is a probability; exposure decomposes pairs into currency legs
+    assert rk["psr"] is not None and 0.0 <= rk["psr"] <= 1.0
+    assert rk["realized_vol"] is not None
+    assert "USD" in rk["exposure"]
 
 
 def test_transactions_blotter(isolated):
