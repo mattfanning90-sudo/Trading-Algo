@@ -71,6 +71,14 @@ GLOSSARY = {
     "Tilt": "The ensemble's net conviction for a pair, from -1 (max short) to +1 (max long).",
     "Gross leverage": "Total size of all positions vs your capital. 3x = holding $15k of positions on $5k.",
     "Outcome": "The signed price move over the next %d days after the trade — did the call actually work? (⏳ until enough days pass.)" % _OUTCOME_BARS,
+    "Mid price": "The execution reference price — the midpoint between bid and ask at the time of the trade.",
+    "Bid": "The price you can SELL at (what a buyer will pay). Always a touch below mid.",
+    "Ask": "The price you can BUY at (what a seller will accept). Always a touch above mid. (Sometimes called the 'offer'.)",
+    "Spread": "Ask − bid, the dealer's cut on every round trip, here in basis points (1 bp = 0.01%). You pay half of it each time you enter or exit — the main cost of trading.",
+    "Notional": "The dollar size of the position change: |Δweight| × equity. A 0.2 weight change on a $5,000 book = $1,000 traded.",
+    "Transaction cost": "What this trade actually cost you in spread: half the spread × the notional traded. Always charged — there is no free trade.",
+    "P&L since": "Mark-to-market of this weight change since it was made: Δweight × the price move since × equity. It's this trade's running contribution to the book — NOT lot-by-lot realised profit (this is a weight-based book).",
+    "Delta weight": "How much the position in this pair changed on this trade, as a fraction of equity (+ = bought/added long, − = sold/added short).",
 }
 
 
@@ -221,6 +229,71 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
             "trades": out_trades, "decision": decision}
 
 
+def _transactions(state, panel, max_rows=400) -> dict:
+    """Enriched transaction blotter: per-trade price economics + P&L since.
+
+    For each weight change we reconstruct the bid/ask/spread (from the pair's
+    dealing spread), the dollar notional traded (|Δweight| × equity that day), the
+    transaction cost actually charged, and the trade's running mark-to-market
+    contribution (Δweight × price move since × equity). The book is weight-based,
+    so 'P&L since' is an honest marginal contribution, not lot-by-lot realised P&L.
+    """
+    eqh = state.get("equity_history", [])
+    eq_map = {d: e for d, e in eqh}
+    eq_dates = [d for d, _ in eqh]
+    cur_equity = float(state.get("equity", state.get("initial_capital", 0.0)))
+
+    def equity_on(date: str) -> float:
+        if date in eq_map:
+            return float(eq_map[date])
+        prior = [d for d in eq_dates if d <= date]
+        return float(eq_map[prior[-1]]) if prior else cur_equity
+
+    closes = fx_data.closes(panel)
+    last = closes.iloc[-1] if not closes.empty else pd.Series(dtype=float)
+
+    rows = []
+    tot_cost = tot_notional = tot_pnl = 0.0
+    for t in state.get("trades", []):
+        sym, price = t.get("pair"), t.get("price")
+        if not sym or not price:
+            continue
+        try:
+            pair = get_pair(sym)
+        except KeyError:
+            continue
+        spread_px = pair.spread_pips * pair.pip          # round-trip, in price terms
+        half = spread_px / 2.0
+        eq = equity_on(t.get("date", ""))
+        dw = float(t.get("delta_weight") or 0.0)
+        notional = abs(dw) * eq
+        cost = abs(dw) * 0.5 * pair.spread_fraction(price) * eq   # matches the book's charge
+        lastpx = float(last.get(sym)) if last.get(sym) == last.get(sym) else None
+        move = (lastpx / price - 1.0) if lastpx else None
+        pnl = (dw * move * eq) if move is not None else None
+        tot_cost += cost
+        tot_notional += notional
+        if pnl is not None:
+            tot_pnl += pnl
+        rows.append({
+            "time": t.get("date"), "pair": sym, "side": t.get("side"),
+            "dweight": round(dw, 4), "target": t.get("target_weight"),
+            "price": round(float(price), 6),
+            "bid": round(price - half, 6), "ask": round(price + half, 6),
+            "spread_bps": round(spread_px / price * 1e4, 2),
+            "notional": round(notional, 2), "cost": round(cost, 4),
+            "last": round(lastpx, 6) if lastpx else None,
+            "move": round(move, 4) if move is not None else None,
+            "pnl": round(pnl, 2) if pnl is not None else None,
+            "regime": t.get("regime"), "why": t.get("why"),
+        })
+    rows.reverse()                                        # newest first
+    return {"rows": rows[:max_rows], "shown": min(len(rows), max_rows),
+            "count": len(rows),
+            "totals": {"cost": round(tot_cost, 2), "notional": round(tot_notional, 2),
+                       "pnl": round(tot_pnl, 2)}}
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -283,6 +356,7 @@ def build_payload(account, synthetic=False, bars=180):
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
+        "transactions": _transactions(state, panel),
         "attribution": _agent_attribution(panel, p, bars),
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
@@ -340,6 +414,16 @@ color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accen
   text-transform:none;box-shadow:0 6px 18px rgba(0,0,0,.5)}
 .tip:hover::before{content:"";position:absolute;left:14px;bottom:128%;border:6px solid transparent;
   border-top-color:var(--accent);z-index:30}
+.txnwrap{overflow:auto;max-height:560px;border:1px solid var(--bd);border-radius:10px}
+table.txn{width:100%;border-collapse:collapse;font-size:.78rem;font-variant-numeric:tabular-nums}
+table.txn th,table.txn td{padding:.4rem .6rem;text-align:right;white-space:nowrap;border-bottom:1px solid #21262d}
+table.txn th{position:sticky;top:0;background:#0b0f14;color:var(--mut);font-weight:600;
+  text-transform:uppercase;font-size:.66rem;z-index:2}
+table.txn td:first-child,table.txn th:first-child,table.txn td.l,table.txn th.l{text-align:left}
+table.txn tbody tr:hover{background:#1b2230}
+table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;border-top:1px solid var(--bd)}
+.txnsearch{margin:.2rem 0 .6rem;padding:.35rem .6rem;background:#0b0f14;border:1px solid var(--bd);
+  border-radius:8px;color:var(--fg);font-size:.8rem;width:200px}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -366,6 +450,17 @@ color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accen
       <div class="legend" id="legend"></div></div>
     <div class="card"><h2>Trade journal — plain-English reason &amp; <span class="tip" data-tip="__T_OUT__">outcome</span></h2>
       <div id="journal" class="journal"></div></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <h2>Transactions — full blotter <span class="muted" style="font-weight:400" id="txnsub"></span></h2>
+    <input class="txnsearch" id="txnsearch" placeholder="filter by pair, e.g. BTC">
+    <div class="txnwrap"><table class="txn" id="txntable"></table></div>
+    <div class="legend">Every column is hover-defined. <b>P&amp;L since</b> is each trade's running
+      mark-to-market contribution (Δweight × price move since × equity) — an honest marginal figure
+      for a weight-based book, not lot-by-lot realised profit. Costs are always on.</div>
   </div>
 </div>
 <div class="foot">Paper money. Six agents (trend · breakout · mean-reversion · momentum · carry · deep-learning),
@@ -424,6 +519,45 @@ function bars(obj, hi){
   if((DASH.bench_curve||[]).length)c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'}).setData(DASH.bench_curve);
   if((DASH.book_curve||[]).length)c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'}).setData(DASH.book_curve);
   c.timeScale().fitContent();
+})();
+
+(function(){
+  const T=DASH.transactions||{rows:[],totals:{}};
+  const el=document.getElementById('txntable'),sub=document.getElementById('txnsub');
+  if(!T.rows||!T.rows.length){el.innerHTML='<tbody><tr><td class=l>This fills in as the book trades.</td></tr></tbody>';return;}
+  if(sub)sub.textContent=`(${T.shown} of ${T.count} shown, newest first)`;
+  const cols=[["Time"],["Pair"],["Side"],["Δw→tgt","Delta weight"],["Mid","Mid price"],
+    ["Bid","Bid"],["Ask","Ask"],["Spread bps","Spread"],["Notional","Notional"],
+    ["Cost","Transaction cost"],["Last"],["Move"],["P&L since","P&L since"]];
+  const money=v=>v==null?"–":(v<0?"-":"")+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const head='<thead><tr>'+cols.map(([lbl,g])=>`<th${(lbl==='Pair'||lbl==='Time')?' class=l':''}>${g?tip(lbl,g):lbl}</th>`).join('')+'</tr></thead>';
+  const ccy=DASH.currency;
+  function rowHTML(r){
+    const sideCls=r.side==='BUY'?'B':'S';
+    const dw=`<span class=${r.dweight>=0?'win':'loss'}>${(r.dweight>=0?'+':'')+r.dweight}</span> → ${r.target!=null?r.target:'–'}`;
+    return `<tr title="${(r.why||'').replace(/"/g,'&quot;')}">`+
+      `<td class=l>${r.time}</td>`+
+      `<td class=l>${r.pair}${r.regime?` <span class=badge>${r.regime}</span>`:''}</td>`+
+      `<td class="${sideCls}">${r.side}</td>`+
+      `<td>${dw}</td>`+
+      `<td>${fmt(r.price)}</td>`+
+      `<td class=muted>${fmt(r.bid)}</td>`+
+      `<td class=muted>${fmt(r.ask)}</td>`+
+      `<td>${r.spread_bps}</td>`+
+      `<td>${money(r.notional)}</td>`+
+      `<td class=loss>${money(r.cost)}</td>`+
+      `<td class=muted>${r.last!=null?fmt(r.last):'–'}</td>`+
+      `<td class=${r.move==null?'muted':(r.move>=0?'win':'loss')}>${r.move==null?'–':pct(r.move)}</td>`+
+      `<td class=${r.pnl==null?'muted':(r.pnl>=0?'win':'loss')}>${money(r.pnl)}</td></tr>`;
+  }
+  const tt=T.totals||{};
+  const foot=`<tfoot><tr><td class=l colspan=8>Totals · ${T.count} trades (${ccy})</td>`+
+    `<td>${money(tt.notional)}</td><td class=loss>${money(tt.cost)}</td><td></td><td></td>`+
+    `<td class=${(tt.pnl||0)>=0?'win':'loss'}>${money(tt.pnl)}</td></tr></tfoot>`;
+  function render(f){const rows=f?T.rows.filter(r=>r.pair.toLowerCase().includes(f)):T.rows;
+    el.innerHTML=head+'<tbody>'+rows.map(rowHTML).join('')+'</tbody>'+foot;}
+  render('');
+  document.getElementById('txnsearch').addEventListener('input',e=>render(e.target.value.trim().toLowerCase()));
 })();
 
 function showPair(sym){

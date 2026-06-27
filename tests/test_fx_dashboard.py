@@ -71,7 +71,8 @@ def test_dashboard_export_offline(isolated):
     assert out.exists()
     for token in ("addCandlestickSeries", "setMarkers", "Trade journal",
                   "Today's read", "BTCUSD", "Equity vs buy-and-hold",
-                  "Agent scorecard", "data-tip", "tip:hover::after", "how.html"):
+                  "Agent scorecard", "data-tip", "tip:hover::after", "how.html",
+                  "Transactions — full blotter", 'id="txntable"', "Spread bps"):
         assert token in html
 
 
@@ -116,6 +117,29 @@ def test_dashboard_payload_analytics(isolated):
     for pair in p["data"].values():
         for t in pair["trades"]:
             assert t["outcome"] in ("open", "win", "loss")
+
+
+def test_transactions_blotter(isolated):
+    """Detailed transaction blotter: price economics + honest P&L-since."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    p = dashboard.build_payload("matt", synthetic=True)
+    txn = p["transactions"]
+    assert {"rows", "totals", "count", "shown"} <= set(txn)
+    assert txn["count"] >= 1
+    r = txn["rows"][0]
+    assert {"time", "pair", "side", "dweight", "target", "price", "bid", "ask",
+            "spread_bps", "notional", "cost", "last", "move", "pnl"} <= set(r)
+    # bid ≤ mid ≤ ask, spread positive, cost + notional non-negative
+    assert r["bid"] <= r["price"] <= r["ask"]
+    assert r["spread_bps"] > 0
+    assert r["cost"] >= 0 and r["notional"] >= 0
+    # cost equals half the spread crossed on the notional traded (matches the book)
+    from trading_algo.forex.pairs import get_pair
+    pr = get_pair(r["pair"])
+    assert r["cost"] == pytest.approx(0.5 * pr.spread_fraction(r["price"]) * r["notional"],
+                                      rel=1e-2)        # values are rounded for display
+    assert {"cost", "notional", "pnl"} <= set(txn["totals"])
 
 
 def test_benchmark_aligned_to_book_inception(isolated):
