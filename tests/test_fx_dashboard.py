@@ -77,8 +77,10 @@ def test_dashboard_export_offline(isolated):
                   'id="ddchart"', 'id="costchart"',
                   'class="subnav"', 'id="overview"', 'class="cards"',
                   'id="conviction"', 'id="pnlpair"', 'id="tradestats"',
-                  "Conviction heatmap", 'id="attrib"'):
+                  "Conviction heatmap", 'id="attrib"',
+                  'class="plain"', "In plain English"):
         assert token in html
+    assert html.count('class="plain"') >= 5    # a visible explainer per section
 
 
 def test_beginner_explanation_plain_english():
@@ -103,6 +105,9 @@ def test_how_page_built(isolated):
     assert "Validation" in h and "Deflated Sharpe" in h
     assert "no statistically significant" in h    # honest caveat present
     assert "From AUD to a trade" in h and "flowchart LR" in h   # AUD currency flow
+    # detailed beginner guide to every dashboard panel
+    assert "What every panel on your dashboard means" in h
+    assert "Conviction heatmap" in h and "cost wedge" in h and "PBO" in h
 
 
 def test_dashboard_payload_analytics(isolated):
