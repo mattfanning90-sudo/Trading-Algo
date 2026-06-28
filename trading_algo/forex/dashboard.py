@@ -685,6 +685,9 @@ section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
   font-feature-settings:"tnum" 1;font-family:var(--mono)}
 .stat .v,.kpi .v,#riskstats .v{letter-spacing:-.01em}
 section{padding:1rem 1.5rem 1.25rem}
+.plain{margin:0 0 1rem;padding:.7rem .9rem;border:1px solid var(--bd);border-left:3px solid var(--accent);
+  border-radius:8px;background:#10151c;color:#c9d1d9;font-size:.86rem;line-height:1.55;max-width:1000px}
+.plain b{color:var(--fg)}.plain .q{color:var(--amber);font-weight:600}
 .heat{display:flex;flex-wrap:wrap;gap:.4rem}
 .hc{padding:.4rem .55rem;border-radius:8px;border:1px solid var(--bd);font-size:.72rem;
   font-family:var(--mono);min-width:82px;text-align:center;line-height:1.35}
@@ -708,6 +711,11 @@ section{padding:1rem 1.5rem 1.25rem}
 
 <section id="overview">
   <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span></div>
+  <p class="plain"><span class="q">In plain English:</span> the big chart is <b>how much your account is worth over time</b>
+    (blue) versus the lazy alternative of just buying a bit of everything and holding it (grey) — both start at 100,
+    so if blue is above grey, the strategy is adding something. Beside it: your <b>scorecard</b>, <b>what you hold
+    right now</b>, and which <b>"agents"</b> (small built-in strategies) have been helping lately. This is paper
+    money — practice, not real funds.</p>
   <div class="cards">
     <div class="card c8"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
     <div class="card c4"><h2>Performance <span class="muted" style="font-weight:400">vs buy &amp; hold</span></h2><div id="metrics" class="metrics"></div></div>
@@ -718,6 +726,12 @@ section{padding:1rem 1.5rem 1.25rem}
 
 <section id="risk">
   <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span></div>
+  <p class="plain"><span class="q">In plain English:</span> before trusting any gain, ask <b>"is this skill or just luck,
+    and what did it cost?"</b> With only a few weeks of data a small profit is almost always noise — the
+    <b>"is it luck?"</b> box estimates the odds it's real and how long you'd need to wait to know. The
+    <b>drawdown</b> chart shows your worst dips, the <b>cost</b> chart shows how much the spread (the dealer's
+    cut on every trade) is quietly eating, and <b>exposure</b> shows which currencies you're really betting on
+    once the pairs are unpacked.</p>
   <div class="cards">
     <div class="card c8 flag"><h2>Costs &amp; <span class="tip acc-amber" data-tip="__T_PSR__">is it luck?</span></h2>
       <div class="stats" id="riskstats"></div>
@@ -730,6 +744,11 @@ section{padding:1rem 1.5rem 1.25rem}
 
 <section id="attrib">
   <div class="band">Attribution &amp; signals <span class="h">where the P&amp;L comes from · what the system thinks now</span></div>
+  <p class="plain"><span class="q">In plain English:</span> <b>where did the money come from?</b> The heatmap shows
+    what the system wants <b>right now</b> for each pair — green = bet it rises (long), red = bet it falls (short),
+    brighter = stronger conviction. Below, the P&amp;L is split by pair, by up-bets vs down-bets, and by market mood
+    (trending vs choppy). <b>Trade quality</b> sums up whether the wins outweigh the losses (profit factor &gt; 1 =
+    yes) and how much you're trading (turnover).</p>
   <div class="cards">
     <div class="card c12"><h2><span class="tip" data-tip="__T_CONV__">Conviction heatmap</span> <span class="muted" style="font-weight:400">today's ensemble tilt per pair (−1…+1)</span></h2>
       <div id="conviction" class="heat"></div></div>
@@ -743,6 +762,10 @@ section{padding:1rem 1.5rem 1.25rem}
 
 <section id="pairs">
   <div class="band">Pair explorer <span class="h">candlesticks · today's read · the reason for every trade</span></div>
+  <p class="plain"><span class="q">In plain English:</span> pick one instrument and look closely. Each
+    <b>candle</b> is one day's price (green = finished up, red = down); the orange and blue lines are short- and
+    long-term <b>averages</b> the agents watch. Arrows mark where we <b>bought or sold</b>, and the journal gives a
+    <b>plain-English reason for every trade</b> plus whether it worked — built so you can learn how each call was made.</p>
   <div class="tabs" id="tabs"></div>
   <div class="wrap">
     <div id="chart"></div>
@@ -759,6 +782,10 @@ section{padding:1rem 1.5rem 1.25rem}
 
 <section id="txns">
   <div class="band">Transactions <span class="h">full blotter · price economics &amp; P&amp;L</span></div>
+  <p class="plain"><span class="q">In plain English:</span> the full receipt — <b>every trade</b> with the price
+    we got, the <b>bid/ask</b> (sell/buy prices) and the <b>spread</b> between them, the dollar <b>size</b>, the
+    <b>cost</b> you paid, and how it's done <b>since</b>. Hover any column heading for what it means; type a pair in
+    the box to filter.</p>
   <div class="card">
     <h2>Full blotter <span class="muted" style="font-weight:400" id="txnsub"></span></h2>
     <input class="txnsearch" id="txnsearch" placeholder="filter by pair, e.g. BTC">
@@ -1092,6 +1119,71 @@ included.</span></div>
 the price move over the next ~10 days), then a plain-English paragraph: <b>what</b> we did, <b>which agents</b>
 drove it, <b>the evidence</b> (with each term defined), and <b>why that size</b>. The arrows on the candle chart
 mark where each trade happened.</div>
+
+<h2>What every panel on your dashboard means (in plain English)</h2>
+<p class="muted">Read this once and the dashboard will make sense top to bottom. Each panel also has hover-help on
+the underlined words.</p>
+
+<div class="step"><b>Equity vs buy-and-hold.</b> Your account's value over time (blue) next to the lazy
+alternative — buying a little of everything and just holding (grey). Both start at 100 so they're comparable from
+day one. <i>How to read it:</i> blue above grey = the strategy beat doing nothing; below = it didn't. <span
+class="muted">Why it matters: beating "buy and hold" is the real bar — if a model can't, it's adding cost, not value.</span></div>
+
+<div class="step"><b>Performance scorecard.</b> The headline numbers. <b>Return</b> = total % change. <b>Sharpe</b> =
+return per unit of "bumpiness" (above ~1 is good, above 2 excellent). <b>Max drawdown</b> = the worst peak-to-trough
+fall — your biggest scare. <b>Win rate</b> = share of up days. <span class="muted">Why: a high return with a huge
+drawdown can be worse than a steady smaller one.</span></div>
+
+<div class="step"><b>Open positions.</b> What you're holding right now, as a % of your account, with a + for a bet
+that the price <i>rises</i> (long) and − for a bet it <i>falls</i> (short). <span class="muted">Why: your actual
+risk is what you hold now, not what you held last week.</span></div>
+
+<div class="step"><b>Agent scorecard.</b> How each mini-strategy ("agent") would have done on its own over this
+window, plus the blended "ensemble" and passive "buy &amp; hold" for reference. <span class="muted">Why: shows which
+kind of edge (trend, reversion, …) is working lately — but one good window is not proof.</span></div>
+
+<div class="step"><b>Is it luck? — PSR, Deflated Sharpe, PBO.</b> The honesty panel. <b>PSR</b> (Probabilistic
+Sharpe) = the chance your edge is real rather than luck, given how few days of data you have; it also tells you roughly
+how many months you'd need before a result counts. <b>Deflated Sharpe</b> is stricter — it also docks you for how many
+strategies were tried (try enough and one looks great by fluke). <b>PBO</b> (Probability of Backtest Overfitting) =
+how often the "best" agent in testing flops in practice; lower is better. <span class="muted">Why: this is the
+difference between "we found something" and "we fooled ourselves." Right now, honestly, the numbers say: too early
+to tell — treat gains as noise.</span></div>
+
+<div class="step"><b>Drawdown (underwater).</b> How far below your previous high-water mark you are, every day.
+Flat at the top = at a new high; deep dips = the painful stretches. <span class="muted">Why: it shows the pain you'd
+have actually lived through, not just the end result.</span></div>
+
+<div class="step"><b>Costs vs gross P&amp;L (the "cost wedge").</b> Two lines: what you'd have made <i>before</i>
+trading costs (grey) and <i>after</i> (blue). The gap between them is the <b>spread</b> — the dealer's cut you pay on
+every trade — adding up. "Cost drag" is that total as a share of your gross profit. <span class="muted">Why: many
+strategies look great before costs and lose after; believe the after line.</span></div>
+
+<div class="step"><b>Net currency exposure.</b> Your pairs unpacked into the actual currencies you're long or
+short (being long EUR/USD means long euros <i>and</i> short US dollars). <span class="muted">Why: several pairs can
+secretly stack into one big bet — e.g. short US dollars everywhere — and this reveals it.</span></div>
+
+<div class="step"><b>Realized vol vs target.</b> How much your account is actually swinging (annualised) compared
+with the risk level the profile aims for. <span class="muted">Why: far below target = under-using your risk budget;
+far above = the safety sizing isn't keeping up.</span></div>
+
+<div class="step"><b>Conviction heatmap.</b> One coloured tile per pair showing what the system wants <i>right
+now</i>, from −1 (max short, bright red) to +1 (max long, bright green). <span class="muted">Why: a single glance at
+today's strongest bets and where the agents disagree (pale tiles).</span></div>
+
+<div class="step"><b>P&amp;L attribution.</b> Where the money came from: broken down by pair, by up-bets vs
+down-bets (long/short), and by market mood (trending vs choppy). <span class="muted">Why: tells you <i>what</i> is
+actually working, so a lucky single pair doesn't get mistaken for a real edge.</span></div>
+
+<div class="step"><b>Trade quality.</b> <b>Profit factor</b> = total gains ÷ total losses (above 1 = winning).
+<b>Expectancy</b> = what you make on an average day. <b>Streaks</b> = longest run of up/down days. <b>Turnover</b> =
+how much you trade (more trading = more cost). <span class="muted">Why: win rate alone lies; these show if the wins
+are big enough to matter.</span></div>
+
+<div class="step"><b>Transactions blotter.</b> The full receipt of every trade: the <b>mid</b> price we used, the
+<b>bid</b> (price to sell) and <b>ask</b> (price to buy), the <b>spread</b> between them in basis points (1 bp =
+0.01%), the dollar <b>notional</b> (size), the <b>cost</b> paid, and <b>P&amp;L since</b> (how that trade has done
+since). <span class="muted">Why: total transparency — nothing about a trade is hidden.</span></div>
 
 <div class="warn"><b>Honest note.</b> This is paper money and a <b>learning tool</b>. Daily FX is extremely hard to
 beat, and our own out-of-sample tests found <b>no statistically significant edge</b>. The value here is seeing
