@@ -33,7 +33,8 @@ from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
 from .fx_strategy import target_weights_history
 from .pairs import get_pair
-from .validation import _norm_ppf, probabilistic_sharpe_ratio
+from .validation import (_norm_ppf, deflated_sharpe_ratio, pbo,
+                         probabilistic_sharpe_ratio)
 
 _LWC = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
 _MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
@@ -89,6 +90,12 @@ GLOSSARY = {
     "Drawdown curve": "How far below the previous peak the book is, every day (the 'underwater' plot). Flat at 0 = at a new high; deep dips = the painful stretches.",
     "Net exposure": "Your true bet per CURRENCY once the pairs are decomposed (long EURUSD = long EUR + short USD). Reveals hidden concentration — e.g. several pairs all leaving you short USD.",
     "Realized vol": "How much the book has actually swung (annualised), vs the profile's target. Far below target = under-risked; far above = the vol-targeting isn't keeping up.",
+    "Attribution": "Where the P&L came from — each pair's running contribution (Δweight × move-since × equity), and the split between long vs short positions and trending vs ranging regimes.",
+    "Profit factor": "Gross gains ÷ gross losses across days. >1 means up-days outweigh down-days; 1.5+ is healthy. Below 1 = losing.",
+    "Expectancy": "Average return per day — what you make on a typical day, good and bad blended. The honest 'edge per bet'.",
+    "Conviction": "Today's ensemble tilt per pair, −1 (max short) to +1 (max long): how strongly the blended agents lean right now. Green = long, red = short, brighter = stronger.",
+    "DSR": "Deflated Sharpe Ratio — like PSR, but it also penalises you for how many strategies/agents were tried (the more you test, the higher a Sharpe you'd expect by luck alone). Clears 95% = a genuinely strong result.",
+    "PBO": "Probability of Backtest Overfitting — across the agents, how often the in-sample best one underperforms out-of-sample. High = 'the winner is probably luck'. Low is good.",
 }
 
 
@@ -402,6 +409,111 @@ def _risk_costs(state, p) -> dict:
     return out
 
 
+def _attribution_rollup(txn: dict) -> dict:
+    """Aggregate the blotter's per-trade contribution (Δw × move-since × equity)
+    by pair, by long/short side, and by regime — 'where the money is made/lost'."""
+    by_pair: dict[str, dict] = {}
+    by_side = {"long": 0.0, "short": 0.0}
+    by_regime: dict[str, float] = {}
+    for r in txn.get("rows", []):
+        pnl = r.get("pnl")
+        if pnl is None:
+            continue
+        p = by_pair.setdefault(r["pair"], {"pnl": 0.0, "cost": 0.0, "trades": 0})
+        p["pnl"] += pnl
+        p["cost"] += r.get("cost", 0.0) or 0.0
+        p["trades"] += 1
+        tgt = r.get("target") or 0.0
+        side = "long" if (tgt > 0 or (tgt == 0 and (r.get("dweight") or 0) < 0)) else "short"
+        by_side[side] += pnl
+        reg = r.get("regime") or "—"
+        by_regime[reg] = by_regime.get(reg, 0.0) + pnl
+    by_pair = {k: {"pnl": round(v["pnl"], 2), "cost": round(v["cost"], 2),
+                   "trades": v["trades"]}
+               for k, v in sorted(by_pair.items(), key=lambda kv: -abs(kv[1]["pnl"]))}
+    return {"by_pair": by_pair,
+            "by_side": {k: round(v, 2) for k, v in by_side.items()},
+            "by_regime": {k: round(v, 2) for k, v in by_regime.items()}}
+
+
+def _max_streak(mask) -> int:
+    best = cur = 0
+    for v in mask:
+        cur = cur + 1 if bool(v) else 0
+        best = max(best, cur)
+    return int(best)
+
+
+def _trade_stats(state: dict) -> dict:
+    """Trade-quality stats from the daily equity curve + turnover from the trades."""
+    trades = state.get("trades", [])
+    out = {"trades": len(trades),
+           "turnover": round(sum(abs(float(t.get("delta_weight") or 0.0)) for t in trades), 2)}
+    eqh = state.get("equity_history", [])
+    if len(eqh) < 3:
+        return out
+    r = pd.Series([float(e) for _, e in eqh], dtype=float).pct_change().dropna()
+    gains, losses = r[r > 0], r[r < 0]
+    out.update({
+        "days": int(len(r)),
+        "profit_factor": round(float(gains.sum() / abs(losses.sum())), 2) if losses.sum() else None,
+        "avg_win": round(float(gains.mean()), 4) if len(gains) else None,
+        "avg_loss": round(float(losses.mean()), 4) if len(losses) else None,
+        "expectancy": round(float(r.mean()), 4),
+        "best": round(float(r.max()), 4), "worst": round(float(r.min()), 4),
+        "win_streak": _max_streak(r > 0), "loss_streak": _max_streak(r < 0),
+    })
+    return out
+
+
+def _conviction(state: dict) -> list:
+    """Today's per-pair ensemble tilt (−1..+1) for a one-glance conviction heatmap."""
+    out = []
+    for sym, d in (state.get("decisions", {}) or {}).items():
+        if not isinstance(d, dict):
+            continue
+        out.append({"pair": sym, "tilt": round(float(d.get("tilt", 0.0) or 0.0), 3),
+                    "weight": round(float(d.get("weight", 0.0) or 0.0), 3),
+                    "regime": d.get("regime")})
+    out.sort(key=lambda x: -abs(x["tilt"]))
+    return out
+
+
+def _agent_daily_matrix(panel, p, bars) -> pd.DataFrame:
+    """T×agents matrix of each agent's standalone daily return (for PBO)."""
+    pool = AgentPool(max_workers=1)
+    _, signals, _ = target_weights_history(panel, p, pool=pool, return_parts=True)
+    if not signals:
+        return pd.DataFrame()
+    rets = fx_data.closes(panel).pct_change(fill_method=None)
+    names = list(next(iter(signals.values())).columns)
+    cols = {name: pd.DataFrame({s: signals[s][name].shift(1) * rets[s] for s in signals})
+            .mean(axis=1).tail(bars).fillna(0.0) for name in names}
+    return pd.DataFrame(cols)
+
+
+def _advanced_significance(panel, p, returns_values, bars=180) -> dict:
+    """Deflated Sharpe (penalised for how many agents/strategies were tried) and
+    Probability of Backtest Overfitting across the agent set — completes PSR."""
+    out = {"dsr": None, "dsr_trials": None, "pbo": None}
+    try:
+        mat = _agent_daily_matrix(panel, p, bars)
+    except Exception:
+        mat = pd.DataFrame()
+    r = np.asarray(returns_values, dtype=float)
+    r = r[np.isfinite(r)]
+    n_trials = int(mat.shape[1]) if not mat.empty else 1
+    if len(r) >= 3:
+        out["dsr"] = round(float(deflated_sharpe_ratio(r, max(n_trials, 1))), 3)
+        out["dsr_trials"] = max(n_trials, 1)
+    if not mat.empty and mat.shape[1] >= 2 and mat.shape[0] >= 4:
+        try:
+            out["pbo"] = round(float(pbo(mat.values)), 3)
+        except Exception:
+            out["pbo"] = None
+    return out
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -450,6 +562,12 @@ def build_payload(account, synthetic=False, bars=180):
         bench_metrics = _curve_metrics([d.strftime("%Y-%m-%d") for d in bh_eq.index],
                                        list(bh_eq.values))
 
+    txn = _transactions(state, panel)
+    risk = _risk_costs(state, p)
+    book_rets = (pd.Series([float(v) for _, v in eqh], dtype=float)
+                 .pct_change().dropna().values) if len(eqh) >= 2 else []
+    risk.update(_advanced_significance(panel, p, book_rets, bars))   # DSR + PBO alongside PSR
+
     return {
         "account": account, "profile": state.get("profile", "balanced"),
         "currency": state.get("currency", "AUD"),
@@ -464,8 +582,11 @@ def build_payload(account, synthetic=False, bars=180):
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
-        "transactions": _transactions(state, panel),
-        "risk": _risk_costs(state, p),
+        "transactions": txn,
+        "risk": risk,
+        "pnl_attribution": _attribution_rollup(txn),
+        "trade_stats": _trade_stats(state),
+        "conviction": _conviction(state),
         "attribution": _agent_attribution(panel, p, bars),
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
@@ -564,6 +685,10 @@ section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
   font-feature-settings:"tnum" 1;font-family:var(--mono)}
 .stat .v,.kpi .v,#riskstats .v{letter-spacing:-.01em}
 section{padding:1rem 1.5rem 1.25rem}
+.heat{display:flex;flex-wrap:wrap;gap:.4rem}
+.hc{padding:.4rem .55rem;border-radius:8px;border:1px solid var(--bd);font-size:.72rem;
+  font-family:var(--mono);min-width:82px;text-align:center;line-height:1.35}
+.hc b{font-size:.85rem}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -576,6 +701,7 @@ section{padding:1rem 1.5rem 1.25rem}
 <div class="subnav">
   <a href="#overview">Overview</a>
   <a href="#risk">Risk &amp; costs</a>
+  <a href="#attrib">Attribution</a>
   <a href="#pairs">Pair explorer</a>
   <a href="#txns">Transactions</a>
 </div>
@@ -599,6 +725,19 @@ section{padding:1rem 1.5rem 1.25rem}
     <div class="card c4"><h2><span class="tip" data-tip="__T_EXP__">Net currency exposure</span></h2><div id="exposurecard"></div></div>
     <div class="card c6"><h2><span class="tip" data-tip="__T_DD__">Drawdown (underwater)</span></h2><div id="ddchart"></div></div>
     <div class="card c6"><h2><span class="tip" data-tip="__T_WEDGE__">Costs vs gross P&amp;L</span></h2><div id="costchart"></div></div>
+  </div>
+</section>
+
+<section id="attrib">
+  <div class="band">Attribution &amp; signals <span class="h">where the P&amp;L comes from · what the system thinks now</span></div>
+  <div class="cards">
+    <div class="card c12"><h2><span class="tip" data-tip="__T_CONV__">Conviction heatmap</span> <span class="muted" style="font-weight:400">today's ensemble tilt per pair (−1…+1)</span></h2>
+      <div id="conviction" class="heat"></div></div>
+    <div class="card c6"><h2><span class="tip" data-tip="__T_ATTR__">P&amp;L by pair</span> <span class="muted" style="font-weight:400">contribution-since</span></h2>
+      <div id="pnlpair"></div></div>
+    <div class="card c6"><h2>Trade quality <span class="muted" style="font-weight:400">daily-return stats + turnover</span></h2>
+      <div class="stats" id="tradestats"></div>
+      <div id="sideregime" style="margin-top:.8rem"></div></div>
   </div>
 </section>
 
@@ -701,6 +840,10 @@ function bars(obj, hi){
   else if(rk.min_track_days==null) sig=`PSR ${psrTxt}: the book isn't beating cash yet, so no length of track record would confirm a real edge at this rate. ${tip('What is this?','Significance')}`;
   else{const more=Math.max(0,rk.min_track_days-rk.n_obs);
     sig=`<b>PSR ${psrTxt}</b> — the probability the true Sharpe is above zero, from ${rk.n_obs} days of returns. To be 95% confident this isn't luck you'd need ≈ <b>${rk.min_track_days}</b> trading days (~${Math.round(rk.min_track_days/21)} months) — about <b>${more}</b> more. Until then, treat the P&L as noise. ${tip('Why?','Significance')}`;}
+  if(rk.dsr!=null||rk.pbo!=null){
+    const dsrTxt=rk.dsr!=null?`${tip('Deflated Sharpe','DSR')} ${(rk.dsr*100).toFixed(0)}% <span class=muted>(penalised for ~${rk.dsr_trials} strategies tried)</span>`:'';
+    const pboTxt=rk.pbo!=null?`${tip('PBO','PBO')} ${(rk.pbo*100).toFixed(0)}% <span class=muted>overfit risk</span>`:'';
+    sig+=`<div style="margin-top:.5rem">${[dsrTxt,pboTxt].filter(Boolean).join(' · ')}</div>`;}
   const st=document.getElementById('sigtext'); if(st)st.innerHTML=sig;
   const exp=rk.exposure||{}, ec=document.getElementById('exposurecard');
   if(ec)ec.innerHTML=Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>';
@@ -714,6 +857,29 @@ function bars(obj, hi){
     ch.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Net'}).setData(cc.map(d=>({time:d.time,value:d.net})));
     ch.timeScale().fitContent();}
   else if(ce)ce.innerHTML='<p class=muted style="padding:1rem">The gap between gross &amp; net = cumulative spread cost. Fills in as the book trades.</p>';
+})();
+
+(function(){
+  // Conviction heatmap
+  const conv=DASH.conviction||[], ch=document.getElementById('conviction');
+  const heatColor=t=>{const a=Math.min(Math.abs(t),1)*0.55+0.08;
+    return t>=0?`rgba(38,166,154,${a})`:`rgba(239,83,80,${a})`;};
+  if(ch)ch.innerHTML=conv.length?conv.map(c=>`<div class=hc style="background:${heatColor(c.tilt)}" title="${c.regime||''}">${c.pair}<br><b>${(c.tilt>=0?'+':'')+c.tilt}</b>${c.regime?` <span class=muted>${c.regime[0]}</span>`:''}</div>`).join(''):'<div class=muted>No live read yet — fills in on the next run.</div>';
+  // P&L by pair
+  const at=DASH.pnl_attribution||{}, pp=document.getElementById('pnlpair');
+  const byPair=Object.fromEntries(Object.entries(at.by_pair||{}).map(([k,v])=>[k,v.pnl]));
+  if(pp)pp.innerHTML=Object.keys(byPair).length?bars(byPair):'<div class=muted>No closed contribution yet.</div>';
+  // side + regime split
+  const sr=document.getElementById('sideregime');
+  if(sr){const blk=(lbl,obj)=>`<div class=muted style="font-size:.7rem;margin:.4rem 0 .2rem">${lbl} (${DASH.currency})</div>`+(Object.keys(obj||{}).length?bars(obj):'<div class=muted>–</div>');
+    sr.innerHTML=blk('Long vs short',at.by_side)+blk('By regime',at.by_regime);}
+  // trade-quality tiles
+  const ts=DASH.trade_stats||{};
+  const items=[["Profit factor",ts.profit_factor??'–',"Profit factor"],["Expectancy/day",ts.expectancy!=null?pct(ts.expectancy):'–',"Expectancy"],
+    ["Avg win",ts.avg_win!=null?pct(ts.avg_win):'–',null],["Avg loss",ts.avg_loss!=null?pct(ts.avg_loss):'–',null],
+    ["Win streak",ts.win_streak??'–',null],["Turnover",ts.turnover??'–',"Gross leverage"]];
+  const tsEl=document.getElementById('tradestats');
+  if(tsEl)tsEl.innerHTML=items.map(([k,v,g])=>`<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
 })();
 
 (function(){
@@ -802,6 +968,7 @@ def render(payload: dict) -> str:
         "__T_BENCH__": g["Benchmark"], "__T_TILT__": g["Tilt"], "__T_OUT__": g["Outcome"],
         "__T_PSR__": g["PSR"], "__T_DD__": g["Drawdown curve"], "__T_WEDGE__": g["Cost wedge"],
         "__T_SCORE__": g["Agent scorecard"], "__T_EXP__": g["Net exposure"],
+        "__T_CONV__": g["Conviction"], "__T_ATTR__": g["Attribution"],
         "__DATA__": json.dumps(payload, separators=(",", ":")),
     }
     html = _PAGE

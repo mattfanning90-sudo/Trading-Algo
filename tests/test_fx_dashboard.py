@@ -75,7 +75,9 @@ def test_dashboard_export_offline(isolated):
                   "Full blotter", 'id="txntable"', "Spread bps",
                   'id="riskstats"', "Drawdown (underwater)", "is it luck?",
                   'id="ddchart"', 'id="costchart"',
-                  'class="subnav"', 'id="overview"', 'class="cards"'):
+                  'class="subnav"', 'id="overview"', 'class="cards"',
+                  'id="conviction"', 'id="pnlpair"', 'id="tradestats"',
+                  "Conviction heatmap", 'id="attrib"'):
         assert token in html
 
 
@@ -157,6 +159,35 @@ def test_risk_costs_significance(isolated):
     assert rk["psr"] is not None and 0.0 <= rk["psr"] <= 1.0
     assert rk["realized_vol"] is not None
     assert "USD" in rk["exposure"]
+
+
+def test_attribution_conviction_and_advanced_significance(isolated):
+    """P&L attribution, trade-quality stats, conviction heatmap, and DSR/PBO."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    # multi-day history so trade stats + DSR populate
+    st = fx_book.load_state("matt")
+    st["equity_history"] = [[f"2025-01-{i:02d}", 5_000.0 * (1 + 0.002 * (i % 3 - 1))]
+                            for i in range(1, 9)]
+    fx_book.save_state("matt", st)
+    p = dashboard.build_payload("matt", synthetic=True)
+
+    # 1. P&L attribution
+    attr = p["pnl_attribution"]
+    assert {"by_pair", "by_side", "by_regime"} <= set(attr)
+    assert set(attr["by_side"]) == {"long", "short"}
+    # 2. trade-quality stats
+    ts = p["trade_stats"]
+    assert ts["trades"] >= 1 and ts["turnover"] >= 0
+    assert {"profit_factor", "expectancy", "win_streak", "avg_win", "avg_loss"} <= set(ts)
+    # 3. conviction heatmap: tilt in [-1,1] per pair
+    conv = p["conviction"]
+    assert conv and all(-1.0001 <= c["tilt"] <= 1.0001 for c in conv)
+    assert "pair" in conv[0] and "regime" in conv[0]
+    # 4. DSR + PBO surfaced alongside PSR
+    assert "dsr" in p["risk"] and "pbo" in p["risk"]
+    assert p["risk"]["dsr"] is None or 0.0 <= p["risk"]["dsr"] <= 1.0
+    assert p["risk"]["pbo"] is None or 0.0 <= p["risk"]["pbo"] <= 1.0
 
 
 def test_transactions_blotter(isolated):
