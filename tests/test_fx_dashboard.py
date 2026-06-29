@@ -78,7 +78,9 @@ def test_dashboard_export_offline(isolated):
                   'class="subnav"', 'id="overview"', 'class="cards"',
                   'id="conviction"', 'id="pnlpair"', 'id="tradestats"',
                   "Conviction heatmap", 'id="attrib"',
-                  'class="plain"', "In plain English"):
+                  'class="plain"', "In plain English",
+                  'id="verdict"', 'id="eqperiod"', 'id="eqread"',
+                  "function sparkline", "subscribeCrosshairMove", 'class="pbtn'):
         assert token in html
     assert html.count('class="plain"') >= 5    # a visible explainer per section
 
