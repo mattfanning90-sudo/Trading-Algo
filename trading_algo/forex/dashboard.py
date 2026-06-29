@@ -692,6 +692,18 @@ section{padding:1rem 1.5rem 1.25rem}
 .hc{padding:.4rem .55rem;border-radius:8px;border:1px solid var(--bd);font-size:.72rem;
   font-family:var(--mono);min-width:82px;text-align:center;line-height:1.35}
 .hc b{font-size:.85rem}
+/* verdict banner */
+.verdict{display:flex;align-items:center;gap:.7rem;padding:.6rem 1.5rem;font-size:.86rem;
+  border-bottom:1px solid var(--bd);line-height:1.4}
+.verdict .vchip{font-weight:600;white-space:nowrap;font-size:.78rem;font-family:var(--mono)}
+.v-amber{background:#1d160a;color:#f0d8a8}.v-green{background:#0c1a12;color:#a6e9c9}.v-red{background:#1d0f0f;color:#f3b6b0}
+/* period selector + chart crosshair readout + sparkline */
+.periods{font-weight:400;font-size:.7rem}
+.pbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:6px;
+  padding:.1rem .45rem;margin-left:.25rem;cursor:pointer;font-size:.7rem;font-family:var(--mono)}
+.pbtn.on{border-color:var(--accent);color:var(--accent)}
+.cread{font-size:.74rem;color:var(--mut);min-height:1.15em;margin:-.1rem 0 .35rem;font-family:var(--mono)}
+.cread b{color:var(--fg)}.spark{display:block;margin-top:.25rem}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -700,6 +712,7 @@ section{padding:1rem 1.5rem 1.25rem}
   <div class="sub">base __CCY__ · updated __UPDATED__ · candlesticks, performance vs buy-and-hold, and a plain-English reason + outcome for every trade. Hover any underlined word for its meaning.</div>
   <div class="stats" id="stats"></div>
 </header>
+<div class="verdict" id="verdict"></div>
 
 <div class="subnav">
   <a href="#overview">Overview</a>
@@ -717,7 +730,8 @@ section{padding:1rem 1.5rem 1.25rem}
     right now</b>, and which <b>"agents"</b> (small built-in strategies) have been helping lately. This is paper
     money — practice, not real funds.</p>
   <div class="cards">
-    <div class="card c8"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span></h2><div id="eqchart"></div></div>
+    <div class="card c8"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span> <span class="periods" id="eqperiod"></span></h2>
+      <div class="cread" id="eqread"></div><div id="eqchart"></div></div>
     <div class="card c4"><h2>Performance <span class="muted" style="font-weight:400">vs buy &amp; hold</span></h2><div id="metrics" class="metrics"></div></div>
     <div class="card c6"><h2>Open positions <span class="muted" style="font-weight:400">(signed % of equity)</span></h2><div id="positionscard"></div></div>
     <div class="card c6"><h2><span class="tip" data-tip="__T_SCORE__">Agent scorecard</span> <span class="muted" style="font-weight:400">(this window)</span></h2><div id="agentcard"></div></div>
@@ -768,7 +782,7 @@ section{padding:1rem 1.5rem 1.25rem}
     <b>plain-English reason for every trade</b> plus whether it worked — built so you can learn how each call was made.</p>
   <div class="tabs" id="tabs"></div>
   <div class="wrap">
-    <div id="chart"></div>
+    <div><div class="cread" id="pairread"></div><div id="chart"></div></div>
     <div class="side">
       <div class="card"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
         <div id="decision" class="why muted"></div>
@@ -807,6 +821,15 @@ const fmt = v => v==null? "–" : (Math.abs(v)>=100? v.toFixed(2) : v.toPrecisio
 const tip = (txt,term)=>`<span class="tip" data-tip="${(G[term]||'').replace(/"/g,'&quot;')}">${txt}</span>`;
 let chart;
 
+function sparkline(curve,w=110,h=26){
+  const v=(curve||[]).map(p=>p.value); if(v.length<2) return '';
+  const mn=Math.min(...v),mx=Math.max(...v),rng=(mx-mn)||1;
+  const pts=v.map((y,i)=>`${(i/(v.length-1)*w).toFixed(1)},${(h-((y-mn)/rng)*h).toFixed(1)}`).join(' ');
+  const up=v[v.length-1]>=v[0],col=up?'var(--up)':'var(--dn)';
+  return `<svg class=spark width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`+
+    `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5"/></svg>`;
+}
+
 (function(){
   const m=DASH.book_metrics||{};
   const items=[["Equity",DASH.equity.toLocaleString()+" "+DASH.currency,null],
@@ -815,6 +838,25 @@ let chart;
     ["Gross lev.",DASH.gross+"x","Gross leverage"],["Trades",DASH.trades_total,null]];
   document.getElementById('stats').innerHTML=items.map(([k,v,g])=>
     `<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
+  // sparkline under the Equity tile
+  const eqStat=document.querySelector('#stats .stat');
+  if(eqStat){const s=sparkline(DASH.book_curve); if(s)eqStat.insertAdjacentHTML('beforeend',s);}
+})();
+
+(function(){
+  const el=document.getElementById('verdict'); if(!el) return;
+  const rk=DASH.risk||{}, ret=DASH.ret, n=rk.n_obs||0, retTxt=pct(ret);
+  let chip,cls,msg;
+  if(DASH.halted){chip='⛔ Risk-halted';cls='v-red';
+    msg=`The drawdown breaker tripped — the book is flat and cooling off. Return ${retTxt}.`;}
+  else if(rk.psr==null||n<10){chip='🟡 Too early to tell';cls='v-amber';
+    msg=`${retTxt} over ${n} day${n===1?'':'s'} — far too little data to mean anything yet. Treat it as noise, not skill.`;}
+  else if(rk.psr>=0.95){chip=ret>=0?'🟢 Edge (so far)':'🔴 Losing edge';cls=ret>=0?'v-green':'v-red';
+    msg=`${retTxt} with PSR ${(rk.psr*100).toFixed(0)}% over ${n} days — statistically distinguishable from luck. Keep watching; one window isn't proof.`;}
+  else{const months=rk.min_track_days?Math.round(rk.min_track_days/21):null;chip='🟡 Not proven';cls='v-amber';
+    msg=`${retTxt} over ${n} days · PSR ${(rk.psr*100).toFixed(0)}% — still indistinguishable from luck${months?`; ~${months} months of data needed to tell`:''}. Treat as noise for now.`;}
+  el.className='verdict '+cls;
+  el.innerHTML=`<span class=vchip>${chip}</span><span>${msg}</span>`;
 })();
 
 function bars(obj, hi){
@@ -831,26 +873,51 @@ function bars(obj, hi){
 }
 
 (function(){
-  const b=DASH.book_metrics||{},k=DASH.bench_metrics||{};
-  const rows=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
-    ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],
-    ["Win rate","win_rate",true,"Win rate"]];
-  const cell=(m,key,isP)=>{const v=m[key];return v==null?"–":(isP?pct(v):v);};
-  document.getElementById('metrics').innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
-    rows.map(([lbl,key,isP,g])=>`<div>${tip(lbl,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');
   document.getElementById('agentcard').innerHTML=bars(DASH.attribution,["ensemble","buy&hold"]);
   const pos=DASH.positions||[];
   document.getElementById('positionscard').innerHTML=pos.length?bars(Object.fromEntries(pos.map(p=>[p.sym,p.w]))):'<div class="muted">Flat — no open positions right now.</div>';
 })();
 
 (function(){
-  const el=document.getElementById('eqchart');
-  if(!(DASH.bench_curve||[]).length&&!(DASH.book_curve||[]).length){el.innerHTML='<p class=muted style="padding:1rem">This fills in as the book trades over the coming days.</p>';return;}
+  // Equity chart + period selector (1W/1M/3M/ALL) + crosshair readout + metrics.
+  const el=document.getElementById('eqchart'), mEl=document.getElementById('metrics');
+  const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[], RF=0.035, ANN=252;
+  const ROWS=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
+    ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],["Win rate","win_rate",true,"Win rate"]];
+  function compute(series){
+    const out={}; if(series.length<2) return out;
+    const v=series.map(p=>p.value); out.total_return=v[v.length-1]/v[0]-1;
+    const r=[]; for(let i=1;i<v.length;i++) r.push(v[i]/v[i-1]-1);
+    if(r.length>=5){const mean=r.reduce((a,b)=>a+b,0)/r.length;
+      const sd=Math.sqrt(r.reduce((a,b)=>a+(b-mean)**2,0)/r.length);
+      if(sd>0){out.sharpe=+((mean*ANN-RF)/(sd*Math.sqrt(ANN))).toFixed(2); out.vol=+(sd*Math.sqrt(ANN)).toFixed(4);}
+      let peak=-1e18,dd=0; for(const x of v){peak=Math.max(peak,x); dd=Math.min(dd,x/peak-1);} out.max_dd=+dd.toFixed(4);
+      out.win_rate=+(r.filter(x=>x>0).length/r.length).toFixed(3);}
+    return out;
+  }
+  function renderMetrics(b,k){const cell=(m,key,isP)=>{const x=m[key];return x==null?"–":(isP?pct(x):x);};
+    mEl.innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
+      ROWS.map(([l,key,isP,g])=>`<div>${tip(l,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');}
+  if(!BENCH.length&&!BOOK.length){el.innerHTML='<p class=muted style="padding:1rem">This fills in as the book trades over the coming days.</p>';renderMetrics({},{});return;}
+  const toDate=t=>new Date(String(t).replace(' ','T'));
+  const cut=(s,days)=>{if(!days||!s.length) return s.slice(); const co=toDate(s[s.length-1].time).getTime()-days*864e5; return s.filter(p=>toDate(p.time).getTime()>=co);};
+  const rebase=s=>{if(!s.length) return []; const b=s[0].value||1; return s.map(p=>({time:p.time,value:+(100*p.value/b).toFixed(4)}));};
   const c=LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
-    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
-  if((DASH.bench_curve||[]).length)c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'}).setData(DASH.bench_curve);
-  if((DASH.book_curve||[]).length)c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'}).setData(DASH.book_curve);
-  c.timeScale().fitContent();
+    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true,crosshair:{mode:0}});
+  const benchS=c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'});
+  const bookS=c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'});
+  function apply(days){const bk=rebase(cut(BOOK,days)),bh=rebase(cut(BENCH,days));
+    benchS.setData(bh); bookS.setData(bk); c.timeScale().fitContent(); renderMetrics(compute(bk),compute(bh));}
+  const periods=[["1W",7],["1M",30],["3M",90],["ALL",0]], pe=document.getElementById('eqperiod');
+  pe.innerHTML=periods.map(([l,d])=>`<button class="pbtn${d===0?' on':''}" data-d="${d}">${l}</button>`).join('');
+  pe.querySelectorAll('.pbtn').forEach(btn=>btn.onclick=()=>{pe.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');apply(+btn.dataset.d||null);});
+  const rd=document.getElementById('eqread');
+  c.subscribeCrosshairMove(prm=>{
+    if(!prm.time||!prm.seriesData){rd.innerHTML='';return;}
+    const t=typeof prm.time==='string'?prm.time:(prm.time.year?`${prm.time.year}-${String(prm.time.month).padStart(2,'0')}-${String(prm.time.day).padStart(2,'0')}`:prm.time);
+    const bv=prm.seriesData.get(bookS),kv=prm.seriesData.get(benchS);
+    rd.innerHTML=`<span class=muted>${t}</span> · Book <b>${bv?bv.value.toFixed(2):'–'}</b> · B&amp;H <span class=muted>${kv?kv.value.toFixed(2):'–'}</span>`;});
+  apply(null);
 })();
 
 (function(){
@@ -963,6 +1030,13 @@ function showPair(sym){
     color:t.side==='BUY'?'#26a69a':'#ef5350',shape:t.side==='BUY'?'arrowUp':'arrowDown',
     text:t.side+(t.weight!=null?' '+Math.round(t.weight*100)+'%':'')})));
   chart.timeScale().fitContent();
+  const pr=document.getElementById('pairread');
+  chart.subscribeCrosshairMove(prm=>{
+    const o=prm.time&&prm.seriesData?prm.seriesData.get(cs):null;
+    if(!o){if(pr)pr.innerHTML='';return;}
+    const t=typeof prm.time==='string'?prm.time:(prm.time.year?`${prm.time.year}-${String(prm.time.month).padStart(2,'0')}-${String(prm.time.day).padStart(2,'0')}`:prm.time);
+    const up=o.close>=o.open;
+    if(pr)pr.innerHTML=`<span class=muted>${t}</span> · O ${fmt(o.open)} H ${fmt(o.high)} L ${fmt(o.low)} <span style="color:${up?'var(--up)':'var(--dn)'}">C <b>${fmt(o.close)}</b></span>`;});
   const dec=d.decision||{};
   document.getElementById('decision').innerHTML=dec.text||'No active position — agents flat or conflicted here.';
   document.getElementById('agents').innerHTML=bars(dec.agents);
