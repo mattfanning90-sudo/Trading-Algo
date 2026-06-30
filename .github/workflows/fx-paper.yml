@@ -68,6 +68,11 @@ jobs:
           python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
 
       - name: Export candlestick dashboards (FX) + equity dashboards
+        # NEWS_API_KEY is optional: with it set (repo secret, a Financial Modeling
+        # Prep key), the daily summary flags high-impact economic releases that hit
+        # a traded currency. Without it the section silently omits — see news.py.
+        env:
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
         run: |
           # FX books: candlesticks + per-trade rationale.
           python -m trading_algo.forex.dashboard --all --out-dir public $SYNTH || true
