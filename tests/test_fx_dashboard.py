@@ -80,7 +80,8 @@ def test_dashboard_export_offline(isolated):
                   "Conviction heatmap", 'id="attrib"',
                   'class="plain"', "In plain English",
                   'id="verdict"', 'id="eqperiod"', 'id="eqread"',
-                  "function sparkline", "subscribeCrosshairMove", 'class="pbtn'):
+                  "function sparkline", "subscribeCrosshairMove", 'class="pbtn',
+                  'id="today"', 'id="dailycard"', "Daily summary", "Market backdrop"):
         assert token in html
     assert html.count('class="plain"') >= 5    # a visible explainer per section
 
@@ -166,6 +167,38 @@ def test_risk_costs_significance(isolated):
     assert rk["psr"] is not None and 0.0 <= rk["psr"] <= 1.0
     assert rk["realized_vol"] is not None
     assert "USD" in rk["exposure"]
+
+
+def test_daily_summary(isolated):
+    """The daily P&L summary: drivers ranked by contribution + derived currency
+    strength, from the book's stored daily snapshot."""
+    from trading_algo.forex import dashboard as dash
+    fx_book.init_account("matt", 5_000, "balanced")
+    state = fx_book.load_state("matt")
+    state["currency"] = "AUD"
+    state["daily"] = {
+        "date": "2026-06-27", "start_equity": 5_010.0, "end_equity": 5_023.4,
+        "pnl_pct": 0.0031, "carry_pct": 0.0002, "cost_pct": -0.0006,
+        "net_pct": 0.00267, "net_aud": 13.4, "halted": False,
+        "by_pair": [
+            {"pair": "USDJPY", "weight": 0.12, "move": 0.004, "fx": 0.0, "contrib": 0.00044},
+            {"pair": "SOLUSD", "weight": -0.17, "move": 0.02, "fx": 0.0, "contrib": -0.0034},
+            {"pair": "EURUSD", "weight": -0.03, "move": -0.002, "fx": 0.0, "contrib": 0.00006}]}
+    state["decisions"] = {"USDJPY": {"regime": "trending", "agents": {"trend": 0.8}},
+                          "SOLUSD": {"regime": "ranging", "agents": {"meanrev": -0.6}}}
+    fx_book.save_state("matt", state)
+
+    d = dash.build_payload("matt", synthetic=True)["daily"]
+    assert d is not None
+    # drivers ranked by absolute contribution (SOLUSD biggest)
+    assert d["drivers"][0]["pair"] == "SOLUSD"
+    assert d["drivers"][0]["regime"] == "ranging"
+    assert d["net_aud"] == 13.4
+    # currency strength derived from the moves: SOL strongest, USD weakest
+    s = d["strength"]
+    assert "USD" in s and "SOL" in s
+    assert list(s.keys())[0] == "SOL"            # sorted strongest-first
+    assert s["USD"] < 0                           # USD broadly soft that day
 
 
 def test_attribution_conviction_and_advanced_significance(isolated):

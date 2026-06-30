@@ -86,3 +86,15 @@ def test_book_flat_fx_is_unchanged(tmp_path, monkeypatch):
     # Same setup but AUDUSD unchanged => equity ~flat (pair didn't move either).
     eq_flat = _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.66)
     assert eq_flat == pytest.approx(5_000, rel=2e-3)
+
+
+def test_daily_snapshot_attributes_pnl(tmp_path, monkeypatch):
+    """run_once records a daily P&L snapshot attributing the move to each position."""
+    _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.70)   # AUD up: long USD-quoted loses
+    dy = fx_book.load_state("c")["daily"]
+    assert dy["date"] == "2025-01-02"
+    assert dy["net_aud"] < 0 and dy["net_pct"] < 0
+    eur = next(c for c in dy["by_pair"] if c["pair"] == "EURUSD")
+    # pair was flat; the loss is the AUD/USD translation on the held long
+    assert eur["move"] == pytest.approx(0.0, abs=1e-6)
+    assert eur["contrib"] == pytest.approx(0.66 / 0.70 - 1, rel=1e-3)
