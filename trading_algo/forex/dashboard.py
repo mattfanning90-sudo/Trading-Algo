@@ -514,6 +514,48 @@ def _advanced_significance(panel, p, returns_values, bars=180) -> dict:
     return out
 
 
+def _daily_summary(state: dict) -> dict | None:
+    """Turn the book's stored daily P&L snapshot into a narratable summary: the
+    drivers/detractors (with each pair's actual move + the agents/regime that held
+    it) and the day's broad currency strength, derived from the cross-rates moved —
+    NOT from news (we describe what the market *did*, not an invented *why*)."""
+    dy = state.get("daily")
+    if not dy or not dy.get("date"):
+        return None
+    dec = state.get("decisions", {}) or {}
+    by = dy.get("by_pair", [])
+
+    # Broad currency strength from the day's moves: a pair up = base stronger vs
+    # quote. Average each currency's appreciation across the pairs it appears in.
+    strg: dict[str, float] = {}
+    cnt: dict[str, int] = {}
+    for c in by:
+        try:
+            pr = get_pair(c["pair"])
+        except KeyError:
+            continue
+        mv = float(c.get("move") or 0.0)
+        strg[pr.base] = strg.get(pr.base, 0.0) + mv
+        strg[pr.quote] = strg.get(pr.quote, 0.0) - mv
+        cnt[pr.base] = cnt.get(pr.base, 0) + 1
+        cnt[pr.quote] = cnt.get(pr.quote, 0) + 1
+    strength = {k: round(v / max(cnt.get(k, 1), 1), 5) for k, v in strg.items()}
+
+    drivers = []
+    for c in by:
+        d = dec.get(c["pair"]) or {}
+        drivers.append({**c, "regime": d.get("regime"), "agents": d.get("agents")})
+    drivers.sort(key=lambda c: -abs(c.get("contrib") or 0.0))
+    return {
+        "date": dy["date"], "net_pct": dy.get("net_pct"), "net_aud": dy.get("net_aud"),
+        "pnl_pct": dy.get("pnl_pct"), "carry_pct": dy.get("carry_pct"),
+        "cost_pct": dy.get("cost_pct"), "halted": dy.get("halted"),
+        "currency": state.get("currency", "AUD"),
+        "drivers": drivers,
+        "strength": dict(sorted(strength.items(), key=lambda kv: -kv[1])),
+    }
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -584,6 +626,7 @@ def build_payload(account, synthetic=False, bars=180):
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
         "risk": risk,
+        "daily": _daily_summary(state),
         "pnl_attribution": _attribution_rollup(txn),
         "trade_stats": _trade_stats(state),
         "conviction": _conviction(state),
@@ -704,6 +747,14 @@ section{padding:1rem 1.5rem 1.25rem}
 .pbtn.on{border-color:var(--accent);color:var(--accent)}
 .cread{font-size:.74rem;color:var(--mut);min-height:1.15em;margin:-.1rem 0 .35rem;font-family:var(--mono)}
 .cread b{color:var(--fg)}.spark{display:block;margin-top:.25rem}
+/* daily summary */
+.dhead{font-size:1.05rem;margin:.1rem 0 .2rem}.dhead b{font-family:var(--mono)}
+.dbreak{color:var(--mut);font-size:.78rem;font-family:var(--mono);margin-bottom:.7rem}
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}@media(max-width:760px){.dgrid{grid-template-columns:1fr}}
+.dcol h3{margin:.2rem 0 .4rem;font-size:.78rem;color:var(--mut);text-transform:uppercase}
+.drow{display:flex;gap:.5rem;align-items:baseline;font-size:.82rem;padding:.3rem 0;border-bottom:1px solid #21262d;line-height:1.4}
+.drow .amt{font-family:var(--mono);min-width:74px;text-align:right}
+.dwhy{color:var(--mut);font-size:.78rem}.dmkt{margin-top:.7rem;font-size:.82rem;line-height:1.5}
 </style></head><body>
 <div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
 <header>
@@ -715,12 +766,22 @@ section{padding:1rem 1.5rem 1.25rem}
 <div class="verdict" id="verdict"></div>
 
 <div class="subnav">
+  <a href="#today">Today</a>
   <a href="#overview">Overview</a>
   <a href="#risk">Risk &amp; costs</a>
   <a href="#attrib">Attribution</a>
   <a href="#pairs">Pair explorer</a>
   <a href="#txns">Transactions</a>
 </div>
+
+<section id="today">
+  <div class="band">Daily summary <span class="h">what drove today's profit &amp; loss</span></div>
+  <p class="plain"><span class="q">In plain English:</span> a once-a-day debrief — <b>how much you made or lost</b>,
+    <b>which positions drove it</b> and how each one moved, and the day's <b>market backdrop</b> (which currencies
+    were broadly strong or weak). We describe <i>what the market did</i> from the price moves themselves — we don't
+    invent a news reason it isn't there to verify.</p>
+  <div class="card" id="dailycard"></div>
+</section>
 
 <section id="overview">
   <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span></div>
@@ -857,6 +918,29 @@ function sparkline(curve,w=110,h=26){
     msg=`${retTxt} over ${n} days · PSR ${(rk.psr*100).toFixed(0)}% — still indistinguishable from luck${months?`; ~${months} months of data needed to tell`:''}. Treat as noise for now.`;}
   el.className='verdict '+cls;
   el.innerHTML=`<span class=vchip>${chip}</span><span>${msg}</span>`;
+})();
+
+(function(){
+  const el=document.getElementById('dailycard'); if(!el) return;
+  const d=DASH.daily;
+  if(!d){el.innerHTML='<div class=muted>Fills in after the first full trading day.</div>';return;}
+  const ccy=d.currency, gain=(d.net_aud||0)>=0;
+  const aud=v=>(v<0?'-':'')+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const head=`<div class=dhead>On <b>${d.date}</b>, the book <b style="color:${gain?'var(--up)':'var(--dn)'}">${gain?'made':'lost'} ${aud(Math.abs(d.net_aud))} ${ccy}</b> (${pct(d.net_pct)}).</div>`;
+  const brk=`<div class=dbreak>market P&amp;L ${pct(d.pnl_pct)} · carry ${pct(d.carry_pct)} · costs ${pct(d.cost_pct)}${d.halted?' · ⛔ risk-halted':''}</div>`;
+  const agentsTop=ag=>{if(!ag) return ''; const e=Object.entries(ag).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,2).map(x=>x[0]); return e.length?` · held by ${e.join(' + ')}`:'';};
+  const row=c=>{const help=c.contrib>=0;
+    const why=`${c.pair} ${c.move>=0?'rose':'fell'} ${Math.abs(c.move*100).toFixed(2)}%${c.regime?` (${c.regime})`:''}${agentsTop(c.agents)}`;
+    return `<div class=drow><span class="amt ${help?'win':'loss'}">${pct(c.contrib)}</span>`+
+      `<span><b>${(c.weight>=0?'LONG':'SHORT')} ${c.pair}</b> <span class=dwhy>— ${why}</span></span></div>`;};
+  const drv=(d.drivers||[]).filter(c=>Math.abs(c.contrib)>1e-9);
+  const winners=drv.filter(c=>c.contrib>0).slice(0,5), losers=drv.filter(c=>c.contrib<0).slice(0,5);
+  const col=(t,rows)=>`<div class=dcol><h3>${t}</h3>${rows.length?rows.map(row).join(''):'<div class=muted>none</div>'}</div>`;
+  const st=Object.entries(d.strength||{});
+  let mkt='';
+  if(st.length>=2){const top=st[0],bot=st[st.length-1];
+    mkt=`<div class=dmkt><b>Market backdrop:</b> the <b>${top[0]}</b> was broadly the day's strongest (avg ${pct(top[1])} across its pairs) and the <b>${bot[0]}</b> the weakest (${pct(bot[1])}). <span class=muted>Derived from how the cross-rates moved — what the market did, not an invented why (no news feed).</span></div>`;}
+  el.innerHTML=head+brk+`<div class=dgrid>${col('Drivers — helped',winners)}${col('Detractors — hurt',losers)}</div>`+mkt;
 })();
 
 function bars(obj, hi){

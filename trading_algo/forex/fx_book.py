@@ -198,9 +198,11 @@ def run_once(account: str, synthetic: bool = False,
 
     positions = {k: float(v) for k, v in state["positions"].items()}
     last_close = state.get("last_close", {})
+    prev_equity = float(state.get("equity") or state["initial_capital"])  # before today's mark
 
     # --- mark to market over the move since the last close ----------------
     pnl_frac = 0.0
+    day_contribs: list[dict] = []          # per-pair P&L attribution for the daily summary
     for s, w in positions.items():
         lc = last_close.get(s)
         nc = px_last.get(s)
@@ -210,7 +212,12 @@ def run_once(account: str, synthetic: bool = False,
             # (esp. AUD/USD) are part of the real P&L. Falls back to 1.0 when the
             # AUD/quote rate can't be derived (e.g. a crypto-only book).
             fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
-            pnl_frac += w * ((nc / lc) * fxf - 1.0)
+            contrib = w * ((nc / lc) * fxf - 1.0)
+            pnl_frac += contrib
+            day_contribs.append({"pair": s, "weight": round(w, 4),
+                                 "move": round(nc / lc - 1.0, 6),     # the pair's own move
+                                 "fx": round(fxf - 1.0, 6),           # AUD/quote translation
+                                 "contrib": round(contrib, 6)})        # P&L as a frac of equity
 
     # Carry scales with the actual elapsed time since the last mark (so it's
     # correct for intraday/1-minute bars, not just daily). Daily is unchanged:
@@ -278,6 +285,20 @@ def run_once(account: str, synthetic: bool = False,
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
     state["decisions"] = rationale          # latest per-pair read (held or flat)
+    # --- daily P&L attribution snapshot (the "what drove today" summary) ----
+    day_contribs.sort(key=lambda c: -abs(c["contrib"]))
+    state["daily"] = {
+        "date": bar_date,
+        "start_equity": round(prev_equity, 2),
+        "end_equity": round(float(equity), 2),
+        "pnl_pct": round(pnl_frac, 6),          # market P&L (positions × moves)
+        "carry_pct": round(carry_frac, 6),      # financing/swap
+        "cost_pct": round(-cost_frac, 6),       # spread paid on today's rebalance (negative)
+        "net_pct": round(equity / prev_equity - 1.0, 6) if prev_equity else 0.0,
+        "net_aud": round(float(equity) - prev_equity, 2),
+        "by_pair": day_contribs,
+        "halted": halted,
+    }
     state["trades"].extend(trades)
     if not state["equity_history"] or state["equity_history"][-1][0] != bar_date:
         state["equity_history"].append([bar_date, round(float(equity), 2)])
