@@ -201,6 +201,32 @@ def test_daily_summary(isolated):
     assert s["USD"] < 0                           # USD broadly soft that day
 
 
+def test_daily_catalysts_only_when_real(isolated, monkeypatch):
+    """News catalysts appear ONLY when a real high-impact release hit a traded
+    currency — silent otherwise (correlation, never fabricated)."""
+    from trading_algo.forex import dashboard as dash, news
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    fx_book.init_account("matt", 5_000, "balanced")
+    st = fx_book.load_state("matt")
+    st["daily"] = {"date": "2026-06-27", "start_equity": 5_000.0, "end_equity": 5_010.0,
+                   "pnl_pct": 0.002, "carry_pct": 0.0, "cost_pct": 0.0, "net_pct": 0.002,
+                   "net_aud": 10.0, "halted": False,
+                   "by_pair": [{"pair": "USDJPY", "weight": 0.1, "move": 0.003, "fx": 0.0, "contrib": 0.0003}]}
+    fx_book.save_state("matt", st)
+
+    # no key / no event -> silent
+    assert dash.build_payload("matt", synthetic=True)["daily"]["catalysts"] == []
+
+    # a real high-impact USD release on a traded currency -> surfaced
+    monkeypatch.setattr(news, "economic_events",
+                        lambda curs, date, **k: [{"currency": "USD", "event": "CPI YoY",
+                                                  "impact": "High", "actual": "3.1%"}]
+                        if "USD" in curs else [])
+    cats = dash.build_payload("matt", synthetic=True)["daily"]["catalysts"]
+    assert cats and cats[0]["currency"] == "USD" and cats[0]["event"] == "CPI YoY"
+
+
 def test_attribution_conviction_and_advanced_significance(isolated):
     """P&L attribution, trade-quality stats, conviction heatmap, and DSR/PBO."""
     fx_book.init_account("matt", 5_000, "balanced")

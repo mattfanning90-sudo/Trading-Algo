@@ -28,6 +28,7 @@ import math
 
 from . import fx_data
 from . import indicators as ind
+from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
@@ -96,6 +97,7 @@ GLOSSARY = {
     "Conviction": "Today's ensemble tilt per pair, −1 (max short) to +1 (max long): how strongly the blended agents lean right now. Green = long, red = short, brighter = stronger.",
     "DSR": "Deflated Sharpe Ratio — like PSR, but it also penalises you for how many strategies/agents were tried (the more you test, the higher a Sharpe you'd expect by luck alone). Clears 95% = a genuinely strong result.",
     "PBO": "Probability of Backtest Overfitting — across the agents, how often the in-sample best one underperforms out-of-sample. High = 'the winner is probably luck'. Low is good.",
+    "Catalyst": "A high-impact scheduled economic release (CPI, a rate decision, jobs…) that landed today on a currency you traded. Shown only when one actually occurred — and it's a POSSIBLE driver (correlation), never proof the release caused your move.",
 }
 
 
@@ -556,6 +558,23 @@ def _daily_summary(state: dict) -> dict | None:
     }
 
 
+def _with_catalysts(daily: dict | None) -> dict | None:
+    """Attach scheduled-news catalysts to the daily summary — but ONLY real,
+    high-impact releases that hit a currency actually traded that day. Empty (and
+    silent) without a NEWS_API_KEY / network / matching event. Correlation only."""
+    if not daily or not daily.get("date"):
+        return daily
+    curs = set()
+    for c in daily.get("drivers", [])[:6]:
+        try:
+            pr = get_pair(c["pair"])
+        except KeyError:
+            continue
+        curs |= {pr.base, pr.quote} & news.FIAT
+    daily["catalysts"] = news.economic_events(sorted(curs), daily["date"]) if curs else []
+    return daily
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -626,7 +645,7 @@ def build_payload(account, synthetic=False, bars=180):
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
         "risk": risk,
-        "daily": _daily_summary(state),
+        "daily": _with_catalysts(_daily_summary(state)),
         "pnl_attribution": _attribution_rollup(txn),
         "trade_stats": _trade_stats(state),
         "conviction": _conviction(state),
@@ -778,8 +797,8 @@ section{padding:1rem 1.5rem 1.25rem}
   <div class="band">Daily summary <span class="h">what drove today's profit &amp; loss</span></div>
   <p class="plain"><span class="q">In plain English:</span> a once-a-day debrief — <b>how much you made or lost</b>,
     <b>which positions drove it</b> and how each one moved, and the day's <b>market backdrop</b> (which currencies
-    were broadly strong or weak). We describe <i>what the market did</i> from the price moves themselves — we don't
-    invent a news reason it isn't there to verify.</p>
+    were broadly strong or weak). When a real <b>high-impact news release</b> hit a currency you traded, it's flagged
+    as a <b>possible catalyst</b> — but only if one actually happened, and always as correlation, never invented.</p>
   <div class="card" id="dailycard"></div>
 </section>
 
@@ -939,8 +958,17 @@ function sparkline(curve,w=110,h=26){
   const st=Object.entries(d.strength||{});
   let mkt='';
   if(st.length>=2){const top=st[0],bot=st[st.length-1];
-    mkt=`<div class=dmkt><b>Market backdrop:</b> the <b>${top[0]}</b> was broadly the day's strongest (avg ${pct(top[1])} across its pairs) and the <b>${bot[0]}</b> the weakest (${pct(bot[1])}). <span class=muted>Derived from how the cross-rates moved — what the market did, not an invented why (no news feed).</span></div>`;}
-  el.innerHTML=head+brk+`<div class=dgrid>${col('Drivers — helped',winners)}${col('Detractors — hurt',losers)}</div>`+mkt;
+    mkt=`<div class=dmkt><b>Market backdrop:</b> the <b>${top[0]}</b> was broadly the day's strongest (avg ${pct(top[1])} across its pairs) and the <b>${bot[0]}</b> the weakest (${pct(bot[1])}). <span class=muted>Derived from how the cross-rates moved.</span></div>`;}
+  // Scheduled-news catalysts — shown ONLY when a real high-impact release hit a
+  // currency traded today. Correlation, never claimed causation.
+  let cat='';
+  const ev=d.catalysts||[];
+  if(ev.length){
+    const items=ev.map(e=>{const p=[e.actual!=null?`actual ${e.actual}`:'',e.estimate!=null?`est ${e.estimate}`:'',e.previous!=null?`prev ${e.previous}`:''].filter(Boolean).join(' · ');
+      return `<div class=drow><span class=dwhy><b>${e.currency}</b> · ${e.event||'release'}${p?` (${p})`:''}</span></div>`;}).join('');
+    cat=`<div class=dmkt><b>Possible catalysts</b> ${tip('— correlation, not proof','Catalyst')}: high-impact scheduled releases today on currencies you traded — a <i>possible</i> reason for the moves above.${items}</div>`;
+  }
+  el.innerHTML=head+brk+`<div class=dgrid>${col('Drivers — helped',winners)}${col('Detractors — hurt',losers)}</div>`+mkt+cat;
 })();
 
 function bars(obj, hi){
