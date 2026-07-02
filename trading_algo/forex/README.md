@@ -90,6 +90,29 @@ python -m trading_algo.forex.paper --init                          # once
 python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
 ```
 
+## The four paper books
+
+| Book | Capital | Universe | Bar | Cadence |
+|------|---------|----------|-----|---------|
+| `matt` | 5k AUD | FX majors + crypto | 1d | daily (fx-paper.yml) |
+| `partner` | 5k AUD | FX majors + crypto | 1d | daily |
+| `daytrader` | **10k AUD** | FX majors + crypto | **60m** | **hourly** (day-paper.yml) |
+| `multiasset` | **10k AUD** | US stocks + bond ETFs + AUDUSD | 1d | daily |
+
+Each book stores its own **bar cadence** and (optionally) a **locked universe** —
+`engine --once` runs every book at its own cadence. The day-trading book is
+advanced hourly on weekdays by `.github/workflows/day-paper.yml` (which also
+republishes the dashboards so the site tracks it through the day). The
+multi-asset book trades the five liquid US equities, four treasury/aggregate
+bond ETFs (`TLT`/`IEF`/`AGG`/`SHY` — the honest, tradable bond vehicle) and an
+AUDUSD overlay that doubles as the AUD translation hub.
+
+Honest notes: Yahoo 60m data is ~15-minutes delayed — the day book is a real
+hourly-cadence paper exercise, not a live-feed simulation (see
+`docs/HFT_REALITY.md`); bond-ETF financing/borrow isn't modelled (price-only,
+like the equities); and intraday turnover makes spread costs bite harder — watch
+the cost wedge.
+
 ## Data sources (`--source`)
 
 The system is **source-agnostic**: every feed returns the same aligned OHLC panel,

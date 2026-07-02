@@ -180,9 +180,14 @@ def _curve_metrics(dates, values) -> dict:
     out = {"total_return": round(float(s.iloc[-1] / s.iloc[0] - 1.0), 4)}
     r = s.pct_change().dropna()
     if len(r) >= 5 and r.std() > 0:
-        out["sharpe"] = round(float((r.mean() * ANNUALIZATION - FX_RISK_FREE)
-                                    / (r.std() * np.sqrt(ANNUALIZATION))), 2)
-        out["vol"] = round(float(r.std() * np.sqrt(ANNUALIZATION)), 4)
+        # Annualise by the curve's ACTUAL bar spacing — an hourly book (daytrader)
+        # must not be annualised as if its bars were daily.
+        med = s.index.to_series().diff().median()
+        secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
+        ppy = min(ANNUALIZATION if secs >= 43200 else 365.25 * 86400.0 / secs, 24 * 365.25)
+        out["sharpe"] = round(float((r.mean() * ppy - FX_RISK_FREE)
+                                    / (r.std() * np.sqrt(ppy))), 2)
+        out["vol"] = round(float(r.std() * np.sqrt(ppy)), 4)
         out["max_dd"] = round(float((s / s.cummax() - 1.0).min()), 4)
         out["win_rate"] = round(float((r > 0).mean()), 3)
     return out
@@ -239,7 +244,10 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
     for t in trades:
         if t.get("pair") != sym or t.get("date", "") < first:
             continue
-        i = pos_of.get(t["date"])
+        # [:10] → date part, so intraday-keyed trades (the daytrader book) still
+        # land on the daily candles for markers, outcomes and click-to-zoom.
+        tday = str(t["date"])[:10]
+        i = pos_of.get(tday)
         fwd, outcome = None, "open"
         entry = t.get("price")
         if i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
@@ -248,7 +256,7 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
             outcome = "win" if fwd > 0 else "loss"
         why = _beginner_explanation(t.get("side"), t.get("target_weight"),
                                     t.get("agents"), t.get("indicators"), sym)
-        out_trades.append({"time": t["date"], "side": t["side"], "price": t.get("price"),
+        out_trades.append({"time": tday, "side": t["side"], "price": t.get("price"),
                            "weight": t.get("target_weight"), "regime": t.get("regime"),
                            "why": why, "agents": t.get("agents"),
                            "fwd_return": fwd, "outcome": outcome})
@@ -936,6 +944,11 @@ const G = DASH.glossary||{}, ROLES = DASH.agent_roles||{};
 const pct = v => v==null? "–" : (v>=0?"+":"")+(v*100).toFixed(2)+"%";
 const fmt = v => v==null? "–" : (Math.abs(v)>=100? v.toFixed(2) : v.toPrecision(5));
 const tip = (txt,term)=>`<span class="tip" data-tip="${(G[term]||'').replace(/"/g,'&quot;')}">${txt}</span>`;
+// LWC time normaliser: intraday keys ("YYYY-MM-DD HH:MM", e.g. the daytrader
+// book's hourly equity) become UNIX timestamps; daily date strings pass through.
+const toT = s => (typeof s==='string'&&s.includes(' '))?Math.floor(Date.parse(s.replace(' ','T')+':00Z')/1000):s;
+const fmtT = t => typeof t==='number'?new Date(t*1000).toISOString().slice(0,16).replace('T',' ')
+  :(t&&t.year?`${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`:t);
 let chart;
 
 function sparkline(curve,w=110,h=26){
@@ -1089,15 +1102,16 @@ document.addEventListener('keydown',e=>{
     grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true,crosshair:{mode:0}});
   const benchS=c.addLineSeries({color:'#8b949e',lineWidth:1,title:'Buy&Hold'});
   const bookS=c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'});
+  const lwc=s=>s.map(p=>({time:toT(p.time),value:p.value}));
   function apply(days){const bk=rebase(cut(BOOK,days)),bh=rebase(cut(BENCH,days));
-    benchS.setData(bh); bookS.setData(bk); c.timeScale().fitContent(); renderMetrics(compute(bk),compute(bh));}
+    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk),compute(bh));}
   const periods=[["1W",7],["1M",30],["3M",90],["ALL",0]], pe=document.getElementById('eqperiod');
   pe.innerHTML=periods.map(([l,d])=>`<button class="pbtn${d===0?' on':''}" data-d="${d}">${l}</button>`).join('');
   pe.querySelectorAll('.pbtn').forEach(btn=>btn.onclick=()=>{pe.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');apply(+btn.dataset.d||null);});
   const rd=document.getElementById('eqread');
   c.subscribeCrosshairMove(prm=>{
     if(!prm.time||!prm.seriesData){rd.innerHTML='';return;}
-    const t=typeof prm.time==='string'?prm.time:(prm.time.year?`${prm.time.year}-${String(prm.time.month).padStart(2,'0')}-${String(prm.time.day).padStart(2,'0')}`:prm.time);
+    const t=fmtT(prm.time);
     const bv=prm.seriesData.get(bookS),kv=prm.seriesData.get(benchS);
     rd.innerHTML=`<span class=muted>${t}</span> · Book <b>${bv?bv.value.toFixed(2):'–'}</b> · B&amp;H <span class=muted>${kv?kv.value.toFixed(2):'–'}</span>`;});
   apply(null);
@@ -1126,12 +1140,12 @@ document.addEventListener('keydown',e=>{
   if(ec)ec.innerHTML=Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>';
   const mk=el=>LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
   const dd=rk.drawdown||[], de=document.getElementById('ddchart');
-  if(de&&dd.length){const ch=mk(de);ch.addAreaSeries({lineColor:'#ef5350',topColor:'rgba(239,83,80,.0)',bottomColor:'rgba(239,83,80,.35)',lineWidth:2}).setData(dd.map(d=>({time:d.time,value:+(d.value*100).toFixed(3)})));ch.timeScale().fitContent();}
+  if(de&&dd.length){const ch=mk(de);ch.addAreaSeries({lineColor:'#ef5350',topColor:'rgba(239,83,80,.0)',bottomColor:'rgba(239,83,80,.35)',lineWidth:2}).setData(dd.map(d=>({time:toT(d.time),value:+(d.value*100).toFixed(3)})));ch.timeScale().fitContent();}
   else if(de)de.innerHTML='<p class=muted style="padding:1rem">Fills in as the book trades.</p>';
   const cc=rk.cost_curve||[], ce=document.getElementById('costchart');
   if(ce&&cc.length>1){const ch=mk(ce);
-    ch.addLineSeries({color:'#8b949e',lineWidth:1,title:'Gross (pre-cost)'}).setData(cc.map(d=>({time:d.time,value:d.gross})));
-    ch.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Net'}).setData(cc.map(d=>({time:d.time,value:d.net})));
+    ch.addLineSeries({color:'#8b949e',lineWidth:1,title:'Gross (pre-cost)'}).setData(cc.map(d=>({time:toT(d.time),value:d.gross})));
+    ch.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Net'}).setData(cc.map(d=>({time:toT(d.time),value:d.net})));
     ch.timeScale().fitContent();}
   else if(ce)ce.innerHTML='<p class=muted style="padding:1rem">The gap between gross &amp; net = cumulative spread cost. Fills in as the book trades.</p>';
 })();
@@ -1241,7 +1255,7 @@ function showPair(sym){
   chart.subscribeCrosshairMove(prm=>{
     const o=prm.time&&prm.seriesData?prm.seriesData.get(cs):null;
     if(!o){if(pr)pr.innerHTML='';return;}
-    const t=typeof prm.time==='string'?prm.time:(prm.time.year?`${prm.time.year}-${String(prm.time.month).padStart(2,'0')}-${String(prm.time.day).padStart(2,'0')}`:prm.time);
+    const t=fmtT(prm.time);
     const up=o.close>=o.open;
     if(pr)pr.innerHTML=`<span class=muted>${t}</span> · O ${fmt(o.open)} H ${fmt(o.high)} L ${fmt(o.low)} <span style="color:${up?'var(--up)':'var(--dn)'}">C <b>${fmt(o.close)}</b></span>`;});
   const dec=d.decision||{};

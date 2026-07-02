@@ -121,9 +121,22 @@ FX_RISK_FREE = 0.035                 # AUD cash benchmark for metrics (RBA-ish)
 DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
 START = "2015-01-01"                 # default backtest start
 
-# Two ready-to-run paper books: the account holder and their partner, each with
-# its own isolated state file and risk profile. Add more here or via the CLI.
+# Ready-to-run paper books, each an isolated state file with its own capital,
+# risk profile, universe and bar cadence. Add more here or via the CLI.
+#   matt / partner — the original daily FX+crypto books.
+#   daytrader      — the DAY-TRADING book: $10k, intraday profile on 60m bars,
+#                    advanced hourly by the day-paper workflow. Honest note:
+#                    Yahoo intraday is ~15-min delayed — fine for paper cadence,
+#                    not a live-feed simulation.
+#   multiasset     — the full STOCK + BOND book: $10k, daily bars, US equities +
+#                    bond ETFs plus an AUDUSD overlay (which doubles as the AUD
+#                    translation hub for exact AUD marking).
+from .pairs import MULTI_ASSET_UNIVERSE  # noqa: E402  (no circularity: pairs is leaf)
+
 ACCOUNTS: dict[str, dict] = {
-    "matt":    {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
-    "partner": {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
+    "matt":       {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
+    "partner":    {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
+    "daytrader":  {"capital": 10_000.0, "profile": "intraday", "bar": "60m"},
+    "multiasset": {"capital": 10_000.0, "profile": "balanced",
+                   "symbols": MULTI_ASSET_UNIVERSE},
 }

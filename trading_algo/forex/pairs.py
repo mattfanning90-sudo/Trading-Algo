@@ -96,13 +96,29 @@ EQUITIES: dict[str, Pair] = {
     "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0),
 }
 
-ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES}
+# US-listed bond ETFs — the honest, tradable bond vehicle for a paper book
+# (direct treasuries need a bond feed/venue we don't have). USD-quoted like the
+# equities; pip = one cent; conservative round-trip spreads in cents; financing
+# not modelled (swap = 0), same as equities.
+BONDS: dict[str, Pair] = {
+    "TLT": Pair("TLT", "TLT", "USD", "TLT", 0.01, 2.0, 0.0, 0.0),   # 20y+ treasuries
+    "IEF": Pair("IEF", "IEF", "USD", "IEF", 0.01, 2.0, 0.0, 0.0),   # 7–10y treasuries
+    "AGG": Pair("AGG", "AGG", "USD", "AGG", 0.01, 1.0, 0.0, 0.0),   # aggregate bond
+    "SHY": Pair("SHY", "SHY", "USD", "SHY", 0.01, 1.0, 0.0, 0.0),   # 1–3y treasuries
+}
+
+ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES, **BONDS}
 
 # Default tradable universe: the seven FX majors plus the three major cryptos.
 DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
 
 # A liquid US-equity universe for the Alpaca / OpenBB feeds (off by default).
 EQUITY_UNIVERSE: list[str] = list(EQUITIES)
+BOND_UNIVERSE: list[str] = list(BONDS)
+
+# The multi-asset book: stocks + bond ETFs, plus AUDUSD as a currency overlay —
+# which also gives the AUD account its translation hub (see fxconv) naturally.
+MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
 
 
 def get_pair(symbol: str) -> Pair:
