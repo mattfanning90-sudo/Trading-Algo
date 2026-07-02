@@ -254,6 +254,10 @@ Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
   result is identical to the full recompute).
 * `AgentPool` reuses one thread pool across cycles and evaluates agents
   concurrently — the benefit grows with the universe size and intraday bar count.
+* The dashboard build runs the weight engine **exactly once per page** (pinned by
+  `tests/test_fx_dashboard.py::test_build_payload_single_weight_engine_pass`) and
+  both the book and the dashboard fetch only `min_history + display` bars instead
+  of the full archive — page-build and live-cycle time stay flat as history grows.
 * `indicators.StreamingEMA` / `StreamingATR` provide O(1)-per-tick incremental
   updates for the latency-critical path, pinned to the vectorized output.
 
