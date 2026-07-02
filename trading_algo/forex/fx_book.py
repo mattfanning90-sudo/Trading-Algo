@@ -111,7 +111,7 @@ def _sign(x: float) -> int:
 def init_account(account: str, capital: float, profile_name: str,
                  symbols: list[str] | None = None,
                  currency: str = cfg.ACCOUNT_CURRENCY, source: str = "yahoo",
-                 force: bool = False) -> None:
+                 bar: str = "1d", force: bool = False) -> None:
     if os.path.exists(_state_file(account)) and not force:
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
@@ -121,6 +121,10 @@ def init_account(account: str, capital: float, profile_name: str,
         "currency": currency,
         "profile": profile_name,
         "source": source,
+        "bar": bar,                          # the book's own data cadence
+        # An explicit universe is LOCKED: run_once won't merge in the default
+        # FX+crypto instruments (a stocks/bonds book must stay stocks/bonds).
+        "universe_locked": symbols is not None,
         "symbols": list(symbols or DEFAULT_UNIVERSE),
         "initial_capital": float(capital),
         "equity": float(capital),
@@ -140,9 +144,12 @@ def init_account(account: str, capital: float, profile_name: str,
 
 
 def init_defaults(synthetic: bool, force: bool = False) -> None:
-    """Open the two ready-to-run books from config (matt + partner)."""
+    """Open every ready-to-run book from config (matt, partner, daytrader,
+    multiasset) — each with its own capital / profile / universe / bar."""
     for name, spec in cfg.ACCOUNTS.items():
-        init_account(name, spec["capital"], spec["profile"], force=force)
+        init_account(name, spec["capital"], spec["profile"],
+                     symbols=spec.get("symbols"), bar=spec.get("bar", "1d"),
+                     force=force)
 
 
 # ---------------------------------------------------------------------------
@@ -161,19 +168,22 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 
 def run_once(account: str, synthetic: bool = False,
-             pool: AgentPool | None = None, interval: str = "1d",
+             pool: AgentPool | None = None, interval: str | None = None,
              source: str | None = None, exchange: str | None = None) -> None:
     state = load_state(account)
     p = _params(state)
+    # Per-book cadence: explicit CLI override, else the book's own stored bar
+    # (daytrader = 60m, everything else daily).
+    interval = interval or state.get("bar") or "1d"
     # Resolve the data source: explicit CLI override, else the book's own stored
     # source (defaults to yahoo). `--exchange` implies crypto (back-compat).
     src = feeds.resolve_source(source if source is not None
                                else state.get("source", "yahoo"), exchange)
-    if src == "yahoo":
+    if src == "yahoo" and not state.get("universe_locked"):
         # Pick up any newly-added instruments (e.g. crypto) without losing history.
         symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
     else:
-        symbols = list(state.get("symbols") or [])  # non-default feeds trade their own book
+        symbols = list(state.get("symbols") or [])  # locked/non-default books trade their own
     state["symbols"] = symbols
     state["source"] = src
     from .fx_strategy import min_history
@@ -317,7 +327,7 @@ def run_once(account: str, synthetic: bool = False,
 
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
-            interval: str = "1d", source: str | None = None,
+            interval: str | None = None, source: str | None = None,
             exchange: str | None = None) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
@@ -385,9 +395,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
-    ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m / 1m (default daily). "
-                         "Live intraday needs a real-time feed; see docs/HFT_REALITY.md.")
+    ap.add_argument("--bar", default=None,
+                    help="data bar interval, e.g. 60m / 15m / 1m (default: each "
+                         "book's own cadence, else daily). Live intraday needs a "
+                         "real-time feed; see docs/HFT_REALITY.md.")
     ap.add_argument("--source", default=None, choices=feeds.SOURCES,
                     help="market-data source: yahoo (default), crypto, oanda, "
                          "alpaca, openbb. See docs/DATA_FEEDS.md.")

@@ -47,12 +47,12 @@ def fx_market_open(dt: datetime | None = None) -> bool:
 
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,
-             bar: str = "1d", source: str | None = None,
+             bar: str | None = None, source: str | None = None,
              exchange: str | None = None) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     src = source or ("crypto" if exchange else "yahoo")
     print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  "
-          f"bar={bar}  src={src} ===")
+          f"bar={bar or 'auto'}  src={src} ===")
     if account:
         fx_book.run_once(account, synthetic, pool=pool, interval=bar,
                          source=source, exchange=exchange)
@@ -68,7 +68,7 @@ def _is_24_7(source: str | None, exchange: str | None) -> bool:
 
 async def run_loop(account: str | None, synthetic: bool, pool: AgentPool,
                    interval: float = 300.0, max_cycles: int | None = None,
-                   bar: str = "1d", source: str | None = None,
+                   bar: str | None = None, source: str | None = None,
                    exchange: str | None = None) -> None:
     """Poll every `interval` seconds (`bar` = data interval); `max_cycles` bounds
     the loop (tests). Crypto trades 24/7, so the FX-week gate is skipped."""
@@ -114,9 +114,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--once", action="store_true", help="single pass (cron-friendly)")
     ap.add_argument("--loop", action="store_true", help="poll forever on --interval")
     ap.add_argument("--interval", type=float, default=300.0, help="loop poll seconds")
-    ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m for intraday, 1m for HF crypto "
-                         "(default daily)")
+    ap.add_argument("--bar", default=None,
+                    help="data bar interval, e.g. 60m / 15m / 1m (default: each "
+                         "book's own cadence, else daily)")
     ap.add_argument("--source", default=None, choices=feeds.SOURCES,
                     help="market-data source: yahoo (default), crypto, oanda, "
                          "alpaca, openbb. See docs/DATA_FEEDS.md.")

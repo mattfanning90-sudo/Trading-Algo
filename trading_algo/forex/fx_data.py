@@ -107,11 +107,13 @@ _SYNTH_LEVEL = {
     "EURAUD": 1.63,
     "BTCUSD": 60000.0, "ETHUSD": 3000.0, "SOLUSD": 150.0,
     "AAPL": 195.0, "MSFT": 420.0, "NVDA": 120.0, "SPY": 540.0, "QQQ": 470.0,
+    "TLT": 95.0, "IEF": 94.0, "AGG": 98.0, "SHY": 82.0,
 }
 
-# Pairs that need a higher synthetic volatility path (crypto ≫ equities ≫ FX).
+# Pairs that need a higher synthetic volatility path (crypto ≫ equities ≫ FX ≫ bonds).
 _SYNTH_VOL = {"BTCUSD": 4.0, "ETHUSD": 4.5, "SOLUSD": 6.0,
-              "AAPL": 1.8, "MSFT": 1.6, "NVDA": 2.6, "SPY": 1.2, "QQQ": 1.4}
+              "AAPL": 1.8, "MSFT": 1.6, "NVDA": 2.6, "SPY": 1.2, "QQQ": 1.4,
+              "TLT": 0.9, "IEF": 0.5, "AGG": 0.35, "SHY": 0.15}
 
 # Yahoo interval -> pandas frequency (for the synthetic generator).
 _PD_FREQ = {"1d": "B", "1h": "1h", "60m": "1h", "30m": "30min", "15m": "15min",

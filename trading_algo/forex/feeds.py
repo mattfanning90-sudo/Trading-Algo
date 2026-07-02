@@ -101,9 +101,17 @@ def load(symbols: list[str], synthetic: bool = False, interval: str = "1d",
         return fx_data.synthetic_panel(symbols, start="2025-01-01",
                                        end="2025-04-01", freq=interval)
     start = cfg.START if daily else _intraday_start(interval)
-    if min_bars and daily:
-        # ~1.55 calendar days per business day, plus margin for holidays.
-        bounded = (pd.Timestamp.utcnow().tz_localize(None)
-                   - pd.Timedelta(days=int(min_bars * 1.6) + 20)).strftime("%Y-%m-%d")
-        start = max(start, bounded)
+    if min_bars:
+        if daily:
+            # ~1.55 calendar days per business day, plus margin for holidays.
+            days = int(min_bars * 1.6) + 20
+        elif interval in ("60m", "1h"):
+            # conservative ≥6 bars per trading day (equities; FX has ~24).
+            days = int(min_bars / 6 * 1.6) + 10
+        else:
+            days = None                      # finer intervals: Yahoo limits apply anyway
+        if days:
+            bounded = (pd.Timestamp.utcnow().tz_localize(None)
+                       - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+            start = max(start, bounded)
     return fx_data.load_panel(symbols, start, interval=interval, use_cache=use_cache)
