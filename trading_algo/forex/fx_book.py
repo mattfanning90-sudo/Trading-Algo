@@ -87,10 +87,13 @@ def _params(state: dict) -> FXParams:
 
 
 def _panel(symbols: list[str], synthetic: bool, interval: str = "1d",
-           source: str = "yahoo", exchange: str | None = None):
-    """Aligned OHLC panel from any data source (see feeds.SOURCES)."""
+           source: str = "yahoo", exchange: str | None = None,
+           min_bars: int | None = None):
+    """Aligned OHLC panel from any data source (see feeds.SOURCES). `min_bars`
+    bounds the daily fetch to the strategy's warm-up need (see feeds.load)."""
     return feeds.load(symbols, synthetic=synthetic, interval=interval,
-                      source=source, exchange=exchange, use_cache=False)
+                      source=source, exchange=exchange, use_cache=False,
+                      min_bars=min_bars)
 
 
 def _bar_key(ts, interval: str) -> str:
@@ -173,7 +176,9 @@ def run_once(account: str, synthetic: bool = False,
         symbols = list(state.get("symbols") or [])  # non-default feeds trade their own book
     state["symbols"] = symbols
     state["source"] = src
-    panel = _panel(symbols, synthetic, interval, source=src, exchange=exchange)
+    from .fx_strategy import min_history
+    panel = _panel(symbols, synthetic, interval, source=src, exchange=exchange,
+                   min_bars=min_history(p) + 5)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
         return

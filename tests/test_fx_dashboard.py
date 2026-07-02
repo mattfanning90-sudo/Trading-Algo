@@ -81,9 +81,31 @@ def test_dashboard_export_offline(isolated):
                   'class="plain"', "In plain English",
                   'id="verdict"', 'id="eqperiod"', 'id="eqread"',
                   "function sparkline", "subscribeCrosshairMove", 'class="pbtn',
-                  'id="today"', 'id="dailycard"', "Daily summary", "Market backdrop"):
+                  'id="today"', 'id="dailycard"', "Daily summary", "Market backdrop",
+                  'id="books"', 'id="ago"', 'id="cbtoggle"', 'id="csvbtn"',
+                  "body.cb", "data-pair", "th.sortable", "function goPair"):
         assert token in html
     assert html.count('class="plain"') >= 5    # a visible explainer per section
+
+
+def test_build_payload_single_weight_engine_pass(isolated, monkeypatch):
+    """Perf invariant: the whole page build runs the (expensive) weight engine
+    exactly ONCE — attribution, scorecard and PBO all share that pass."""
+    from trading_algo.forex import dashboard as dash, fx_strategy
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    calls = {"n": 0}
+    real = fx_strategy.target_weights_history
+    def counted(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+    monkeypatch.setattr(dash, "target_weights_history", counted)
+    p = dash.build_payload("matt", synthetic=True)
+    assert calls["n"] == 1
+    # ...and the shared pass still feeds every consumer
+    assert p["attribution"] and "ensemble" in p["attribution"]
+    assert "dsr" in p["risk"] and "pbo" in p["risk"]
+    assert p["books"] == ["matt"]
 
 
 def test_beginner_explanation_plain_english():

@@ -32,7 +32,7 @@ from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
-from .fx_strategy import target_weights_history
+from .fx_strategy import min_history, target_weights_history
 from .pairs import get_pair
 from .validation import (_norm_ppf, deflated_sharpe_ratio, pbo,
                          probabilistic_sharpe_ratio)
@@ -101,10 +101,14 @@ GLOSSARY = {
 }
 
 
-def _panel(symbols, synthetic):
+def _panel(symbols, synthetic, need_bars: int | None = None):
     if synthetic:
         return fx_data.synthetic_panel(symbols)
-    start = (datetime.now(timezone.utc) - timedelta(days=550)).strftime("%Y-%m-%d")
+    # Fetch exactly the strategy's warm-up + display need (~1.6 calendar days per
+    # business day). The old fixed 550-day window under-fetched min_history, which
+    # silently truncated the ensemble warm-up on real data.
+    days = int((need_bars or 340) * 1.6) + 20
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     return fx_data.load_panel(symbols, start, use_cache=True)
 
 
@@ -184,10 +188,20 @@ def _curve_metrics(dates, values) -> dict:
     return out
 
 
-def _agent_attribution(panel, p, bars) -> dict:
+def _signal_parts(panel, p):
+    """ONE shared pass of the canonical weight engine for the whole page.
+
+    Attribution, the agent scorecard and the PBO matrix all need the per-agent
+    signal history — computing it once here (instead of once per consumer) is the
+    dashboard's single biggest performance lever.
+    """
     pool = AgentPool(max_workers=1)
     _, signals, tilts = target_weights_history(panel, p, pool=pool, return_parts=True)
     rets = fx_data.closes(panel).pct_change(fill_method=None)
+    return signals, tilts, rets
+
+
+def _agent_attribution(signals, tilts, rets, bars) -> dict:
     if not signals:
         return {}
     names = list(next(iter(signals.values())).columns)
@@ -481,25 +495,23 @@ def _conviction(state: dict) -> list:
     return out
 
 
-def _agent_daily_matrix(panel, p, bars) -> pd.DataFrame:
-    """T×agents matrix of each agent's standalone daily return (for PBO)."""
-    pool = AgentPool(max_workers=1)
-    _, signals, _ = target_weights_history(panel, p, pool=pool, return_parts=True)
+def _agent_daily_matrix(signals, rets, bars) -> pd.DataFrame:
+    """T×agents matrix of each agent's standalone daily return (for PBO).
+    Reuses the shared `_signal_parts` pass — no second weight-engine run."""
     if not signals:
         return pd.DataFrame()
-    rets = fx_data.closes(panel).pct_change(fill_method=None)
     names = list(next(iter(signals.values())).columns)
     cols = {name: pd.DataFrame({s: signals[s][name].shift(1) * rets[s] for s in signals})
             .mean(axis=1).tail(bars).fillna(0.0) for name in names}
     return pd.DataFrame(cols)
 
 
-def _advanced_significance(panel, p, returns_values, bars=180) -> dict:
+def _advanced_significance(signals, rets, returns_values, bars=180) -> dict:
     """Deflated Sharpe (penalised for how many agents/strategies were tried) and
     Probability of Backtest Overfitting across the agent set — completes PSR."""
     out = {"dsr": None, "dsr_trials": None, "pbo": None}
     try:
-        mat = _agent_daily_matrix(panel, p, bars)
+        mat = _agent_daily_matrix(signals, rets, bars)
     except Exception:
         mat = pd.DataFrame()
     r = np.asarray(returns_values, dtype=float)
@@ -579,7 +591,13 @@ def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
     p = profile(state.get("profile", "balanced"))
-    panel = _panel(symbols, synthetic)
+    # Bounded compute: everything below only needs the display window plus the
+    # indicator/ensemble warm-up (min_history + bars) — the same fast-trim
+    # property compute_targets(fast=True) relies on. Fetch and trim to exactly
+    # that, so page-build time stays flat no matter how much history accumulates.
+    need = min_history(p) + bars + 10
+    panel = _panel(symbols, synthetic, need_bars=need)
+    panel = {s: df.tail(need) for s, df in panel.items()}
     decisions = state.get("decisions", {})
 
     data, pairs = {}, []
@@ -627,7 +645,9 @@ def build_payload(account, synthetic=False, bars=180):
     risk = _risk_costs(state, p)
     book_rets = (pd.Series([float(v) for _, v in eqh], dtype=float)
                  .pct_change().dropna().values) if len(eqh) >= 2 else []
-    risk.update(_advanced_significance(panel, p, book_rets, bars))   # DSR + PBO alongside PSR
+    # ONE weight-engine pass shared by attribution, the scorecard and PBO.
+    signals, tilts, rets = _signal_parts(panel, p)
+    risk.update(_advanced_significance(signals, rets, book_rets, bars))  # DSR + PBO alongside PSR
 
     return {
         "account": account, "profile": state.get("profile", "balanced"),
@@ -649,9 +669,10 @@ def build_payload(account, synthetic=False, bars=180):
         "pnl_attribution": _attribution_rollup(txn),
         "trade_stats": _trade_stats(state),
         "conviction": _conviction(state),
-        "attribution": _agent_attribution(panel, p, bars),
+        "attribution": _agent_attribution(signals, tilts, rets, bars),
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
+        "books": sorted(list_accounts()),
     }
 
 
@@ -766,6 +787,19 @@ section{padding:1rem 1.5rem 1.25rem}
 .pbtn.on{border-color:var(--accent);color:var(--accent)}
 .cread{font-size:.74rem;color:var(--mut);min-height:1.15em;margin:-.1rem 0 .35rem;font-family:var(--mono)}
 .cread b{color:var(--fg)}.spark{display:block;margin-top:.25rem}
+/* colourblind-safe mode: blue/orange replaces green/red (persisted) */
+body.cb{--up:#4c9be8;--dn:#f5a623}
+/* interaction affordances */
+[data-pair]{cursor:pointer}
+.row [data-pair]:hover,.hc:hover{color:var(--accent);border-color:var(--accent)}
+table.txn th.sortable{cursor:pointer;user-select:none}
+table.txn th.sortable:hover{color:var(--fg)}
+.navr{margin-left:auto;display:flex;gap:.6rem;align-items:center}
+.navr .bk{color:var(--mut)}.navr .bk.cur{color:var(--accent);border-bottom:1px solid var(--accent)}
+.chipbtn{background:transparent;border:1px solid var(--bd);color:var(--mut);border-radius:999px;
+  padding:.15rem .6rem;cursor:pointer;font-size:.75rem}
+.chipbtn:hover{border-color:var(--accent);color:var(--accent)}
+#ago{font-size:.75rem;color:var(--mut);font-family:var(--mono)}
 /* daily summary */
 .dhead{font-size:1.05rem;margin:.1rem 0 .2rem}.dhead b{font-family:var(--mono)}
 .dbreak{color:var(--mut);font-size:.78rem;font-family:var(--mono);margin-bottom:.7rem}
@@ -775,7 +809,9 @@ section{padding:1rem 1.5rem 1.25rem}
 .drow .amt{font-family:var(--mono);min-width:74px;text-align:right}
 .dwhy{color:var(--mut);font-size:.78rem}.dmkt{margin-top:.7rem;font-size:.82rem;line-height:1.5}
 </style></head><body>
-<div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a></div>
+<div class="nav"><a href="index.html">← All books</a><a href="how.html">📖 How it works — start here</a>
+  <span class="navr"><span id="books"></span><span id="ago"></span>
+    <button class="chipbtn" id="cbtoggle" title="Colourblind-safe colours (blue/orange instead of green/red)">◑ colours</button></span></div>
 <header>
   <h1>FX Paper Book · <span style="color:var(--accent)">__ACCOUNT__</span>
     <span class="badge">__PROFILE__</span>__HALT__</h1>
@@ -881,7 +917,8 @@ section{padding:1rem 1.5rem 1.25rem}
     <b>cost</b> you paid, and how it's done <b>since</b>. Hover any column heading for what it means; type a pair in
     the box to filter.</p>
   <div class="card">
-    <h2>Full blotter <span class="muted" style="font-weight:400" id="txnsub"></span></h2>
+    <h2>Full blotter <span class="muted" style="font-weight:400" id="txnsub"></span>
+      <button class="chipbtn" id="csvbtn" style="float:right">⬇ CSV</button></h2>
     <input class="txnsearch" id="txnsearch" placeholder="filter by pair, e.g. BTC">
     <div class="txnwrap"><table class="txn" id="txntable"></table></div>
     <div class="legend">Every column is hover-defined. <b>P&amp;L since</b> is each trade's running
@@ -977,12 +1014,46 @@ function bars(obj, hi){
   return Object.entries(obj).map(([n,v])=>{
     const w=Math.min(Math.abs(v)/max,1)*50,left=v>=0?50:50-w,col=v>=0?'var(--up)':'var(--dn)';
     const em=(hi&&hi.includes(n))?'font-weight:700;color:var(--fg)':'';
-    const nm=ROLES[n]?`<span class="tip" data-tip="${ROLES[n].replace(/"/g,'&quot;')}">${n}</span>`:n;
+    // pair names are click-through links into the Pair explorer
+    const isPair=(DASH.pairs||[]).includes(n);
+    const nm=ROLES[n]?`<span class="tip" data-tip="${ROLES[n].replace(/"/g,'&quot;')}">${n}</span>`
+             :(isPair?`<span data-pair="${n}" title="open in Pair explorer">${n}</span>`:n);
     return `<div class=row><div class=name style="${em}">${nm}</div>`+
       `<div class=bar><i style="left:${left}%;width:${w}%;background:${col}"></i>`+
       `<i style="left:50%;width:1px;background:#555"></i></div>`+
       `<div class=val style="color:${col}">${pct(v)}</div></div>`;}).join('');
 }
+
+let curSym=null;
+function goPair(sym){
+  if(!(DASH.pairs||[]).includes(sym)) return;
+  showPair(sym);
+  document.getElementById('pairs').scrollIntoView({behavior:'smooth'});
+}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-pair]'); if(t) goPair(t.dataset.pair);});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||!curSym||!(DASH.pairs||[]).length) return;
+  const i=DASH.pairs.indexOf(curSym);
+  if(e.key==='ArrowRight') showPair(DASH.pairs[(i+1)%DASH.pairs.length]);
+  else if(e.key==='ArrowLeft') showPair(DASH.pairs[(i-1+DASH.pairs.length)%DASH.pairs.length]);});
+
+(function(){
+  // header: sibling-book switcher, live "updated ago", colourblind-safe toggle
+  const bk=document.getElementById('books');
+  if(bk)bk.innerHTML=(DASH.books||[]).map(b=>b===DASH.account
+    ?`<span class="bk cur">${b}</span>`:`<a class=bk href="fx_${b}.html">${b}</a>`).join(' ');
+  const ago=document.getElementById('ago');
+  const upd=Date.parse((DASH.updated||'').replace(' UTC','Z').replace(' ','T'));
+  function tick(){if(!ago||!upd)return;const m=Math.max(0,Math.round((Date.now()-upd)/60000));
+    ago.textContent=m<60?`updated ${m}m ago`:`updated ${Math.round(m/60)}h ago`;
+    ago.style.color=m>1800?'var(--dn)':'var(--mut)';}   // stale >30h = red
+  tick(); setInterval(tick,30000);
+  const cb=document.getElementById('cbtoggle');
+  if(localStorage.getItem('cb')==='1')document.body.classList.add('cb');
+  if(cb)cb.onclick=()=>{const on=document.body.classList.toggle('cb');
+    localStorage.setItem('cb',on?'1':'0');};
+})();
 
 (function(){
   document.getElementById('agentcard').innerHTML=bars(DASH.attribution,["ensemble","buy&hold"]);
@@ -1070,7 +1141,7 @@ function bars(obj, hi){
   const conv=DASH.conviction||[], ch=document.getElementById('conviction');
   const heatColor=t=>{const a=Math.min(Math.abs(t),1)*0.55+0.08;
     return t>=0?`rgba(38,166,154,${a})`:`rgba(239,83,80,${a})`;};
-  if(ch)ch.innerHTML=conv.length?conv.map(c=>`<div class=hc style="background:${heatColor(c.tilt)}" title="${c.regime||''}">${c.pair}<br><b>${(c.tilt>=0?'+':'')+c.tilt}</b>${c.regime?` <span class=muted>${c.regime[0]}</span>`:''}</div>`).join(''):'<div class=muted>No live read yet — fills in on the next run.</div>';
+  if(ch)ch.innerHTML=conv.length?conv.map(c=>`<div class=hc data-pair="${c.pair}" style="background:${heatColor(c.tilt)}" title="${c.regime||''} — click to open in Pair explorer">${c.pair}<br><b>${(c.tilt>=0?'+':'')+c.tilt}</b>${c.regime?` <span class=muted>${c.regime[0]}</span>`:''}</div>`).join(''):'<div class=muted>No live read yet — fills in on the next run.</div>';
   // P&L by pair
   const at=DASH.pnl_attribution||{}, pp=document.getElementById('pnlpair');
   const byPair=Object.fromEntries(Object.entries(at.by_pair||{}).map(([k,v])=>[k,v.pnl]));
@@ -1093,11 +1164,16 @@ function bars(obj, hi){
   const el=document.getElementById('txntable'),sub=document.getElementById('txnsub');
   if(!T.rows||!T.rows.length){el.innerHTML='<tbody><tr><td class=l>This fills in as the book trades.</td></tr></tbody>';return;}
   if(sub)sub.textContent=`(${T.shown} of ${T.count} shown, newest first)`;
-  const cols=[["Time"],["Pair"],["Side"],["Δw→tgt","Delta weight"],["Mid","Mid price"],
-    ["Bid","Bid"],["Ask","Ask"],["Spread bps","Spread"],["Notional","Notional"],
-    ["Cost","Transaction cost"],["Last"],["Move"],["P&L since","P&L since"]];
+  const cols=[["Time",null,"time"],["Pair",null,"pair"],["Side",null,"side"],
+    ["Δw→tgt","Delta weight","dweight"],["Mid","Mid price","price"],
+    ["Bid","Bid","bid"],["Ask","Ask","ask"],["Spread bps","Spread","spread_bps"],
+    ["Notional","Notional","notional"],["Cost","Transaction cost","cost"],
+    ["Last",null,"last"],["Move",null,"move"],["P&L since","P&L since","pnl"]];
   const money=v=>v==null?"–":(v<0?"-":"")+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const head='<thead><tr>'+cols.map(([lbl,g])=>`<th${(lbl==='Pair'||lbl==='Time')?' class=l':''}>${g?tip(lbl,g):lbl}</th>`).join('')+'</tr></thead>';
+  let sortK=null,sortDir=-1;   // click a header to sort; click again to flip
+  const head=()=>'<thead><tr>'+cols.map(([lbl,g,k])=>{
+    const arrow=k===sortK?(sortDir<0?' ▼':' ▲'):'';
+    return `<th class="sortable${(lbl==='Pair'||lbl==='Time')?' l':''}" data-k="${k}">${g?tip(lbl,g):lbl}${arrow}</th>`;}).join('')+'</tr></thead>';
   const ccy=DASH.currency;
   function rowHTML(r){
     const sideCls=r.side==='BUY'?'B':'S';
@@ -1121,13 +1197,32 @@ function bars(obj, hi){
   const foot=`<tfoot><tr><td class=l colspan=8>Totals · ${T.count} trades (${ccy})</td>`+
     `<td>${money(tt.notional)}</td><td class=loss>${money(tt.cost)}</td><td></td><td></td>`+
     `<td class=${(tt.pnl||0)>=0?'win':'loss'}>${money(tt.pnl)}</td></tr></tfoot>`;
-  function render(f){const rows=f?T.rows.filter(r=>r.pair.toLowerCase().includes(f)):T.rows;
-    el.innerHTML=head+'<tbody>'+rows.map(rowHTML).join('')+'</tbody>'+foot;}
-  render('');
-  document.getElementById('txnsearch').addEventListener('input',e=>render(e.target.value.trim().toLowerCase()));
+  let curFilter='';
+  function render(){
+    let rows=curFilter?T.rows.filter(r=>r.pair.toLowerCase().includes(curFilter)):T.rows.slice();
+    if(sortK)rows.sort((a,b)=>{const x=a[sortK],y=b[sortK];
+      if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1;
+      return (typeof x==='string'?String(x).localeCompare(String(y)):x-y)*sortDir;});
+    el.innerHTML=head()+'<tbody>'+rows.map(rowHTML).join('')+'</tbody>'+foot;
+    el.querySelectorAll('th.sortable').forEach(th=>th.onclick=()=>{
+      const k=th.dataset.k;
+      sortDir=(k===sortK)?-sortDir:-1; sortK=k; render();});
+  }
+  render();
+  document.getElementById('txnsearch').addEventListener('input',e=>{curFilter=e.target.value.trim().toLowerCase();render();});
+  // one-click CSV export of the full blotter (client-side, no server)
+  const csvBtn=document.getElementById('csvbtn');
+  if(csvBtn)csvBtn.onclick=()=>{
+    const kk=cols.map(c=>c[2]);
+    const csv=[kk.join(',')].concat(T.rows.map(r=>kk.map(k=>{
+      const v=r[k]; return v==null?'':String(v).includes(',')?`"${v}"`:v;}).join(','))).join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+    a.download=`transactions_${DASH.account}.csv`; a.click(); URL.revokeObjectURL(a.href);};
 })();
 
 function showPair(sym){
+  curSym=sym;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.s===sym));
   document.getElementById('curpair').textContent=sym;
   const d=DASH.data[sym];
