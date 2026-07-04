@@ -229,3 +229,22 @@ def test_export_payload_map(books):
     assert payloads["/api/account/FULL"]["account"] == "full"
     # exported meta is locked to the single baked account
     assert [a["key"] for a in payloads["/api/meta"]["accounts"]] == ["FULL"]
+
+
+def test_export_site_bakes_every_book(books, tmp_path):
+    payloads = export.build_payloads_site(synthetic=True)
+    assert "/api/overview" in payloads
+    keys = {a["key"] for a in payloads["/api/meta"]["accounts"]}
+    assert keys == {"FULL", "MATT"}
+    for k in keys:
+        assert payloads[f"/api/account/{k}"]
+        assert f"/api/backtest/{k}" in payloads
+
+    out = tmp_path / "site.html"
+    export.export_site(synthetic=True, out_path=str(out))
+    html = out.read_text()
+    assert "__EXPORT_ALL__ = true" in html
+    assert "/api/overview" in html
+    # self-contained: inlined assets, no external resources
+    assert 'src="app.js"' not in html and 'href="styles.css"' not in html
+    assert 'src="http' not in html and 'href="http' not in html
