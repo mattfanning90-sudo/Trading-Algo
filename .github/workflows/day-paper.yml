@@ -113,8 +113,21 @@ jobs:
       cancel-in-progress: false
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     steps:
+      # Pages occasionally rejects a deploy with "try again later" when another
+      # publish is mid-flight (the shared concurrency group serialises jobs, but
+      # the Pages backend can still transiently reject). A failed deploy silently
+      # strands the LIVE site behind the committed state, so tolerate the first
+      # failure and retry once after a short back-off rather than leaving it stale.
       - name: Deploy to GitHub Pages
         id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Back off before retry
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 25
+      - name: Deploy to GitHub Pages (retry)
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
