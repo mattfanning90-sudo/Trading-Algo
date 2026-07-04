@@ -12,7 +12,7 @@ from . import config as cfg
 from . import constituents, data
 from .backtest import run_backtest
 from .portfolio_backtest import run_portfolio_backtest
-from .regions import get_region
+from .regions import all_region_keys, get_region
 from .strategy import compute_targets
 
 
@@ -100,7 +100,9 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--region", choices=list(cfg.ALLOCATIONS), help="single sleeve")
+    # Single-sleeve choices come from the region REGISTRY, not ALLOCATIONS, so a
+    # scaffolded-but-unfunded sleeve (e.g. TSX) can still be backtested on its own.
+    ap.add_argument("--region", choices=all_region_keys(), help="single sleeve")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--point-in-time", action="store_true",
                     help="use point-in-time constituents (survivorship-bias corrected)")

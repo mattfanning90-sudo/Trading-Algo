@@ -15,6 +15,7 @@ import argparse
 
 from . import feeds
 from . import fx_config as cfg
+from . import pairs
 from .agents import AgentPool, default_agents
 from .fx_backtest import run_backtest
 from .fx_config import profile, profile_names
@@ -50,6 +51,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--exchange", default=None,
                     help="crypto exchange via ccxt (e.g. binance) for the crypto "
                          "source; default binance. See docs/CRYPTO_HF.md.")
+    ap.add_argument("--universe", default=None,
+                    help="override the source's natural universe: a named preset "
+                         f"({', '.join(pairs.UNIVERSES)}) or a comma-separated "
+                         "symbol list, e.g. majors+crosses.")
     args = ap.parse_args(argv)
 
     if args.synthetic:
@@ -57,8 +62,13 @@ def main(argv: list[str] | None = None) -> None:
     source = feeds.resolve_source(args.source, args.exchange)
     if args.profile == "hf_crypto" and source == "yahoo":
         source = "crypto"
-    # Each source brings its natural universe (FX majors / crypto / US equities).
-    universe = feeds.default_universe(source, args.profile)
+    # Each source brings its natural universe (FX majors / crypto / US equities);
+    # --universe overrides it so a candidate set (e.g. majors+crosses) can be tested.
+    if args.universe:
+        universe = pairs.resolve_universe(args.universe)
+        print(f"Universe ({args.universe}): {', '.join(universe)}")
+    else:
+        universe = feeds.default_universe(source, args.profile)
     panel = feeds.load(universe, synthetic=args.synthetic, interval=args.bar,
                        source=source, exchange=args.exchange, use_cache=True)
     if not panel:

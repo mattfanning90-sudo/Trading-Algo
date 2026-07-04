@@ -15,7 +15,8 @@ import pandas as pd
 from . import data
 
 # Plausible synthetic anchor levels (base units per 1 local unit), AUD base.
-_SYNTH_LEVEL = {"AUD": 1.0, "USD": 1.52, "GBP": 1.92, "EUR": 1.63, "JPY": 0.0098}
+_SYNTH_LEVEL = {"AUD": 1.0, "USD": 1.52, "GBP": 1.92, "EUR": 1.63, "JPY": 0.0098,
+                "CAD": 1.11}   # AUDCAD ~0.90 (CAD per AUD) -> ~1.11 AUD per CAD
 
 
 def fx_ticker(base: str, ccy: str) -> str:

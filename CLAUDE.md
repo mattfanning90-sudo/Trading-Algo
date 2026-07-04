@@ -100,8 +100,16 @@ live intraday needs a real-time broker feed. The honest case against HFT here:
 
 ## Adding a region
 Add one entry to `REGIONS` in `regions.py` (universe in `universes.py`, plus
-index/currency/fees/calendar/routing) and include its key in
-`config.ALLOCATIONS`. Everything else is parameterised.
+index/currency/fees/calendar/routing). Everything else is parameterised.
+
+**Funded vs registered (the backtest gate).** Being in `REGIONS` makes a sleeve
+independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
+--region KEY`) and single-sleeve CLIs read the *registry*, not `ALLOCATIONS`. A
+sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
+(portfolio/paper/engine key off that). So the flow is: register → backtest →
+*then* fund. **TSX (Canada, CAD)** ships as a worked example: fully registered
+but intentionally absent from `ALLOCATIONS` until a walk-forward backtest earns
+it a slot. The dashboard METHOD tab tags such sleeves `UNFUNDED`.
 
 ## Environment notes
 - Fresh containers do NOT ship numpy/pandas/yfinance — `pip install -r

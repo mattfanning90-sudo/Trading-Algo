@@ -104,6 +104,9 @@ def build_meta() -> dict:
                 "slippage_bps": r.slippage_bps,
                 "stamp_duty_bps": r.stamp_duty_bps,
                 "price_scale": r.price_scale,
+                # False = scaffolded/backtestable but receives no live capital
+                # (not in config.ALLOCATIONS), e.g. TSX until a backtest funds it.
+                "funded": r.key in cfg.ALLOCATIONS,
             }
             for r in REGIONS.values()
         ],
