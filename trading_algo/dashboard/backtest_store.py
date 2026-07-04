@@ -118,6 +118,17 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
     return path
 
 
+def sweep_verdict(values: list[list[float]], top_ns: list, lookbacks: list) -> dict:
+    """Judge the grid with the project's own robustness rule (sweep.py) —
+    one definition of 'robust', not two."""
+    import pandas as pd
+
+    from ..sweep import robustness_report
+    # robustness_report expects sweep.py's orientation: rows=lookbacks, cols=top_n
+    grid = pd.DataFrame(values, index=list(top_ns), columns=list(lookbacks)).T
+    return robustness_report(grid)
+
+
 def _run_sweep(synthetic: bool,
                top_ns: tuple = (8, 10, 12, 15),
                lookbacks: tuple = (126, 189, 252)) -> dict:
@@ -133,14 +144,13 @@ def _run_sweep(synthetic: bool,
             r = run_portfolio_backtest(synthetic=synthetic, params=params)
             row.append(round(float(_metric(r["metrics"], "Sharpe") or 0.0), 2))
         values.append(row)
-    flat = [v for row in values for v in row]
-    mean = sum(flat) / len(flat)
-    spread = (max(flat) - min(flat)) / abs(mean) if mean else 0.0
+    report = sweep_verdict(values, list(top_ns), [f"{lb}d" for lb in lookbacks])
     return {
         "top_ns": list(top_ns),
         "lookbacks": [f"{lb}d" for lb in lookbacks],
         "values": values,
-        "verdict": "PLATEAU — ROBUST" if spread < 0.35 else "PEAKED — FRAGILE",
+        "verdict": report.get("verdict", ""),
+        "report": report,
     }
 
 

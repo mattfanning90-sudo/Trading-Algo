@@ -805,9 +805,13 @@ function backtestHTML(page) {
         cells.push(`<span style="display:grid;place-items:center;padding:12px 4px;background:rgba(126,231,135,${(0.05 + t * 0.28).toFixed(2)});color:${t > 0.8 ? PALE : '#9db5a0'};font-size:11px;letter-spacing:.06em">${num(v, 2)}</span>`);
       });
     });
-    const verdictOk = /ROBUST/.test(sweep.verdict || '');
+    /* tone follows sweep.py's three verdicts: ROBUST / MODERATE / PEAKY */
+    const v = sweep.verdict || '';
+    const vTone = /ROBUST/.test(v) ? G : /PEAKY/.test(v) ? R : AMB;
+    const vBorder = /ROBUST/.test(v) ? '#2a4a2c' : /PEAKY/.test(v) ? '#4a2a28' : '#4a3a1a';
+    const vShort = v.split(' — ')[0] || '—';
     sweepHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span style="font-size:9px;color:${verdictOk ? G : R};border:1px solid ${verdictOk ? '#2a4a2c' : '#4a2a28'};background:${verdictOk ? 'rgba(126,231,135,.06)' : 'rgba(255,123,114,.06)'};padding:2px 8px">VERDICT: ${esc(sweep.verdict || '')}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span title="${esc(v)}" style="font-size:9px;color:${vTone};border:1px solid ${vBorder};background:rgba(126,231,135,.04);padding:2px 8px">VERDICT: ${esc(vShort)}</span></div>
       <div style="padding:14px 18px">
         <div style="display:grid;grid-template-columns:70px repeat(${sweep.lookbacks.length},1fr);gap:3px;font-size:10px">
           <span></span>${sweep.lookbacks.map(l => `<span style="color:#61805f;text-align:center;font-size:9px;letter-spacing:.1em">LOOKBACK ${esc(String(l).toUpperCase())}</span>`).join('')}
