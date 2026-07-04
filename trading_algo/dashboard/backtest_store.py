@@ -74,11 +74,23 @@ def _metrics_out(m: dict) -> dict:
 
 
 def export_equity(synthetic: bool = False, point_in_time: bool = False,
-                  sweep: bool = False) -> str:
-    """Run the portfolio backtest and write the dashboard cache. Returns path."""
+                  sweep: bool = False, report_out: str | None = None) -> str:
+    """Run the portfolio backtest and write the dashboard cache. Returns path.
+    `report_out` additionally writes the Markdown report from the SAME run
+    (so CI gets both without paying for two backtests)."""
     from ..portfolio_backtest import run_portfolio_backtest
 
     result = run_portfolio_backtest(synthetic=synthetic, point_in_time=point_in_time)
+
+    if report_out:
+        from ..report import portfolio_markdown
+        with open(report_out, "w", encoding="utf-8") as f:
+            f.write(portfolio_markdown(result, synthetic, point_in_time) + "\n")
+        try:                               # equity curves for the CI artifact
+            result["equity"].to_csv("equity_curve_portfolio.csv")
+            result["benchmark"].to_csv("benchmark_curve.csv")
+        except Exception:
+            pass
     out = {
         "kind": "equity",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -138,8 +150,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--point-in-time", action="store_true")
     ap.add_argument("--sweep", action="store_true",
                     help="also run the TOP_N × lookback robustness grid (slow)")
+    ap.add_argument("--report", default=None, metavar="PATH",
+                    help="also write the Markdown report from the same run")
     args = ap.parse_args(argv)
-    path = export_equity(args.synthetic, args.point_in_time, args.sweep)
+    path = export_equity(args.synthetic, args.point_in_time, args.sweep,
+                         report_out=args.report)
     print(f"backtest cache → {path}")
 
 
