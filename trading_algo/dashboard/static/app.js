@@ -1042,6 +1042,62 @@ function allAccountsHTML() {
 /* ========================= AGENT BOOKS (FX) ============================ */
 const AGENT_NAMES = ['TREND', 'BREAKOUT', 'MOMENTUM', 'MEANREV', 'CARRY', 'NEURAL'];
 
+/* Plain-English explainers for the TA overlays & indicator panes — what the
+   tool is, what to look for on the chart, and how to actually trade it. Shown
+   on hover over each TA / pane button. */
+const TA_HELP = {
+  ema: {
+    title: 'EMA — trend direction',
+    what: 'Two smoothed average-price lines. The FAST line (amber) reacts quickly to recent price; the SLOW line (pale) is the bigger, slower trend.',
+    look: 'Fast ABOVE slow → uptrend. Fast BELOW slow → downtrend. The moment they cross is the signal: fast crossing up through slow is bullish (a "golden cross"), crossing down is bearish (a "death cross"). The wider the gap between the lines, the stronger the trend.',
+    apply: 'Trade WITH the cross. In an uptrend, price dipping back to the fast line is often a lower-risk spot to join rather than chasing. This is the Trend agent’s core input — it votes with the EMA direction, scaled by how strong the trend is.',
+  },
+  boll: {
+    title: 'Bollinger Bands — stretch & squeeze',
+    what: 'A middle average with an upper and lower band set 2 standard deviations away. The bands WIDEN when the market is volatile and PINCH tight when it’s quiet.',
+    look: 'Price riding the upper band = strong (it can stay there in a real trend). Price poking OUTSIDE a band then snapping back = a stretched move likely to revert. Bands squeezing very tight = a "squeeze" that often precedes a big breakout.',
+    apply: 'In a calm, sideways market, fade the extremes — buy near the lower band, sell near the upper (the Mean-reversion agent’s logic). In a strong trend, don’t fight a band-ride. A squeeze is your cue to get ready for a breakout — direction unknown until price picks one.',
+  },
+  don: {
+    title: 'Donchian Channel — breakout levels',
+    what: 'The highest high and lowest low over the last N bars — literally the recent range’s ceiling and floor.',
+    look: 'Price breaking ABOVE the upper channel = breakout to new highs, buyers in control. Breaking BELOW the lower channel = breakdown to new lows. Sitting inside the channel = rangebound, no breakout yet.',
+    apply: 'Classic breakout trading: go long when price closes above the channel top, short below the bottom, and use the opposite band as a natural stop/exit. This is the Breakout agent’s trigger — it fires a full ±1 vote right at a fresh break.',
+  },
+  RSI: {
+    title: 'RSI — overbought / oversold',
+    what: 'A 0–100 gauge of how strong recent up-moves are versus down-moves. The dashed lines mark 70 and 30.',
+    look: 'Above 70 = "overbought" (buying may be overdone). Below 30 = "oversold" (selling overdone). Around 50 = neutral. Watch for divergence: price makes a new high but RSI doesn’t — a warning the move is tiring.',
+    apply: 'In a range, 70/30 are fade signals — sell overbought, buy oversold. In a STRONG trend RSI can sit overbought for a long time, so use it to time entries, not to call the exact top or bottom. A cross back through 50 is a simple momentum-shift cue.',
+  },
+  MOMENTUM: {
+    title: 'Momentum — speed of the move',
+    what: 'How far price has moved over a lookback window, as a % — the SPEED of the move, not just its direction. The centre line is zero.',
+    look: 'Above zero = price higher than N bars ago (up-momentum); below zero = down-momentum. The line RISING = accelerating; flattening = losing steam. The zero-line cross is the momentum flip.',
+    apply: 'Favour longs while momentum is positive and rising, shorts while negative and falling — winners tend to keep winning (the Momentum agent’s edge). Momentum fading near an extreme, with RSI or Bollinger agreeing, hints at a pause or reversal.',
+  },
+  ADX: {
+    title: 'ADX — trend strength (the regime gate)',
+    what: 'A 0–60+ measure of TREND STRENGTH only. It says nothing about direction — just whether a real trend exists or the market is chopping sideways.',
+    look: 'Above 25 = a genuine trend is in force. Below 20 = weak / ranging (chop, where trend signals fail). Rising ADX = trend strengthening; falling = trend fading.',
+    apply: 'This is the switch that picks which agents to trust. ADX high → follow Trend, Breakout and Momentum. ADX low → switch to Mean-reversion and fade the extremes instead. Don’t chase breakouts when ADX is under 20 — they tend to fail in chop.',
+  },
+};
+
+function taTipHTML(key) {
+  const h = TA_HELP[key];
+  if (!h) return '';
+  return `
+  <div class="tip" style="position:absolute;top:calc(100% + 7px);left:0;width:360px;background:#0a110b;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 36px rgba(0,0,0,.8),0 0 22px rgba(126,231,135,.05);z-index:80;padding:12px 14px;pointer-events:none;white-space:normal;text-transform:none;letter-spacing:normal">
+    <div style="font-size:12px;font-weight:600;color:#eaffec;letter-spacing:.02em;margin-bottom:8px">${esc(h.title)}</div>
+    <div style="font-size:10.5px;line-height:1.7;color:#9db5a0;margin-bottom:8px">${esc(h.what)}</div>
+    <div style="font-size:8px;color:#61805f;letter-spacing:.12em;margin-bottom:3px">WHAT TO LOOK FOR</div>
+    <div style="font-size:10.5px;line-height:1.7;color:#c9e8cc;margin-bottom:8px">${esc(h.look)}</div>
+    <div style="font-size:8px;color:#61805f;letter-spacing:.12em;margin-bottom:3px">HOW TO TRADE IT</div>
+    <div style="font-size:10.5px;line-height:1.7;color:#c9e8cc">${esc(h.apply)}</div>
+  </div>`;
+}
+
 /* indicative macro tables for the FUNDAMENTALS panel (ported from the design;
    the panel is labelled INDICATIVE in the UI) */
 const CBD = {
@@ -1285,9 +1341,9 @@ function chartSectionHTML(page) {
     { key: 'ema', label: 'EMA ' + pF + '/' + pS, dot: '#e3b341' },
     { key: 'boll', label: 'BOLLINGER ±2σ', dot: '#9db5a0' },
     { key: 'don', label: 'DONCHIAN ' + wD, dot: '#8a7433' },
-  ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" style="display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#262626'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}</span>`).join('\n');
+  ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" data-tip="${c.key}" style="position:relative;display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#262626'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}<span style="color:#3d543f;margin-left:1px">ⓘ</span></span>`).join('\n');
   const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k =>
-    `<span class="hv-dim" data-act="pane" data-arg="${k}" style="font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#262626'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k}</span>`).join('\n');
+    `<span class="hv-dim" data-act="pane" data-arg="${k}" data-tip="${k}" style="position:relative;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#262626'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k} <span style="color:#3d543f">ⓘ</span></span>`).join('\n');
 
   /* ---- indicator pane ---- */
   let paneHtml = '';
@@ -2142,6 +2198,27 @@ document.addEventListener('mouseout', e => {
   if (p) p.remove();
   _hovRow = null;
   flushPending();
+});
+
+/* TA / indicator button explainers — plain-English "what to look for + how to
+   trade it" tooltips, appended inside the hovered chip. */
+let _hovTip = null;
+document.addEventListener('mouseover', e => {
+  const chip = e.target.closest('[data-tip]');
+  if (chip === _hovTip) return;
+  if (_hovTip) { const t = _hovTip.querySelector('.tip'); if (t) t.remove(); }
+  _hovTip = chip;
+  if (!chip) return;
+  const html = taTipHTML(chip.dataset.tip);
+  if (html) chip.insertAdjacentHTML('beforeend', html);
+});
+document.addEventListener('mouseout', e => {
+  if (!_hovTip) return;
+  const to = e.relatedTarget;
+  if (to && _hovTip.contains(to)) return;
+  const t = _hovTip.querySelector('.tip');
+  if (t) t.remove();
+  _hovTip = null;
 });
 
 /* the pointer leaving the window fires no mousemove/mouseout — clear any
