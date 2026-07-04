@@ -80,3 +80,37 @@ def test_unknown_asset_class_rejected():
     with pytest.raises(ValueError):
         pairs.Pair("XXXUSD", "XXX", "USD", "XXX-USD", 1.0, 1.0, 0.0, 0.0,
                    "commodity")
+
+
+# ---------------------------------------------------------------------------
+# Named universe presets + resolver
+# ---------------------------------------------------------------------------
+def test_resolve_universe_default_is_live_universe():
+    assert pairs.resolve_universe(None) == pairs.DEFAULT_UNIVERSE
+    assert pairs.resolve_universe("default") == pairs.DEFAULT_UNIVERSE
+    # returns a copy, not the module list (mutating it must not leak)
+    got = pairs.resolve_universe(None)
+    got.append("EURUSD")
+    assert "EURUSD" not in pairs.DEFAULT_UNIVERSE[7:]
+
+
+def test_resolve_universe_majors_plus_crosses():
+    u = pairs.resolve_universe("majors+crosses")
+    assert u == pairs.resolve_universe("fx")          # aliases
+    assert set(pairs.PAIRS).issubset(u)
+    assert set(pairs.CROSSES).issubset(u)
+    assert not (set(pairs.CRYPTO) & set(u))           # no crypto in the FX set
+
+
+def test_resolve_universe_explicit_list_and_dedup():
+    assert pairs.resolve_universe("EURUSD,GBPUSD,EURJPY") == \
+        ["EURUSD", "GBPUSD", "EURJPY"]
+    assert pairs.resolve_universe("eurusd, gbpusd") == ["EURUSD", "GBPUSD"]
+    assert pairs.resolve_universe("EURUSD,EURUSD") == ["EURUSD"]  # de-duped
+
+
+def test_resolve_universe_rejects_typos_and_empty():
+    with pytest.raises(KeyError):
+        pairs.resolve_universe("EURUSD,NOTAPAIR")
+    with pytest.raises(ValueError):
+        pairs.resolve_universe(",")
