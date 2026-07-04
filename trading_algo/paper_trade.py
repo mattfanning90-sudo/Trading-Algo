@@ -34,6 +34,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import data, fees, fx, strategy
+from . import state_schema
 from .regions import REGIONS, get_region
 
 # State location: env override (used by CI to persist to a tracked dir), else repo root.
@@ -53,10 +54,30 @@ def load_state(account: str) -> dict:
     if not os.path.exists(path):
         raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
     with open(path) as f:
-        return json.load(f)
+        state = json.load(f)
+    # Upgrade older files additively (never destructive), then validate. With the
+    # gate on, an invalid file fails safe — we raise rather than trade on / reset
+    # a corrupted book. With it off, we only warn (shadow mode). See config F18.
+    state, _applied = state_schema.migrate_state(state)
+    errors = state_schema.validate_state(state)
+    if errors:
+        msg = (f"State file for account '{account}' is invalid:\n  - "
+               + "\n  - ".join(errors))
+        if cfg.VALIDATE_STATE_FILES:
+            raise state_schema.StateValidationError(msg)
+        print(f"⚠ {msg}\n  (VALIDATE_STATE_FILES is off — continuing in shadow mode)")
+    return state
 
 
 def save_state(account: str, state: dict) -> None:
+    # Refuse to persist a corrupt state when the gate is on, so a bug can't write
+    # garbage that the next run would fail on.
+    if cfg.VALIDATE_STATE_FILES:
+        errors = state_schema.validate_state(state)
+        if errors:
+            raise state_schema.StateValidationError(
+                f"Refusing to save invalid state for '{account}':\n  - "
+                + "\n  - ".join(errors))
     with open(_state_file(account), "w") as f:
         json.dump(state, f, indent=2)
 
@@ -128,6 +149,7 @@ def init_account(account: str, capital: float, synthetic: bool,
         }
     state = {
         "account": account,
+        "schema_version": state_schema.STATE_SCHEMA_VERSION,
         "base_currency": cfg.BASE_CURRENCY,
         "initial_capital_base": capital,
         "allocations": norm,

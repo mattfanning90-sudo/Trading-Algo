@@ -107,6 +107,14 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
   capital. F4 and F5 are bundled in the phase but ship on their own schedule so
   they can't create a false "we're live-ready" signal.
 
+> **Delivery started.** The first Phase-0 work has landed: **R4** — the
+> `test_consistency.py` guard now asserts numeric weight equality (backtest holds
+> `compute_targets`' output bit-for-bit; paper invents no names and preserves
+> relative sizing), and **F18** — `state_schema.py` validates and migrates
+> `paper_state_*.json` on load/save, failing safe behind `config.VALIDATE_STATE_FILES`
+> (default-off shadow mode). These two were chosen first because they carry no
+> capital risk and harden the guarantees every later phase leans on.
+
 ## 5. Feature readiness at a glance
 
 From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:
