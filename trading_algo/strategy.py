@@ -67,6 +67,8 @@ def precompute(prices: pd.DataFrame, index_prices: pd.Series,
         # store the index regime pre-aligned to the price calendar (forward-filled)
         "risk_on": sig.index_risk_on(index_prices, p).reindex(prices.index).ffill(),
     }
+    if p.use_residual_momentum:
+        cache["resmom"] = sig.residual_momentum_score(prices, index_prices, p)
     if p.use_value:
         cache["value"] = sig.value_score(prices, p)
     return cache
@@ -96,7 +98,8 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
 
     c = signals_cache if signals_cache is not None else precompute(prices, index_prices, p)
 
-    scores = c["momentum"].loc[asof]
+    # residual (market-neutral) momentum swaps in as the ranking score when enabled
+    scores = c["resmom" if p.use_residual_momentum else "momentum"].loc[asof]
     if eligible is not None:
         scores = scores[scores.index.isin(eligible)]
     trend = c["trend"].loc[asof]

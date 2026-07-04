@@ -20,6 +20,11 @@ class StrategyParams:
     skip_days: int = 21             # skip most recent month (short-term reversal)
     min_history_days: int = 300     # exclude names with insufficient history
 
+    # --- Residual (market-neutral) momentum (Blitz et al.; rank on beta-stripped
+    #     returns to cut momentum's crash beta). Off by default → raw momentum. ---
+    use_residual_momentum: bool = False
+    resmom_beta_lookback: int = 252  # window for the rolling beta used to residualise
+
     # --- Value factor (price-based long-term reversal; blends with momentum) -
     use_value: bool = False         # off by default → pure momentum (unchanged)
     value_lookback_days: int = 756  # ~3y window for long-term reversal

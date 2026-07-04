@@ -49,6 +49,14 @@ on:
         description: "Add a low-risk / betting-against-beta sleeve to the multistrat book"
         type: boolean
         default: false
+      with_resmom:
+        description: "Use residual (market-neutral) momentum for the equity sleeve"
+        type: boolean
+        default: false
+      method:
+        description: "Combiner weighting for the multistrat book (erc/invvol/equal)"
+        type: string
+        default: "erc"
 
 permissions:
   contents: read
@@ -92,7 +100,9 @@ jobs:
             GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
             VAL="${{ inputs.with_value && '--with-value' || '' }}"
             LR="${{ inputs.with_lowrisk && '--with-lowrisk' || '' }}"
-            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL $LR --validate \
+            RM="${{ inputs.with_resmom && '--with-resmom' || '' }}"
+            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL $LR $RM --validate \
+              --method "${{ inputs.method }}" \
               --target-vol "${{ inputs.target_vol }}" \
               --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else
