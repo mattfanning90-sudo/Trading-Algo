@@ -68,6 +68,12 @@ It reuses this project's principles (no lookahead, costs always on, one shared
   overfitting gauntlet on the combined book (DSR/PBO deflated across the combiner's
   own knobs). The research conclusion: combine uncorrelated premia, don't chase one
   signal
+- `features.py` / `labels.py` / `mlpipeline.py` — **predictive-model (ML) data layer**:
+  a causal, cross-sectionally-standardised feature panel + forward-return/triple-barrier
+  labels + a leakage-controlled **purged/embargoed walk-forward** and a dependency-light
+  baseline (cross-sectional ridge). `mlreport.py` runs it OOS + Deflated-Sharpe-deflated.
+  Price-only for now (lands ~the book); built so new data = one more feature column.
+  Design + honest expectations: `docs/research/PREDICTIVE_MODEL.md`
 - `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
 
 ## Commands
@@ -81,6 +87,7 @@ python -m trading_algo.trend_report                 # equity vs trend vs blend (
 python -m trading_algo.defensive_sweep --region US  # what idle capital should earn
 python -m trading_algo.validate --region US         # win rate, Deflated Sharpe, PBO, regime, stress
 python -m trading_algo.multistrat_report --validate  # equity+trend+carry book + overfitting gauntlet
+python -m trading_algo.mlreport --point-in-time      # predictive-model baseline (purged walk-forward)
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
 python -m trading_algo.engine --once --account full # one scheduler pass
