@@ -26,13 +26,15 @@ import pandas as pd
 
 import math
 
+from . import feeds
 from . import fx_data
 from . import fxconv
 from . import indicators as ind
+from . import marks
 from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
-from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
+from .fx_config import FX_RISK_FREE, profile
 from .fx_config import profile_names
 from .fx_strategy import min_history, target_weights_history
 from .pairs import ALL_PAIRS, currencies_in, get_pair
@@ -77,7 +79,7 @@ GLOSSARY = {
     "Regime": "Whether the market is trending (ADX high) or ranging/choppy (ADX low). Trend agents shine in trends; mean-reversion shines in ranges.",
     "Tilt": "The ensemble's net conviction for a pair, from -1 (max short) to +1 (max long).",
     "Gross leverage": "Total size of all positions vs your capital. 3x = holding $15k of positions on $5k.",
-    "Outcome": "For DAILY-book trades: the signed price move over the next %d days after the trade — did the call actually work? (⏳ until enough days pass.) Intraday trades are not judged on this daily window — they're measured by realised P&L in the Transactions blotter." % _OUTCOME_BARS,
+    "Outcome": "The signed price move over the next %d bars of the book's OWN bar size after the trade (days for the daily books, hours for the 60m book) — did the call actually work? (⏳ until enough bars pass.) Only when an intraday book's page has to fall back to a daily proxy panel are its intraday trades left unjudged on that daily window — then they're measured by realised P&L in the Transactions blotter." % _OUTCOME_BARS,
     "Mid price": "The execution reference price — the midpoint between bid and ask at the time of the trade.",
     "Bid": "The price you can SELL at (what a buyer will pay). Always a touch below mid.",
     "Ask": "The price you can BUY at (what a seller will accept). Always a touch above mid. (Sometimes called the 'offer'.)",
@@ -129,16 +131,10 @@ def _panel(symbols, synthetic, need_bars: int | None = None):
     return fx_data.load_panel(symbols, _panel_start(need_bars), use_cache=True)
 
 
-def _ppy(idx) -> float:
-    """Periods-per-year implied by a DatetimeIndex's median bar spacing.
-
-    NOTE: this is CALENDAR-time annualisation (hourly => 365.25*24 = 8766 bars/yr,
-    capped there) rather than FX trading-time (~6048 traded hours/yr), so hourly
-    vol/Sharpe are consistently, modestly overstated everywhere they appear — a
-    known calibration choice, kept for simplicity and internal consistency."""
-    med = idx.to_series().diff().median() if len(idx) else pd.NaT
-    secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
-    return min(ANNUALIZATION if secs >= 43200 else 365.25 * 86400.0 / secs, 24 * 365.25)
+# THE calendar-time annualisation convention (round-2 item 5): one shared
+# implementation in marks.periods_per_year, used by fx_book.status and every
+# vol/Sharpe figure this page computes — books and dashboard can never disagree.
+_ppy = marks.periods_per_year
 
 
 # THE authoritative bar -> (unit label, bars per day) mapping, shared by
@@ -190,19 +186,12 @@ def _equity_lookup(state):
     return equity_on, eq_map
 
 
-def _trade_cost(dw: float, pair, price: float, eq: float) -> float:
-    """Half-spread charge on a weight change, in account currency — mirrors the
-    book's canonical charge (fx_book.run_once, fx_book.py:282:
-    ``cost_frac += abs(delta) * 0.5 * spread_fraction(price)``). Keep in lockstep;
-    test_blotter_matches_book_charge trips if they drift."""
-    return abs(dw) * 0.5 * pair.spread_fraction(price) * eq
-
-
-def _trade_mark(dw: float, price: float, lastpx: float, fxf: float, eq: float) -> float:
-    """Mark-to-market contribution of a weight change since entry, in account
-    currency — mirrors the book's marking (fx_book.run_once, fx_book.py:231:
-    ``contrib = w * ((nc / lc) * fxf - 1.0)``): pair move × AUD-translation."""
-    return dw * ((lastpx / price) * fxf - 1.0) * eq
+# Round-2 item 2 (dashboard half): the blotter's cost + mark formulas ARE the
+# book's — imported from the ONE formula module (marks.py) that fx_book.run_once
+# also routes through, so the two sides can never diverge again. No local
+# formula bodies live here; test_fx_dashboard.py pins this by source inspection.
+_trade_cost = marks.trade_cost   # (dw, pair, price, equity)      -> account ccy
+_trade_mark = marks.trade_mark   # (dw, entry, now, fxf, equity)  -> account ccy
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +289,9 @@ def _signal_parts(panel, p):
 
 
 def _agent_attribution(signals, tilts, rets, bars) -> dict:
+    """Per-agent standalone return over the last `bars` PANEL bars — for an
+    intraday book on its true-bar panel that is `bars` of the BOOK'S bars
+    (e.g. 180 hourly bars ≈ 1.5 trading weeks), an explicit bounded tail."""
     if not signals:
         return {}
     names = list(next(iter(signals.values())).columns)
@@ -316,45 +308,82 @@ def _agent_attribution(signals, tilts, rets, bars) -> dict:
     return out
 
 
-def _pair_payload(sym, bars_df, trades, decision, p, bars):
+def _pair_payload(sym, bars_df, trades, decision, p, bars, intraday=False):
+    """Candles + EMA overlays + marked/judged trades for one pair.
+
+    ``intraday=True`` (round-2 item 4) means `bars_df` is the book's OWN bar
+    panel (e.g. 60m for the daytrader): candle times carry the hour, trade
+    markers land on their own intraday candle, and outcomes are judged over the
+    next `_OUTCOME_BARS` bars **of the book's bar** — no neutral 'intraday'
+    outcome on this path. The 'intraday' outcome survives only on the daily
+    proxy fallback (``intraday=False`` with intraday-keyed trades), where
+    judging an hours-lived position on a 10-DAILY-bar window would be dishonest.
+    """
     df = bars_df.dropna(subset=["open", "high", "low", "close"]).tail(bars)
     if df.empty:
         return None
+    tfmt = "%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d"
     close = df["close"]
     ef, es = ind.ema(close, p.ema_fast), ind.ema(close, p.ema_slow)
-    candles = [{"time": d.strftime("%Y-%m-%d"),
+    candles = [{"time": d.strftime(tfmt),
                 "open": round(float(o), 6), "high": round(float(h), 6),
                 "low": round(float(l), 6), "close": round(float(c), 6)}
                for d, o, h, l, c in zip(df.index, df["open"], df["high"],
                                         df["low"], df["close"])]
-    line = lambda s: [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 6)}
+    line = lambda s: [{"time": d.strftime(tfmt), "value": round(float(v), 6)}
                       for d, v in s.items() if v == v]
 
-    pos_of = {d.strftime("%Y-%m-%d"): i for i, d in enumerate(df.index)}
+    pos_of = {d.strftime(tfmt): i for i, d in enumerate(df.index)}
     closes_arr = close.to_numpy()
-    first = df.index[0].strftime("%Y-%m-%d")
+    first = df.index[0].strftime(tfmt)
     out_trades = []
     for t in trades:
         if t.get("pair") != sym or t.get("date", "") < first:
             continue
-        # [:10] → date part, so intraday-keyed trades (the daytrader book) still
-        # land on the daily candles for markers and click-to-zoom.
         tdate = str(t["date"])
-        tday = tdate[:10]
-        i = pos_of.get(tday)
         fwd, outcome = None, "open"
         entry = t.get("price")
-        if " " in tdate:
-            # Intraday trade on a daily panel: never judge a position that lived
-            # hours on a 10-DAILY-bar window — realised P&L lives in the blotter.
-            outcome = "intraday"
-        elif i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
-            s = 1.0 if t["side"] == "BUY" else -1.0
-            fwd = round(float(s * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
-            outcome = "win" if fwd > 0 else "loss"
+        if intraday:
+            # True-bar panel: the trade lands on its OWN intraday candle and is
+            # judged on the next _OUTCOME_BARS bars of the book's bar.
+            i = pos_of.get(tdate)
+            if i is None:
+                try:
+                    ts = pd.Timestamp(tdate)
+                except ValueError:    # corrupt date: skip the trade, not the page
+                    continue
+                if " " in tdate:      # off-grid timestamp: candle at-or-before it
+                    j = int(df.index.searchsorted(ts, side="right")) - 1
+                    i = j if j >= 0 else None
+                else:                  # daily-keyed legacy trade: day's first bar
+                    j = int(df.index.searchsorted(ts, side="left"))
+                    i = (j if j < len(df.index)
+                         and df.index[j].strftime("%Y-%m-%d") == tdate else None)
+            if i is None:
+                continue               # can't place it on this panel's candles
+            tkey = df.index[i].strftime(tfmt)
+            if entry and i + _OUTCOME_BARS < len(closes_arr):
+                s = 1.0 if t["side"] == "BUY" else -1.0
+                fwd = round(float(s * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
+                outcome = "win" if fwd > 0 else "loss"
+        else:
+            # [:10] → date part, so intraday-keyed trades (a daytrader book on
+            # the daily fallback panel) still land on the daily candles for
+            # markers and click-to-zoom.
+            tkey = tdate[:10]
+            i = pos_of.get(tkey)
+            if " " in tdate:
+                # Intraday trade on a daily panel: never judge a position that
+                # lived hours on a 10-DAILY-bar window — realised P&L lives in
+                # the blotter.
+                outcome = "intraday"
+            elif i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
+                s = 1.0 if t["side"] == "BUY" else -1.0
+                fwd = round(float(s * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
+                outcome = "win" if fwd > 0 else "loss"
         why = _beginner_explanation(t.get("side"), t.get("target_weight"),
                                     t.get("agents"), t.get("indicators"), sym)
-        out_trades.append({"time": tday, "side": t["side"], "price": t.get("price"),
+        out_trades.append({"time": tkey, "side": t["side"], "price": t.get("price"),
                            "weight": t.get("target_weight"), "regime": t.get("regime"),
                            "why": why, "agents": t.get("agents"),
                            "fwd_return": fwd, "outcome": outcome})
@@ -377,6 +406,13 @@ def _transactions(state, panel, hub_closes=None, max_rows=400) -> dict:
     contribution (Δweight × price move since × equity). The book is weight-based,
     so 'P&L since' is an honest marginal contribution, not lot-by-lot realised P&L.
 
+    AUD translation (round-2 item 1): each trade PREFERS its stored
+    execution-time ``aud_per_quote`` (stamped by fx_book.run_once at the trade
+    bar's close) — factor = aud_per_quote_now / stored — so entry-time context
+    is the book's own record, not a reconstruction from today's frame. Legacy
+    trades without the stamp (or with a null/non-positive one) fall back to the
+    today's-frame reconstruction below.
+
     `hub_closes`: optional AUD-hub closes frame covering trades OLDER than the
     bounded display panel, so their AUD translation stays real instead of
     silently falling back to 1.0. `rows` is ALWAYS the full blotter (the CSV
@@ -388,11 +424,24 @@ def _transactions(state, panel, hub_closes=None, max_rows=400) -> dict:
     closes = fx_data.closes(panel)
     last = closes.iloc[-1] if not closes.empty else pd.Series(dtype=float)
 
-    def fx_factor(quote: str, tdate: str) -> float:
-        """AUD/quote translation since the trade date, via fxconv.conversion_factor
-        — the book's own AUD-translation semantics (one implementation, so corrupt
-        /negative rates are rejected identically). 1.0 only when underivable."""
-        d = pd.Timestamp(str(tdate)[:10]) if tdate else pd.NaT
+    def fx_factor(quote: str, tdate: str, stored: float | None = None) -> float:
+        """AUD/quote translation since the trade date. Prefers the trade's
+        stored execution-time aud_per_quote (item 1); otherwise reconstructs
+        via fxconv.conversion_factor — the book's own AUD-translation semantics
+        (one implementation, so corrupt/negative rates are rejected
+        identically). 1.0 only when underivable."""
+        try:
+            stored = float(stored) if stored is not None else None
+        except (TypeError, ValueError):
+            stored = None
+        if stored and stored > 0:
+            now = fxconv.aud_per_quote(quote, last)
+            if now and now > 0:
+                return float(now) / stored
+        try:
+            d = pd.Timestamp(str(tdate)) if tdate else pd.NaT
+        except ValueError:
+            d = pd.NaT
         frame = closes
         if (hub_closes is not None and not hub_closes.empty
                 and (closes.empty or (d == d and d < closes.index[0]))):
@@ -426,9 +475,11 @@ def _transactions(state, panel, hub_closes=None, max_rows=400) -> dict:
         lp = last.get(sym)
         lastpx = float(lp) if lp is not None and lp == lp else None   # audited fix: no float(None)
         move = (lastpx / price - 1.0) if lastpx else None
-        # P&L-since in true AUD: pair move AND the AUD/quote move, like the book.
+        # P&L-since in true AUD: pair move AND the AUD/quote move, like the book
+        # (stored execution-time aud_per_quote preferred; see fx_factor above).
         pnl = (round(_trade_mark(dw, price, lastpx,
-                                 fx_factor(pair.quote, t.get("date", "")), eq), 2)
+                                 fx_factor(pair.quote, t.get("date", ""),
+                                           t.get("aud_per_quote")), eq), 2)
                if move is not None else None)
         tot_cost += cost
         tot_notional += notional
@@ -649,7 +700,9 @@ def _agent_daily_matrix(signals, rets, bars) -> pd.DataFrame:
 
 def _advanced_significance(signals, rets, returns_values, bars=180) -> dict:
     """Deflated Sharpe (penalised for how many agents/strategies were tried) and
-    Probability of Backtest Overfitting across the agent set — completes PSR."""
+    Probability of Backtest Overfitting across the agent set — completes PSR.
+    `bars` is a PANEL-bar window (book bars on a true intraday panel) — the
+    same explicit bounded tail as the attribution/display windows."""
     out = {"dsr": None, "dsr_trials": None, "pbo": None}
     try:
         mat = _agent_daily_matrix(signals, rets, bars)
@@ -748,8 +801,47 @@ def build_payload(account, synthetic=False, bars=180):
     # property compute_targets(fast=True) relies on. Fetch and trim to exactly
     # that, so page-build time stays flat no matter how much history accumulates.
     need = min_history(p) + bars + 10
-    panel = _panel(symbols, synthetic, need_bars=need)
+    bar = state.get("bar")
+    intraday_bar = bar not in ("1d", "B", None)
+
+    # Round-2 item 4: an intraday book's analytics panel is built AT THE BOOK'S
+    # OWN BAR (60m for the daytrader), so candles, trade outcomes, the agent
+    # scorecard, attribution and DSR/PBO all run on the same bar history the
+    # book actually trades. Every window stays sized in BOOK BARS — the display
+    # and attribution tail is `bars` (180) of the book's bars (~1.5 trading
+    # weeks of hourly candles), an explicit bound, NOT 180 days of hourly bars.
+    # If the intraday fetch comes back empty or shorter than the strategy
+    # warm-up (Yahoo caps 60m history at ~730 days; offline/CI builds have no
+    # feed), degrade to the daily proxy panel and say so (signal_note below).
+    panel: dict = {}
+    panel_intraday = False
+    if intraday_bar:
+        try:
+            panel = feeds.load(symbols, synthetic=synthetic, interval=bar,
+                               source=state.get("source", "yahoo"),
+                               use_cache=True, min_bars=need)
+        except Exception:
+            panel = {}
+        if panel and len(fx_data.closes(panel)) >= min_history(p):
+            panel_intraday = True
+        else:
+            panel = {}
+    signal_note = None
+    if not panel:
+        panel = _panel(symbols, synthetic, need_bars=need)
+        if intraday_bar:
+            # Honest labelling, ONLY where it still applies: the true-bar fetch
+            # degraded, so this page runs on the daily proxy.
+            signal_note = (
+                f"This book trades {bar} bars, but its intraday history could "
+                "not be fetched on this build (Yahoo caps 60m history at ~730 "
+                "days and offline builds have no feed), so the candles, Agent "
+                "scorecard, Attribution and DSR/PBO below are computed on a "
+                "DAILY proxy panel with the intraday parameter set — "
+                "directionally useful, not the exact hourly signal history "
+                "the book traded.")
     panel = {s: df.tail(need) for s, df in panel.items()}
+    tfmt = "%Y-%m-%d %H:%M" if panel_intraday else "%Y-%m-%d"
     decisions = state.get("decisions", {})
 
     data, pairs = {}, []
@@ -757,7 +849,8 @@ def build_payload(account, synthetic=False, bars=180):
         if sym not in panel:
             continue
         payload = _pair_payload(sym, panel[sym], state.get("trades", []),
-                                decisions.get(sym), p, bars)
+                                decisions.get(sym), p, bars,
+                                intraday=panel_intraday)
         if payload:
             data[sym] = payload
             pairs.append(sym)
@@ -772,12 +865,14 @@ def build_payload(account, synthetic=False, bars=180):
 
     closes_df = fx_data.closes(panel)
     bench_curve, bench_metrics = [], {}
+    bench_ppy = 252
     if not closes_df.empty:
         # Honest day-one comparison: clip the buy-and-hold benchmark to the book's
         # OWN live window and re-base it to 100 on the book's first day, so both
         # lines start together and the metrics table compares the same period.
         # Before the book has any history, fall back to a longer window so the
-        # chart still shows price context.
+        # chart still shows price context. The bench is built from the SAME
+        # panel as everything else — the book's own bar for intraday books.
         if eqh:
             # [:10] → date part: an intraday first key ('2026-07-01 09:00') must
             # not exclude the daily panel's midnight row for that same day.
@@ -790,10 +885,16 @@ def build_payload(account, synthetic=False, bars=180):
         bh_ret = w.pct_change(fill_method=None).mean(axis=1).fillna(0.0)
         bh_eq = (1 + bh_ret).cumprod()
         bh_eq = 100.0 * bh_eq / bh_eq.iloc[0]            # start exactly at 100
-        bench_curve = [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
+        bench_curve = [{"time": d.strftime(tfmt), "value": round(float(v), 4)}
                        for d, v in bh_eq.items()]
-        bench_metrics = _curve_metrics([d.strftime("%Y-%m-%d") for d in bh_eq.index],
+        bench_metrics = _curve_metrics([d.strftime(tfmt) for d in bh_eq.index],
                                        list(bh_eq.values))
+        try:
+            # Annualisation for the client-side bench column: the bench curve's
+            # own bar spacing (252 on the daily panel, ~8766 on a true 60m one).
+            bench_ppy = int(round(_ppy(bh_eq.index)))
+        except Exception:
+            bench_ppy = 252
 
     # Trades older than the bounded display panel would silently lose their AUD
     # translation (factor 1.0) — fetch a small AUD-hub closes frame covering
@@ -821,27 +922,21 @@ def build_payload(account, synthetic=False, bars=180):
     signals, tilts, rets = _signal_parts(panel, p)
     risk.update(_advanced_significance(signals, rets, book_rets, bars))  # DSR + PBO alongside PSR
 
-    # Annualisation for the client-side metrics table: the book's own bar spacing
-    # (hourly ppy ≈ 8766); the buy&hold bench is always the daily panel → 252.
-    book_ppy = 252
+    # Annualisation for the client-side metrics table: each curve by its OWN
+    # bar spacing (marks.periods_per_year — the one calendar-time convention).
+    # book_ppy comes from the equity keys (hourly ≈ 8766); bench_ppy was set
+    # above from the bench panel (equal to book_ppy on a true intraday panel,
+    # 252 on the daily proxy fallback). A book too young for a spacing
+    # estimate (<2 equity points) seeds from its OWN stored bar via the same
+    # calendar-time rule — a fresh hourly book must not read as daily.
+    bpd = _bar_unit(bar)[1]
+    book_ppy = int(round(min(365.25 * bpd, 24 * 365.25))) if bpd > 1 else 252
     if len(eqh) >= 2:
         try:
             book_ppy = int(round(_ppy(pd.to_datetime([d for d, _ in eqh],
                                                      format="mixed"))))
         except Exception:
-            book_ppy = 252
-
-    # Honest labelling for intraday books: the analytics panel is DAILY (a true
-    # 60m panel would ripple through candles/outcomes/PBO windows and Yahoo's
-    # ~730-day 60m cap — flagged as a follow-up), so say so on the page.
-    bar = state.get("bar")
-    signal_note = None
-    if bar not in ("1d", "B", None):
-        signal_note = (f"This book trades {bar} bars; the Agent scorecard, "
-                       "Attribution and DSR/PBO below are computed on a DAILY "
-                       "proxy panel with the intraday parameter set — "
-                       "directionally useful, not the exact hourly signal "
-                       "history the book traded.")
+            pass
 
     return {
         "account": account, "profile": state.get("profile", "balanced"),
@@ -856,7 +951,7 @@ def build_payload(account, synthetic=False, bars=180):
                       for k, v in sorted(state.get("positions", {}).items(),
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
-        "book_ppy": book_ppy, "signal_note": signal_note,
+        "book_ppy": book_ppy, "bench_ppy": bench_ppy, "signal_note": signal_note,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
         "risk": risk,
@@ -1382,10 +1477,12 @@ document.addEventListener('keydown',e=>{
   // Equity chart + period selector (1W/1M/3M/ALL) + crosshair readout + metrics.
   const el=document.getElementById('eqchart'), mEl=document.getElementById('metrics');
   const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[], RF=0.035;
-  // Each curve is annualised for its OWN bar spacing: the book by book_ppy
-  // (hourly ≈ 8766, from Python — agrees with the header Sharpe tile), the
-  // buy&hold bench always by 252 (it is built from the daily panel).
-  const BOOK_ANN=DASH.book_ppy||252;
+  // Each curve is annualised for its OWN bar spacing (one calendar-time
+  // convention, marks.periods_per_year): the book by book_ppy (hourly ≈ 8766,
+  // from Python — agrees with the header Sharpe tile), the buy&hold bench by
+  // bench_ppy (equal to book_ppy on a true intraday panel; 252 on the daily
+  // panel / daily-proxy fallback).
+  const BOOK_ANN=DASH.book_ppy||252, BENCH_ANN=DASH.bench_ppy||252;
   const ROWS=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
     ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],["Win rate","win_rate",true,"Win rate"]];
   function compute(series,ann){
@@ -1412,8 +1509,8 @@ document.addEventListener('keydown',e=>{
   const bookS=c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'});
   const lwc=s=>s.map(p=>({time:toT(p.time),value:p.value}));
   function apply(days){const bk=rebase(cut(BOOK,days)),bh=rebase(cut(BENCH,days));
-    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk,BOOK_ANN),compute(bh,252));}
-  if(BOOK_ANN!==252&&mEl)mEl.insertAdjacentHTML('afterend',
+    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk,BOOK_ANN),compute(bh,BENCH_ANN));}
+  if(BOOK_ANN!==BENCH_ANN&&mEl)mEl.insertAdjacentHTML('afterend',
     '<div class=legend>Book bars are hourly; the Buy&amp;Hold benchmark is daily — each row is annualised for its own bar spacing.</div>');
   const periods=[["1W",7],["1M",30],["3M",90],["ALL",0]], pe=document.getElementById('eqperiod');
   pe.innerHTML=periods.map(([l,d])=>`<button class="pbtn${d===0?' on':''}" data-d="${d}">${l}</button>`).join('');
@@ -1567,10 +1664,14 @@ function showPair(sym){
   chart=LightweightCharts.createChart(document.getElementById('chart'),{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
     grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
   const cs=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false});
-  cs.setData(d.candles);
-  chart.addLineSeries({color:'#f5a623',lineWidth:1,priceLineVisible:false}).setData(d.ema_fast);
-  chart.addLineSeries({color:'#58a6ff',lineWidth:1,priceLineVisible:false}).setData(d.ema_slow);
-  cs.setMarkers(d.trades.map(t=>({time:t.time,position:t.side==='BUY'?'belowBar':'aboveBar',
+  // Every candle/EMA/marker time flows through the ONE toT normaliser: intraday
+  // 'YYYY-MM-DD HH:MM' keys (true 60m panel) and daily dates both become UNIX
+  // timestamps, so a series can never mix string and numeric time types.
+  const nT=a=>(a||[]).map(x=>({...x,time:toT(x.time)}));
+  cs.setData(nT(d.candles));
+  chart.addLineSeries({color:'#f5a623',lineWidth:1,priceLineVisible:false}).setData(nT(d.ema_fast));
+  chart.addLineSeries({color:'#58a6ff',lineWidth:1,priceLineVisible:false}).setData(nT(d.ema_slow));
+  cs.setMarkers(d.trades.map(t=>({time:toT(t.time),position:t.side==='BUY'?'belowBar':'aboveBar',
     color:t.side==='BUY'?'#26a69a':'#ef5350',shape:t.side==='BUY'?'arrowUp':'arrowDown',
     text:t.side+(t.weight!=null?' '+Math.round(t.weight*100)+'%':'')})));
   chart.timeScale().fitContent();
@@ -1597,7 +1698,7 @@ function showPair(sym){
       `<div class=hd style="margin-top:.2rem"><span class=badge>${t.time}${t.regime?' · '+t.regime:''}</span></div>`+
       `<div class="why" style="margin-top:.4rem">${t.why||'(no rationale)'}</div></div>`;}).join('');
   j.querySelectorAll('.j').forEach(el=>el.onclick=()=>{const times=d.candles.map(c=>c.time),i=times.indexOf(el.dataset.t);
-    if(i>=0)chart.timeScale().setVisibleRange({from:times[Math.max(0,i-30)],to:times[Math.min(times.length-1,i+8)]});});
+    if(i>=0)chart.timeScale().setVisibleRange({from:toT(times[Math.max(0,i-30)]),to:toT(times[Math.min(times.length-1,i+8)])});});
 }
 const tabs=document.getElementById('tabs');
 DASH.pairs.forEach(s=>{const b=document.createElement('div');b.className='tab';b.dataset.s=s;b.textContent=s;b.onclick=()=>showPair(s);tabs.appendChild(b);});
@@ -1741,7 +1842,8 @@ included.</span></div>
 
 <h2>How to read a trade in the journal</h2>
 <div class="step">Each entry shows: <b>BUY/SELL pair @ price</b> · the <b>outcome</b> (✅ win / ❌ loss / ⏳ still open —
-the price move over the next ~10 days), then a plain-English paragraph: <b>what</b> we did, <b>which agents</b>
+the price move over the next ~10 bars of the book's own bar size: days for the daily books, hours for the
+day-trading book), then a plain-English paragraph: <b>what</b> we did, <b>which agents</b>
 drove it, <b>the evidence</b> (with each term defined), and <b>why that size</b>. The arrows on the candle chart
 mark where each trade happened.</div>
 

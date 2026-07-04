@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trading_algo.forex import dashboard, fx_book
+from trading_algo.forex import dashboard, fx_book, marks
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
 
@@ -83,7 +83,10 @@ def test_bar_unit_single_shared_implementation():
     # ...and both the risk card and the trade-stats card route through it
     assert "_bar_unit(" in inspect.getsource(dashboard._risk_costs)
     assert "_bar_unit(" in inspect.getsource(dashboard._trade_stats)
-    assert src.count("def _ppy") == 1
+    # round-2 item 5: _ppy IS marks.periods_per_year (a delegation, not a copy) —
+    # the ONE calendar-time annualisation convention shared with fx_book.status
+    assert dashboard._ppy is marks.periods_per_year
+    assert "def _ppy" not in src                       # no local implementation left
     # equity lookup extracted once too (issue 24)
     assert src.count("def equity_on") == 1
 
@@ -102,29 +105,90 @@ def test_template_narration_is_bar_aware():
     assert round(mtd / (21 * bpd)) == 5                # months
 
 
-# ---- issues 1 + 7: client annualisation + daily-proxy signal note ----------
-def test_book_ppy_and_signal_note_for_hourly_book(isolated):
+# ---- issues 1 + 7 (round-2 item 4): client annualisation + honesty note ----
+# The hourly book now gets a TRUE 60m analytics panel; the DAILY-proxy note
+# survives ONLY on the degraded fallback path (empty/short intraday fetch).
+def test_book_ppy_true_panel_no_note_for_hourly_book(isolated):
+    fx_book.init_account("daytrader", 10_000, "intraday", bar="60m")
+    st = fx_book.load_state("daytrader")
+    # equity keys inside the synthetic 60m panel window (2025-01..2025-04)
+    st.update(_hourly_state(start="2025-02-03"))
+    st["bar"] = "60m"
+    fx_book.save_state("daytrader", st)
+    p = dashboard.build_payload("daytrader", synthetic=True)
+    assert p["book_ppy"] > 2000                        # hourly ppy ≈ 8766, not 252
+    assert p["bench_ppy"] == p["book_ppy"]             # bench built at the book's bar
+    assert p["signal_note"] is None                    # note only where it applies
+    html = dashboard.render(p)
+    assert "book_ppy" in html and "bench_ppy" in html
+    assert "ANN=252" not in html                       # hardcoded annualisation gone
+    assert "compute(bh,BENCH_ANN)" in html             # bench annualised by ITS ppy
+    assert "compute(bh,252)" not in html               # hardcoded bench ann gone
+    assert "DAILY proxy panel" not in html             # true-bar page: no proxy note
+    # hourly-vs-daily legend is CONDITIONAL on the two ppys differing
+    assert "BOOK_ANN!==BENCH_ANN" in html
+    assert "annualised for its own bar spacing" in html
+
+
+def test_signal_note_survives_on_daily_fallback(isolated, monkeypatch):
     fx_book.init_account("daytrader", 10_000, "intraday", bar="60m")
     st = fx_book.load_state("daytrader")
     st.update(_hourly_state())
     st["bar"] = "60m"
     fx_book.save_state("daytrader", st)
+    # dead intraday feed (offline CI / Yahoo outage) -> degrade to daily proxy
+    monkeypatch.setattr(dashboard.feeds, "load", lambda *a, **k: {})
     p = dashboard.build_payload("daytrader", synthetic=True)
-    assert p["book_ppy"] > 2000                        # hourly ppy ≈ 8766, not 252
+    assert p["book_ppy"] > 2000                        # the BOOK is still hourly
+    assert p["bench_ppy"] == 252                       # bench fell back to daily
     assert p["signal_note"] and "DAILY proxy panel" in p["signal_note"]
     html = dashboard.render(p)
     assert "book_ppy" in html
-    assert "ANN=252" not in html                       # hardcoded annualisation gone
     assert "computed on a DAILY" in html               # note rendered on the page
-    assert "compute(bh,252)" in html                   # bench stays daily-annualised
 
 
 def test_daily_book_has_no_signal_note(isolated):
     fx_book.init_account("matt", 5_000, "balanced")
     p = dashboard.build_payload("matt", synthetic=True)
     assert p.get("signal_note") is None
+    # daily books are UNCHANGED by the true-bar panel work: daily candles,
+    # daily annualisation on both curves
+    assert p["book_ppy"] == 252 and p["bench_ppy"] == 252
+    for d in p["data"].values():
+        assert all(" " not in c["time"] for c in d["candles"])
+    assert p["bench_curve"] and " " not in p["bench_curve"][0]["time"]
     html = dashboard.render(p)
     assert "DAILY proxy panel" not in html
+
+
+# ---- round-2 item 5: books and dashboard share ONE annualisation convention -
+def test_books_and_dashboard_share_one_annualisation(isolated, capsys):
+    """On one identical hourly equity history, the book-side annualised vol
+    (fx_book.status) equals the dashboard's realized_vol to rounding — both
+    route through marks.periods_per_year (calendar-time, THE convention)."""
+    fx_book.init_account("daytrader", 10_000, "intraday", bar="60m")
+    st = fx_book.load_state("daytrader")
+    hs = _hourly_state(n=120, sigma=0.002)
+    st.update(hs)
+    fx_book.save_state("daytrader", st)
+
+    idx = pd.to_datetime([d for d, _ in hs["equity_history"]], format="mixed")
+    r = pd.Series([v for _, v in hs["equity_history"]]).pct_change().dropna()
+    expected = float(r.std() * np.sqrt(marks.periods_per_year(idx)))
+
+    # dashboard side (_risk_costs routes through _ppy = marks.periods_per_year)
+    rk = dashboard._risk_costs(st, profile("intraday"), {"rows": []})
+    assert rk["realized_vol"] == pytest.approx(expected, rel=1e-3)
+
+    # book side: status prints the SAME annualised vol
+    capsys.readouterr()
+    fx_book.status("daytrader")
+    out = capsys.readouterr().out
+    line = next(l for l in out.splitlines() if "Ann. vol" in l)
+    assert f"{expected:.1%}" in line
+    wrong = float(r.std() * np.sqrt(252))
+    assert f"{expected:.1%}" != f"{wrong:.1%}"         # the test distinguishes
+    assert f"{wrong:.1%}" not in line
 
 
 # ---- issue 39: intraday trades are never judged on the 10-daily-bar grid ---

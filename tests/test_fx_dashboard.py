@@ -438,6 +438,80 @@ def test_risk_costs_reuse_blotter_costs(isolated):
     assert rk["total_cost"] == txn["totals"]["cost"]
 
 
+def test_blotter_prefers_stored_aud_per_quote():
+    """Round-2 item 1 (consumption): a trade's stored execution-time
+    aud_per_quote drives its blotter P&L — factor = aud_per_quote_now / stored
+    — while legacy trades without the stamp (or with a null / non-positive
+    stamp) fall back to today's-frame reconstruction. The hand-built panel is
+    rigged so the two paths give DIFFERENT numbers, proving the preference."""
+    import pandas as pd
+    idx = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    mk = lambda a, b: pd.DataFrame({"open": [a, b], "high": [a, b],
+                                    "low": [a, b], "close": [a, b]}, index=idx)
+    # AUDUSD 0.50 -> 0.80: aud_per_USD was 2.0 at entry (reconstruction would
+    # use THIS), and is 1.25 now. The stored stamp says 4.0 — deliberately
+    # different from the panel's own entry-day 2.0.
+    panel = {"EURUSD": mk(1.00, 1.10), "AUDUSD": mk(0.50, 0.80)}
+    base = {"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+            "delta_weight": 0.2, "target_weight": 0.2, "price": 1.00}
+    st = {"equity_history": [["2025-01-02", 5_000.0]], "equity": 5_000.0,
+          "initial_capital": 5_000.0,
+          "trades": [dict(base, aud_per_quote=4.0),     # stored ≠ panel's 2.0
+                     dict(base),                         # legacy: no key
+                     dict(base, aud_per_quote=None),     # null stamp
+                     dict(base, aud_per_quote=-1.0)]}    # corrupt stamp
+    txn = dashboard._transactions(st, panel)
+    rows = list(reversed(txn["rows"]))                  # back to write order
+    # stored path: 0.2 * ((1.10/1.00) * (1.25/4.0) - 1) * 5000 = -656.25
+    assert rows[0]["pnl"] == pytest.approx(-656.25, abs=0.01)
+    # reconstruction path: factor = 1.25/2.0 = 0.625 -> -312.50 for all three
+    recon = 0.2 * ((1.10 / 1.00) * (1.25 / 2.0) - 1.0) * 5_000.0
+    for r in rows[1:]:
+        assert r["pnl"] == pytest.approx(recon, abs=0.01)
+    # ...and the two genuinely differ: the stored value took precedence
+    assert abs(rows[0]["pnl"] - recon) > 100
+
+
+def test_blotter_stored_factor_guarded_when_now_side_underivable():
+    """Architect guard (round-2 item 1): a VALID stored aud_per_quote must NOT
+    be used when the *now-side* aud_per_quote can't be derived from today's
+    frame — a crypto-only / hub-less book with no AUDUSD to translate through.
+    Dividing by a phantom now-rate would mismark the trade; the now-side guard
+    (``if now and now > 0``) instead falls back to reconstruction, which with no
+    hub yields factor 1.0 — the honest pure pair move."""
+    import pandas as pd
+    idx = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    mk = lambda a, b: pd.DataFrame({"open": [a, b], "high": [a, b],
+                                    "low": [a, b], "close": [a, b]}, index=idx)
+    panel = {"EURUSD": mk(1.00, 1.10)}          # NO AUDUSD hub -> now-side underivable
+    st = {"equity_history": [["2025-01-02", 5_000.0]], "equity": 5_000.0,
+          "initial_capital": 5_000.0,
+          "trades": [{"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+                      "delta_weight": 0.2, "target_weight": 0.2, "price": 1.00,
+                      "aud_per_quote": 4.0}]}   # valid stamp, but unusable now
+    pnl = dashboard._transactions(st, panel)["rows"][0]["pnl"]
+    # guard -> reconstruction -> factor 1.0 -> 0.2 * (1.10/1.00 - 1) * 5000 = +100.
+    # Without the guard the phantom now=0 would collapse the mark toward -1000.
+    assert pnl == pytest.approx(100.0, abs=0.01)
+
+
+def test_dashboard_routes_formulas_through_marks():
+    """Round-2 item 2 (dashboard half): the blotter's cost/mark/annualisation
+    formulas are IMPORTS of trading_algo.forex.marks — no local formula bodies.
+    Together with test_fx_marks.py::test_fx_book_routes_through_marks_only
+    (the book half) this is the 'can never diverge' consistency pair."""
+    import inspect
+    from trading_algo.forex import marks
+    assert dashboard._trade_cost is marks.trade_cost
+    assert dashboard._trade_mark is marks.trade_mark
+    assert dashboard._ppy is marks.periods_per_year
+    src = inspect.getsource(dashboard)
+    assert "def _trade_cost" not in src and "def _trade_mark" not in src
+    assert "0.5 * pair.spread_fraction" not in src      # no local cost body
+    assert "0.5 * spread_fraction" not in src
+    assert "* fxf - 1.0" not in src                     # no local mark body
+
+
 def test_blotter_matches_book_charge(isolated):
     """Cross-tying regression (CLAUDE.md 'costs always on' / one-formula): the
     dashboard's blotter cost must reconcile with what the BOOK actually charged

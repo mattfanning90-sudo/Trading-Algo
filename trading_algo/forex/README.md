@@ -113,6 +113,28 @@ hourly-cadence paper exercise, not a live-feed simulation (see
 like the equities); and intraday turnover makes spread costs bite harder — watch
 the cost wedge.
 
+### True-bar dashboard panel & the annualisation convention
+
+The dashboard builds each book's analytics panel **at the book's own bar**: the
+daytrader page runs candles, trade outcomes (the next 10 *hourly* bars), the
+agent scorecard, attribution and DSR/PBO on a true 60m panel, with the
+buy-and-hold bench built from the same panel. Every window stays sized in
+**book bars** (the display/attribution tail is 180 of the book's bars — ~1.5
+trading weeks of hourly candles — an explicit bound, not 180 *days* of hourly
+bars). Yahoo caps 60m history at **~730 days**; if the intraday fetch comes
+back empty or shorter than the strategy warm-up (offline/CI builds have no
+feed), the page degrades to the daily proxy panel and says so on the page.
+
+**Annualisation is calendar-time everywhere** (the one convention, implemented
+once in `marks.periods_per_year` and shared by `fx_book.status` and every
+dashboard vol/Sharpe figure): bars spaced ≥ 12 h annualise at 252 trading
+days/yr; faster bars at `365.25 × 86400 / bar_seconds`, capped at hourly
+(`24 × 365.25 = 8766`). This is calendar time, not FX trading time (~6048
+traded hours/yr), so hourly vol/Sharpe are consistently, modestly overstated —
+a known calibration choice, kept for simplicity and internal consistency
+(pinned by `tests/test_fx_marks.py` and
+`tests/test_fx_dashboard_units.py::test_books_and_dashboard_share_one_annualisation`).
+
 ## Data sources (`--source`)
 
 The system is **source-agnostic**: every feed returns the same aligned OHLC panel,
@@ -318,7 +340,8 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `crypto_exec.py` | live crypto order execution via ccxt (dry-run by default) |
 | `agents.py` | the five agents + concurrent `AgentPool` |
 | `ensemble.py` | performance-weighted agent blending |
-| `risk.py` | vol targeting + per-pair / gross caps |
+| `risk.py` | vol targeting + per-pair / gross / asset-class caps |
+| `marks.py` | **the one** cost/mark/annualisation formula module (book + dashboard) |
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |
 | `fx_book.py` | persistent multi-account paper books |

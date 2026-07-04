@@ -33,6 +33,7 @@ from . import feeds
 from . import fx_config as cfg
 from . import fx_data
 from . import fxconv
+from . import marks
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -256,7 +257,7 @@ def run_once(account: str, synthetic: bool = False,
             # (esp. AUD/USD) are part of the real P&L. Falls back to 1.0 when the
             # AUD/quote rate can't be derived (e.g. a crypto-only book).
             fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
-            contrib = w * ((nc / lc) * fxf - 1.0)
+            contrib = marks.position_contribution(w, lc, nc, fxf)
             pnl_frac += contrib
             day_contribs.append({"pair": s, "weight": round(w, 4),
                                  "move": round(nc / lc - 1.0, 6),     # the pair's own move
@@ -307,13 +308,20 @@ def run_once(account: str, synthetic: bool = False,
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        cost_frac += abs(delta) * 0.5 * get_pair(s).spread_fraction(price)
+        cost_frac += marks.cost_fraction(delta, get_pair(s), price)
         why = rationale.get(s, {})
+        # Execution-time AUD/quote factor, stamped at the trade bar's CLOSE (the
+        # same px_last marks the book itself uses — an execution-time
+        # approximation, not a tick-level fill rate). The dashboard blotter
+        # prefers this stored value over reconstructing entry-time context from
+        # today's panel; null when not derivable (e.g. no AUDUSD hub in px_last).
+        apq = fxconv.aud_per_quote(get_pair(s).quote, px_last)
         trades.append({"date": bar_date, "pair": s,
                        "side": "BUY" if delta > 0 else "SELL",
                        "delta_weight": round(delta, 4),
                        "target_weight": round(new_positions.get(s, 0.0), 4),
                        "price": round(float(price), 5) if price == price else None,
+                       "aud_per_quote": round(float(apq), 6) if apq else None,
                        "why": why.get("text"),
                        "regime": why.get("regime"),
                        "agents": why.get("agents"),
@@ -387,7 +395,11 @@ def status(account: str) -> None:
         print(f"  Current equity   {state['equity']:,.2f} {state['currency']}")
         print(f"  Total return     {state['equity'] / state['initial_capital'] - 1:+.2%}")
         if len(rets) > 20:
-            print(f"  Ann. vol         {rets.std() * np.sqrt(cfg.ANNUALIZATION):.1%}")
+            # Calendar-time annualisation at the book's own bar cadence — the
+            # ONE convention (see marks.periods_per_year); daily books still
+            # annualise at 252, hourly at 24*365.25.
+            ppy = marks.periods_per_year(s.index)
+            print(f"  Ann. vol         {rets.std() * np.sqrt(ppy):.1%}")
             print(f"  Max drawdown     {(s / s.cummax() - 1).min():.2%}")
         print(f"  Trades to date   {len(state['trades'])}")
     if state.get("risk_halted"):
