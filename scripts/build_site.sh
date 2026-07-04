@@ -58,22 +58,32 @@ done
 python -c "from trading_algo.forex.dashboard import build_how_page; build_how_page(\"public\")" \
   || echo "skip how page"
 
-# --- Single canonical landing page (the CI index) -------------------------------
+# --- The landing page IS the terminal ------------------------------------------
+# One static page baking every book + the ALL-ACCOUNTS overview, switcher live.
+python -m trading_algo.dashboard.export --site $SYNTH -o public/index.html \
+  || echo "skip terminal index (books.html will be copied as the landing page)"
+
+# --- Directory page (books.html): every page on the site ------------------------
 {
-  echo '<!doctype html><meta charset=utf-8><title>Trading Paper Books</title>'
+  echo '<!doctype html><meta charset=utf-8><title>MOMENTUM/3R — paper books</title>'
   echo '<meta name=viewport content="width=device-width,initial-scale=1">'
-  echo '<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:3rem;max-width:760px}'
-  echo 'h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1rem;color:#8b949e}.s{color:#8b949e;margin:0 0 1rem}'
-  echo 'a.card{display:block;margin:.8rem 0;padding:1.1rem 1.4rem;border:1px solid #30363d;border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}'
-  echo 'a.card:hover{border-color:#58a6ff}.n{font-size:1.15rem;font-weight:600;color:#58a6ff}.d{color:#8b949e;font-size:.85rem}</style>'
-  echo "<h1>Trading Paper Books</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
-  echo '<a class=card href="how.html" style="border-color:#1f6feb"><div class=n>📖 How it works — start here</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
-  echo '<h2>Momentum/3R terminal — every paper book</h2>'
+  echo '<style>body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#060606;color:#c9e8cc;margin:0;padding:2.5rem;max-width:820px}'
+  echo 'h1{font-size:1.1rem;letter-spacing:.1em;color:#eaffec;margin:0 0 .2rem}h1 b{color:#7ee787}'
+  echo 'h2{margin:2rem 0 .6rem;font-size:.75rem;letter-spacing:.14em;color:#61805f}.s{color:#61805f;font-size:.8rem;margin:0 0 1.6rem}'
+  echo 'a.card{display:block;margin:.55rem 0;padding:.9rem 1.1rem;border:1px solid #262626;border-radius:4px;background:#0d0d0d;color:#c9e8cc;text-decoration:none}'
+  echo 'a.card:hover{border-color:#2a4a2c;background:#111111}.n{font-size:.95rem;font-weight:600;color:#7ee787;letter-spacing:.06em}.d{color:#61805f;font-size:.75rem;margin-top:.2rem}</style>'
+  echo "<h1>■ <b>MOMENTUM/3R</b> — PAPER BOOKS</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC') · reported in AUD</p>"
+  echo '<a class=card href="index.html" style="border-color:#2a4a2c"><div class=n>THE TERMINAL — ALL ACCOUNTS</div><div class=d>every paper book behind one account switcher · overview / positions / backtest / method</div></a>'
+  echo '<a class=card href="how.html"><div class=n>HOW IT WORKS</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
+  echo '<h2>SINGLE-BOOK TERMINAL PAGES</h2>'
   for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
-    echo "<a class=card href=\"$b.html\"><div class=n>$n · terminal</div><div class=d>equity momentum book — overview / positions / backtest / method</div></a>"; done
+    echo "<a class=card href=\"$b.html\"><div class=n>${n^^} · EQUITIES</div><div class=d>equity momentum book — terminal</div></a>"; done
   for f in public/tm_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#tm_}
-    echo "<a class=card href=\"$b.html\"><div class=n>$n · terminal</div><div class=d>FX / multi-asset agent book — decision book, agent votes, pair charts</div></a>"; done
-  echo '<h2>Classic FX candlestick pages — per-trade detail</h2>'
+    echo "<a class=card href=\"$b.html\"><div class=n>${n^^} · AGENT BOOK</div><div class=d>FX / multi-asset agent book — terminal</div></a>"; done
+  echo '<h2>CLASSIC FX CANDLESTICK PAGES — PER-TRADE DETAIL</h2>'
   for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
-    echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>candlesticks + the reasoning behind every trade</div></a>"; done
-} > public/index.html
+    echo "<a class=card href=\"$b.html\"><div class=n>${n^^}</div><div class=d>candlesticks + the reasoning behind every trade</div></a>"; done
+} > public/books.html
+
+# If the terminal index failed to build, the directory page is the landing.
+[ -e public/index.html ] || cp public/books.html public/index.html

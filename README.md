@@ -183,6 +183,7 @@ with **no server and no network** (charts, sorting and tabs all work):
 ```bash
 python -m trading_algo.dashboard.export --account full -o dashboard.html
 python -m trading_algo.dashboard.export --account matt -o fx_matt.html   # FX books too
+python -m trading_algo.dashboard.export --site -o index.html   # EVERY book + ALL overview, switcher live
 ```
 
 ## Run as a native Mac app

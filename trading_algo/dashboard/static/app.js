@@ -31,7 +31,8 @@ const S = {
   backtests: {},            // key -> backtest payload
   errors: {},               // key -> error string
   candles: null,            // optional real OHLC dropped in as candles.json
-  isExport: !!window.__EXPORT_ACCOUNT__,
+  isExport: !!(window.__EXPORT_ACCOUNT__ || window.__EXPORT_ALL__),
+  exportAll: !!window.__EXPORT_ALL__,   // --site export: every book baked
 };
 
 /* ============================== utils ================================== */
@@ -224,33 +225,33 @@ function headerHTML(page) {
   const isAll = S.account === 'ALL';
   const accs = accounts();
   const chips = [];
-  if (!S.isExport && accs.length > 1) {
+  if ((!S.isExport || S.exportAll) && accs.length > 1) {
     chips.push({ key: 'ALL', label: 'ALL ACCOUNTS' });
   }
   for (const a of accs) chips.push({ key: a.key, label: a.label });
   const chipHtml = chips.map(a => {
     const on = S.account === a.key;
-    return `<span class="hv-dim" data-act="acct" data-arg="${esc(a.key)}" style="font-size:9px;letter-spacing:.1em;padding:4px 10px;border:1px solid ${on ? '#2a4a2c' : '#1d2c1e'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-radius:2px;cursor:pointer;user-select:none">${esc(a.label)}</span>`;
+    return `<span class="hv-dim" data-act="acct" data-arg="${esc(a.key)}" style="font-size:9px;letter-spacing:.1em;padding:4px 10px;border:1px solid ${on ? '#2a4a2c' : '#262626'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-radius:2px;cursor:pointer;user-select:none">${esc(a.label)}</span>`;
   }).join('');
 
   const tabs = ['OVERVIEW', 'POSITIONS', 'BACKTEST', 'METHOD'].map(label => {
     const on = S.tab === label;
-    return `<span class="hv-dim" data-act="tab" data-arg="${label}" style="padding:13px 18px;color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-right:1px solid #1d2c1e;border-bottom:2px solid ${on ? G : 'transparent'};cursor:pointer;user-select:none">${label}</span>`;
+    return `<span class="hv-dim" data-act="tab" data-arg="${label}" style="padding:13px 18px;color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-right:1px solid #262626;border-bottom:2px solid ${on ? G : 'transparent'};cursor:pointer;user-select:none">${label}</span>`;
   }).join('');
 
   const mid = isAll
-    ? `<div style="padding:13px 18px;font-size:11px;letter-spacing:.08em;color:#eaffec;border-right:1px solid #1d2c1e;background:#12200f;border-bottom:2px solid #7ee787">ACCOUNTS OVERVIEW</div>
+    ? `<div style="padding:13px 18px;font-size:11px;letter-spacing:.08em;color:#eaffec;border-right:1px solid #262626;background:#12200f;border-bottom:2px solid #7ee787">ACCOUNTS OVERVIEW</div>
        <div style="padding:13px 18px;font-size:10px;letter-spacing:.08em;color:#61805f">${(S.overview ? S.overview.accounts.length : accs.length)} PAPER BOOKS · REPORTED IN AUD</div>`
     : `<div style="display:flex;font-size:11px;letter-spacing:.08em">${tabs}</div>`;
 
   const base = (S.meta && S.meta.base_currency) || 'AUD';
   return `
-  <div style="display:flex;align-items:center;gap:0;background:#0a110b;border-bottom:1px solid #1d2c1e;flex:none">
-    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-right:1px solid #1d2c1e">
+  <div style="display:flex;align-items:center;gap:0;background:#0d0d0d;border-bottom:1px solid #262626;flex:none">
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-right:1px solid #262626">
       <span style="width:9px;height:9px;background:#7ee787;border-radius:1px;box-shadow:0 0 8px rgba(126,231,135,.8)"></span>
       <span style="font-size:14px;font-weight:600;color:#eaffec;letter-spacing:.1em">MOMENTUM/3R</span>
     </div>
-    <div style="display:flex;align-items:center;gap:4px;padding:0 14px;border-right:1px solid #1d2c1e;align-self:stretch;flex-wrap:wrap">${chipHtml}</div>
+    <div style="display:flex;align-items:center;gap:4px;padding:0 14px;border-right:1px solid #262626;align-self:stretch;flex-wrap:wrap">${chipHtml}</div>
     ${mid}
     <div style="margin-left:auto;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:10px;white-space:nowrap">
       <span style="color:#61805f">ACCT <span style="color:#eaffec">${esc(S.account || '')}</span></span>
@@ -270,11 +271,11 @@ function equityTapeHTML(page) {
   if (fx.USD) items.push(`<span style="color:#61805f">AUD/USD <span style="color:#c9e8cc">${num(1 / fx.USD, 4)}</span></span>`);
   if (fx.GBP) items.push(`<span style="color:#61805f">GBP/AUD <span style="color:#c9e8cc">${num(fx.GBP, 4)}</span></span>`);
   if (fx.USD) items.push(`<span style="color:#61805f">USD/AUD <span style="color:#c9e8cc">${num(fx.USD, 4)}</span></span>`);
-  items.push(`<span style="color:#233a24">│</span>`);
+  items.push(`<span style="color:#2e2e2e">│</span>`);
   for (const ix of page.index_state || []) {
     items.push(`<span style="color:#61805f">${esc(ix.symbol)} <span style="color:${ix.risk_on ? G : R}">${ix.risk_on ? 'ABOVE' : 'BELOW'} ${(S.meta ? S.meta.params.index_trend_ma : 200)}D</span></span>`);
   }
-  items.push(`<span style="color:#233a24">│</span>`);
+  items.push(`<span style="color:#2e2e2e">│</span>`);
   items.push(`<span style="color:#61805f">PEAK <span style="color:#c9e8cc">A$${num(page.peak_equity, 2)}</span> · OFF-PEAK <span style="color:${page.off_peak < 0 ? AMB : TXT}">${sgnPct(page.off_peak, 2)}</span></span>`);
   items.push(page.risk_halted
     ? `<span style="color:#61805f">BREAKER <span style="color:${R}">TRIPPED</span> @ −${num(page.breaker * 100, 0)}%</span>`
@@ -282,14 +283,14 @@ function equityTapeHTML(page) {
   const sched = (S.meta && S.meta.schedule) || [];
   const closes = sched.map(s => `${REGION_SHORT[s.region] || s.region} ${s.close_hhmm}`).join(' · ');
   items.push(`<span style="margin-left:auto;color:#61805f">NEXT REBAL <span style="color:#c9e8cc">${esc(page.next_rebalance || '')}</span>${closes ? ` · <span style="color:#c9e8cc">${esc(closes)} UTC</span>` : ''}</span>`);
-  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#080d09;border-bottom:1px solid #1d2c1e;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${items.join('\n')}</div>`;
+  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${items.join('\n')}</div>`;
 }
 
 /* ---- agent / small account ticker tape ---- */
 function acctTapeHTML(items, right) {
   const cells = items.map(t =>
     `<span style="color:#61805f">${esc(t.k)} <span style="color:${t.c || TXT}">${esc(t.v)}</span></span>`).join('\n');
-  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#080d09;border-bottom:1px solid #1d2c1e;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${cells}
+  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${cells}
     <span style="margin-left:auto;color:#61805f">${right}</span></div>`;
 }
 
@@ -301,11 +302,11 @@ function statusBarHTML(page) {
   if (page) mark = page.as_of || page.last_bar_date || '';
   const tests = S.meta && S.meta.tests_total;
   return `
-  <div style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0a110b;border-top:1px solid #1d2c1e;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
+  <div style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0d0d0d;border-top:1px solid #262626;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
     <span><span style="color:#7ee787">●</span> ENGINE IDLE — ${esc(wake)}</span>
     ${mark ? `<span>LAST MARK ${esc(mark)}</span>` : ''}
     ${tests ? `<span>${tests} TESTS</span>` : ''}
-    <span style="margin-left:auto">SIGNALS ≤ T · EXECUTION T+1 · NO LOOKAHEAD</span>
+    ${S.exportAll ? '<span style="margin-left:auto"><a href="books.html" style="color:#61805f;text-decoration:none" class="hv-dim">ALL PAGES →</a></span><span>' : '<span style="margin-left:auto">'}SIGNALS ≤ T · EXECUTION T+1 · NO LOOKAHEAD</span>
   </div>`;
 }
 
@@ -363,14 +364,14 @@ function axisDates(dates, n) {
 
 const rangeChips = () => ['1M', '3M', 'ALL'].map(k => {
   const on = S.range === k;
-  return `<span class="hv-dim" data-act="range" data-arg="${k}" style="padding:2px 8px;cursor:pointer;user-select:none;${on ? 'background:#12200f;color:#7ee787;border:1px solid #2a4a2c' : 'color:#61805f;border:1px solid #1d2c1e'}">${k}</span>`;
+  return `<span class="hv-dim" data-act="range" data-arg="${k}" style="padding:2px 8px;cursor:pointer;user-select:none;${on ? 'background:#12200f;color:#7ee787;border:1px solid #2a4a2c' : 'color:#61805f;border:1px solid #262626'}">${k}</span>`;
 }).join('');
 
 /* popover container: side-flip calc + chrome shared by all row popovers */
 function popShell(rect, need, left, width, pad, inner) {
   const side = (rect.top >= need || rect.top > (window.innerHeight - rect.bottom))
     ? 'bottom:calc(100% + 7px)' : 'top:calc(100% + 6px)';
-  return `<div class="pop" style="position:absolute;${side};left:${left}px;width:${width}px;background:#0a110b;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 36px rgba(0,0,0,.75),0 0 22px rgba(126,231,135,.05);z-index:60;padding:${pad};pointer-events:none">${inner}</div>`;
+  return `<div class="pop" style="position:absolute;${side};left:${left}px;width:${width}px;background:#0d0d0d;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 36px rgba(0,0,0,.75),0 0 22px rgba(126,231,135,.05);z-index:60;padding:${pad};pointer-events:none">${inner}</div>`;
 }
 
 /* row attributes shared by every hoverable position row */
@@ -424,18 +425,18 @@ function equityOverviewHTML(page) {
       : `<span style="font-size:9px;color:#7ee787;border:1px solid #2a4a2c;background:rgba(126,231,135,.06);padding:2px 7px">RISK_ON</span>`;
     const barColor = nPos === 0 ? G : stroke;
     return `
-      <div style="padding:12px 18px;${i < arr.length - 1 ? 'border-bottom:1px solid #1d2c1e' : ''}">
+      <div style="padding:12px 18px;${i < arr.length - 1 ? 'border-bottom:1px solid #262626' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#eaffec">${esc(s.key)} <span style="color:#61805f;font-size:10px">· ${esc(s.currency)} · ${num(s.weight * 100, 1)}%</span></span>${chip}</div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:8px"><div><div style="font-size:16px;color:#eaffec;font-weight:600">${eqTxt}</div><div style="font-size:9px;color:#61805f;margin-top:2px">${sub}</div></div><svg viewBox="0 0 120 26" preserveAspectRatio="none" style="width:110px;height:26px"><polyline points="${spark}" fill="none" stroke="${stroke}" stroke-width="1.2"${dash}></polyline></svg></div>
-        <div style="height:3px;background:#121c12;margin-top:8px"><div style="height:3px;width:${(investedPct * 100).toFixed(0)}%;background:${barColor}"></div></div>
+        <div style="height:3px;background:#1a1a1a;margin-top:8px"><div style="height:3px;width:${(investedPct * 100).toFixed(0)}%;background:${barColor}"></div></div>
       </div>`;
   }).join('');
 
   /* open book rows */
   const bookRows = M.rows.map(p => `
-    <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #0c130d;align-items:center;cursor:crosshair">
+    <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#61805f">${esc(p.region)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span>
-      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#121c12;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
       <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>
     </div>`).join('');
 
@@ -443,7 +444,7 @@ function equityOverviewHTML(page) {
   const feedRows = M.feed.map(t => {
     const sym = SYM[t.currency] || t.currency;
     return `
-    <div style="display:flex;align-items:center;gap:9px;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #0c130d">
+    <div style="display:flex;align-items:center;gap:9px;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212">
       <span style="color:#3d543f">${mmdd(t.date)}</span>
       <span style="width:32px;font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span>
       <span style="color:#eaffec;width:58px">${esc(t.ticker)}</span>
@@ -454,40 +455,40 @@ function equityOverviewHTML(page) {
 
   return `
   <div data-screen="overview">
-    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:14px 18px;border-right:1px solid #1d2c1e;background:#0a110b">
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d">
         <div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div>
         <div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div>
         <svg viewBox="0 0 120 24" preserveAspectRatio="none" style="width:100%;height:24px;margin-top:4px;display:block"><polyline points="${eqSpark}" fill="none" stroke="#7ee787" stroke-width="1.2"></polyline></svg>
       </div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(sinceDate)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">EXPOSURE</div><div style="font-size:20px;font-weight:600;color:#e3b341;margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${pct0(k.cash_pct)} CASH · VOL-TGT ${pct0(k.target_vol)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(posCounts)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(sinceDate)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">EXPOSURE</div><div style="font-size:20px;font-weight:600;color:#e3b341;margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${pct0(k.cash_pct)} CASH · VOL-TGT ${pct0(k.target_vol)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(posCounts)}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">A$${num(k.fees_base, 0)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feesSub}</div></div>
     </div>
 
-    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="border-right:1px solid #1d2c1e">
+    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+      <div style="border-right:1px solid #262626">
         <div style="padding:12px 18px 0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#61805f">MIN ${vals.length ? num(Math.min(...vals), 2) : '—'}</span><span style="color:#61805f">MAX ${vals.length ? num(Math.max(...vals), 2) : '—'}</span></div>
             <div style="display:flex;gap:2px;font-size:9px">${rangeChips()}</div>
           </div>
           <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
-            <line x1="0" y1="35" x2="600" y2="35" stroke="#121c12" stroke-width="1"></line>
-            <line x1="0" y1="70" x2="600" y2="70" stroke="#121c12" stroke-width="1"></line>
-            <line x1="0" y1="105" x2="600" y2="105" stroke="#121c12" stroke-width="1"></line>
+            <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
+            <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
+            <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
             <polygon points="${eqArea140}" fill="rgba(126,231,135,0.08)"></polygon>
             <polyline points="${eqPts140}" fill="none" stroke="#7ee787" stroke-width="1.6" stroke-linejoin="round"></polyline>
             ${vals.length ? `<circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>` : ''}
           </svg>
         </div>
-        <div style="padding:8px 18px 14px;border-top:1px solid #121c12;margin-top:10px">
+        <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
           <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:6px 0">DRAWDOWN FROM PEAK</div>
           <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
-            <line x1="0" y1="1" x2="600" y2="1" stroke="#1d2c1e" stroke-width="1"></line>
+            <line x1="0" y1="1" x2="600" y2="1" stroke="#262626" stroke-width="1"></line>
             <polygon points="${ddArea}" fill="rgba(255,123,114,0.18)"></polygon>
             <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
           </svg>
@@ -498,21 +499,21 @@ function equityOverviewHTML(page) {
     </div>
 
     <div style="display:grid;grid-template-columns:2.1fr 1fr">
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN BOOK · ${M.rows.length} POSITIONS</span><span style="font-size:9px;color:#61805f">HOVER A TICKER FOR PRICE HISTORY</span></div>
-        <div style="display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>TICKER</span><span>REGION</span><span>QTY</span><span>PRICE</span><span>VALUE</span><span>WEIGHT</span><span>DAY</span><span>UNRL</span></div>
+      <div style="border-right:1px solid #262626">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN BOOK · ${M.rows.length} POSITIONS</span><span style="font-size:9px;color:#61805f">HOVER A TICKER FOR PRICE HISTORY</span></div>
+        <div style="display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>REGION</span><span>QTY</span><span>PRICE</span><span>VALUE</span><span>WEIGHT</span><span>DAY</span><span>UNRL</span></div>
         ${bookRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO OPEN POSITIONS.</div>'}
       </div>
       <div style="display:flex;flex-direction:column">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${mdy(M.lastDate)} REBALANCE` : ''}</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${mdy(M.lastDate)} REBALANCE` : ''}</div>
         <div>${feedRows}</div>
-        <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #1d2c1e;background:#0a110b">
+        <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #262626;background:#0d0d0d">
           <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">TOTAL FINANCIAL POSITION · ${esc(page.base_currency)}</div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">INVESTED</span><span style="color:#c9e8cc">${num(k.invested_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">CASH</span><span style="color:#c9e8cc">${num(k.cash_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">OPEN P&amp;L</span><span style="color:${cSign(k.unrealized_base)}">${sgnNum(k.unrealized_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:#ff7b72">−${num(k.fees_base, 0)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #1d2c1e;margin-top:5px"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${num(k.total_equity, 2)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${num(k.total_equity, 2)}</span></div>
         </div>
       </div>
     </div>
@@ -561,21 +562,21 @@ function equityPopHTML(page, region, ticker, rect) {
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:2px">
       <span style="font-size:13px;font-weight:600;color:#eaffec">${esc(ticker)}</span>
       <span style="font-size:9px;color:#61805f;letter-spacing:.1em">${esc(region)} · 90-DAY PRICE</span>
-      <span style="font-size:8px;letter-spacing:.12em;border:1px solid #1d2c1e;padding:1px 6px;color:${real ? G : AMB}">${real ? 'LIVE DATA' : 'SYNTHETIC'}</span>
+      <span style="font-size:8px;letter-spacing:.12em;border:1px solid #262626;padding:1px 6px;color:${real ? G : AMB}">${real ? 'LIVE DATA' : 'SYNTHETIC'}</span>
       <span style="margin-left:auto;font-size:13px;font-weight:600;color:#eaffec">${px2(p.sym, p.price)}</span>
       <span style="font-size:11px;color:${chgPct >= 0 ? G : R}">${sgn(chgPct, num(Math.abs(chgPct), 1))}% 90D</span>
     </div>
     <svg viewBox="0 0 360 104" style="width:100%;height:104px;display:block">
-      <line x1="0" y1="26" x2="360" y2="26" stroke="#121c12" stroke-width="1"></line>
-      <line x1="0" y1="52" x2="360" y2="52" stroke="#121c12" stroke-width="1"></line>
-      <line x1="0" y1="78" x2="360" y2="78" stroke="#121c12" stroke-width="1"></line>
+      <line x1="0" y1="26" x2="360" y2="26" stroke="#1a1a1a" stroke-width="1"></line>
+      <line x1="0" y1="52" x2="360" y2="52" stroke="#1a1a1a" stroke-width="1"></line>
+      <line x1="0" y1="78" x2="360" y2="78" stroke="#1a1a1a" stroke-width="1"></line>
       <polygon points="0,104 ${pts} 360,104" fill="${up ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
       <polyline points="${pts}" fill="none" stroke="${up ? G : R}" stroke-width="1.4" stroke-linejoin="round"></polyline>
       <line x1="0" y1="${Y(entry).toFixed(1)}" x2="360" y2="${Y(entry).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="4 3" opacity="0.75"></line>
-      <circle cx="${X(buyIdx).toFixed(1)}" cy="${Y(entry).toFixed(1)}" r="3.2" fill="#e3b341" stroke="#070b08" stroke-width="1.2"></circle>
+      <circle cx="${X(buyIdx).toFixed(1)}" cy="${Y(entry).toFixed(1)}" r="3.2" fill="#e3b341" stroke="#060606" stroke-width="1.2"></circle>
     </svg>
     <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:2px">${monthLabels}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:9px;padding-top:9px;border-top:1px solid #121c12">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:9px;padding-top:9px;border-top:1px solid #1a1a1a">
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.12em">90D HIGH</div><div style="font-size:11px;color:#c9e8cc;margin-top:2px">${fmt(hi)}</div></div>
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.12em">90D LOW</div><div style="font-size:11px;color:#c9e8cc;margin-top:2px">${fmt(lo)}</div></div>
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.12em">ENTRY <span style="color:#e3b341">◆</span></div><div style="font-size:11px;color:#e3b341;margin-top:2px">${fmt(entry)}${buyDate ? ' · ' + buyDate : ''}</div></div>
@@ -593,9 +594,9 @@ function closedRowsHTML(closed, opts = {}) {
     const nc = cSign(c.net);
     const retCell = opts.bar === false
       ? `<span style="color:${nc}">${sgnPct(c.return_pct, 1)}</span>`
-      : `<span style="display:flex;align-items:center;gap:6px"><span style="color:${nc}">${sgnPct(c.return_pct, 1)}</span><span style="width:34px;height:3px;background:#121c12;display:inline-block"><span style="display:block;height:3px;background:${nc};width:${Math.min(Math.abs(c.return_pct) / maxRet * 100, 100).toFixed(0)}%"></span></span></span>`;
+      : `<span style="display:flex;align-items:center;gap:6px"><span style="color:${nc}">${sgnPct(c.return_pct, 1)}</span><span style="width:34px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${nc};width:${Math.min(Math.abs(c.return_pct) / maxRet * 100, 100).toFixed(0)}%"></span></span></span>`;
     return `
-    <div class="hv-row" style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #0c130d;align-items:center">
+    <div class="hv-row" style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
       <span style="color:#3d543f">${esc(c.date)}</span>
       <span style="color:#eaffec;font-weight:600">${esc(c.ticker)} <span style="font-weight:400;color:#3d543f;font-size:9px">${esc(c.note)}</span></span>
       <span style="color:#61805f">${esc(c.region)}</span>
@@ -628,16 +629,16 @@ function equityPositionsHTML(page) {
       : `<span style="font-size:9px;color:#7ee787;border:1px solid #2a4a2c;padding:2px 8px">RISK_ON</span>`;
     const body = rows.length === 0
       ? `<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO OPEN POSITIONS.${s.regime === 'RISK_OFF' ? ` ${esc(s.index_ticker)} IS BELOW ITS ${ma}-DAY MA, SO THIS BOOK HOLDS 100% CASH UNTIL THE REGIME TURNS RISK-ON.` : ''}</div>`
-      : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
+      : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
         rows.map(p => `
-        <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #0c130d;align-items:center;cursor:crosshair">
+        <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
           <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
-          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#121c12;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
           <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
         </div>`).join('');
     return `
-    <div style="border-bottom:1px solid #1d2c1e">
-      <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0a110b;border-bottom:1px solid #121c12">
+    <div style="border-bottom:1px solid #262626">
+      <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
         <span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.08em">${esc(s.key)} · ${esc(country)}</span>
         ${chip}
         <span style="font-size:10px;color:#61805f">EQUITY <span style="color:#c9e8cc">${eqTxt}</span></span>
@@ -652,7 +653,7 @@ function equityPositionsHTML(page) {
   const blotterRows = (page.blotter || []).map(t => {
     const sym = SYM[t.currency] || t.currency;
     return `
-    <div class="hv-row" style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:4px 18px;font-size:10.5px;border-bottom:1px solid #0c130d">
+    <div class="hv-row" style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:4px 18px;font-size:10.5px;border-bottom:1px solid #121212">
       <span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${pxFill(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:#61805f">${sym}${num(t.commission || 0, 2)}</span><span style="color:${t.stamp_duty ? AMB : FAINT}">${t.stamp_duty ? sym + num(t.stamp_duty, 2) : '—'}</span>
     </div>`;
   }).join('');
@@ -672,20 +673,20 @@ function equityPositionsHTML(page) {
   return `
   <div data-screen="positions">
     ${sleeveBlocks}
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#0a110b;border-bottom:1px solid #121c12">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ALL ${(page.blotter || []).length} FILLS</span>
       <span style="font-size:9px;color:#61805f">COMMISSIONS + UK STAMP DUTY (50BPS ON FTSE BUYS) ITEMISED</span>
     </div>
-    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
+    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
     ${blotterRows}
-    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0a110b;border-top:1px solid #1d2c1e;border-bottom:1px solid #121c12">
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)</span>
       ${regionNetHtml}
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">INCLUDES COMMISSIONS + UK STAMP DUTY · FILLS ALREADY CARRY MODELLED SPREAD/SLIPPAGE</span>
     </div>
-    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}
   </div>`;
 }
@@ -738,7 +739,7 @@ function costFootnote() {
 }
 
 const kpiCell = (label, val, color, sub, last) => `
-  <div style="padding:14px 18px;${last ? '' : 'border-right:1px solid #1d2c1e'}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${label}</div><div style="font-size:22px;font-weight:600;color:${color};margin-top:6px">${val}</div><div style="font-size:9px;color:#3d543f;margin-top:3px">${sub}</div></div>`;
+  <div style="padding:14px 18px;${last ? '' : 'border-right:1px solid #262626'}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${label}</div><div style="font-size:22px;font-weight:600;color:${color};margin-top:6px">${val}</div><div style="font-size:9px;color:#3d543f;margin-top:3px">${sub}</div></div>`;
 
 function backtestHTML(page) {
   const bt = S.backtests[S.account];
@@ -786,9 +787,9 @@ function backtestHTML(page) {
   let sleeveRows = '';
   if (sleeves && sleeves.length) {
     sleeveRows = sleeves.map(s => `
-      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #0c130d"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:#7ee787">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:#ff7b72">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span></div>`).join('');
+      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:#7ee787">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:#ff7b72">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span></div>`).join('');
     sleeveRows += `
-      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #0c130d;background:#0a110b"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:#7ee787">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:#ff7b72">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span></div>`;
+      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #121212;background:#0d0d0d"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:#7ee787">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:#ff7b72">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span></div>`;
   } else {
     sleeveRows = `<div style="padding:22px 18px;font-size:10.5px;color:#61805f;line-height:1.8">PER-SLEEVE METRICS APPEAR HERE ONCE THE BACKTEST CACHE EXISTS.<br><span style="color:#3d543f">python -m trading_algo.dashboard.backtest_store</span></div>`;
   }
@@ -811,7 +812,7 @@ function backtestHTML(page) {
     const vBorder = /ROBUST/.test(v) ? '#2a4a2c' : /PEAKY/.test(v) ? '#4a2a28' : '#4a3a1a';
     const vShort = v.split(' — ')[0] || '—';
     sweepHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span title="${esc(v)}" style="font-size:9px;color:${vTone};border:1px solid ${vBorder};background:rgba(126,231,135,.04);padding:2px 8px">VERDICT: ${esc(vShort)}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span title="${esc(v)}" style="font-size:9px;color:${vTone};border:1px solid ${vBorder};background:rgba(126,231,135,.04);padding:2px 8px">VERDICT: ${esc(vShort)}</span></div>
       <div style="padding:14px 18px">
         <div style="display:grid;grid-template-columns:70px repeat(${sweep.lookbacks.length},1fr);gap:3px;font-size:10px">
           <span></span>${sweep.lookbacks.map(l => `<span style="color:#61805f;text-align:center;font-size:9px;letter-spacing:.1em">LOOKBACK ${esc(String(l).toUpperCase())}</span>`).join('')}
@@ -821,7 +822,7 @@ function backtestHTML(page) {
       </div>`;
   } else {
     sweepHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span style="font-size:9px;color:#61805f;border:1px solid #1d2c1e;padding:2px 8px">NOT CACHED</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span style="font-size:9px;color:#61805f;border:1px solid #262626;padding:2px 8px">NOT CACHED</span></div>
       <div style="padding:14px 18px;font-size:10px;color:#61805f;line-height:1.8">RUN THE SWEEP AND RE-EXPORT TO SEE THE TOP_N × LOOKBACK SHARPE GRID HERE:<br><span style="color:#3d543f">python -m trading_algo.dashboard.backtest_store --sweep</span><br><br>A BROAD PLATEAU MEANS THE PARAMETERS ARE ROBUST; AN ISOLATED PEAK MEANS THEY WERE CURVE-FIT.</div>`;
   }
 
@@ -831,17 +832,17 @@ function backtestHTML(page) {
       ${banner}
       <span style="margin-left:auto;color:#8a7433">${esc(period)} · MONTHLY REBALANCE · COSTS ON</span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #1d2c1e">${kpis}</div>
-    <div style="padding:14px 18px;border-bottom:1px solid #1d2c1e">
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${kpis}</div>
+    <div style="padding:14px 18px;border-bottom:1px solid #262626">
       <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px">
         <span style="color:#eaffec">■ GROWTH OF A$${num((real && bt.initial_capital) || 100000, 0)} · AUD, NET OF COSTS${real ? '' : ' · ILLUSTRATIVE'}</span>
         <span style="color:#7ee787">— MOMENTUM/3R</span>
         <span style="color:#61805f">— EQUAL-WEIGHT INDEX BENCHMARK</span>
       </div>
       <svg viewBox="0 0 1200 240" preserveAspectRatio="none" style="width:100%;height:250px;display:block">
-        <line x1="0" y1="60" x2="1200" y2="60" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="120" x2="1200" y2="120" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="180" x2="1200" y2="180" stroke="#121c12" stroke-width="1"></line>
+        <line x1="0" y1="60" x2="1200" y2="60" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="120" x2="1200" y2="120" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="180" x2="1200" y2="180" stroke="#1a1a1a" stroke-width="1"></line>
         <polygon points="${curves.btArea}" fill="rgba(126,231,135,0.06)"></polygon>
         <polyline points="${curves.btBench}" fill="none" stroke="#61805f" stroke-width="1.3"></polyline>
         <polyline points="${curves.btPts}" fill="none" stroke="#7ee787" stroke-width="1.7" stroke-linejoin="round"></polyline>
@@ -849,15 +850,15 @@ function backtestHTML(page) {
       <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${curves.years.map(y => `<span>${y}</span>`).join('')}</div>
       <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:12px 0 6px">DRAWDOWN</div>
       <svg viewBox="0 0 1200 60" preserveAspectRatio="none" style="width:100%;height:60px;display:block">
-        <line x1="0" y1="1" x2="1200" y2="1" stroke="#1d2c1e" stroke-width="1"></line>
+        <line x1="0" y1="1" x2="1200" y2="1" stroke="#262626" stroke-width="1"></line>
         <polygon points="${curves.btDdArea}" fill="rgba(255,123,114,0.16)"></polygon>
         <polyline points="${curves.btDd}" fill="none" stroke="#ff7b72" stroke-width="1.1"></polyline>
       </svg>
     </div>
     <div style="display:grid;grid-template-columns:1.4fr 1fr">
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ PER-SLEEVE METRICS · LOCAL CURRENCY, NET OF COSTS</div>
-        <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>SLEEVE</span><span>CAGR</span><span>SHARPE</span><span>SORTINO</span><span>MAX DD</span><span>CALMAR</span></div>
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ PER-SLEEVE METRICS · LOCAL CURRENCY, NET OF COSTS</div>
+        <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>SLEEVE</span><span>CAGR</span><span>SHARPE</span><span>SORTINO</span><span>MAX DD</span><span>CALMAR</span></div>
         ${sleeveRows}
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">COMBINED VOL SITS BELOW EVERY INDIVIDUAL SLEEVE — THE DIVERSIFICATION BENEFIT OF MULTIPLE REGIONAL BOOKS. ${esc(costFootnote())}</div>
       </div>
@@ -881,17 +882,17 @@ function methodHTML() {
     { n: '05', mod: 'STRATEGY.PY', title: 'INVERSE-VOL WEIGHTS', formula: `wᵢ ∝ 1/VOLᵢ · CAP ${pct0(p.max_weight ?? 0.15)}`, desc: 'CALM NAMES GET MORE CAPITAL; NO SINGLE NAME DOMINATES.' },
     { n: '06', mod: 'STRATEGY.PY', title: 'VOL TARGETING', formula: `SCALE → ${pct0(p.target_vol ?? 0.12)} VOL · GROSS ≤ ${pct0(p.max_gross ?? 1)}`, desc: 'STEADY RISK, NOT STEADY CAPITAL. TURBULENT MARKETS → MORE CASH.' },
   ].map(st => `
-    <div style="border:1px solid #1d2c1e;background:#0a110b;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+    <div style="border:1px solid #262626;background:#0d0d0d;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:15px;color:#3d543f;font-weight:600">${st.n}</span><span style="font-size:8px;color:#61805f;letter-spacing:.1em">${st.mod}</span></div>
       <div style="font-size:11px;color:#eaffec;font-weight:600;letter-spacing:.04em">${st.title}</div>
-      <div style="font-size:10px;color:#7ee787;background:#0c130d;border:1px solid #121c12;padding:6px 8px;line-height:1.5">${st.formula}</div>
+      <div style="font-size:10px;color:#7ee787;background:#121212;border:1px solid #1a1a1a;padding:6px 8px;line-height:1.5">${st.formula}</div>
       <div style="font-size:9.5px;color:#61805f;line-height:1.6">${st.desc}</div>
     </div>`).join('');
 
   const costRows = regions.map(r => {
     const sym = SYM[r.currency] || r.currency;
     return `
-    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #0c130d"><span style="color:#eaffec">${esc(r.key)}</span><span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
+    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(r.key)}</span><span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
   }).join('');
 
   const invariants = [
@@ -901,12 +902,12 @@ function methodHTML() {
     { text: 'WHOLE SHARES ONLY IN PAPER TRADING; COMMISSION FLOORS RESPECTED.', test: 'TEST_PAPER_TRADE' },
     { text: 'SYNTHETIC RESULTS ARE PLUMBING TESTS — NEVER PRESENTED AS PERFORMANCE.', test: 'TEST_DATA_SOURCES' },
   ].map(iv => `
-    <div style="display:flex;gap:10px;padding:9px 18px;border-bottom:1px solid #0c130d;font-size:10.5px;line-height:1.6"><span style="color:#7ee787">✓</span><span style="color:#9db5a0">${iv.text} <span style="color:#3d543f">${iv.test}</span></span></div>`).join('');
+    <div style="display:flex;gap:10px;padding:9px 18px;border-bottom:1px solid #121212;font-size:10.5px;line-height:1.6"><span style="color:#7ee787">✓</span><span style="color:#9db5a0">${iv.text} <span style="color:#3d543f">${iv.test}</span></span></div>`).join('');
 
   return `
   <div data-screen="method">
-    <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:18px;border-right:1px solid #1d2c1e">
+    <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:18px;border-right:1px solid #262626">
         <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ THE IDEA IN ONE PARAGRAPH</div>
         <p style="font-size:12px;line-height:1.9;color:#9db5a0;margin:0">EACH MONTH, IN EACH REGION (FTSE / US / ASX), RANK EVERY STOCK BY ITS <span style="color:#7ee787">12-MONTH-MINUS-1 MOMENTUM</span>. BUY THE STRONGEST NAMES — BUT ONLY THOSE IN AN UPTREND, AND ONLY WHILE THE REGIONAL INDEX ITSELF IS IN AN UPTREND; OTHERWISE HOLD CASH. SIZE BY <span style="color:#7ee787">INVERSE VOLATILITY</span>, SCALE TO A <span style="color:#7ee787">${pct0(p.target_vol ?? 0.12)} VOL TARGET</span>, REBALANCE MONTHLY. THREE BOOKS IN PARALLEL, EACH IN ITS OWN CURRENCY, REPORTED IN AUD.</p>
       </div>
@@ -921,25 +922,25 @@ function methodHTML() {
         </div>
       </div>
     </div>
-    <div style="padding:14px 18px;border-bottom:1px solid #1d2c1e">
+    <div style="padding:14px 18px;border-bottom:1px solid #262626">
       <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:12px">■ THE PER-SLEEVE PIPELINE · SIGNALS.PY → STRATEGY.COMPUTE_TARGETS()</div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">${pipeline}</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr">
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST MODEL · REGIONS.PY</div>
-        <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #121c12"><span>REGION</span><span>COMMISSION</span><span>MIN</span><span>SLIPPAGE</span><span>STAMP DUTY</span></div>
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST MODEL · REGIONS.PY</div>
+        <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>REGION</span><span>COMMISSION</span><span>MIN</span><span>SLIPPAGE</span><span>STAMP DUTY</span></div>
         ${costRows}
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">MONTHLY TURNOVER RUNS ~25–35%, SO THE EDGE SURVIVES COMMISSIONS, SLIPPAGE AND UK STAMP DUTY. LSE PENCE ARE SCALED TO POUNDS (PRICE_SCALE = 0.01).</div>
       </div>
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK CONTROLS · CONFIG.PY</div>
-        <div style="padding:12px 18px;border-bottom:1px solid #0c130d"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>
-        <div style="padding:12px 18px;border-bottom:1px solid #0c130d"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE-SIZE GATE</span><span style="color:#e3b341">A$${num(risk.min_viable_equity_base ?? 500, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SLEEVE BELOW THIS HOLDS CASH INSTEAD OF BLEEDING COMMISSION FLOORS — THE LESSON THE $1K ACCOUNT TAUGHT.</div></div>
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK CONTROLS · CONFIG.PY</div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE-SIZE GATE</span><span style="color:#e3b341">A$${num(risk.min_viable_equity_base ?? 500, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SLEEVE BELOW THIS HOLDS CASH INSTEAD OF BLEEDING COMMISSION FLOORS — THE LESSON THE $1K ACCOUNT TAUGHT.</div></div>
         <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">POSITION CAPS</span><span style="color:#7ee787">${pct0(p.max_weight ?? 0.15)} / ${pct0(p.max_gross ?? 1)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">SINGLE-NAME CAP ${pct0(p.max_weight ?? 0.15)}; GROSS EXPOSURE ≤ ${pct0(p.max_gross ?? 1)} — NEVER LEVERED. ENFORCED INSIDE COMPUTE_TARGETS().</div></div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ INVARIANTS${tests ? ` · ENFORCED BY ${tests} TESTS` : ''}</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ INVARIANTS${tests ? ` · ENFORCED BY ${tests} TESTS` : ''}</div>
         ${invariants}
       </div>
     </div>
@@ -968,7 +969,7 @@ function allAccountsHTML() {
     const spark = toPts(c.spark, 120, 30, 3).join(' ');
     const up = c.spark.length > 1 ? c.spark[c.spark.length - 1] >= c.spark[0] : true;
     return `
-    <div class="hv-acct" data-act="acct" data-arg="${esc(c.key)}" style="padding:16px 18px;border-right:1px solid #1d2c1e;display:flex;flex-direction:column;gap:10px;cursor:pointer">
+    <div class="hv-acct" data-act="acct" data-arg="${esc(c.key)}" style="padding:16px 18px;border-right:1px solid #262626;display:flex;flex-direction:column;gap:10px;cursor:pointer">
       <div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)}">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
       <div style="font-size:21px;font-weight:600;color:#eaffec;letter-spacing:-.01em">A$${num(c.equity, 2)}</div>
       <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${cSign(c.day)}">${sgnPct(c.day, 2)} DAY</span></div>
@@ -981,17 +982,17 @@ function allAccountsHTML() {
   const best = T.best, worst = T.worst;
   return `
   <div data-screen="all">
-    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:14px 18px;border-right:1px solid #1d2c1e;background:#0a110b"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL AUM · AUD</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${aumInt}<span style="font-size:15px;color:#61805f">${aumDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">ACROSS ${T.books} PAPER BOOKS</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(T.net_pnl)};margin-top:8px">${sgnNum(T.net_pnl, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.net_pnl_pct, 2)} ON ${num(T.initial, 0)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.books} BOOKS RED</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL AUM · AUD</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${aumInt}<span style="font-size:15px;color:#61805f">${aumDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">ACROSS ${T.books} PAPER BOOKS</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(T.net_pnl)};margin-top:8px">${sgnNum(T.net_pnl, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.net_pnl_pct, 2)} ON ${num(T.initial, 0)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.books} BOOKS RED</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${T.halts ? R : G};margin-top:8px">${T.halts} / ${T.books}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${T.halts ? 'BREAKER(S) TRIPPED' : 'ALL BREAKERS ARMED'}</div></div>
     </div>
-    <div style="padding:12px 18px;border-bottom:1px solid #1d2c1e">
+    <div style="padding:12px 18px;border-bottom:1px solid #262626">
       <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">CAPITAL ALLOCATION</div>
-      <div style="display:flex;height:14px;border:1px solid #1d2c1e">${segs}</div>
+      <div style="display:flex;height:14px;border:1px solid #262626">${segs}</div>
       <div style="display:flex;gap:18px;margin-top:7px;font-size:9px;color:#61805f;flex-wrap:wrap">${legend}</div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(${cards.length || 1},1fr)">${cardHtml}</div>
@@ -1080,8 +1081,8 @@ function agentKpisHTML(page) {
       ? { label: 'RISK HALT', val: 'HALTED', color: R, sub: `COOLDOWN ${page.halt_cooldown} BARS` }
       : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
   ];
-  return `<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #1d2c1e">` +
-    kpis.map((k, i) => `<div style="padding:14px 16px;${i < kpis.length - 1 ? 'border-right:1px solid #1d2c1e' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:20px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div>';
+  return `<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">` +
+    kpis.map((k, i) => `<div style="padding:14px 16px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:20px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div>';
 }
 
 function agentTapeHTML(page) {
@@ -1151,26 +1152,26 @@ function agentCurveAttrHTML(page) {
     return `
     <div style="display:flex;align-items:center;gap:9px;padding:4px 0;font-size:10px">
       <span style="color:#c9e8cc;width:64px">${esc(b.label)}</span>
-      <span style="position:relative;flex:1;height:5px;background:#121c12;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#233a24"></span><span style="position:absolute;top:0;height:5px;left:${left};width:${width};background:${color}"></span></span>
+      <span style="position:relative;flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${left};width:${width};background:${color}"></span></span>
       <span style="color:${color};width:56px;text-align:right">${b.val}</span>
     </div>`;
   }).join('');
 
   return `
-  <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #1d2c1e">
-    <div style="padding:12px 18px;border-right:1px solid #1d2c1e">
+  <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+    <div style="padding:12px 18px;border-right:1px solid #262626">
       <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em;margin-bottom:8px"><span style="color:#eaffec">■ EQUITY CURVE · AUD</span><span style="color:#61805f">${rangeTxt}</span></div>
       <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
-        <line x1="0" y1="35" x2="600" y2="35" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="70" x2="600" y2="70" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="105" x2="600" y2="105" stroke="#121c12" stroke-width="1"></line>
+        <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
         <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
         <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
       </svg>
       <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px"><span>${esc(mmdd(eqStart) || eqStart)}</span><span>${esc(String(eqEnd).slice(5))}</span></div>
     </div>
     <div>
-      <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ${title}</div>
+      <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ${title}</div>
       <div style="padding:8px 18px 12px">${barHtml}</div>
     </div>
   </div>`;
@@ -1244,9 +1245,9 @@ function chartSectionHTML(page) {
     { key: 'ema', label: 'EMA ' + pF + '/' + pS, dot: '#e3b341' },
     { key: 'boll', label: 'BOLLINGER ±2σ', dot: '#9db5a0' },
     { key: 'don', label: 'DONCHIAN ' + wD, dot: '#8a7433' },
-  ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" style="display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#1d2c1e'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}</span>`).join('\n');
+  ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" style="display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#262626'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}</span>`).join('\n');
   const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k =>
-    `<span class="hv-dim" data-act="pane" data-arg="${k}" style="font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#1d2c1e'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k}</span>`).join('\n');
+    `<span class="hv-dim" data-act="pane" data-arg="${k}" style="font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#262626'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k}</span>`).join('\n');
 
   /* ---- indicator pane ---- */
   let paneHtml = '';
@@ -1339,10 +1340,10 @@ function chartSectionHTML(page) {
   /* ---- chips + dropdown ---- */
   const pairChips = page.rows.map(r => {
     const on = r.pair === selPair;
-    return `<span class="hv-dim" data-act="pair" data-arg="${esc(r.pair)}" style="font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${on ? '#2a4a2c' : '#1d2c1e'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${esc(r.pair)}</span>`;
+    return `<span class="hv-dim" data-act="pair" data-arg="${esc(r.pair)}" style="font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${on ? '#2a4a2c' : '#262626'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${esc(r.pair)}</span>`;
   }).join('\n');
   const tfMenu = !S.tfOpen ? '' : `
-    <div style="position:absolute;top:calc(100% + 4px);right:0;min-width:128px;background:#0a110b;border:1px solid #2a4a2c;box-shadow:0 10px 28px rgba(0,0,0,.8);z-index:80">
+    <div style="position:absolute;top:calc(100% + 4px);right:0;min-width:128px;background:#0d0d0d;border:1px solid #2a4a2c;box-shadow:0 10px 28px rgba(0,0,0,.8);z-index:80">
       ${Object.keys(TF_MAP).map(k => `<div class="hv-menu" data-act="tf" data-arg="${k}" style="display:flex;justify-content:space-between;gap:12px;padding:6px 12px;font-size:9.5px;letter-spacing:.06em;color:${k === tf ? PALE : DIM};background:${k === tf ? '#12200f' : 'transparent'};cursor:pointer"><span>${k}</span><span style="color:#3d543f">${TF_MAP[k].desc}</span></div>`).join('')}
     </div>`;
 
@@ -1353,21 +1354,21 @@ function chartSectionHTML(page) {
   const sideColor = row.weight >= 0 ? G : R;
 
   return `
-  <div style="border-bottom:1px solid #1d2c1e">
-    <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #121c12;flex-wrap:wrap">
+  <div style="border-bottom:1px solid #262626">
+    <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #1a1a1a;flex-wrap:wrap">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ PAIR CHART · ${esc(selPair)}</span>
       <span style="font-size:9px;font-weight:600;color:${sideColor}">${row.weight >= 0 ? '▲ LONG ' : '▼ SHORT '}</span>
       <span style="font-size:9px;color:#61805f">${esc(row.regime)} · VOL ${num(volN * 100, 0)}%</span>
       <div style="position:relative;margin-left:auto">
-        <span class="hv-dim" data-act="tf-toggle" style="display:inline-flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.08em;padding:4px 10px;border:1px solid #2a4a2c;color:#7ee787;background:#0a110b;cursor:pointer;user-select:none">◷ ${tf} <span style="color:#61805f">▾</span></span>
+        <span class="hv-dim" data-act="tf-toggle" style="display:inline-flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.08em;padding:4px 10px;border:1px solid #2a4a2c;color:#7ee787;background:#0d0d0d;cursor:pointer;user-select:none">◷ ${tf} <span style="color:#61805f">▾</span></span>
         ${tfMenu}
       </div>
       <div style="display:flex;gap:3px;flex-wrap:wrap">${pairChips}</div>
     </div>
-    <div style="display:flex;align-items:center;gap:5px;padding:7px 18px;border-bottom:1px solid #121c12">
+    <div style="display:flex;align-items:center;gap:5px;padding:7px 18px;border-bottom:1px solid #1a1a1a">
       <span style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-right:4px">TA</span>
       ${taChips}
-      <span style="color:#233a24;margin:0 5px">│</span>
+      <span style="color:#2e2e2e;margin:0 5px">│</span>
       ${paneChips}
       <span style="margin-left:auto;font-size:8.5px;color:#3d543f;letter-spacing:.06em">${legendParts.join(' · ') || 'ALL OVERLAYS OFF — CLICK TO ADD'}</span>
     </div>
@@ -1375,9 +1376,9 @@ function chartSectionHTML(page) {
       <div style="position:relative" id="candle-zone" data-candles="1">
       <svg viewBox="0 0 1200 240" preserveAspectRatio="none" style="width:100%;height:250px;display:block">
         <rect id="hov-rect" x="0" y="0" width="0" height="240" fill="rgba(234,255,236,0.06)"></rect>
-        <line x1="0" y1="60" x2="1200" y2="60" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="120" x2="1200" y2="120" stroke="#121c12" stroke-width="1"></line>
-        <line x1="0" y1="180" x2="1200" y2="180" stroke="#121c12" stroke-width="1"></line>
+        <line x1="0" y1="60" x2="1200" y2="60" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="120" x2="1200" y2="120" stroke="#1a1a1a" stroke-width="1"></line>
+        <line x1="0" y1="180" x2="1200" y2="180" stroke="#1a1a1a" stroke-width="1"></line>
         <path d="${cp.wickUp}" stroke="#7ee787" stroke-width="1" fill="none"></path>
         <path d="${cp.bodyUp}" fill="#7ee787"></path>
         <path d="${cp.wickDn}" stroke="#ff7b72" stroke-width="1" fill="none"></path>
@@ -1391,7 +1392,7 @@ function chartSectionHTML(page) {
         <polyline points="${taEmaSlow}" stroke="#c9e8cc" stroke-width="1.4" fill="none" opacity="0.85"></polyline>
         <line x1="0" y1="${CY(closeN).toFixed(1)}" x2="1200" y2="${CY(closeN).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"></line>
       </svg>
-      <div id="candle-pop" style="display:none;position:absolute;top:10px;left:0;width:292px;background:#0a110b;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 32px rgba(0,0,0,.8);z-index:70;padding:11px 13px;pointer-events:none"></div>
+      <div id="candle-pop" style="display:none;position:absolute;top:10px;left:0;width:292px;background:#0d0d0d;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 32px rgba(0,0,0,.8);z-index:70;padding:11px 13px;pointer-events:none"></div>
       </div>
       <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px">
         <span>${T.label}</span>
@@ -1402,11 +1403,11 @@ function chartSectionHTML(page) {
         <span style="margin-left:auto;color:#8a7433">${chartSrc}</span>
       </div>
       ${paneHtml}
-      <div style="border-top:1px solid #121c12;padding:10px 0 12px">
+      <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
         <div style="display:flex;gap:14px;align-items:baseline;font-size:8.5px;letter-spacing:.1em;margin-bottom:9px"><span style="color:#eaffec;letter-spacing:.14em">■ MOVE BREAKDOWN — WHAT HAPPENED &amp; WHY</span><span style="color:#61805f">${esc(phaseSummary)}</span></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
           ${phases.map(ph => `
-          <div style="border:1px solid #1d2c1e;background:#0a110b;padding:10px 12px">
+          <div style="border:1px solid #262626;background:#0d0d0d;padding:10px 12px">
             <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:9px;color:#61805f;letter-spacing:.1em">${ph.label}</span><span style="font-size:11px;color:${ph.color};font-weight:600">${ph.arrow} ${ph.chg}</span></div>
             <div style="font-size:9px;color:#3d543f;margin-top:2px;letter-spacing:.06em">${ph.range}</div>
             <div style="font-size:9.5px;color:#9db5a0;line-height:1.7;margin-top:7px">${esc(ph.text)}</div>
@@ -1420,12 +1421,12 @@ function chartSectionHTML(page) {
 
 function _paneHTML(label, val, hint, y1, y2, y3, pts, area) {
   return `
-  <div style="border-top:1px solid #121c12;padding-top:8px">
+  <div style="border-top:1px solid #1a1a1a;padding-top:8px">
     <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:5px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:#e3b341">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
     <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:80px;display:block;margin-bottom:8px">
-      <line x1="0" y1="${y1}" x2="1200" y2="${y1}" stroke="#233a24" stroke-width="1" stroke-dasharray="4 4"></line>
-      <line x1="0" y1="${y2}" x2="1200" y2="${y2}" stroke="#121c12" stroke-width="1"></line>
-      <line x1="0" y1="${y3}" x2="1200" y2="${y3}" stroke="#233a24" stroke-width="1" stroke-dasharray="4 4"></line>
+      <line x1="0" y1="${y1}" x2="1200" y2="${y1}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
+      <line x1="0" y1="${y2}" x2="1200" y2="${y2}" stroke="#1a1a1a" stroke-width="1"></line>
+      <line x1="0" y1="${y3}" x2="1200" y2="${y3}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <polygon points="${area}" fill="rgba(201,232,204,0.06)"></polygon>
       <polyline points="${pts}" fill="none" stroke="#c9e8cc" stroke-width="1.3" stroke-linejoin="round"></polyline>
     </svg>
@@ -1509,30 +1510,30 @@ function _fundamentals(page, row, cp) {
   }
 
   return `
-  <div style="border-top:1px solid #121c12;padding:10px 0 12px">
+  <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
     <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:9px;flex-wrap:wrap">
       <span style="font-size:8.5px;color:#eaffec;letter-spacing:.14em">■ FUNDAMENTALS · ${esc(cp)}</span>
-      <span style="font-size:8.5px;letter-spacing:.08em;color:${fu.biasColor};border:1px solid #1d2c1e;padding:2px 8px">${esc(fu.bias)}</span>
+      <span style="font-size:8.5px;letter-spacing:.08em;color:${fu.biasColor};border:1px solid #262626;padding:2px 8px">${esc(fu.bias)}</span>
       <span style="font-size:8.5px;color:#61805f">${esc(fu.align)}</span>
       <span style="margin-left:auto;font-size:8.5px;color:#3d543f">INDICATIVE FIGURES — WIRE A MACRO FEED FOR LIVE DATA</span>
     </div>
     <div style="display:grid;grid-template-columns:1.05fr 1.25fr 1.1fr;gap:10px">
-      <div style="border:1px solid #1d2c1e;background:#0a110b;padding:10px 12px">
+      <div style="border:1px solid #262626;background:#0d0d0d;padding:10px 12px">
         <div style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:8px">INTEREST RATES · THE PRIMARY DRIVER</div>
         ${fu.rates.map(r => `<div style="display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:10.5px"><span style="color:#eaffec;font-weight:600;width:34px">${esc(r.code)}</span><span style="color:#61805f;font-size:9px;flex:1">${esc(r.cb)}</span><span style="color:${r.color};font-weight:600">${esc(r.rate)}</span></div>`).join('')}
-        <div style="font-size:10px;color:#c9e8cc;margin-top:6px;padding-top:6px;border-top:1px solid #121c12">${esc(fu.diffTxt)}</div>
+        <div style="font-size:10px;color:#c9e8cc;margin-top:6px;padding-top:6px;border-top:1px solid #1a1a1a">${esc(fu.diffTxt)}</div>
         <div style="font-size:9.5px;color:#61805f;line-height:1.65;margin-top:5px">${esc(fu.carryTxt)}</div>
       </div>
-      <div style="border:1px solid #1d2c1e;background:#0a110b;padding:10px 12px">
+      <div style="border:1px solid #262626;background:#0d0d0d;padding:10px 12px">
         <div style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:8px">ECONOMIC INDICATORS · GDP / CPI / JOBS</div>
-        <div style="display:grid;grid-template-columns:.5fr 1fr 1fr 1fr;gap:4px;font-size:8.5px;color:#3d543f;letter-spacing:.08em;padding-bottom:4px;border-bottom:1px solid #121c12"><span></span><span>GROWTH</span><span>INFLATION</span><span>JOBS</span></div>
-        ${fu.econ.map(r => `<div style="display:grid;grid-template-columns:.5fr 1fr 1fr 1fr;gap:4px;padding:5px 0;font-size:10.5px;border-bottom:1px solid #0c130d"><span style="color:#eaffec;font-weight:600">${esc(r.code)}</span><span style="color:#c9e8cc">${esc(r.gdp)}</span><span style="color:#c9e8cc">${esc(r.cpi)}</span><span style="color:#c9e8cc">${esc(r.jobs)}</span></div>`).join('')}
+        <div style="display:grid;grid-template-columns:.5fr 1fr 1fr 1fr;gap:4px;font-size:8.5px;color:#3d543f;letter-spacing:.08em;padding-bottom:4px;border-bottom:1px solid #1a1a1a"><span></span><span>GROWTH</span><span>INFLATION</span><span>JOBS</span></div>
+        ${fu.econ.map(r => `<div style="display:grid;grid-template-columns:.5fr 1fr 1fr 1fr;gap:4px;padding:5px 0;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#eaffec;font-weight:600">${esc(r.code)}</span><span style="color:#c9e8cc">${esc(r.gdp)}</span><span style="color:#c9e8cc">${esc(r.cpi)}</span><span style="color:#c9e8cc">${esc(r.jobs)}</span></div>`).join('')}
         <div style="font-size:9.5px;color:#61805f;line-height:1.65;margin-top:6px">${esc(fu.econTxt)}</div>
       </div>
-      <div style="border:1px solid #1d2c1e;background:#0a110b;padding:10px 12px">
+      <div style="border:1px solid #262626;background:#0d0d0d;padding:10px 12px">
         <div style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:8px">GEOPOLITICS &amp; SENTIMENT</div>
         <div style="display:flex;justify-content:space-between;font-size:10.5px;padding:2px 0"><span style="color:#61805f;font-size:9px">RISK APPETITE</span><span style="color:${fuRiskColor};font-weight:600">${esc(fuRisk)}</span></div>
-        <div style="font-size:9.5px;color:#9db5a0;line-height:1.65;margin:6px 0;padding-bottom:6px;border-bottom:1px solid #121c12">${esc(fu.geoTxt)}</div>
+        <div style="font-size:9.5px;color:#9db5a0;line-height:1.65;margin:6px 0;padding-bottom:6px;border-bottom:1px solid #1a1a1a">${esc(fu.geoTxt)}</div>
         <div style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:4px">WATCH NEXT</div>
         ${fu.events.map(e => `<div style="display:flex;gap:8px;font-size:10px;padding:2px 0"><span style="color:#e3b341">◆</span><span style="color:#c9e8cc">${esc(e)}</span></div>`).join('')}
       </div>
@@ -1581,7 +1582,7 @@ function updateCandleHover(e) {
   const title = 'BAR ' + (i + 1) + ' OF ' + n2 + (ago === 0 ? ' · CURRENT ' + barWord.toUpperCase() : ' · ' + ago + ' ' + barWord.toUpperCase() + (ago > 1 ? 'S' : '') + ' AGO');
   pop.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px"><span style="font-size:9px;color:#61805f;letter-spacing:.1em">${title}</span><span style="font-size:11px;font-weight:600;color:${green ? G : R}">${(chg >= 0 ? '▲ +' : '▼ −') + Math.abs(chg).toFixed(2)}%</span></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #121c12">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1a1a1a">
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.1em">OPEN</div><div style="font-size:10.5px;color:#c9e8cc;margin-top:1px">${cFmt(b.o)}</div></div>
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.1em">HIGH</div><div style="font-size:10.5px;color:#7ee787;margin-top:1px">${cFmt(b.h)}</div></div>
       <div><div style="font-size:8px;color:#61805f;letter-spacing:.1em">LOW</div><div style="font-size:10.5px;color:#ff7b72;margin-top:1px">${cFmt(b.l)}</div></div>
@@ -1598,14 +1599,14 @@ function agentPositionsHTML(page) {
     const sideColor = long ? G : R;
     const frac = Math.min(Math.abs(p.weight) / cap, 1);
     const mini = p.agents.map(v => {
-      const bg = v > 0.02 ? G : (v < -0.02 ? R : '#233a24');
+      const bg = v > 0.02 ? G : (v < -0.02 ? R : '#2e2e2e');
       return `<span style="width:10px;height:${Math.max(Math.abs(v) * 100, 8).toFixed(0)}%;background:${bg};align-self:${v >= 0 ? 'flex-end' : 'flex-start'}"></span>`;
     }).join('');
     return `
-    <div class="hv-row" ${hovAttrs('fx', p.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #0c130d;align-items:center;cursor:crosshair">
+    <div class="hv-row" ${hovAttrs('fx', p.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.pair)}</span>
       <span style="font-size:9px;font-weight:600;color:${sideColor}">${long ? '▲ LONG' : '▼ SHORT'}</span>
-      <span style="display:flex;align-items:center;gap:8px"><span style="position:relative;width:90px;height:5px;background:#121c12;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#233a24"></span><span style="position:absolute;top:0;height:5px;left:${long ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${sideColor}"></span></span><span style="color:#c9e8cc;font-size:10px">${sgnPct(p.weight, 1)}</span></span>
+      <span style="display:flex;align-items:center;gap:8px"><span style="position:relative;width:90px;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${long ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${sideColor}"></span></span><span style="color:#c9e8cc;font-size:10px">${sgnPct(p.weight, 1)}</span></span>
       <span style="color:${cSign(p.tilt)}">${sgn(p.tilt, Math.abs(p.tilt).toFixed(2))}</span>
       <span style="font-size:9px;color:${p.regime === 'TRENDING' ? TXT : AMB}">${esc(p.regime)}</span>
       <span style="color:#9db5a0">${pairPrice(p.pair, p.price)}</span>
@@ -1616,8 +1617,8 @@ function agentPositionsHTML(page) {
 
   return `
   <div data-screen="agent-positions">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #121c12"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS'} · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A PAIR FOR THE ENSEMBLE'S REASONING</span></div>
-    <div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS'} · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A PAIR FOR THE ENSEMBLE'S REASONING</span></div>
+    <div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
     ${rows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO DECISIONS RECORDED YET. RUN THE FX ENGINE ONCE.</div>'}
   </div>`;
 }
@@ -1642,7 +1643,7 @@ function agentPopHTML(page, pair, rect) {
     return `
     <div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:9.5px">
       <span style="color:#61805f;width:58px">${name}</span>
-      <span style="position:relative;flex:1;height:4px;background:#121c12;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:8px;background:#233a24"></span><span style="position:absolute;top:0;height:4px;left:${v >= 0 ? '50%' : (50 - Math.abs(v) * 50) + '%'};width:${Math.abs(v) * 50}%;background:${bg}"></span></span>
+      <span style="position:relative;flex:1;height:4px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:8px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:4px;left:${v >= 0 ? '50%' : (50 - Math.abs(v) * 50) + '%'};width:${Math.abs(v) * 50}%;background:${bg}"></span></span>
       <span style="color:${bg};width:38px;text-align:right">${sgn(v, Math.abs(v).toFixed(2))}</span>
     </div>`;
   }).join('');
@@ -1660,9 +1661,9 @@ function agentPopHTML(page, pair, rect) {
       <span style="margin-left:auto;font-size:12px;color:#eaffec">${fmtP(closeN)}</span>
     </div>
     <svg viewBox="0 0 590 110" preserveAspectRatio="none" style="width:100%;height:110px;display:block;margin-bottom:2px">
-      <line x1="0" y1="28" x2="590" y2="28" stroke="#121c12" stroke-width="1"></line>
-      <line x1="0" y1="55" x2="590" y2="55" stroke="#121c12" stroke-width="1"></line>
-      <line x1="0" y1="82" x2="590" y2="82" stroke="#121c12" stroke-width="1"></line>
+      <line x1="0" y1="28" x2="590" y2="28" stroke="#1a1a1a" stroke-width="1"></line>
+      <line x1="0" y1="55" x2="590" y2="55" stroke="#1a1a1a" stroke-width="1"></line>
+      <line x1="0" y1="82" x2="590" y2="82" stroke="#1a1a1a" stroke-width="1"></line>
       <path d="${cp.wickUp}" stroke="#7ee787" stroke-width="1" fill="none"></path>
       <path d="${cp.bodyUp}" fill="#7ee787"></path>
       <path d="${cp.wickDn}" stroke="#ff7b72" stroke-width="1" fill="none"></path>
@@ -1671,11 +1672,11 @@ function agentPopHTML(page, pair, rect) {
     </svg>
     <div style="display:flex;gap:14px;font-size:8.5px;color:#3d543f;letter-spacing:.08em;margin-bottom:9px"><span>${barLabel}</span><span>HI <span style="color:#61805f">${fmtP(hi)}</span></span><span>LO <span style="color:#61805f">${fmtP(lo)}</span></span><span style="margin-left:auto;color:#e3b341">LAST ${fmtP(closeN)} ┄</span>${real ? '' : '<span style="color:#8a7433">SYNTHETIC BARS — DROP A candles.json TO WIRE REAL OHLC</span>'}</div>
     <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:14px">
-      <div style="font-size:10.5px;line-height:1.75;color:#9db5a0;border-right:1px solid #121c12;padding-right:14px">${esc(p.why)}</div>
+      <div style="font-size:10.5px;line-height:1.75;color:#9db5a0;border-right:1px solid #1a1a1a;padding-right:14px">${esc(p.why)}</div>
       <div>
         <div style="font-size:8px;color:#61805f;letter-spacing:.12em;margin-bottom:6px">AGENT VOTES</div>
         ${votes}
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid #121c12">${ind}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid #1a1a1a">${ind}</div>
       </div>
     </div>`);
 }
@@ -1751,7 +1752,7 @@ function agentBacktestHTML(page) {
   const weights = AGENT_NAMES.map((name, i) => `
     <div style="display:flex;align-items:center;gap:9px;padding:4px 0;font-size:10px">
       <span style="color:#c9e8cc;width:70px">${name}</span>
-      <span style="flex:1;height:5px;background:#121c12;display:inline-block"><span style="display:block;height:5px;width:${(wSrc[i] / wMax * 100).toFixed(0)}%;background:#7ee787"></span></span>
+      <span style="flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="display:block;height:5px;width:${(wSrc[i] / wMax * 100).toFixed(0)}%;background:#7ee787"></span></span>
       <span style="color:#61805f;width:34px;text-align:right">${wSrc[i] ? (wSrc[i] * 100).toFixed(0) + '%' : '—'}</span>
     </div>`).join('');
 
@@ -1760,7 +1761,7 @@ function agentBacktestHTML(page) {
     sharpe: f.sharpe == null ? '—' : num(+f.sharpe, 2),
     hit: f.hit_rate == null ? (f.hit || '—') : num(+f.hit_rate * 100, 0) + '%',
     dd: f.max_drawdown == null ? (f.dd || '—') : sgnPct(+f.max_drawdown, 1),
-  })) : abd ? ABD_FOLDS : []).map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #0c130d"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
+  })) : abd ? ABD_FOLDS : []).map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
     || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO WALK-FORWARD FOLDS RECORDED.</div>';
 
   const banner = real
@@ -1777,14 +1778,14 @@ function agentBacktestHTML(page) {
       ${banner}
       <span style="margin-left:auto;color:#8a7433">COSTS + CARRY MODELLED · NO LOOKAHEAD</span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #1d2c1e">${abKpis}</div>
-    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:14px 18px;border-right:1px solid #1d2c1e">
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${abKpis}</div>
+    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:14px 18px;border-right:1px solid #262626">
         <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF A$10,000 · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span><span style="color:#61805f">— BUY &amp; HOLD BASKET</span></div>
         <svg viewBox="0 0 1200 220" preserveAspectRatio="none" style="width:100%;height:230px;display:block">
-          <line x1="0" y1="55" x2="1200" y2="55" stroke="#121c12" stroke-width="1"></line>
-          <line x1="0" y1="110" x2="1200" y2="110" stroke="#121c12" stroke-width="1"></line>
-          <line x1="0" y1="165" x2="1200" y2="165" stroke="#121c12" stroke-width="1"></line>
+          <line x1="0" y1="55" x2="1200" y2="55" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="110" x2="1200" y2="110" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="165" x2="1200" y2="165" stroke="#1a1a1a" stroke-width="1"></line>
           ${abPts ? `<polygon points="0,220 ${abPts} 1200,220" fill="rgba(126,231,135,0.06)"></polygon>` : ''}
           <polyline points="${abBench}" fill="none" stroke="#61805f" stroke-width="1.3"></polyline>
           <polyline points="${abPts}" fill="none" stroke="#7ee787" stroke-width="1.7" stroke-linejoin="round"></polyline>
@@ -1792,12 +1793,12 @@ function agentBacktestHTML(page) {
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${xLabels.map(y => `<span>${esc(y)}</span>`).join('')}</div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS</div>
         <div style="padding:10px 18px 6px">${weights}</div>
         <div style="padding:4px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS PERFORMANCE-WEIGHTED (AGENTS.PY): AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN — RE-SCORED EVERY BAR.</div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
+    <div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
     ${foldRows}
     <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">WALK-FORWARD: TRAIN ON A WINDOW, TEST ON THE UNSEEN NEXT SLICE, ROLL FORWARD. IF THE EDGE ONLY EXISTS IN-SAMPLE, IT DIES HERE — THE FOLDS ABOVE ARE THE HONEST TEST.</div>
   </div>`;
@@ -1817,16 +1818,16 @@ function agentMethodHTML(page) {
     { name: 'CARRY', f: 'RATE DIFFERENTIAL', d: 'Earns the interest-rate gap by holding the higher-yielding currency.' },
     { name: 'NEURAL', f: 'MLP ON INDICATOR FEATURES', d: 'A small neural net trained on the same indicators; votes −1…+1 (nn.py).' },
   ].map(a => `
-    <div style="border:1px solid #1d2c1e;background:#0a110b;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+    <div style="border:1px solid #262626;background:#0d0d0d;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
       <div style="font-size:11px;color:#eaffec;font-weight:600;letter-spacing:.04em">${a.name}</div>
-      <div style="font-size:10px;color:#7ee787;background:#0c130d;border:1px solid #121c12;padding:6px 8px;line-height:1.5">${a.f}</div>
+      <div style="font-size:10px;color:#7ee787;background:#121212;border:1px solid #1a1a1a;padding:6px 8px;line-height:1.5">${a.f}</div>
       <div style="font-size:9.5px;color:#61805f;line-height:1.6">${a.d}</div>
     </div>`).join('');
 
   return `
   <div data-screen="agent-method">
-    <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:18px;border-right:1px solid #1d2c1e">
+    <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:18px;border-right:1px solid #262626">
         <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ THE IDEA IN ONE PARAGRAPH</div>
         <p style="font-size:12px;line-height:1.9;color:#9db5a0;margin:0">EVERY BAR, SIX INDEPENDENT <span style="color:#7ee787">TECHNICAL AGENTS</span> EACH VOTE −1…+1 ON EVERY PAIR. A <span style="color:#7ee787">PERFORMANCE-WEIGHTED ENSEMBLE</span> BLENDS THE VOTES — AGENTS THAT HAVE BEEN RIGHT LATELY COUNT FOR MORE. A REGIME GATE PICKS WHICH AGENTS APPLY (TREND-FOLLOWERS IN TRENDS, MEAN-REVERSION IN RANGES), THEN A <span style="color:#7ee787">VOL-TARGETING RISK LAYER</span> SIZES EACH POSITION AND CAPS IT AT ${cap} OF EQUITY.</p>
       </div>
@@ -1843,21 +1844,21 @@ function agentMethodHTML(page) {
         </div>
       </div>
     </div>
-    <div style="padding:14px 18px;border-bottom:1px solid #1d2c1e">
+    <div style="padding:14px 18px;border-bottom:1px solid #262626">
       <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:12px">■ THE SIX AGENTS · FOREX/AGENTS.PY</div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">${amAgents}</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr">
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ REGIME GATE</div>
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ REGIME GATE</div>
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">ADX DECIDES THE STATE: <span style="color:#c9e8cc">TRENDING</span> → TREND, BREAKOUT &amp; MOMENTUM AGENTS VOTE; <span style="color:#e3b341">RANGING</span> → MEAN-REVERSION TAKES OVER AND TREND SITS OUT. CARRY AND THE NEURAL AGENT VOTE IN BOTH.</div>
       </div>
-      <div style="border-right:1px solid #1d2c1e">
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK LAYER</div>
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK LAYER</div>
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">EACH POSITION IS SIZED SO ITS <span style="color:#c9e8cc">RISK</span> (NOT ITS DOLLARS) IS CONSTANT — WILD PAIRS GET LESS CAPITAL. PER-PAIR CAP <span style="color:#c9e8cc">${cap}</span>, ACCOUNT BREAKER <span style="color:#ff7b72">−${brk}%</span> FROM PEAK → FLAT + COOLDOWN.</div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ISOLATED BOOKS</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ISOLATED BOOKS</div>
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">${esc(books || 'EACH ACCOUNT')} ARE SEPARATE PAPER BOOKS WITH THEIR OWN STATE, PROFILE (BALANCED / CONSERVATIVE / INTRADAY) AND UNIVERSE — SAME ENGINE, DIFFERENT KNOBS.</div>
       </div>
     </div>
@@ -1889,31 +1890,31 @@ function smallOverviewHTML(page) {
 
   return `
   <div data-screen="small-overview">
-    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #1d2c1e">
-      <div style="padding:14px 18px;border-right:1px solid #1d2c1e;background:#0a110b"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">INITIAL ${num(k.initial_capital, 2)} · ${(page.sleeves || []).map(s => s.key).join(' / ')} SLEEVE ONLY</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(M.curve.length ? M.curve[0].date : '')}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${allCash ? 'FX-DRIVEN · 100% CASH' : pct0(1 - k.cash_pct) + ' INVESTED'}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">OFF PEAK</div><div style="font-size:20px;font-weight:600;color:${page.off_peak < -0.01 ? AMB : PALE};margin-top:8px">${sgnPct(page.off_peak, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">PEAK A$${num(page.peak_equity, 2)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">CASH ${sym}${num(sleeve.cash_local || 0, 2)} ${esc(sleeve.currency || '')}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #1d2c1e"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${(k.fees || []).map(f => (SYM[f.currency] || f.currency) + num(f.amount, 2)).join(' · ') || 'A$0'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feePct != null ? `= ${num(feePct * 100, 1)}% OF THE ONLY POSITION` : 'COMMISSION FLOORS DOMINATE'}</div></div>
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
+      <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">INITIAL ${num(k.initial_capital, 2)} · ${(page.sleeves || []).map(s => s.key).join(' / ')} SLEEVE ONLY</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(M.curve.length ? M.curve[0].date : '')}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${allCash ? 'FX-DRIVEN · 100% CASH' : pct0(1 - k.cash_pct) + ' INVESTED'}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">OFF PEAK</div><div style="font-size:20px;font-weight:600;color:${page.off_peak < -0.01 ? AMB : PALE};margin-top:8px">${sgnPct(page.off_peak, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">PEAK A$${num(page.peak_equity, 2)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">CASH ${sym}${num(sleeve.cash_local || 0, 2)} ${esc(sleeve.currency || '')}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${(k.fees || []).map(f => (SYM[f.currency] || f.currency) + num(f.amount, 2)).join(' · ') || 'A$0'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feePct != null ? `= ${num(feePct * 100, 1)}% OF THE ONLY POSITION` : 'COMMISSION FLOORS DOMINATE'}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">VIABILITY GATE</div><div style="font-size:20px;font-weight:600;color:${above ? G : R};margin-top:8px">${above ? 'ABOVE' : 'BELOW'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">HOLDS CASH BELOW A$${num(gate, 0)}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:2.1fr 1fr">
-      <div style="padding:12px 18px;border-right:1px solid #1d2c1e">
+      <div style="padding:12px 18px;border-right:1px solid #262626">
         <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em;margin-bottom:8px"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#61805f">${vals.length ? `MIN ${num(Math.min(...vals), 2)} · MAX ${num(Math.max(...vals), 2)}` : '—'}</span></div>
         <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
-          <line x1="0" y1="35" x2="600" y2="35" stroke="#121c12" stroke-width="1"></line>
-          <line x1="0" y1="70" x2="600" y2="70" stroke="#121c12" stroke-width="1"></line>
-          <line x1="0" y1="105" x2="600" y2="105" stroke="#121c12" stroke-width="1"></line>
+          <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
           <polygon points="${vals.length ? '0,140 ' + p140.join(' ') + ' 600,140' : ''}" fill="${down ? 'rgba(255,123,114,0.08)' : 'rgba(126,231,135,0.08)'}"></polygon>
           <polyline points="${p140.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
         </svg>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ MICRO-ACCOUNT MODE — THE LESSON THIS BOOK TEACHES</div>
-        <div style="padding:12px 18px;border-bottom:1px solid #0c130d"><div style="font-size:11px;color:#eaffec">WHOLE SHARES ONLY</div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SMALL BOOK CAN'T HOLD A ${(S.meta ? S.meta.params.top_n : 10)}-NAME BOOK IN WHOLE SHARES — SO IT CONCENTRATES INTO A SINGLE NAME. LAST BOOK: ${lastQty} × ${esc(lastName)}.</div></div>
-        <div style="padding:12px 18px;border-bottom:1px solid #0c130d"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">FEE DRAG</span><span style="color:#ff7b72">${feePct != null ? num(feePct * 100, 1) + '% ROUND-TRIP' : 'FLOORS BITE'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">THE $1 COMMISSION FLOOR IS TRIVIAL ON A $10K TRADE BUT EATS A REAL SLICE OF A TINY POSITION. SMALL ACCOUNTS BLEED THROUGH FLOORS.</div></div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ MICRO-ACCOUNT MODE — THE LESSON THIS BOOK TEACHES</div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="font-size:11px;color:#eaffec">WHOLE SHARES ONLY</div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SMALL BOOK CAN'T HOLD A ${(S.meta ? S.meta.params.top_n : 10)}-NAME BOOK IN WHOLE SHARES — SO IT CONCENTRATES INTO A SINGLE NAME. LAST BOOK: ${lastQty} × ${esc(lastName)}.</div></div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">FEE DRAG</span><span style="color:#ff7b72">${feePct != null ? num(feePct * 100, 1) + '% ROUND-TRIP' : 'FLOORS BITE'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">THE $1 COMMISSION FLOOR IS TRIVIAL ON A $10K TRADE BUT EATS A REAL SLICE OF A TINY POSITION. SMALL ACCOUNTS BLEED THROUGH FLOORS.</div></div>
         <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE GATE</span><span style="color:#7ee787">A$${num(gate, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">BELOW A$${num(gate, 0)} THE SLEEVE STOPS TRADING AND HOLDS CASH RATHER THAN FEEDING THE COMMISSION FLOOR (CONFIG.PY · MIN_VIABLE_EQUITY_BASE).</div></div>
       </div>
     </div>
@@ -1949,17 +1950,17 @@ function smallPositionsHTML(page) {
   const rows = M.rows;
 
   const posBody = rows.length === 0
-    ? `<div style="padding:22px 18px;font-size:11px;color:#61805f;border-bottom:1px solid #1d2c1e">— NO OPEN POSITIONS.${lastClosed ? ` MICRO-ACCOUNT MODE CONCENTRATED THE BOOK INTO A SINGLE NAME (${esc(lastClosed.ticker)}); THE ${esc(mdy(lastClosed.date).split(' ')[0])} REBALANCE CLOSED IT AND LEFT THE SLEEVE IN CASH.` : ''}</div>`
-    : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
+    ? `<div style="padding:22px 18px;font-size:11px;color:#61805f;border-bottom:1px solid #262626">— NO OPEN POSITIONS.${lastClosed ? ` MICRO-ACCOUNT MODE CONCENTRATED THE BOOK INTO A SINGLE NAME (${esc(lastClosed.ticker)}); THE ${esc(mdy(lastClosed.date).split(' ')[0])} REBALANCE CLOSED IT AND LEFT THE SLEEVE IN CASH.` : ''}</div>`
+    : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
       rows.map(p => `
-      <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #0c130d;align-items:center;cursor:crosshair">
+      <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
         <span style="color:#eaffec">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
         <span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span>
         <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
       </div>`).join('');
 
   const blotterRows = (page.blotter || []).map(t => `
-    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #0c130d"><span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${px2(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:#61805f">${sym}${num(t.commission || 0, 2)}</span></div>`).join('');
+    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${px2(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:#61805f">${sym}${num(t.commission || 0, 2)}</span></div>`).join('');
 
   const closedRows = closedRowsHTML(closed, { bar: false });
 
@@ -1969,23 +1970,23 @@ function smallPositionsHTML(page) {
 
   return `
   <div data-screen="small-positions">
-    <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0a110b;border-bottom:1px solid #121c12">
+    <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.08em">${esc(sleeve.key || '')} · 100% ALLOCATION</span>
       <span style="font-size:10px;color:#61805f">EQUITY <span style="color:#c9e8cc">${eqTxt}</span></span>
       <span style="font-size:10px;color:#61805f">CASH <span style="color:#c9e8cc">${num((sleeve.cash_pct || 1) * 100, 0)}%</span></span>
       <span style="margin-left:auto;font-size:10px;color:#61805f">LAST REBALANCE <span style="color:#c9e8cc">${esc(rebalMonth || '—')}</span></span>
     </div>
     ${posBody}
-    <div style="padding:10px 18px;background:#0a110b;border-bottom:1px solid #121c12;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${(page.blotter || []).length} FILLS</div>
-    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span></div>
+    <div style="padding:10px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${(page.blotter || []).length} FILLS</div>
+    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span></div>
     ${blotterRows}
-    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0a110b;border-top:1px solid #1d2c1e;border-bottom:1px solid #121c12">
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L</span>
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${lastClosed ? `${sgn(lastClosed.net, sym + num(Math.abs(lastClosed.net), 2))} → ` : ''}${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">FEE DRAG ON A MICRO BOOK, ITEMISED — THE LESSON THIS ACCOUNT TEACHES</span>
     </div>
-    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #121c12"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}
   </div>`;
 }
@@ -2031,7 +2032,7 @@ function render() {
   const page = S.account === 'ALL' ? S.overview : S.pages[S.account];
   const app = document.getElementById('app');
   app.innerHTML = `
-  <div style="min-height:100vh;background:#070b08;color:#c9e8cc;display:flex;flex-direction:column">
+  <div style="min-height:100vh;background:#060606;color:#c9e8cc;display:flex;flex-direction:column">
     ${headerHTML(page)}
     ${tapeHTML()}
     <div style="flex:1">${contentHTML()}</div>
@@ -2176,7 +2177,9 @@ async function boot() {
   } catch (e) { /* optional */ }
 
   const accs = accounts();
-  if (S.isExport) {
+  if (S.exportAll) {
+    S.account = accs.length > 1 ? 'ALL' : (accs[0] ? accs[0].key : 'ALL');
+  } else if (S.isExport) {
     S.account = window.__EXPORT_ACCOUNT__;
   } else if (accs.some(a => a.key === 'FULL')) {
     S.account = 'FULL';
