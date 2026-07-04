@@ -10,10 +10,12 @@ from trading_algo.forex import news
 
 @pytest.fixture(autouse=True)
 def _clear_news_cache():
-    """The shared fetch is memoised per (date, key) — isolate every test."""
+    """The shared fetches are memoised per (date/range, key) — isolate every test."""
     news._fetch_rows_cached.cache_clear()
+    news._fetch_range_cached.cache_clear()
     yield
     news._fetch_rows_cached.cache_clear()
+    news._fetch_range_cached.cache_clear()
 
 
 def _stub_requests(monkeypatch, rows, calls):
@@ -144,3 +146,109 @@ def test_news_feed_currencies_via_canonical_helper(monkeypatch):
                         lambda curs, date, **k: (seen.__setitem__("curs", list(curs)), [])[1])
     dash._news_feed({"symbols": ["EURUSD", "AUDJPY", "BOGUS", "GBPUSD"]})
     assert seen["curs"] == ["AUD", "EUR", "GBP", "JPY", "USD"]
+
+
+# ---- calendar_range + dashboard.fx_api news wiring --------------------------
+def test_calendar_range_one_call_dated_high_impact(monkeypatch):
+    """One provider call for the whole window; dated, high-impact only."""
+    monkeypatch.setenv("NEWS_API_KEY", "k")
+    rows = [
+        {"date": "2026-07-01 12:30", "currency": "USD", "impact": "High",
+         "event": "CPI", "actual": 3.1, "estimate": 3.0, "previous": 3.2},
+        {"date": "2026-07-02 08:00", "currency": "EUR", "impact": "Medium",
+         "event": "PMI", "actual": 51, "estimate": 50},
+        {"date": "2026-07-03 18:00", "currency": "JPY", "impact": "Low",
+         "event": "minor", "actual": 1},
+    ]
+    calls = {"n": 0}
+    _stub_requests(monkeypatch, rows, calls)
+    out = news.calendar_range(["USD", "EUR", "JPY"], "2026-06-25", "2026-07-04")
+    assert calls["n"] == 1                       # single ranged GET
+    assert calls["params"]["from"] == "2026-06-25" and calls["params"]["to"] == "2026-07-04"
+    assert [e["event"] for e in out] == ["CPI"]  # high-impact only, dated
+    assert out[0]["date"] == "2026-07-01" and out[0]["time"] == "12:30"
+    assert out[0]["currency"] == "USD" and out[0]["impact"] == "high"
+    # CPI beat (3.1 vs 3.0) → currency-positive predicted impact
+    assert out[0]["bias"] == "positive" and out[0]["bias_text"] == "USD POSITIVE"
+    # medium included when high_only=False, still sorted by date/time
+    out2 = news.calendar_range(["USD", "EUR"], "2026-06-25", "2026-07-04", high_only=False)
+    assert [e["event"] for e in out2] == ["CPI", "PMI"]
+
+
+def test_calendar_range_graceful_without_key(monkeypatch):
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    assert news.calendar_range(["USD"], "2026-06-01", "2026-07-04") == []
+
+
+def test_fx_snapshot_carries_news(tmp_path, monkeypatch):
+    """build_fx_snapshot surfaces dated news for the book's currencies, and
+    stays [] (never raises) with no key."""
+    import json
+    import trading_algo.paper_trade as pt
+    from trading_algo.dashboard import fx_api
+    from trading_algo.forex import fx_book
+
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    state = {
+        "account": "matt", "currency": "AUD", "profile": "balanced", "bar": "1d",
+        "symbols": ["EURUSD", "BTCUSD"], "initial_capital": 5000.0, "equity": 4900.0,
+        "positions": {"EURUSD": -0.1}, "last_close": {"EURUSD": 1.14},
+        "last_bar_date": "2026-07-04", "peak_equity": 5000.0, "risk_halted": False,
+        "halt_cooldown": 0, "trades": [], "equity_history": [["2026-07-04", 4900.0]],
+        "decisions": {"EURUSD": {"weight": -0.1, "tilt": -0.5, "regime": "trending",
+                                 "agents": {}, "indicators": {"price": 1.14, "ann_vol": 0.05},
+                                 "text": "x"}},
+        "daily": {},
+    }
+    (tmp_path / "fx_state_matt.json").write_text(json.dumps(state))
+
+    # currencies derived from the pairs (EUR, USD — BTC dropped as non-fiat)
+    assert fx_api._pair_currencies(["EURUSD", "BTCUSD"]) == ["EUR", "USD"]
+
+    captured = {}
+    monkeypatch.setenv("NEWS_API_KEY", "k")
+    def _fake_range(curs, start, end, **k):
+        captured["curs"] = list(curs); captured["start"] = start; captured["end"] = end
+        return [{"date": "2026-07-01", "time": "12:30", "currency": "USD",
+                 "event": "CPI", "impact": "high", "actual": 3.1, "estimate": 3.0}]
+    monkeypatch.setattr(fx_api.fxnews, "calendar_range", _fake_range)
+
+    snap = fx_api.build_fx_snapshot("matt")
+    assert snap["news_available"] is True
+    assert [e["event"] for e in snap["news"]] == ["CPI"]
+    assert captured["curs"] == ["EUR", "USD"]
+    assert captured["end"] == "2026-07-06"       # anchor + 2 days
+    assert captured["start"] == "2026-05-20"     # anchor − 45 days
+
+    # no key → silent, never raises
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    monkeypatch.setattr(fx_api.fxnews, "calendar_range", lambda *a, **k: [])
+    snap2 = fx_api.build_fx_snapshot("matt")
+    assert snap2["news"] == [] and snap2["news_available"] is False
+
+
+# ---- predicted currency impact ---------------------------------------------
+def test_predicted_impact_reads():
+    pi = news.predicted_impact
+    # hawkish beat vs miss
+    assert pi("CPI YoY", "USD", 3.1, 3.0)["bias"] == "positive"
+    assert pi("CPI YoY", "USD", 2.8, 3.0)["bias"] == "negative"
+    # labour slack is inverted: higher unemployment = currency-negative
+    assert pi("Unemployment Rate", "USD", 4.3, 4.1)["bias"] == "negative"
+    assert pi("Unemployment Rate", "USD", 3.9, 4.1)["bias"] == "positive"
+    # suffix parsing (K) on a miss
+    assert pi("Nonfarm Payrolls", "USD", "180K", "200K")["bias"] == "negative"
+    # rate hike above expectation
+    assert pi("BoE Interest Rate Decision", "GBP", 4.50, 4.25)["bias"] == "positive"
+    # inline
+    assert pi("US GDP", "USD", 2.0, 2.0)["bias"] == "neutral"
+    # a speech is "watch tone", not a direction
+    assert pi("ECB President Speech", "EUR")["bias"] == "watch"
+    assert pi("ECB President Speech", "EUR")["text"] == "WATCH TONE"
+    # upcoming (forecast only) → convention arrow, no realised direction
+    up = pi("German GDP", "EUR", None, "0.3%", "0.2%")
+    assert up["bias"] == "watch" and up["text"] == "HIGHER → EUR+"
+    # unclassified indicator → unknown, empty text
+    assert pi("Obscure Diffusion Index", "JPY", 5, 4) == {"bias": "unknown", "text": ""}
