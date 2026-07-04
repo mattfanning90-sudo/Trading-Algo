@@ -253,25 +253,31 @@ class NewsSentiment(FeatureSource):
         q = urllib.parse.quote(f'"{name}"')
         url = f"{self._API}?query={q}&mode={mode}&format=json&startdatetime={sd}&enddatetime={ed}"
         try:
-            df = self._parse_timeline(_http_get(url), col)
-            time.sleep(0.3)                      # be polite to GDELT
+            df = self._parse_timeline(_http_get(url, timeout=8), col)  # short timeout: GDELT throttles
+            time.sleep(0.2)
             return df
         except Exception:
             return pd.DataFrame(columns=["known_date", col])
 
-    def observations(self, tickers, start, end, max_names: int = 120):
+    def observations(self, tickers, start, end, max_names: int = 40, max_seconds: int = 150):
+        """GDELT per-name tone (+ buzz). GDELT's DOC API is rate-limited and slow, so this
+        is capped hard: at most `max_names` names and a `max_seconds` wall-clock budget —
+        a demo-scale, honest test of differentiated data, not a full production feed (that
+        needs GDELT's bulk GKG files or a paid sentiment vendor)."""
         titles = self._titles()
         if not titles:
             return pd.DataFrame()
-        out = []
+        out, deadline = [], time.time() + max_seconds
         for t in tickers[:max_names]:
+            if time.time() > deadline:
+                break                             # stay inside the time budget
             nm = titles.get(t.upper())
             if not nm:
                 continue
             tone = self._timeline(nm, "timelinetone", start, end, "sentiment")
-            vol = self._timeline(nm, "timelinevol", start, end, "buzz")
             if tone.empty:
                 continue
+            vol = self._timeline(nm, "timelinevol", start, end, "buzz")
             m = tone.merge(vol, on="known_date", how="left") if not vol.empty else tone
             m["ticker"] = t
             out.append(m)
