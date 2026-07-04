@@ -24,6 +24,16 @@ def test_asof_merge_no_lookahead():
     assert panel.loc[(idx[59], "A"), "roe"] == 0.5
 
 
+def test_asof_handles_tzaware_known_dates():
+    # GDELT stamps carry a UTC "Z"; prices are tz-naive — the merge must not crash
+    idx = pd.bdate_range("2018-01-01", periods=40)
+    obs = pd.DataFrame({"known_date": ["2018-01-15T00:00:00Z", "2018-02-01T00:00:00Z"],
+                        "ticker": ["A", "A"], "sentiment": [0.3, -0.2]})
+    panel = ds.asof_panel(obs, idx)
+    assert panel.loc[(idx[20], "A"), "sentiment"] in (0.3, -0.2)
+    assert panel.index.get_level_values("date").tz is None   # normalised to tz-naive
+
+
 def test_asof_uses_latest_known():
     idx = pd.bdate_range("2020-01-01", periods=40)
     obs = pd.DataFrame({"known_date": [idx[5], idx[20]], "ticker": ["A", "A"], "roe": [0.1, 0.9]})

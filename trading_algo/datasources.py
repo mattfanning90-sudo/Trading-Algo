@@ -57,7 +57,9 @@ def asof_panel(obs: pd.DataFrame, index: pd.DatetimeIndex) -> pd.DataFrame:
         return pd.DataFrame()
     feats = [c for c in obs.columns if c not in ("known_date", "ticker")]
     obs = obs.copy()
-    obs["known_date"] = pd.to_datetime(obs["known_date"])
+    # normalise to tz-naive: GDELT stamps are UTC ("...Z"), price dates are tz-naive —
+    # mixing them breaks the sort/union. Coerce everything to naive UTC wall-time.
+    obs["known_date"] = pd.to_datetime(obs["known_date"], utc=True).dt.tz_localize(None)
     out = {}
     for f in feats:
         wide = obs.pivot_table(index="known_date", columns="ticker", values=f, aggfunc="last")
