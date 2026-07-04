@@ -98,6 +98,29 @@ data ─────────┘                                             
 - **The safe compounding win remains allocation** (70/30 equity/active → ~10.5% CAGR at ~⅔ the
   drawdown). A predictive model is a *research bet on new data*, not a replacement for that.
 
+## Result — the pipeline built + fundamentals wired + honestly tested
+
+Built in-repo: `features.py` (causal panel), `labels.py`, `mlpipeline.py` (purged/embargoed
+walk-forward + cross-sectional ridge + label-shuffle **null probe**), `datasources.py`
+(leakage-safe as-of merge; **real SEC-EDGAR fundamentals**; IV/sentiment adapters + synthetic),
+`mlreport.py` + CI `ml` task.
+
+De-biased run (1,058 PIT names, price features **+ real EDGAR `roe/net_margin/asset_growth`**):
+- **Leakage probe clean:** real OOS IC **0.016** vs label-shuffled null **−0.003** → the pipeline
+  does not peek (the machinery is trustworthy).
+- **No real predictive edge:** IC ≈ 0.016 is noise-level (good equity ML ≈ 0.03–0.05). Adding
+  fundamentals did NOT change it — their loadings (~0.002–0.01) sit at the same noise level as
+  the price factors.
+- The headline long-only Sharpe (~1.0) is a **construction/beta mirage**: 34% vol, always-invested,
+  concentrated top-20 on the delisted-inclusive small-cap set over a bull-heavy sample — not the
+  12%-vol book, and not alpha. The IC + null probe are what tell the truth; the Sharpe misleads.
+
+**Takeaway:** the honest, leakage-controlled, fundamentals-fed pipeline exists and works — and it
+confirms the thesis once more: *price + basic fundamentals carry essentially no cross-sectional
+predictive edge on liquid US equities.* The remaining untested bet is genuinely differentiated data
+(options-IV skew, clean news/social sentiment) via paid feeds — wired as adapters, ready to test —
+and even that must clear this same IC / null-probe / deflation bar before it's believed.
+
 ### Minimal first experiment (cheap, honest)
 Before any paid data: build `features.py` + `labels.py` from what we already have, port the
 FX purged-walk-forward loop, train a LightGBM cross-sectional model on the PIT US universe,
