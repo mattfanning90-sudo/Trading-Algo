@@ -40,9 +40,10 @@ jobs:
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       # Paper accounts to run & publish. "regions" (optional) restricts an account
       # to a subset (a small account trades US-only to dodge fee drag). Add more here.
-      # "core" is a fresh isolated book opened to forward-track the shippable strategy
-      # from now, separate from "full" (which carries older history).
-      ACCOUNTS: '[{"name":"full","capital":100000,"regions":""},{"name":"small","capital":1000,"regions":"US"},{"name":"core","capital":100000,"regions":""}]'
+      # "core" is a fresh isolated book that forward-tracks the SHIPPABLE strategy —
+      # US momentum + the long-only trend ETF sleeve (the research book, live-tradeable
+      # version), 50/50 — separate from "full" (multi-region momentum, older history).
+      ACCOUNTS: '[{"name":"full","capital":100000,"regions":""},{"name":"small","capital":1000,"regions":"US"},{"name":"core","capital":100000,"regions":"US TREND"}]'
     steps:
       - uses: actions/checkout@v4
 

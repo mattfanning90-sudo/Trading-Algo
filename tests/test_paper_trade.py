@@ -37,6 +37,23 @@ def test_init_splits_into_sleeves(account):
         assert s["positions"] == {}
 
 
+def test_trend_sleeve_trades_etfs(account):
+    # a momentum+trend account: US momentum sleeve + long-only trend ETF sleeve
+    pt.init_account(account, capital=100_000, synthetic=True,
+                    allocations={"US": 0.5, pt.TREND_KEY: 0.5})
+    state = pt.load_state(account)
+    assert pt.TREND_KEY in state["sleeves"]
+    assert state["sleeves"][pt.TREND_KEY]["currency"] == "USD"
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    held = state["sleeves"][pt.TREND_KEY]["positions"]
+    assert held, "trend sleeve should hold ETFs after a rebalance"
+    from trading_algo import universes
+    assert set(held) <= set(universes.TREND)          # only trend-basket ETFs
+    # trend paper params are long-only + unlevered (whole-share tradeable, no shorts)
+    assert pt.TREND_PAPER_PARAMS.long_only and pt.TREND_PAPER_PARAMS.max_gross == 1.0
+
+
 def test_daily_run_marks_and_persists(account):
     pt.init_account(account, capital=300_000, synthetic=True)
     pt.run_daily(account, synthetic=True)
