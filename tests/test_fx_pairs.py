@@ -50,3 +50,33 @@ def test_currencies_in():
 def test_unknown_pair_raises():
     with pytest.raises(KeyError):
         pairs.get_pair("ZZZUSD")
+
+
+# ---------------------------------------------------------------------------
+# asset_class (round-2 item 3: per-class gross caps in risk.size_book)
+# ---------------------------------------------------------------------------
+def test_every_pair_has_a_known_asset_class():
+    for sym, p in pairs.ALL_PAIRS.items():
+        assert p.asset_class in {"fx", "crypto", "equity", "bond"}, sym
+
+
+def test_asset_class_group_membership():
+    assert all(p.asset_class == "fx" for p in pairs.PAIRS.values())
+    assert all(p.asset_class == "fx" for p in pairs.CROSSES.values())
+    assert all(p.asset_class == "crypto" for p in pairs.CRYPTO.values())
+    assert all(p.asset_class == "equity" for p in pairs.EQUITIES.values())
+    assert all(p.asset_class == "bond" for p in pairs.BONDS.values())
+
+
+def test_asset_class_spot_checks():
+    assert pairs.get_pair("EURUSD").asset_class == "fx"
+    assert pairs.get_pair("EURGBP").asset_class == "fx"
+    assert pairs.get_pair("BTCUSD").asset_class == "crypto"
+    assert pairs.get_pair("SPY").asset_class == "equity"
+    assert pairs.get_pair("TLT").asset_class == "bond"
+
+
+def test_unknown_asset_class_rejected():
+    with pytest.raises(ValueError):
+        pairs.Pair("XXXUSD", "XXX", "USD", "XXX-USD", 1.0, 1.0, 0.0, 0.0,
+                   "commodity")

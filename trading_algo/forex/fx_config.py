@@ -59,11 +59,23 @@ class FXParams:
     include_carry: bool = True         # apply overnight swap/financing
     bar: str = "1d"                    # informational: intended data bar interval
 
-    # --- Asset-class concentration cap ---------------------------------------
+    # --- Asset-class concentration caps --------------------------------------
     # Crypto legs are near-perfectly correlated with each other: several crypto
     # positions are effectively ONE bet. Cap total crypto gross (Σ|w|) at this
     # fraction of equity (None = off, e.g. for a crypto-only book).
     crypto_gross_cap: float | None = 0.25
+    # Per-asset-class gross caps (Σ|w| per class, fraction of equity), applied
+    # by risk.size_book by scaling that class's legs down proportionally.
+    # Immutable tuple-of-pairs (FXParams is frozen; a dict default won't do);
+    # None as a cap value disables that class. Classes come from
+    # pairs.Pair.asset_class. FX carries NO entry (uncapped — G10 pairs are
+    # idiosyncratic enough and max_gross still binds); crypto stays driven by
+    # the dedicated `crypto_gross_cap` knob above (back-compat), which
+    # risk.size_book merges into these at run time. Defaults: US equities are
+    # one cluster (~0.75 gross); bond ETFs are one duration bet (~0.50 gross).
+    class_gross_caps: tuple[tuple[str, float | None], ...] = (
+        ("equity", 0.75), ("bond", 0.50),
+    )
 
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
@@ -83,12 +95,14 @@ _PROFILES: dict[str, FXParams] = {
         target_vol=0.06, max_gross=2.0, max_vol_scale=2.0,
         per_pair_cap=0.20, max_drawdown_stop=0.12, drawdown_cooldown_days=15,
         crypto_gross_cap=0.15,
+        class_gross_caps=(("equity", 0.60), ("bond", 0.40)),
     ),
-    "balanced": FXParams(),  # the defaults above
+    "balanced": FXParams(),  # the defaults above (equity 0.75 / bond 0.50)
     "aggressive": FXParams(
         target_vol=0.18, max_gross=5.0, max_vol_scale=5.0,
         per_pair_cap=0.35, max_drawdown_stop=0.30, drawdown_cooldown_days=7,
         crypto_gross_cap=0.40,
+        class_gross_caps=(("equity", 1.00), ("bond", 0.75)),
     ),
     # Medium-frequency / intraday: shorter windows tuned for 15m–60m bars.
     # NOT high-frequency — see docs/HFT_REALITY.md. Live use needs a real-time
@@ -100,6 +114,7 @@ _PROFILES: dict[str, FXParams] = {
         # cooldown decrements once per NEW BAR: 240 hourly bars = 10 trading
         # days x 24 bars (mirrors hf_crypto's explicit 240-for-1m convention).
         max_drawdown_stop=0.20, drawdown_cooldown_days=240,
+        # class_gross_caps: inherits the balanced defaults (equity .75 / bond .50).
     ),
     # High-frequency-CAPABLE crypto (minute scale; NOT microsecond HFT — see
     # docs/CRYPTO_HF.md). Short windows, crypto-sized risk, a churn band to keep
@@ -112,6 +127,7 @@ _PROFILES: dict[str, FXParams] = {
         max_drawdown_stop=0.15, drawdown_cooldown_days=240,
         rebalance_min_delta=0.05, include_carry=True, bar="1m",
         crypto_gross_cap=None,           # crypto-ONLY book: the cap would strangle it
+        # class_gross_caps: default is inert here (no equities/bonds in universe).
     ),
 }
 

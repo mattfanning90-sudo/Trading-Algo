@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# The four recognised asset classes. Legs within one class are treated as ONE
+# correlated bet by the risk layer's per-class gross caps (risk.size_book).
+ASSET_CLASSES = {"fx", "crypto", "equity", "bond"}
+
 
 @dataclass(frozen=True)
 class Pair:
@@ -32,6 +36,12 @@ class Pair:
     spread_pips: float         # typical dealing spread, in pips (round trip)
     swap_long_pips: float      # daily financing for a long, in pips (+ = you earn)
     swap_short_pips: float     # daily financing for a short, in pips (+ = you earn)
+    asset_class: str = "fx"    # one of ASSET_CLASSES (risk groups legs by this)
+
+    def __post_init__(self) -> None:
+        if self.asset_class not in ASSET_CLASSES:
+            raise ValueError(f"Unknown asset_class {self.asset_class!r} for "
+                             f"{self.symbol}. Known: {sorted(ASSET_CLASSES)}")
 
     @property
     def is_jpy(self) -> bool:
@@ -67,9 +77,9 @@ PAIRS: dict[str, Pair] = {
 # vol-targeting risk layer automatically sizes it down, so it slots into the same
 # ecosystem. Spreads are wider (~0.2% round trip) than majors.
 CRYPTO: dict[str, Pair] = {
-    "BTCUSD": Pair("BTCUSD", "BTC", "USD", "BTC-USD", 1.0, 120.0, 0.0, 0.0),
-    "ETHUSD": Pair("ETHUSD", "ETH", "USD", "ETH-USD", 1.0, 6.0, 0.0, 0.0),
-    "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0),
+    "BTCUSD": Pair("BTCUSD", "BTC", "USD", "BTC-USD", 1.0, 120.0, 0.0, 0.0, "crypto"),
+    "ETHUSD": Pair("ETHUSD", "ETH", "USD", "ETH-USD", 1.0, 6.0, 0.0, 0.0, "crypto"),
+    "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0, "crypto"),
 }
 
 # Extra crosses available but off by default — flip into DEFAULT_UNIVERSE to use.
@@ -89,11 +99,11 @@ CROSSES: dict[str, Pair] = {
 # point or two). Equity borrow/financing is not modelled here, so swap = 0 — the
 # book's carry term is just zero for these (documented in docs/DATA_FEEDS.md).
 EQUITIES: dict[str, Pair] = {
-    "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0),
-    "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0),
-    "NVDA": Pair("NVDA", "NVDA", "USD", "NVDA", 0.01, 2.0, 0.0, 0.0),
-    "SPY":  Pair("SPY",  "SPY",  "USD", "SPY",  0.01, 1.0, 0.0, 0.0),
-    "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0),
+    "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0, "equity"),
+    "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0, "equity"),
+    "NVDA": Pair("NVDA", "NVDA", "USD", "NVDA", 0.01, 2.0, 0.0, 0.0, "equity"),
+    "SPY":  Pair("SPY",  "SPY",  "USD", "SPY",  0.01, 1.0, 0.0, 0.0, "equity"),
+    "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0, "equity"),
 }
 
 # US-listed bond ETFs — the honest, tradable bond vehicle for a paper book
@@ -101,10 +111,10 @@ EQUITIES: dict[str, Pair] = {
 # equities; pip = one cent; conservative round-trip spreads in cents; financing
 # not modelled (swap = 0), same as equities.
 BONDS: dict[str, Pair] = {
-    "TLT": Pair("TLT", "TLT", "USD", "TLT", 0.01, 2.0, 0.0, 0.0),   # 20y+ treasuries
-    "IEF": Pair("IEF", "IEF", "USD", "IEF", 0.01, 2.0, 0.0, 0.0),   # 7–10y treasuries
-    "AGG": Pair("AGG", "AGG", "USD", "AGG", 0.01, 1.0, 0.0, 0.0),   # aggregate bond
-    "SHY": Pair("SHY", "SHY", "USD", "SHY", 0.01, 1.0, 0.0, 0.0),   # 1–3y treasuries
+    "TLT": Pair("TLT", "TLT", "USD", "TLT", 0.01, 2.0, 0.0, 0.0, "bond"),   # 20y+ treasuries
+    "IEF": Pair("IEF", "IEF", "USD", "IEF", 0.01, 2.0, 0.0, 0.0, "bond"),   # 7–10y treasuries
+    "AGG": Pair("AGG", "AGG", "USD", "AGG", 0.01, 1.0, 0.0, 0.0, "bond"),   # aggregate bond
+    "SHY": Pair("SHY", "SHY", "USD", "SHY", 0.01, 1.0, 0.0, 0.0, "bond"),   # 1–3y treasuries
 }
 
 ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES, **BONDS}
