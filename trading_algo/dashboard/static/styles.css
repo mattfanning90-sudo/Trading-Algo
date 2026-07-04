@@ -34,6 +34,12 @@ html, body {
   min-height: 100%;
 }
 
+/* Whole-terminal zoom: every screen is built with fixed px sizes (a faithful
+   port of the design), so scaling the whole thing is the way to enlarge text.
+   Seeded from viewport width by app.js and adjustable with the A−/A+ control;
+   the value persists in localStorage. */
+#app { zoom: var(--m3r-zoom, 1); }
+
 body {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #c9e8cc;

@@ -33,6 +33,7 @@ const S = {
   candles: null,            // optional real OHLC dropped in as candles.json
   isExport: !!(window.__EXPORT_ACCOUNT__ || window.__EXPORT_ALL__),
   exportAll: !!window.__EXPORT_ALL__,   // --site export: every book baked
+  zoom: null,               // whole-terminal zoom (seeded from viewport)
 };
 
 /* ============================== utils ================================== */
@@ -254,6 +255,11 @@ function headerHTML(page) {
     <div style="display:flex;align-items:center;gap:4px;padding:0 14px;border-right:1px solid #262626;align-self:stretch;flex-wrap:wrap">${chipHtml}</div>
     ${mid}
     <div style="margin-left:auto;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:10px;white-space:nowrap">
+      <span style="display:inline-flex;align-items:center;gap:6px;color:#61805f">TEXT
+        <span class="hv-dim" data-act="zoom" data-arg="out" title="Smaller" style="border:1px solid #262626;padding:2px 7px;border-radius:2px;cursor:pointer;user-select:none;color:#c9e8cc">A−</span>
+        <span style="color:#eaffec;min-width:30px;text-align:center" title="Text size">${Math.round(zoomLevel() * 100)}%</span>
+        <span class="hv-dim" data-act="zoom" data-arg="in" title="Larger" style="border:1px solid #262626;padding:2px 7px;border-radius:2px;cursor:pointer;user-select:none;color:#c9e8cc">A+</span>
+      </span>
       <span style="color:#61805f">ACCT <span style="color:#eaffec">${esc(S.account || '')}</span></span>
       <span style="color:#61805f">MODE <span style="color:#e3b341">PAPER</span></span>
       ${page && page.synthetic ? '<span style="color:#e3b341;border:1px solid #4a3a1a;background:rgba(227,179,65,.08);padding:3px 8px;border-radius:2px">SYNTHETIC DATA</span>' : ''}
@@ -261,6 +267,40 @@ function headerHTML(page) {
       <span id="livechip" style="${liveChipStyle()}"><span id="clock">${clockStr()}</span> UTC · <span id="conn">${connLabel()}</span></span>
     </div>
   </div>`;
+}
+
+/* ---- whole-terminal zoom (fixed-px screens, so we scale the lot) ---- */
+const ZOOM_MIN = 0.8, ZOOM_MAX = 2.2, ZOOM_STEP = 0.1;
+
+function defaultZoom() {
+  const w = window.innerWidth || 1440;
+  if (w >= 3200) return 1.6;       // 32"+ at native / low scaling
+  if (w >= 2560) return 1.4;       // 1440p and up
+  if (w >= 1920) return 1.2;
+  if (w >= 1600) return 1.1;
+  return 1.0;
+}
+
+function zoomLevel() {
+  if (S.zoom == null) {
+    let saved = null;
+    try { saved = parseFloat(localStorage.getItem('m3r_zoom')); } catch (e) { /* private mode */ }
+    S.zoom = saved && isFinite(saved) ? saved : defaultZoom();
+  }
+  return S.zoom;
+}
+
+function applyZoom() {
+  document.documentElement.style.setProperty('--m3r-zoom', zoomLevel().toFixed(2));
+}
+
+function stepZoom(dir) {
+  const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
+    +(zoomLevel() + (dir === 'in' ? ZOOM_STEP : -ZOOM_STEP)).toFixed(2)));
+  S.zoom = z;
+  try { localStorage.setItem('m3r_zoom', String(z)); } catch (e) { /* private mode */ }
+  applyZoom();
+  render();                       // refresh the % readout
 }
 
 /* ---- equity (FULL) ticker tape ---- */
@@ -2072,6 +2112,7 @@ document.addEventListener('click', async e => {
   if (act === 'pair') { S.selPair[S.account] = arg; S.candleIdx = null; render(); return; }
   if (act === 'ta') { S.ta[arg] = !S.ta[arg]; render(); return; }
   if (act === 'pane') { S.taPane = S.taPane === arg ? null : arg; render(); return; }
+  if (act === 'zoom') { stepZoom(arg); return; }
 });
 
 /* row popovers: attach/detach without re-rendering (keeps scroll) */
@@ -2167,6 +2208,8 @@ async function poll() {
 
 /* ============================== boot =================================== */
 async function boot() {
+  applyZoom();                               // before first paint, no flash
+
   try { S.meta = await loadJSON('/api/meta'); }
   catch (e) { S.meta = null; }               // poll() retries until it loads
 
