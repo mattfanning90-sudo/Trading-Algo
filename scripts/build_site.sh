@@ -44,6 +44,16 @@ for f in "$MOMENTUM_STATE_DIR"/paper_state_*.json; do
     -o "public/eq_${name}.html" || echo "skip equity $name"
 done
 
+# --- Momentum/3R terminal pages for the FX / multi-asset books -----------------
+# The equity eq_*.html exports above already ARE the terminal; this gives the
+# FX books the same page set (the classic fx_*.html candlestick pages stay).
+for f in "$FX_STATE_DIR"/fx_state_*.json; do
+  [ -e "$f" ] || continue
+  name=$(basename "$f" .json); name=${name#fx_state_}
+  python -m trading_algo.dashboard.export --account "$name" $SYNTH \
+    -o "public/tm_${name}.html" || echo "skip terminal $name"
+done
+
 # --- "How it works" page --------------------------------------------------------
 python -c "from trading_algo.forex.dashboard import build_how_page; build_how_page(\"public\")" \
   || echo "skip how page"
@@ -58,10 +68,12 @@ python -c "from trading_algo.forex.dashboard import build_how_page; build_how_pa
   echo 'a.card:hover{border-color:#58a6ff}.n{font-size:1.15rem;font-weight:600;color:#58a6ff}.d{color:#8b949e;font-size:.85rem}</style>'
   echo "<h1>Trading Paper Books</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
   echo '<a class=card href="how.html" style="border-color:#1f6feb"><div class=n>📖 How it works — start here</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
-  echo '<h2>FX &amp; crypto — candlesticks + the reasoning behind every trade</h2>'
-  for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
-    echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>paper book</div></a>"; done
-  echo '<h2>Equity momentum (FTSE / US / ASX)</h2>'
+  echo '<h2>Momentum/3R terminal — every paper book</h2>'
   for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
-    echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>equity momentum book</div></a>"; done
+    echo "<a class=card href=\"$b.html\"><div class=n>$n · terminal</div><div class=d>equity momentum book — overview / positions / backtest / method</div></a>"; done
+  for f in public/tm_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#tm_}
+    echo "<a class=card href=\"$b.html\"><div class=n>$n · terminal</div><div class=d>FX / multi-asset agent book — decision book, agent votes, pair charts</div></a>"; done
+  echo '<h2>Classic FX candlestick pages — per-trade detail</h2>'
+  for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
+    echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>candlesticks + the reasoning behind every trade</div></a>"; done
 } > public/index.html
