@@ -132,34 +132,49 @@ every regional close is safe.
 
 ## Live dashboard
 
-A self-contained web terminal (stdlib `http.server` + a hand-written vanilla-JS
-SPA — **no frameworks, no CDNs, fully offline**). It reads the persisted paper
-state, marks positions to the latest prices, and shows:
+A self-contained web **terminal** (stdlib `http.server` + a hand-written
+vanilla-JS SPA — **no frameworks, no CDNs, fully offline**; IBM Plex Mono is
+bundled locally). One server shows **every paper book on disk** — the equity
+sleeves *and* the FX agent books — behind an account switcher:
 
-- Two tabs: **Overview** (the live dashboard) and **How it works** (an in-app
-  explainer of the strategy — pipeline, filters, vol targeting, costs).
-- KPI strip: total equity (AUD), total return, day change, **open P&L**, open
-  positions, trades, cash %.
-- A Canvas equity curve (combined + per-sleeve overlay + **benchmark** line)
-  with hover tooltip, plus a **drawdown** chart, **rolling Sharpe**, and
-  per-sleeve **return attribution**.
-- A **Total Financial Position** panel: equity = invested + cash, with net /
-  realised / open P&L, total fees paid (AUD), and gross exposure.
-- An allocation donut (actual vs target weights, with drift).
-- Per-sleeve cards: **RISK_ON / RISK_OFF (CASH)** regime badge, cash-vs-invested
-  liquidity bar, sparkline, top holdings.
-- A sortable positions table — including each stock's **day change** and
-  **unrealized P&L** (green/red) — and a live trades feed (BUY/SELL, commission,
-  and UK stamp duty on FTSE rows).
+- **Account switcher**: `ALL ACCOUNTS` roll-up plus one chip per book
+  (`FULL · EQUITIES`, `SMALL · A$1K`, `FX · MATT`, `FX · PARTNER`,
+  `DAYTRADER · 60M`, `MULTI-ASSET` — discovered from `paper_state_*.json` /
+  `fx_state_*.json`).
+- **Four tabs per book**: `OVERVIEW` · `POSITIONS` · `BACKTEST` · `METHOD`.
+- **Equity books**: KPI strip (equity, return, day, net P&L split real/open,
+  exposure, fees incl. UK stamp duty), ticker tape (FX rates, index regimes,
+  peak/off-peak, breaker, next rebalance), equity curve + drawdown with
+  1M/3M/ALL ranges, per-sleeve cards, the open book with **90-day price-history
+  hover popovers** (real closes when data is reachable), a trade feed, the full
+  blotter, and a **FIFO closed-trades ledger** (round-trips reconstructed from
+  the fills, costs itemised).
+- **FX agent books**: gross/net, off-peak and breaker KPIs, day/bar attribution
+  or ensemble-tilt panel, the decision book with per-pair **agent votes
+  (T·B·M·R·C·N)** and the ensemble's plain-English "why" on hover, and a
+  candlestick **pair chart** with timeframes, EMA/Bollinger/Donchian overlays,
+  RSI/momentum/ADX panes, per-candle explainers, a phase-by-phase move
+  breakdown and an indicative fundamentals panel.
+- **Micro account**: the A$1K book gets its own overview (viability gate, fee
+  drag, whole-shares lesson) wired from its real fills.
+- **BACKTEST tab** reads a cached result written by
+  `python -m trading_algo.dashboard.backtest_store` (add `--sweep` for the
+  robustness grid); with no cache it shows clearly-labelled illustrative curves
+  and the exact command to wire real ones.
+- **METHOD tab** renders the pipeline, cost model, risk controls and invariants
+  straight from `config.py` / `regions.py` — change a knob and the page follows.
 
 ```bash
 python -m trading_algo.dashboard --account full          # live prices
 python -m trading_algo.dashboard --account full --synthetic --port 8787
+python -m trading_algo.dashboard.backtest_store          # cache the BACKTEST tab
 ```
 
-It polls `GET /api/state` every 5s; if the server is down it shows a
-"reconnecting…" state and keeps the last good data. The page renders a populated
-sample immediately so it's never blank.
+API: `GET /api/meta`, `/api/overview`, `/api/account/<KEY>`,
+`/api/backtest/<KEY>`, plus the legacy `/api/state` (the bound account). The
+SPA polls the active book every 5s and keeps the last good data if the server
+drops. Equity books need market data to mark positions (use `--synthetic`
+offline); the FX books and the ALL roll-up read state files and always render.
 
 **Share it as one file.** Export the whole dashboard — CSS, JS and a baked-in
 state snapshot — into a single self-contained `.html` that opens in any browser
@@ -167,6 +182,7 @@ with **no server and no network** (charts, sorting and tabs all work):
 
 ```bash
 python -m trading_algo.dashboard.export --account full -o dashboard.html
+python -m trading_algo.dashboard.export --account matt -o fx_matt.html   # FX books too
 ```
 
 ## Run as a native Mac app

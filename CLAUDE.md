@@ -43,7 +43,10 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
-- `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
+- `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
+  vanilla SPA): every paper book (equity + FX) behind one account switcher,
+  OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
+  agent-vote decision book, candlestick pair charts
 
 ## Commands
 ```bash
