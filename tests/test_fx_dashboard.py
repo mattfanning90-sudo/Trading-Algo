@@ -78,14 +78,18 @@ def test_dashboard_export_offline(isolated):
                   'class="subnav"', 'id="overview"', 'class="cards"',
                   'id="conviction"', 'id="pnlpair"', 'id="tradestats"',
                   "Conviction heatmap", 'id="attrib"',
-                  'class="plain"', "In plain English",
+                  'class="pop"', "In plain English", 'id="cmdk"', 'id="cmdin"',
+                  "<kbd>1</kbd>", "IntersectionObserver",
                   'id="verdict"', 'id="eqperiod"', 'id="eqread"',
                   "function sparkline", "subscribeCrosshairMove", 'class="pbtn',
                   'id="today"', 'id="dailycard"', "Daily summary", "Market backdrop",
                   'id="books"', 'id="ago"', 'id="cbtoggle"', 'id="csvbtn"',
                   "body.cb", "data-pair", "th.sortable", "function goPair"):
         assert token in html
-    assert html.count('class="plain"') >= 5    # a visible explainer per section
+    # every section's plain-English explainer now lives in a hover popover on the
+    # band header (Bloomberg-dense body), not inline in the flow
+    assert html.count('class="pop"') >= 6
+    assert '<p class="plain">' not in html
 
 
 def test_build_payload_single_weight_engine_pass(isolated, monkeypatch):

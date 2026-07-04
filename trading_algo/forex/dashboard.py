@@ -761,8 +761,39 @@ table.txn tfoot td{position:sticky;bottom:0;background:#0b0f14;font-weight:600;b
   color:var(--mut);text-decoration:none;font-size:.8rem}
 .subnav a:hover{border-color:var(--accent);color:var(--accent)}
 section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
-.band{display:flex;align-items:baseline;gap:.6rem;margin:0 0 .9rem;font-size:1.05rem;font-weight:600}
-.band .h{color:var(--mut);font-size:.78rem;font-weight:400}
+/* terminal-style section headers: mono, uppercase, amber tick */
+.band{display:flex;align-items:baseline;gap:.6rem;margin:0 0 .9rem;font-size:.92rem;font-weight:600;
+  font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em;
+  border-left:3px solid var(--amber);padding-left:.6rem}
+.band .h{color:var(--mut);font-size:.76rem;font-weight:400;text-transform:none;letter-spacing:0;
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+/* i plain-English popover on each section header (hover / focus / tap) */
+.band .info{position:relative;cursor:help;color:var(--mut);font-style:normal;font-family:system-ui,sans-serif;
+  font-size:.8rem;line-height:1;border:1px solid var(--bd);border-radius:50%;
+  width:1.2rem;height:1.2rem;display:inline-flex;align-items:center;justify-content:center;flex:none;align-self:center}
+.band .info:hover,.band .info:focus,.band .info.open{color:var(--amber);border-color:var(--amber);outline:none}
+.band .pop{display:none;position:absolute;left:-.5rem;top:150%;z-index:40;width:min(520px,82vw);
+  background:#10151c;border:1px solid var(--amber);border-left:3px solid var(--amber);border-radius:8px;
+  padding:.7rem .9rem;font-size:.84rem;font-weight:400;line-height:1.55;color:#c9d1d9;cursor:auto;
+  text-transform:none;letter-spacing:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  box-shadow:0 8px 22px rgba(0,0,0,.55)}
+.band .info:hover .pop,.band .info:focus .pop,.band .info.open .pop{display:block}
+.band .pop b{color:var(--fg)}.band .pop .q{color:var(--amber);font-weight:600}
+/* subnav: scrollspy highlight + hotkey hints */
+.subnav a.on{border-color:var(--accent);color:var(--accent)}
+kbd{font-family:var(--mono);font-size:.66rem;color:var(--mut);border:1px solid var(--bd);
+  border-bottom-width:2px;border-radius:4px;padding:0 .28rem;margin-right:.3rem}
+.subnav .hint{margin-left:auto;color:var(--mut);font-size:.74rem;align-self:center}
+/* command palette - the <GO> line */
+#cmdk{position:fixed;inset:0;z-index:100;background:rgba(5,8,12,.6);backdrop-filter:blur(3px)}
+#cmdk[hidden]{display:none}
+.cmdbox{max-width:560px;margin:12vh auto 0;background:#0b0f14;border:1px solid var(--amber);
+  border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.7);overflow:hidden}
+#cmdin{width:100%;padding:.85rem 1rem;background:transparent;border:0;outline:none;color:var(--fg);
+  font-family:var(--mono);font-size:1rem}
+.cmdrow{padding:.5rem 1rem;font-size:.86rem;cursor:pointer;display:flex;gap:.6rem;align-items:center;
+  border-top:1px solid #161b22}
+.cmdrow.sel,.cmdrow:hover{background:#1b2230;color:var(--accent)}
 /* 12-col equal-height grid: rows sum to 12 so there are no trailing gaps */
 .cards{display:grid;grid-template-columns:repeat(12,1fr);gap:1rem;align-items:stretch}
 .c12{grid-column:span 12}.c8{grid-column:span 8}.c6{grid-column:span 6}.c4{grid-column:span 4}
@@ -829,30 +860,34 @@ table.txn th.sortable:hover{color:var(--fg)}
 <div class="verdict" id="verdict"></div>
 
 <div class="subnav">
-  <a href="#today">Today</a>
-  <a href="#overview">Overview</a>
-  <a href="#risk">Risk &amp; costs</a>
-  <a href="#attrib">Attribution</a>
-  <a href="#pairs">Pair explorer</a>
-  <a href="#txns">Transactions</a>
+  <a href="#today"><kbd>1</kbd>Today</a>
+  <a href="#overview"><kbd>2</kbd>Overview</a>
+  <a href="#risk"><kbd>3</kbd>Risk &amp; costs</a>
+  <a href="#attrib"><kbd>4</kbd>Attribution</a>
+  <a href="#pairs"><kbd>5</kbd>Pair explorer</a>
+  <a href="#txns"><kbd>6</kbd>Transactions</a>
+  <span class="hint"><kbd>/</kbd> jump to pair · section · book &nbsp; <kbd>&#8592;</kbd><kbd>&#8594;</kbd> pairs</span>
 </div>
 
+<div id="cmdk" hidden><div class="cmdbox">
+  <input id="cmdin" placeholder="Jump to… a pair (EURUSD), section (risk) or book (partner)" autocomplete="off">
+  <div id="cmdlist"></div>
+</div></div>
+
 <section id="today">
-  <div class="band">Daily summary <span class="h">what drove today's profit &amp; loss</span></div>
-  <p class="plain"><span class="q">In plain English:</span> a once-a-day debrief — <b>how much you made or lost</b>,
+  <div class="band">Daily summary <span class="h">what drove today's profit &amp; loss</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> a once-a-day debrief — <b>how much you made or lost</b>,
     <b>which positions drove it</b> and how each one moved, and the day's <b>market backdrop</b> (which currencies
     were broadly strong or weak). When a real <b>high-impact news release</b> hit a currency you traded, it's flagged
-    as a <b>possible catalyst</b> — but only if one actually happened, and always as correlation, never invented.</p>
+    as a <b>possible catalyst</b> — but only if one actually happened, and always as correlation, never invented.</span></span></div>
   <div class="card" id="dailycard"></div>
 </section>
 
 <section id="overview">
-  <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span></div>
-  <p class="plain"><span class="q">In plain English:</span> the big chart is <b>how much your account is worth over time</b>
+  <div class="band">Overview <span class="h">equity vs buy-and-hold · performance · positions</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> the big chart is <b>how much your account is worth over time</b>
     (blue) versus the lazy alternative of just buying a bit of everything and holding it (grey) — both start at 100,
     so if blue is above grey, the strategy is adding something. Beside it: your <b>scorecard</b>, <b>what you hold
     right now</b>, and which <b>"agents"</b> (small built-in strategies) have been helping lately. This is paper
-    money — practice, not real funds.</p>
+    money — practice, not real funds.</span></span></div>
   <div class="cards">
     <div class="card c8"><h2><span class="tip" data-tip="__T_BENCH__">Equity vs buy-and-hold</span> <span class="muted" style="font-weight:400">(both start at 100)</span> <span class="periods" id="eqperiod"></span></h2>
       <div class="cread" id="eqread"></div><div id="eqchart"></div></div>
@@ -863,13 +898,12 @@ table.txn th.sortable:hover{color:var(--fg)}
 </section>
 
 <section id="risk">
-  <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span></div>
-  <p class="plain"><span class="q">In plain English:</span> before trusting any gain, ask <b>"is this skill or just luck,
+  <div class="band">Risk, costs &amp; significance <span class="h">is the edge real after costs &amp; luck?</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> before trusting any gain, ask <b>"is this skill or just luck,
     and what did it cost?"</b> With only a few weeks of data a small profit is almost always noise — the
     <b>"is it luck?"</b> box estimates the odds it's real and how long you'd need to wait to know. The
     <b>drawdown</b> chart shows your worst dips, the <b>cost</b> chart shows how much the spread (the dealer's
     cut on every trade) is quietly eating, and <b>exposure</b> shows which currencies you're really betting on
-    once the pairs are unpacked.</p>
+    once the pairs are unpacked.</span></span></div>
   <div class="cards">
     <div class="card c8 flag"><h2>Costs &amp; <span class="tip acc-amber" data-tip="__T_PSR__">is it luck?</span></h2>
       <div class="stats" id="riskstats"></div>
@@ -881,12 +915,11 @@ table.txn th.sortable:hover{color:var(--fg)}
 </section>
 
 <section id="attrib">
-  <div class="band">Attribution &amp; signals <span class="h">where the P&amp;L comes from · what the system thinks now</span></div>
-  <p class="plain"><span class="q">In plain English:</span> <b>where did the money come from?</b> The heatmap shows
+  <div class="band">Attribution &amp; signals <span class="h">where the P&amp;L comes from · what the system thinks now</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> <b>where did the money come from?</b> The heatmap shows
     what the system wants <b>right now</b> for each pair — green = bet it rises (long), red = bet it falls (short),
     brighter = stronger conviction. Below, the P&amp;L is split by pair, by up-bets vs down-bets, and by market mood
     (trending vs choppy). <b>Trade quality</b> sums up whether the wins outweigh the losses (profit factor &gt; 1 =
-    yes) and how much you're trading (turnover).</p>
+    yes) and how much you're trading (turnover).</span></span></div>
   <div class="cards">
     <div class="card c12"><h2><span class="tip" data-tip="__T_CONV__">Conviction heatmap</span> <span class="muted" style="font-weight:400">today's ensemble tilt per pair (−1…+1)</span></h2>
       <div id="conviction" class="heat"></div></div>
@@ -899,11 +932,10 @@ table.txn th.sortable:hover{color:var(--fg)}
 </section>
 
 <section id="pairs">
-  <div class="band">Pair explorer <span class="h">candlesticks · today's read · the reason for every trade</span></div>
-  <p class="plain"><span class="q">In plain English:</span> pick one instrument and look closely. Each
+  <div class="band">Pair explorer <span class="h">candlesticks · today's read · the reason for every trade</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> pick one instrument and look closely. Each
     <b>candle</b> is one day's price (green = finished up, red = down); the orange and blue lines are short- and
     long-term <b>averages</b> the agents watch. Arrows mark where we <b>bought or sold</b>, and the journal gives a
-    <b>plain-English reason for every trade</b> plus whether it worked — built so you can learn how each call was made.</p>
+    <b>plain-English reason for every trade</b> plus whether it worked — built so you can learn how each call was made.</span></span></div>
   <div class="tabs" id="tabs"></div>
   <div class="wrap">
     <div><div class="cread" id="pairread"></div><div id="chart"></div></div>
@@ -919,11 +951,10 @@ table.txn th.sortable:hover{color:var(--fg)}
 </section>
 
 <section id="txns">
-  <div class="band">Transactions <span class="h">full blotter · price economics &amp; P&amp;L</span></div>
-  <p class="plain"><span class="q">In plain English:</span> the full receipt — <b>every trade</b> with the price
+  <div class="band">Transactions <span class="h">full blotter · price economics &amp; P&amp;L</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> the full receipt — <b>every trade</b> with the price
     we got, the <b>bid/ask</b> (sell/buy prices) and the <b>spread</b> between them, the dollar <b>size</b>, the
     <b>cost</b> you paid, and how it's done <b>since</b>. Hover any column heading for what it means; type a pair in
-    the box to filter.</p>
+    the box to filter.</span></span></div>
   <div class="card">
     <h2>Full blotter <span class="muted" style="font-weight:400" id="txnsub"></span>
       <button class="chipbtn" id="csvbtn" style="float:right">⬇ CSV</button></h2>
@@ -1066,6 +1097,55 @@ document.addEventListener('keydown',e=>{
   if(localStorage.getItem('cb')==='1')document.body.classList.add('cb');
   if(cb)cb.onclick=()=>{const on=document.body.classList.toggle('cb');
     localStorage.setItem('cb',on?'1':'0');};
+})();
+
+(function(){
+  // Command palette - the Bloomberg-style <GO> line: "/" or Ctrl/Cmd-K, type a
+  // pair, section or book, Enter to jump. Number keys 1-6 jump straight to bands.
+  const wrap=document.getElementById('cmdk'),inp=document.getElementById('cmdin'),list=document.getElementById('cmdlist');
+  const SECTIONS=[["Today","today"],["Overview","overview"],["Risk & costs","risk"],
+    ["Attribution","attrib"],["Pair explorer","pairs"],["Transactions","txns"]];
+  const items=[
+    ...SECTIONS.map(([n,id])=>({t:'section',label:n,go:()=>{const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth'});}})),
+    ...(DASH.pairs||[]).map(p=>({t:'pair',label:p,go:()=>goPair(p)})),
+    ...(DASH.books||[]).filter(b=>b!==DASH.account).map(b=>({t:'book',label:b,go:()=>location.href=`fx_${b}.html`}))];
+  let sel=0,cur=[];
+  const draw=()=>{list.innerHTML=cur.slice(0,10).map((i,j)=>
+    `<div class="cmdrow${j===sel?' sel':''}" data-j="${j}"><span class=badge>${i.t}</span>${i.label}</div>`).join('')
+    ||'<div class="cmdrow muted">no match</div>';};
+  const filter=q=>{q=q.toLowerCase();cur=items.filter(i=>i.label.toLowerCase().includes(q));sel=0;draw();};
+  const open=()=>{if(!wrap)return;wrap.hidden=false;inp.value='';filter('');inp.focus();};
+  const close=()=>{if(wrap)wrap.hidden=true;};
+  if(inp){
+    inp.addEventListener('input',e=>filter(e.target.value));
+    inp.addEventListener('keydown',e=>{
+      if(e.key==='ArrowDown'){sel=Math.min(sel+1,Math.min(cur.length,10)-1);draw();e.preventDefault();}
+      else if(e.key==='ArrowUp'){sel=Math.max(sel-1,0);draw();e.preventDefault();}
+      else if(e.key==='Enter'){const it=cur[sel];if(it){close();it.go();}}
+      else if(e.key==='Escape')close();});
+    list.addEventListener('click',e=>{const r=e.target.closest('.cmdrow');
+      if(r&&cur[+r.dataset.j]){close();cur[+r.dataset.j].go();}});
+    wrap.addEventListener('click',e=>{if(e.target===wrap)close();});
+  }
+  document.addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+    if(e.key==='/'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k')){open();e.preventDefault();}
+    else if(/^[1-6]$/.test(e.key)){const sc=SECTIONS[+e.key-1];
+      const el=sc&&document.getElementById(sc[1]);if(el)el.scrollIntoView({behavior:'smooth'});}});
+  // tap-to-toggle the section explainer popovers (mobile has no hover)
+  document.addEventListener('click',e=>{
+    const inf=e.target.closest('.band .info');
+    document.querySelectorAll('.band .info.open').forEach(x=>{if(x!==inf)x.classList.remove('open');});
+    if(inf&&!e.target.closest('.pop'))inf.classList.toggle('open');});
+  // scrollspy: highlight the section you're reading in the sticky nav
+  const map={};document.querySelectorAll('.subnav a[href^="#"]').forEach(a=>map[a.getAttribute('href').slice(1)]=a);
+  if('IntersectionObserver' in window){
+    const io=new IntersectionObserver(es=>{es.forEach(x=>{if(x.isIntersecting){
+      Object.values(map).forEach(a=>a.classList.remove('on'));
+      const a=map[x.target.id];if(a)a.classList.add('on');}});},
+      {rootMargin:'-15% 0px -70% 0px'});
+    Object.keys(map).forEach(id=>{const el=document.getElementById(id);if(el)io.observe(el);});
+  }
 })();
 
 (function(){
