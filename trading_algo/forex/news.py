@@ -13,6 +13,8 @@ key, or override the provider) to enable it; see docs/DATA_FEEDS.md.
 """
 from __future__ import annotations
 
+import copy
+import functools
 import os
 
 # Currencies an economic calendar covers (crypto has no scheduled releases).
@@ -23,6 +25,34 @@ _FMP_URL = "https://financialmodelingprep.com/api/v3/economic_calendar"
 
 def _key(explicit: str | None = None) -> str | None:
     return explicit or os.environ.get("NEWS_API_KEY") or os.environ.get("FMP_API_KEY")
+
+
+@functools.lru_cache(maxsize=8)
+def _fetch_rows_cached(date: str, key: str, timeout: float) -> tuple:
+    """The ONE provider fetch (memoised per date/key): GET the FMP calendar for
+    `date` with the graceful never-raise contract — any failure is ().
+
+    Memoisation matters operationally: a `dashboard --all` export calls the
+    calendar twice per book (feed + catalysts) × 4 books = 8 identical GETs;
+    caching collapses that to 1, keeping the hourly CI well clear of the FMP
+    free tier's 250 calls/day. The exporter is a short-lived CLI process, so
+    intra-process staleness is a non-issue.
+    """
+    try:
+        import requests
+        resp = requests.get(_FMP_URL, params={"from": date, "to": date, "apikey": key},
+                            timeout=timeout)
+        rows = resp.json() if resp.ok else []
+    except Exception:
+        return ()
+    return tuple(rows or [])
+
+
+def _fetch_rows(date: str, key: str, timeout: float = 8.0) -> list:
+    """Shared FMP fetch for `calendar_feed` and `economic_events` — the provider
+    endpoint/params and the graceful-[] failure contract are written ONCE here.
+    Deep-copies on the way out so callers can't mutate the cache."""
+    return [copy.deepcopy(e) for e in _fetch_rows_cached(date, key, timeout)]
 
 
 def _is_high(impact) -> bool:
@@ -40,15 +70,8 @@ def calendar_feed(currencies, date: str, *, key: str | None = None,
     want = {c.upper() for c in (currencies or []) if c.upper() in FIAT}
     if not k or not want or not date:
         return []
-    try:
-        import requests
-        resp = requests.get(_FMP_URL, params={"from": date, "to": date, "apikey": k},
-                            timeout=timeout)
-        rows = resp.json() if resp.ok else []
-    except Exception:
-        return []
     out: list[dict] = []
-    for e in rows or []:
+    for e in _fetch_rows(date, k, timeout):
         try:
             cur = str(e.get("currency") or e.get("country") or "").upper()
             imp = str(e.get("impact") or "").strip().lower()
@@ -77,15 +100,8 @@ def economic_events(currencies, date: str, *, key: str | None = None,
     want = {c.upper() for c in (currencies or []) if c.upper() in FIAT}
     if not k or not want or not date:
         return []
-    try:
-        import requests
-        resp = requests.get(_FMP_URL, params={"from": date, "to": date, "apikey": k},
-                            timeout=timeout)
-        rows = resp.json() if resp.ok else []
-    except Exception:
-        return []
     out: list[dict] = []
-    for e in rows or []:
+    for e in _fetch_rows(date, k, timeout):
         try:
             cur = str(e.get("currency") or e.get("country") or "").upper()
             if cur in want and _is_high(e.get("impact")):

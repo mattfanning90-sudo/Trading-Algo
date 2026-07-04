@@ -71,6 +71,17 @@ def ml_pool(models_dir: str | None = None) -> "AgentPool":
     return AgentPool(max_workers=1)
 
 
+_ML_POOL: AgentPool | None = None
+
+
+def _cached_ml_pool() -> "AgentPool":
+    """Memoized ml_pool() so run_all loads the trained model once per process."""
+    global _ML_POOL
+    if _ML_POOL is None:
+        _ML_POOL = ml_pool()
+    return _ML_POOL
+
+
 def list_accounts() -> list[str]:
     out = []
     for fn in os.listdir(os.path.abspath(STATE_DIR)):
@@ -169,9 +180,26 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None, interval: str | None = None,
-             source: str | None = None, exchange: str | None = None) -> None:
+             source: str | None = None, exchange: str | None = None,
+             use_ml: bool = False) -> None:
     state = load_state(account)
     p = _params(state)
+    # --- ML gate (the ONE mechanism pinning the ML pool to its training set) --
+    # The NeuralAgent is trained on DAILY bars of the default FX+crypto
+    # universe, so with use_ml=True it only ever scores daily-bar books with
+    # the unlocked default universe. Gated-out books (daytrader: 60m bars;
+    # multiasset: universe_locked) keep the CALLER's technical pool — never a
+    # fresh default when a pool was supplied, so --workers is always honored —
+    # which makes daytrader's 23:00 bar identical regardless of whether
+    # fx-paper or day-paper advances it (last_bar_date dedup then makes the
+    # loser a no-op). With use_ml=False (the default) the caller's explicit
+    # pool is used unconditionally.
+    technical_pool = pool          # may be None -> downstream module default
+    if (use_ml and state.get("bar", "1d") in ("1d", "B")
+            and not state.get("universe_locked")):
+        pool = _cached_ml_pool()
+    else:
+        pool = technical_pool
     # Per-book cadence: explicit CLI override, else the book's own stored bar
     # (daytrader = 60m, everything else daily).
     interval = interval or state.get("bar") or "1d"
@@ -261,7 +289,7 @@ def run_once(account: str, synthetic: bool = False,
         halted = True
         state["halt_cooldown"] = p.drawdown_cooldown_days
         print(f"  [{account}] ⛔ drawdown {equity / peak - 1:.1%} breached "
-              f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} runs.")
+              f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} bars.")
 
     # --- target weights ----------------------------------------------------
     rationale: dict[str, dict] = {}
@@ -330,12 +358,12 @@ def run_once(account: str, synthetic: bool = False,
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
             interval: str | None = None, source: str | None = None,
-            exchange: str | None = None) -> None:
+            exchange: str | None = None, use_ml: bool = False) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if os.path.exists(_state_file(name)):
             run_once(name, synthetic, pool=pool, interval=interval,
-                     source=source, exchange=exchange)
+                     source=source, exchange=exchange, use_ml=use_ml)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +391,7 @@ def status(account: str) -> None:
             print(f"  Max drawdown     {(s / s.cummax() - 1).min():.2%}")
         print(f"  Trades to date   {len(state['trades'])}")
     if state.get("risk_halted"):
-        print(f"  ⛔ RISK-HALTED   {state.get('halt_cooldown', 0)} runs remaining")
+        print(f"  ⛔ RISK-HALTED   {state.get('halt_cooldown', 0)} bars remaining")
     print("\n  Open positions (signed weight = frac of equity):")
     if not state["positions"]:
         print("    (flat)")
@@ -423,7 +451,7 @@ def main(argv: list[str] | None = None) -> None:
                 src = "crypto"
             symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
             init_account(args.account, args.capital, args.profile, symbols=symbols,
-                         source=src, force=args.force)
+                         source=src, bar=args.bar or "1d", force=args.force)
         else:
             init_defaults(args.synthetic, force=args.force)
     elif args.status:

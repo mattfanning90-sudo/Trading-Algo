@@ -90,6 +90,23 @@ def test_dashboard_export_offline(isolated):
     # band header (Bloomberg-dense body), not inline in the flow
     assert html.count('class="pop"') >= 6
     assert '<p class="plain">' not in html
+    assert '.plain{' not in html                      # dead ruleset deleted too
+    # popover hover bridge: invisible ::after extends the icon's hit area and the
+    # gap shrank, so the cursor can reach the popover without it closing
+    assert '.band .info::after' in html
+    assert 'top:150%' not in html
+    # pair-nav arrow keys ignore browser shortcuts + all editable targets
+    assert 'e.altKey||e.metaKey||e.ctrlKey' in html
+    assert "tg.tagName==='TEXTAREA'" in html
+    # each pair switch disposes the previous LWC chart (ResizeObserver leak)
+    assert 'chart.remove()' in html
+    # ONE timestamp parser: the freshness pill reuses toT, and toT normalises
+    # plain daily dates to UNIX timestamps too (no mixed time types per series)
+    assert html.count("replace(' UTC'") == 1
+    assert "toT((DASH.updated||'').replace(' UTC',''))" in html
+    assert "T00:00:00Z" in html
+    # scorecard/attribution honestly labelled gross-of-costs
+    assert 'gross of spread costs' in html.lower() or 'Gross of spread costs' in html
 
 
 def test_build_payload_single_weight_engine_pass(isolated, monkeypatch):
@@ -336,3 +353,104 @@ def test_dashboard_index(isolated):
     dashboard.build_index(["matt", "partner"], str(isolated))
     idx = (isolated / "index.html").read_text()
     assert "matt" in idx and "partner" in idx
+
+
+# ---- audit round 2: units, resilience, escaping, dedup --------------------
+def test_glossary_labels_scorecard_gross():
+    assert "gross of spread costs" in dashboard.GLOSSARY["Agent scorecard"]
+    assert "gross of spread costs" in dashboard.GLOSSARY["Attribution"]
+
+
+def test_curve_metrics_mixed_date_formats():
+    """One --bar 60m override run on a daily book mixes 'YYYY-MM-DD' and
+    'YYYY-MM-DD HH:MM' equity keys — must not raise on pandas 2/3."""
+    m = dashboard._curve_metrics(
+        ["2026-07-01", "2026-07-02", "2026-07-03 09:00", "2026-07-04",
+         "2026-07-05", "2026-07-06", "2026-07-07"],
+        [100.0, 101.0, 100.5, 101.5, 102.0, 101.0, 103.0])
+    assert "total_return" in m and "sharpe" in m
+
+
+def test_main_all_survives_corrupt_state(isolated, capsys):
+    """--all must not silently drop the remaining books when one state file is
+    corrupt (the CI workflows run the exporter under '|| true')."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    (isolated / "fx_state_bad.json").write_text("{this is not json")
+    dashboard.main(["--all", "--synthetic", "--out-dir", str(isolated / "public")])
+    assert (isolated / "public" / "fx_matt.html").exists()
+    assert (isolated / "public" / "index.html").exists()
+    assert "[skip bad" in capsys.readouterr().out
+
+
+def test_third_party_news_strings_escaped(isolated):
+    """FMP calendar strings cross a trust boundary: they must not be able to
+    terminate the inline __DATA__ script or inject markup via innerHTML."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    p = dashboard.build_payload("matt", synthetic=True)
+    evil = '</script><script>alert(1)</script><img src=x onerror=1>'
+    p["news_feed"] = [{"time": "09:00", "currency": "USD", "event": evil,
+                       "impact": "high", "actual": evil, "estimate": None,
+                       "previous": None}]
+    html = dashboard.render(p)
+    assert '<\\/script' in html                        # JSON-embedded '</' escaped
+    assert '</script><script>alert' not in html        # can't break out of __DATA__
+    # client-side: every third-party field goes through esc() in BOTH sinks
+    for token in ("esc(e.event)", "esc(e.actual)", "esc(e.estimate)",
+                  "esc(e.previous)", "esc(e.currency)", "esc(e.time)"):
+        assert token in html
+    assert "const esc" in html
+
+
+def test_blotter_full_rows_and_csv_quoting(isolated):
+    """The CSV export covers ALL rows (reconciles with the footer totals) and
+    is RFC-4180 quoted; only the table DISPLAY is capped at 400."""
+    import pandas as pd
+    idx = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    mk = lambda a, b: pd.DataFrame({"open": [a, b], "high": [a, b],
+                                    "low": [a, b], "close": [a, b]}, index=idx)
+    panel = {"EURUSD": mk(1.08, 1.08), "AUDUSD": mk(0.66, 0.66)}
+    st = {"equity_history": [["2025-01-02", 5_000.0]], "equity": 5_000.0,
+          "initial_capital": 5_000.0,
+          "trades": [{"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+                      "delta_weight": 0.01, "target_weight": 0.01, "price": 1.08}
+                     for _ in range(450)]}
+    txn = dashboard._transactions(st, panel)
+    assert len(txn["rows"]) == 450                    # full blotter, no server slice
+    assert txn["count"] == 450 and txn["shown"] == 400
+    # footer totals reconcile exactly with summing the exported rows
+    assert txn["totals"]["cost"] == round(sum(r["cost"] for r in txn["rows"]), 2)
+    # template: CSV maps over the FULL T.rows with doubled-quote escaping,
+    # and the table renderer only slices for display
+    page = dashboard._PAGE
+    assert "T.rows.map(r=>kk.map(k=>q(r[k]))" in page
+    assert 'replace(/"/g' in page
+    assert "rows=rows.slice(0,400)" in page
+
+
+def test_risk_costs_reuse_blotter_costs(isolated):
+    """Tripwire: the risk card's total_cost is DERIVED from the blotter rows
+    (one cost-formula site), so the two can never disagree."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    p = dashboard.build_payload("matt", synthetic=True)
+    txn, rk = p["transactions"], p["risk"]
+    assert rk["total_cost"] == round(sum(r["cost"] for r in txn["rows"]), 2)
+    assert rk["total_cost"] == txn["totals"]["cost"]
+
+
+def test_blotter_matches_book_charge(isolated):
+    """Cross-tying regression (CLAUDE.md 'costs always on' / one-formula): the
+    dashboard's blotter cost must reconcile with what the BOOK actually charged
+    (state['daily'].cost_pct × that day's equity), so a future change to
+    fx_book's charging breaks THIS test instead of silently diverging."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    st = fx_book.load_state("matt")
+    assert st["trades"], "expected the synthetic run to trade"
+    p = dashboard.build_payload("matt", synthetic=True)
+    equity_on, _ = dashboard._equity_lookup(st)
+    daily = st["daily"]
+    expected = -daily["cost_pct"] * equity_on(daily["date"])
+    # tolerance = stored rounding only (cost_pct 6dp, row costs 4dp)
+    assert p["transactions"]["totals"]["cost"] == pytest.approx(expected, abs=0.05)
+    assert expected > 0
