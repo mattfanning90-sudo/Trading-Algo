@@ -1,7 +1,14 @@
 """Zero-dependency dashboard web server (Python stdlib only).
 
-Serves the static SPA at / and the live state at /api/state. No Flask/FastAPI —
+Serves the terminal SPA at / and the live data under /api/*. No Flask/FastAPI —
 keeps the project's "no heavy frameworks" rule and runs fully offline.
+
+Routes
+    /api/state              legacy: snapshot of the server's bound account
+    /api/meta               config: accounts, strategy params, fees, schedule
+    /api/overview           all paper books rolled up (offline-safe)
+    /api/account/<KEY>      one book — equity or FX, by display key
+    /api/backtest/<KEY>     cached backtest results for that book's kind
 """
 from __future__ import annotations
 
@@ -9,15 +16,26 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import api
+from . import api, backtest_store, fx_api, meta, overview, registry
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _CTYPES = {".html": "text/html", ".css": "text/css",
            ".js": "application/javascript", ".json": "application/json",
-           ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+           ".svg": "image/svg+xml", ".ico": "image/x-icon",
+           ".woff2": "font/woff2", ".woff": "font/woff"}
+
+
+def _regime_hint(snapshot: dict) -> str | None:
+    """'ASX RISK-OFF' style chip for the overview card, from a fresh snapshot."""
+    off = [s["key"] for s in snapshot.get("sleeves", []) if s.get("regime") == "RISK_OFF"]
+    if not off:
+        return None
+    return f"{off[0]} RISK-OFF" if len(off) == 1 else f"{len(off)} SLEEVES RISK-OFF"
 
 
 def make_handler(account: str, synthetic: bool):
+    regime_hints: dict[str, str] = {}      # account -> chip, shared across requests
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: bytes, ctype: str) -> None:
             self.send_response(code)
@@ -31,17 +49,56 @@ def make_handler(account: str, synthetic: bool):
         def _json(self, code: int, obj) -> None:
             self._send(code, json.dumps(obj).encode(), "application/json; charset=utf-8")
 
+        def _api(self, path: str) -> None:
+            requested = account            # which book this request is about
+            try:
+                if path == "/api/state":
+                    self._json(200, self._equity(account))
+                elif path == "/api/meta":
+                    self._json(200, meta.build_meta())
+                elif path == "/api/overview":
+                    self._json(200, overview.build_overview(regime_hints))
+                elif path.startswith("/api/account/"):
+                    key = requested = path[len("/api/account/"):]
+                    entry = registry.resolve(key)
+                    if entry is None:
+                        self._json(404, {"error": f"no account '{key}'"})
+                        return
+                    requested = entry["account"]
+                    if entry["kind"] == "fx":
+                        self._json(200, fx_api.build_fx_snapshot(entry["account"]))
+                    else:
+                        self._json(200, self._equity(entry["account"]))
+                elif path.startswith("/api/backtest/"):
+                    key = path[len("/api/backtest/"):]
+                    entry = registry.resolve(key)
+                    if entry is None:
+                        self._json(404, {"error": f"no account '{key}'"})
+                    else:
+                        self._json(200, backtest_store.load_backtest(
+                            entry["kind"], entry["account"]))
+                else:
+                    self._json(404, {"error": "unknown endpoint"})
+            except FileNotFoundError:
+                self._json(404, {"error": f"no account '{requested}'. "
+                                          f"Run paper_trade --init first."})
+            except Exception as exc:  # surface, don't crash the server
+                self._json(500, {"error": repr(exc)})
+
+        def _equity(self, acct: str) -> dict:
+            snapshot = api.build_snapshot(acct, synthetic)
+            hint = _regime_hint(snapshot)
+            if hint:
+                regime_hints[acct] = hint
+            else:
+                regime_hints.pop(acct, None)
+            return snapshot
+
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
 
-            if path == "/api/state":
-                try:
-                    self._json(200, api.build_snapshot(account, synthetic))
-                except FileNotFoundError:
-                    self._json(404, {"error": f"no account '{account}'. "
-                                              f"Run paper_trade --init first."})
-                except Exception as exc:  # surface, don't crash the server
-                    self._json(500, {"error": repr(exc)})
+            if path.startswith("/api/"):
+                self._api(path)
                 return
 
             # static files (path-traversal safe)
@@ -51,7 +108,9 @@ def make_handler(account: str, synthetic: bool):
                 self._send(404, b"not found", "text/plain; charset=utf-8")
                 return
             ext = os.path.splitext(full)[1]
-            ctype = _CTYPES.get(ext, "application/octet-stream") + "; charset=utf-8"
+            ctype = _CTYPES.get(ext, "application/octet-stream")
+            if ext in (".html", ".css", ".js", ".json", ".svg"):
+                ctype += "; charset=utf-8"
             with open(full, "rb") as f:
                 self._send(200, f.read(), ctype)
 
