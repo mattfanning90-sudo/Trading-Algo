@@ -24,8 +24,9 @@ on:
 
 permissions:
   contents: write      # commit updated paper state
-  # Pages publishing is consolidated in fx-paper.yml (one Pages deployer to avoid
-  # clobbering); this workflow only updates equity state + exports dashboards.
+  # Pages publishing lives in fx-paper.yml and day-paper.yml (their deploy jobs
+  # share one 'github-pages' concurrency group); this workflow only updates
+  # equity state + exports dashboards.
 
 concurrency:
   group: paper-trade
@@ -95,7 +96,27 @@ jobs:
             echo "No state change to commit."
           else
             git commit -m "chore: update paper state [skip ci]"
-            git push
+            # Rebase-safe push — used verbatim in every state-committing
+            # workflow (day-paper / fx-paper / paper-trade). Rules:
+            #  * never retry mid-rebase: 'git rebase --abort' before EVERY try;
+            #  * no merge commits (never a plain pull);
+            #  * on a content conflict in the state JSON, '-X theirs' prefers
+            #    the commit being REPLAYED — i.e. OUR just-computed state,
+            #    the correct winner (both runners computed the same or a
+            #    fresher bar);
+            #  * a genuinely failed push fails the step — no '|| true'.
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((5 * attempt))
+            done
           fi
 
       # Dashboards are published to GitHub Pages by fx-paper.yml (single Pages

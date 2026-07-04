@@ -67,6 +67,8 @@ class FXParams:
 
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
+    # decremented once per bar — scale to the profile's bar (10 for daily,
+    # 240 for 60m; see hf_crypto's 240-for-1m convention).
     drawdown_cooldown_days: int = 10
 
     def with_overrides(self, **kwargs) -> "FXParams":
@@ -95,6 +97,9 @@ _PROFILES: dict[str, FXParams] = {
         ema_fast=10, ema_slow=40, donchian_window=20, roc_window=24,
         vol_lookback=24, agent_lookback=48, bb_window=20,
         target_vol=0.10, max_gross=3.0, bar="60m",
+        # cooldown decrements once per NEW BAR: 240 hourly bars = 10 trading
+        # days x 24 bars (mirrors hf_crypto's explicit 240-for-1m convention).
+        max_drawdown_stop=0.20, drawdown_cooldown_days=240,
     ),
     # High-frequency-CAPABLE crypto (minute scale; NOT microsecond HFT — see
     # docs/CRYPTO_HF.md). Short windows, crypto-sized risk, a churn band to keep
@@ -146,6 +151,8 @@ ACCOUNTS: dict[str, dict] = {
     "matt":       {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
     "partner":    {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
     "daytrader":  {"capital": 10_000.0, "profile": "intraday", "bar": "60m"},
+    # universe-locked => never receives the FX-trained neural agent
+    # (see fx_book.run_once ML gate).
     "multiasset": {"capital": 10_000.0, "profile": "balanced",
                    "symbols": MULTI_ASSET_UNIVERSE},
 }
