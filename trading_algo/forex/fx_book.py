@@ -213,7 +213,8 @@ def run_once(account: str, synthetic: bool = False,
 
     positions = {k: float(v) for k, v in state["positions"].items()}
     last_close = state.get("last_close", {})
-    prev_equity = float(state.get("equity") or state["initial_capital"])  # before today's mark
+    prev_equity = float(state["equity"] if state.get("equity") is not None
+                        else state["initial_capital"])   # before today's mark
 
     # --- mark to market over the move since the last close ----------------
     pnl_frac = 0.0
@@ -306,7 +307,8 @@ def run_once(account: str, synthetic: bool = False,
         "date": bar_date,
         "start_equity": round(prev_equity, 2),
         "end_equity": round(float(equity), 2),
-        "pnl_pct": round(pnl_frac, 6),          # market P&L (positions × moves)
+        # rounded from the stored contribs so the breakdown sums exactly
+        "pnl_pct": round(sum(c["contrib"] for c in day_contribs), 6) if day_contribs else round(pnl_frac, 6),
         "carry_pct": round(carry_frac, 6),      # financing/swap
         "cost_pct": round(-cost_frac, 6),       # spread paid on today's rebalance (negative)
         "net_pct": round(equity / prev_equity - 1.0, 6) if prev_equity else 0.0,

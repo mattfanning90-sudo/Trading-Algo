@@ -21,6 +21,7 @@ import pandas as pd
 
 from . import indicators as ind
 from .fx_config import FXParams
+from .pairs import CRYPTO
 
 
 def pair_vols(panel: dict[str, pd.DataFrame], p: FXParams) -> pd.DataFrame:
@@ -56,6 +57,18 @@ def size_book(tilts: pd.DataFrame, vols: pd.DataFrame, p: FXParams) -> pd.DataFr
 
     w = tilts.mul(scale, axis=0)
     w = w.clip(-p.per_pair_cap, p.per_pair_cap)        # hard per-pair cap
+
+    # Asset-class cap: crypto legs are highly correlated with each other, so
+    # three "diversified" crypto positions are really ONE bet. Cap total crypto
+    # gross (Σ|w_crypto|) at `crypto_gross_cap` of equity by scaling the crypto
+    # legs down proportionally. Risk policy, not a market view; None disables it
+    # (the crypto-only hf_crypto profile must not be strangled by it).
+    if p.crypto_gross_cap is not None:
+        ccols = [c for c in w.columns if c in CRYPTO]
+        if ccols:
+            cgross = w[ccols].abs().sum(axis=1)
+            cscale = (p.crypto_gross_cap / cgross.replace(0.0, np.nan)).clip(upper=1.0).fillna(1.0)
+            w[ccols] = w[ccols].mul(cscale, axis=0)
 
     gross = w.abs().sum(axis=1)
     delever = (p.max_gross / gross.replace(0.0, np.nan)).clip(upper=1.0).fillna(1.0)
