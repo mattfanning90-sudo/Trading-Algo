@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trading-algo/product/schema/backlog_item.schema.json",
+  "title": "Backlog Item",
+  "description": "One researched, critiqued, roll-out-ready unit of product work for the Trading-Algo platform. Every field that a reviewer or the rollout machinery relies on is required, so an item cannot silently ship half-specified.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "title", "epic", "status", "owner_role", "problem", "hypothesis",
+    "evidence", "role_reviews", "scoring", "acceptance_criteria",
+    "invariants_touched", "rollout"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^F[0-9]{1,3}$",
+      "description": "Stable identifier, e.g. F1. Never reused, never renumbered."
+    },
+    "title": { "type": "string", "minLength": 6, "maxLength": 90 },
+    "epic": {
+      "type": "string",
+      "enum": [
+        "data-integrity", "statistical-validity", "risk-and-guardrails",
+        "execution-quality", "reporting-and-attribution", "platform-and-ci",
+        "portfolio-mechanics"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "proposed", "researching", "groomed", "ready",
+        "in_progress", "in_rollout", "done", "parked", "rejected"
+      ],
+      "description": "Lifecycle state. See product/PROCESS.md for the state machine and the Definition of Ready/Done gates."
+    },
+    "owner_role": {
+      "type": "string",
+      "enum": ["product_owner", "data_scientist", "chief_engineer", "algo_trader"]
+    },
+    "problem": {
+      "type": "string",
+      "minLength": 20,
+      "description": "The user/desk problem in one or two sentences. Not the solution."
+    },
+    "hypothesis": {
+      "type": "string",
+      "minLength": 20,
+      "description": "If we build this, we expect <measurable change>. Stated so it can be falsified."
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Why we believe the problem is real. At least one item. Grounded in repo files or cited literature — no assertion without a source.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "source", "confidence"],
+        "properties": {
+          "claim": { "type": "string", "minLength": 10 },
+          "source": {
+            "type": "string",
+            "minLength": 3,
+            "description": "A repo path (e.g. HANDOFF.md, trading_algo/execution_ibkr.py) or a citation."
+          },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "role_reviews": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "All four roles must weigh in before an item can leave 'groomed'. This is the critique the request asked for, made structural.",
+      "required": ["product_owner", "data_scientist", "chief_engineer", "algo_trader"],
+      "properties": {
+        "product_owner": { "$ref": "#/$defs/review" },
+        "data_scientist": { "$ref": "#/$defs/review" },
+        "chief_engineer": { "$ref": "#/$defs/review" },
+        "algo_trader": { "$ref": "#/$defs/review" }
+      }
+    },
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "RICE. score is derived: reach * impact * confidence / effort. The validator recomputes and checks it.",
+      "required": ["reach", "impact", "confidence", "effort", "score"],
+      "properties": {
+        "reach": { "type": "number", "minimum": 1, "maximum": 10, "description": "How many books/sleeves/decisions this touches (1-10)." },
+        "impact": { "type": "number", "enum": [0.25, 0.5, 1, 2, 3], "description": "Massive=3, High=2, Medium=1, Low=0.5, Minimal=0.25." },
+        "confidence": { "type": "number", "enum": [0.5, 0.8, 1.0], "description": "Low=0.5, Medium=0.8, High=1.0." },
+        "effort": { "type": "number", "minimum": 0.5, "maximum": 10, "description": "Person-weeks (S~1, M~3, L~6)." },
+        "score": { "type": "number", "minimum": 0 }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Binary, testable conditions. An item is only 'done' when every criterion is met and, where measurable=true, backed by a metric or test.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement", "measurable"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^AC[0-9]{1,2}$" },
+          "statement": { "type": "string", "minLength": 12 },
+          "measurable": {
+            "type": "boolean",
+            "description": "True if backed by a numeric threshold or an automated test/assertion."
+          },
+          "metric": {
+            "type": "string",
+            "description": "Required when measurable=true: the threshold or test, e.g. 'PBO < 0.30' or 'tests/test_data_quality.py green'."
+          }
+        }
+      }
+    },
+    "invariants_touched": {
+      "type": "array",
+      "description": "Which CLAUDE.md invariants this work risks. Empty array means it demonstrably touches none. See product/PROCESS.md for the mapping.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "1-no-lookahead", "2-costs-always-on", "3-one-weight-function",
+          "4-whole-shares", "5-synthetic-is-test-only", "6-local-currency", "none"
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "Ids of items that must ship first.",
+      "items": { "type": "string", "pattern": "^F[0-9]{1,3}$" }
+    },
+    "rollout": { "$ref": "https://trading-algo/product/schema/rollout.schema.json" }
+  },
+  "$defs": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "notes"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["strong_yes", "yes", "maybe", "no"]
+        },
+        "notes": { "type": "string", "minLength": 12 },
+        "concern": {
+          "type": "string",
+          "description": "The single biggest reservation from this role's lens, if any."
+        }
+      }
+    }
+  }
+}
