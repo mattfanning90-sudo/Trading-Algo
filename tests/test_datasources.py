@@ -55,6 +55,32 @@ def test_extra_panel_adds_feature_columns():
     assert list(panel.index.names) == ["date", "ticker"]
 
 
+def test_gdelt_timeline_parser():
+    raw = (b'{"timeline":[{"series":"Average Tone","data":['
+           b'{"date":"2018-03-01T00:00:00Z","value":1.5},'
+           b'{"date":"2018-03-02T00:00:00Z","value":-0.7}]}]}')
+    df = ds.NewsSentiment._parse_timeline(raw, "sentiment")
+    assert list(df.columns) == ["known_date", "sentiment"]
+    assert len(df) == 2 and df["sentiment"].iloc[0] == 1.5
+    # malformed input degrades to empty, never raises
+    assert ds.NewsSentiment._parse_timeline(b"not json", "sentiment").empty
+
+
+def test_sparse_altdata_does_not_shrink_panel():
+    prices = _prices()
+    reg = get_region("US")
+    _, idx = data.synthetic_region(reg)
+    core = feat.build_feature_panel(prices, idx)                       # price-only
+    # a single sentiment observation for one name on one date
+    d = prices.index[400]
+    sparse = pd.DataFrame({"known_date": [d], "ticker": [prices.columns[0]], "sentiment": [0.9]})
+    extra = ds.asof_panel(sparse, prices.index)
+    full = feat.build_feature_panel(prices, idx, extra=extra)
+    assert len(full) == len(core)                                     # sparse feed kept every row
+    assert "sentiment" in full.columns
+    assert (full["sentiment"].fillna(0) == full["sentiment"]).all()   # missing filled neutral (0)
+
+
 def test_pipeline_runs_with_altdata():
     reg = get_region("US")
     prices, idx = data.synthetic_region(reg)

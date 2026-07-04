@@ -53,18 +53,22 @@ def build_feature_panel(prices: pd.DataFrame, index_prices: pd.Series,
     cols = {k: _cross_section_z(v).stack() for k, v in wide.items()}
     panel = pd.concat(cols, axis=1)[FEATURES]
     panel.index.names = ["date", "ticker"]
+    panel = panel.dropna()          # rows must have ALL core price features
 
     if extra is not None and not extra.empty:
-        # z-score each alt-data column cross-sectionally per date, then append
+        # z-score each alt-data column cross-sectionally per date, then append. Alt-data
+        # is often SPARSE (fundamentals filed quarterly; sentiment only where covered and
+        # only ~2017+ for GDELT), so fill missing with 0 = neutral-after-z-score rather
+        # than dropping the row — a sparse feed must not shrink the whole dataset.
         ez = {}
         for c in extra.columns:
-            wide_c = extra[c].unstack("ticker")
-            ez[c] = _cross_section_z(wide_c).stack()
+            ez[c] = _cross_section_z(extra[c].unstack("ticker")).stack()
         extra_z = pd.concat(ez, axis=1)
         extra_z.index.names = ["date", "ticker"]
         panel = panel.join(extra_z, how="left")
+        panel[list(extra.columns)] = panel[list(extra.columns)].fillna(0.0)
 
-    return panel.dropna()
+    return panel
 
 
 def feature_names(extra: pd.DataFrame | None = None) -> list[str]:

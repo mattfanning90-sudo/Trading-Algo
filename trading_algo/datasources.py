@@ -26,6 +26,7 @@ import io
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 
 import numpy as np
@@ -218,13 +219,63 @@ class OptionIV(FeatureSource):
 # ---------------------------------------------------------------------------
 
 class NewsSentiment(FeatureSource):
-    """Sentiment features: net tone, buzz/volume, tone momentum. No free clean history —
-    wire GDELT (free-ish tone), Alpha-Vantage news-sentiment, or RavenPack into
-    `observations`; `synthetic` runs the pipeline offline meanwhile."""
-    name = "news_sentiment"
+    """News sentiment from **GDELT** (free, no key): per-company daily average news TONE
+    and coverage VOLUME (buzz), via the DOC 2.0 timeline API.
 
-    def observations(self, tickers, start, end):
-        return pd.DataFrame()
+    Honest limits: GDELT DOC 2.0 starts ~2017 (short history), matches companies by NAME
+    (from SEC `company_tickers`, so current filers only — delisted names get no sentiment,
+    filled neutral downstream), and the API is rate-limited (so `max_names` is capped). It
+    is a genuine free differentiated-data test, not a full survivorship-clean feed."""
+    name = "news_sentiment"
+    _TITLES_URL = "https://www.sec.gov/files/company_tickers.json"
+    _API = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+    def _titles(self) -> dict[str, str]:
+        try:
+            data = json.loads(_http_get(self._TITLES_URL))
+            return {row["ticker"].upper(): row["title"] for row in data.values()}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _parse_timeline(raw: bytes, col: str) -> pd.DataFrame:
+        """Parse a GDELT DOC-2.0 timeline JSON into [known_date, <col>]."""
+        try:
+            series = json.loads(raw)["timeline"][0]["data"]
+        except Exception:
+            return pd.DataFrame(columns=["known_date", col])
+        rows = [{"known_date": d["date"], col: d["value"]} for d in series if "date" in d]
+        return pd.DataFrame(rows)
+
+    def _timeline(self, name: str, mode: str, start: str, end: str, col: str) -> pd.DataFrame:
+        sd = pd.to_datetime(max(start, "2017-01-01")).strftime("%Y%m%d000000")
+        ed = pd.to_datetime(end).strftime("%Y%m%d000000")
+        q = urllib.parse.quote(f'"{name}"')
+        url = f"{self._API}?query={q}&mode={mode}&format=json&startdatetime={sd}&enddatetime={ed}"
+        try:
+            df = self._parse_timeline(_http_get(url), col)
+            time.sleep(0.3)                      # be polite to GDELT
+            return df
+        except Exception:
+            return pd.DataFrame(columns=["known_date", col])
+
+    def observations(self, tickers, start, end, max_names: int = 120):
+        titles = self._titles()
+        if not titles:
+            return pd.DataFrame()
+        out = []
+        for t in tickers[:max_names]:
+            nm = titles.get(t.upper())
+            if not nm:
+                continue
+            tone = self._timeline(nm, "timelinetone", start, end, "sentiment")
+            vol = self._timeline(nm, "timelinevol", start, end, "buzz")
+            if tone.empty:
+                continue
+            m = tone.merge(vol, on="known_date", how="left") if not vol.empty else tone
+            m["ticker"] = t
+            out.append(m)
+        return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
     def synthetic(self, tickers, start, end):
         rng = np.random.default_rng(33)
