@@ -71,11 +71,13 @@ def build_report(synthetic: bool, point_in_time: bool = False,
     feats = mlp.feature_cols(ds)
     w(f"OOS periods: {base['n_periods']} monthly. {len(feats)} features: {', '.join(feats)}.\n")
 
-    w("| ridge α | CAGR | Vol | Sharpe | hit rate |")
+    w("The **market-neutral long/short** Sharpe is the honest skill metric (beta stripped); "
+      "long-only is shown only as a beta/construction reference.\n")
+    w("| ridge α | L/S Sharpe (SKILL) | L/S CAGR@10% | long-only Sharpe (beta) | hit rate |")
     w("|---|---|---|---|---|")
     for a in grid:
-        m = runs[a]["metrics"]
-        w(f"| {a:g} | {m['CAGR']:.1%} | {m['Vol']:.1%} | {m['Sharpe']:.2f} | {m['hit_rate']:.0%} |")
+        m, ml = runs[a]["metrics"], runs[a]["ls_metrics"]
+        w(f"| {a:g} | **{ml['Sharpe']:.2f}** | {ml['CAGR']:.1%} | {m['Sharpe']:.2f} | {ml['hit_rate']:.0%} |")
 
     sharpes = [runs[a]["metrics"]["Sharpe"] for a in grid]
     dsr = robust.deflated_sharpe_ratio(r, sharpes, periods_per_year=12)
@@ -99,22 +101,20 @@ def build_report(synthetic: bool, point_in_time: bool = False,
         w(f"**Feature loadings** (whole-sample ridge, descriptive): {loads}\n")
 
     w("## Honest read\n")
-    s = base["metrics"]["Sharpe"]
-    w(f"- Baseline OOS Sharpe **{s:.2f}** (OOS IC {base['ic']:.3f}) vs the existing book's ~0.28.")
-    if s > 0.5 and clean:
-        w("- The Sharpe is high but the label-shuffle null is clean, so it isn't a hard "
-          "leak. Treat with suspicion anyway: a long-only, always-invested top-N by a "
-          "flexible model on the delisted-inclusive universe can be *flattered* by the "
-          "deterministic −30% delisting mark (avoiding identifiable losers) and by having "
-          "no regime/vol de-risking — a construction difference from the book, not proven "
-          "alpha. Reconcile costs + construction before trusting it.")
-    elif not clean:
-        w("- ⚠️ The null IC is non-zero → there is leakage in the pipeline. The headline "
-          "number is an artefact; fix the leak (feature/label timing, embargo) before any "
-          "other conclusion.")
-    w("- The durable win here is the *pipeline*: leakage-controlled (purged/embargoed "
-      "walk-forward + shuffle null), deflated, and ready to ingest real data as new feature "
-      "columns with zero downstream change (docs/research/PREDICTIVE_MODEL.md).")
+    s_ls = base["ls_metrics"]["Sharpe"]
+    s_lo = base["metrics"]["Sharpe"]
+    w(f"- **Market-neutral skill Sharpe {s_ls:.2f}** (OOS IC {base['ic']:.3f}) — the honest number. "
+      f"Long-only was {s_lo:.2f}, but that is beta/construction, not skill.")
+    if not clean:
+        w("- ⚠️ Null IC non-zero → leakage. Fix the feature/label timing before trusting anything.")
+    elif abs(s_ls) < 0.3:
+        w("- On price+fundamentals the market-neutral edge is ≈ 0 — the model can't rank next "
+          "month's winners (IC ~ noise). Consistent with everything: no cross-sectional alpha "
+          "in this data. The flattering long-only Sharpe was pure beta on the small-cap/delisted "
+          "universe with no vol-targeting — now correctly stripped out.")
+    w("- The durable win is the *pipeline*: market-neutral, leakage-controlled (purged walk-"
+      "forward + shuffle null), deflated, ready to ingest new data as columns "
+      "(docs/research/PREDICTIVE_MODEL.md).")
     return "\n".join(L)
 
 

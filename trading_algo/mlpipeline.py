@@ -119,13 +119,17 @@ def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
                     p: StrategyParams = DEFAULT_PARAMS, horizon: int = 21,
                     rebalance: str = "ME", top_n: int = 20, n_folds: int = 5,
                     embargo: int = 1, alpha: float = 1.0, cost_bps: float = 10.0,
-                    extra: pd.DataFrame | None = None,
-                    shuffle_seed: int | None = None) -> dict:
-    """Walk-forward backtest of the ridge predictor: each as-of date, long the top-N
-    names by OOS score (equal weight), realise the next-period return, charge turnover
-    cost. Returns a non-overlapping per-period return series + the OOS scores + the OOS
-    information coefficient. `shuffle_seed` permutes the TRAINING labels within each date
-    (a leakage null: a leak-free pipeline then produces IC ≈ 0)."""
+                    extra: pd.DataFrame | None = None, shuffle_seed: int | None = None,
+                    ls_frac: float = 0.2, target_vol: float = 0.10) -> dict:
+    """Walk-forward backtest of the ridge predictor. Two books each as-of date:
+
+    - **long-only** top-N (reference; dominated by beta/construction), and
+    - **long/short** market-neutral: long the top `ls_frac`, short the bottom `ls_frac`,
+      dollar-neutral. This strips market beta, so its Sharpe measures *predictive skill*
+      — the honest number. The L/S series is vol-targeted to `target_vol` (Sharpe is
+      unchanged; only the CAGR becomes comparable).
+
+    `shuffle_seed` permutes TRAINING labels within each date (leakage null → IC ≈ 0)."""
     df = build_dataset(prices, index_prices, p, horizon, rebalance, extra=extra)
     if df.empty:
         return {"returns": pd.Series(dtype=float), "scores": df, "n_periods": 0}
@@ -139,16 +143,35 @@ def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
     scores = fit_predict_walk_forward(train_df, n_folds, embargo, alpha)
     if scores.empty:
         return {"returns": pd.Series(dtype=float), "scores": scores, "n_periods": 0}
-    rows, prev = {}, set()
+
+    def _leg(names, date):
+        vals = fwd.reindex([(date, t) for t in names]).dropna()
+        return float(vals.mean()) if len(vals) else 0.0
+
+    lo_rows, ls_rows = {}, {}
+    prev_lo, prev_l, prev_s = set(), set(), set()
     for date, grp in scores.groupby(level="date"):
-        picks = list(grp.nlargest(min(top_n, len(grp))).index.get_level_values("ticker"))
-        realised = np.nanmean([fwd.get((date, t), np.nan) for t in picks]) if picks else 0.0
-        turnover = len(set(picks) ^ prev) / max(len(picks), 1)      # symmetric-diff fraction
-        rows[date] = (realised if realised == realised else 0.0) - turnover * cost_bps / 1e4
-        prev = set(picks)
-    r = pd.Series(rows).sort_index()
-    return {"returns": r, "scores": scores, "n_periods": len(r),
-            "ic": oos_ic(scores, fwd), "metrics": summarise(r)}
+        g = grp.droplevel("date")
+        k = max(int(len(g) * ls_frac), 1)
+        longs = list(g.nlargest(k).index)
+        shorts = list(g.nsmallest(k).index)
+        lo = list(g.nlargest(min(top_n, len(g))).index)
+        # long-only (reference)
+        to_lo = len(set(lo) ^ prev_lo) / max(len(lo), 1)
+        lo_rows[date] = _leg(lo, date) - to_lo * cost_bps / 1e4
+        prev_lo = set(lo)
+        # long/short market-neutral (skill)
+        to_ls = (len(set(longs) ^ prev_l) + len(set(shorts) ^ prev_s)) / max(2 * k, 1)
+        ls_rows[date] = (_leg(longs, date) - _leg(shorts, date)) - to_ls * cost_bps / 1e4
+        prev_l, prev_s = set(longs), set(shorts)
+
+    lo = pd.Series(lo_rows).sort_index()
+    ls = pd.Series(ls_rows).sort_index()
+    # vol-target the L/S book (Sharpe-invariant; makes CAGR comparable)
+    realised = ls.std() * np.sqrt(_PPY)
+    ls_vt = ls * (target_vol / realised) if realised > 0 else ls
+    return {"returns": lo, "ls_returns": ls_vt, "scores": scores, "n_periods": len(lo),
+            "ic": oos_ic(scores, fwd), "metrics": summarise(lo), "ls_metrics": summarise(ls_vt)}
 
 
 def summarise(r: pd.Series) -> dict:
