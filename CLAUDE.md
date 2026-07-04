@@ -100,6 +100,13 @@ Add one entry to `REGIONS` in `regions.py` (universe in `universes.py`, plus
 index/currency/fees/calendar/routing) and include its key in
 `config.ALLOCATIONS`. Everything else is parameterised.
 
+## Specs (`/spec`)
+Goals and acceptance criteria for a piece of work live in
+`docs/specs/<slug>.md`, all on one schema (`.claude/skills/spec/template.md`).
+`/spec <topic>` drafts one collaboratively (Claude drafts, user confirms);
+`/spec check <slug>` audits its acceptance criteria against the code.
+`docs/specs/_example.md` is a worked example, not a real spec.
+
 ## Environment notes
 - Fresh containers do NOT ship numpy/pandas/yfinance — `pip install -r
   requirements.txt` first (a SessionStart hook in `.claude/settings.json` does
