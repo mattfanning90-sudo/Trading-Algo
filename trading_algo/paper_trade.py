@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,52 @@ def load_state(account: str) -> dict:
 def save_state(account: str, state: dict) -> None:
     with open(_state_file(account), "w") as f:
         json.dump(state, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# P&L reconstruction from the fills log
+# ---------------------------------------------------------------------------
+def replay_fills(trades: list[dict]) -> tuple[dict[tuple, float], dict[str, float]]:
+    """Replay the chronological fills log with average-cost accounting.
+
+    Returns ``(basis, realized)`` where
+      * ``basis``    = ``{(region, ticker): avg_cost}`` for names still held
+        (net quantity > 0), and
+      * ``realized`` = ``{region: cumulative price-only realised P&L}``.
+
+    A buy moves the average cost; a sell realises ``(fill − avg)·qty`` and leaves
+    the average unchanged; a full exit clears it. This mirrors, exactly, the
+    incremental accounting `rebalance_sleeve` does — so it can rebuild the same
+    numbers for positions that predate cost-basis tracking (whose sells would
+    otherwise book $0, because the missing basis fell back to the sell price).
+    """
+    held: dict[tuple, list] = {}          # key -> [qty, avg_cost]
+    realized: dict[str, float] = {}
+    for t in trades:
+        key = (t["region"], t["ticker"])
+        qty = int(t["shares"])
+        fill = float(t["fill"])
+        h = held.setdefault(key, [0, 0.0])
+        if t["side"] == "BUY":
+            new_qty = h[0] + qty
+            h[1] = (h[0] * h[1] + qty * fill) / new_qty if new_qty else fill
+            h[0] = new_qty
+        else:  # SELL
+            sold = min(qty, h[0])
+            if sold > 0:
+                realized[t["region"]] = realized.get(t["region"], 0.0) + (fill - h[1]) * sold
+            h[0] = max(0, h[0] - qty)
+            if h[0] == 0:
+                h[1] = 0.0
+    basis = {k: v[1] for k, v in held.items() if v[0] > 0}
+    return basis, realized
+
+
+def reconstruct_basis(trades: list[dict]) -> dict[tuple, float]:
+    """Average-cost basis per ``(region, ticker)`` for currently-held names,
+    rebuilt from the fills log (see `replay_fills`)."""
+    basis, _ = replay_fills(trades)
+    return basis
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +172,7 @@ def init_account(account: str, capital: float, synthetic: bool,
             "cost_basis": {},
             "realized_pnl": 0.0,
             "last_rebalance_month": None,
+            "last_rebalance_date": None,
         }
     state = {
         "account": account,
@@ -173,6 +221,19 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         if price and price == price and price > 0:
             desired[t] = int((equity * w) / price)
 
+    # Backfill cost basis for any held name that lacks one (positions opened
+    # before cost-basis tracking existed). Without this a subsequent sell falls
+    # back to the sell price and books $0 realised P&L — silently hiding the
+    # gain/loss. Reconstruct from the fills log before we trade.
+    cb = sleeve.setdefault("cost_basis", {})
+    missing = [t for t in sleeve["positions"] if t not in cb]
+    if missing:
+        basis = reconstruct_basis(trade_log)
+        for t in missing:
+            b = basis.get((region.key, t))
+            if b:
+                cb[t] = float(b)
+
     for t in sorted(set(sleeve["positions"]) | set(desired)):
         cur = sleeve["positions"].get(t, 0)
         tgt = desired.get(t, 0)
@@ -189,7 +250,6 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         fee = fees.commission(region, notional)
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
         sleeve["cash"] -= delta * fill + fee + duty
-        cb = sleeve.setdefault("cost_basis", {})
         if delta < 0:   # realised P&L on shares sold (average-cost basis)
             sleeve["realized_pnl"] = (sleeve.get("realized_pnl", 0.0)
                                       + (fill - cb.get(t, fill)) * abs(delta))
@@ -215,6 +275,28 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
 # ---------------------------------------------------------------------------
 # Daily run
 # ---------------------------------------------------------------------------
+def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
+    """Whether a sleeve should rebalance on this run.
+
+    Fires once per calendar month (mirroring the backtest's month-end signal),
+    but only if at least `cfg.MIN_REBALANCE_GAP_DAYS` have elapsed since the last
+    rebalance — so a book funded late in a month isn't churned days later on the
+    1st. When the gap blocks it, `last_rebalance_month` is left untouched so the
+    next run re-checks and trades as soon as the gap clears.
+    """
+    if sleeve.get("last_rebalance_month") == this_month:
+        return False
+    gap = cfg.MIN_REBALANCE_GAP_DAYS
+    last = sleeve.get("last_rebalance_date")
+    if gap and last:
+        try:
+            if (date.fromisoformat(today) - date.fromisoformat(last)).days < gap:
+                return False
+        except (ValueError, TypeError):
+            pass
+    return True
+
+
 def run_daily(account: str, synthetic: bool) -> None:
     state = load_state(account)
     snap = fx_snapshot(synthetic)
@@ -245,8 +327,9 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
                 rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
                                  px_today, today, state["trades"])
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
-        elif sleeve["last_rebalance_month"] != this_month:
+        elif _should_rebalance(sleeve, today, this_month):
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
@@ -256,6 +339,7 @@ def run_daily(account: str, synthetic: bool) -> None:
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
                 rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
 
         eq_local = sleeve_equity_local(sleeve, px_today)
@@ -331,6 +415,27 @@ def status(account: str) -> None:
             print("        (all cash)")
 
 
+def repair_pnl(account: str) -> None:
+    """One-time fix: rebuild `cost_basis` and `realized_pnl` from the fills log.
+
+    State written before cost-basis tracking left legacy positions with no basis,
+    so their sells booked $0 realised P&L and their open positions showed $0
+    unrealised. This replays the whole trade history (average-cost) to restore
+    both. Idempotent — safe to re-run."""
+    state = load_state(account)
+    basis, realized = replay_fills(state["trades"])
+    for k, sleeve in state["sleeves"].items():
+        cb = {t: float(basis[(k, t)]) for t in sleeve["positions"] if (k, t) in basis}
+        sleeve["cost_basis"] = cb
+        sleeve["realized_pnl"] = round(float(realized.get(k, 0.0)), 6)
+    save_state(account, state)
+    print(f"Repaired '{account}' from {len(state['trades'])} fills:")
+    for k, sleeve in state["sleeves"].items():
+        n_pos = len(sleeve["positions"])
+        print(f"  [{k}] realized_pnl {sleeve['realized_pnl']:+,.2f} {sleeve['currency']}"
+              f"   basis for {len(sleeve['cost_basis'])}/{n_pos} positions")
+
+
 def compare(accounts: list[str]) -> None:
     print(f"{'Account':<10} {'Capital':>14} {'Equity':>14} {'Return':>9} {'Trades':>7}")
     for name in accounts:
@@ -355,6 +460,8 @@ def main(argv: list[str] | None = None) -> None:
                          "(e.g. --regions US). Default: all three.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--force-rebalance", action="store_true")
+    ap.add_argument("--repair-pnl", action="store_true",
+                    help="rebuild cost_basis/realized_pnl from the fills log")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
     args = ap.parse_args(argv)
@@ -366,10 +473,13 @@ def main(argv: list[str] | None = None) -> None:
         init_account(args.account, args.capital, args.synthetic, allocations)
     elif args.status:
         status(args.account)
+    elif args.repair_pnl:
+        repair_pnl(args.account)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():
             s["last_rebalance_month"] = None
+            s["last_rebalance_date"] = None   # bypass the min-gap guard
         save_state(args.account, state)
         run_daily(args.account, args.synthetic)
     else:

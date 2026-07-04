@@ -159,9 +159,17 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # Iterate the account's OWN regions (a small account may trade only one).
     regions = list(state.get("allocations") or cfg.ALLOCATIONS)
 
+    # Realised P&L and open-position cost basis both come from the fills log so
+    # the OVERVIEW tiles and the closed-trades ledger can't disagree, and so
+    # positions opened before cost-basis tracking still show a real unrealised
+    # P&L (their stored basis may be missing).
+    closed = closed_trades(state["trades"], snap_fx)
+    basis_fallback = paper_trade.reconstruct_basis(state["trades"])
+
     sleeves_out, as_of = [], ""
     total_base = total_cash_base = total_unrealized_base = 0.0
-    total_invested_base = total_realized_base = 0.0
+    total_invested_base = 0.0
+    total_realized_base = closed["net_base"]   # FIFO round-trips, net of costs
     index_by_region: dict[str, tuple] = {}
     n_positions = 0
     history: dict[str, dict] = {}
@@ -195,7 +203,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             prev_price = _safe_price(px_prev, t)
             val_local = sh * price
             invested_local += val_local
-            avg = float(cost_basis.get(t) or price)         # fallback: no P&L
+            avg = float(cost_basis.get(t) or basis_fallback.get((k, t)) or price)
             day_change = (price / prev_price - 1.0) if prev_price else 0.0
             unrl_pct = (price / avg - 1.0) if avg else 0.0
             unrl_base = sh * (price - avg) * m
@@ -218,7 +226,6 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         total_base += eq_base
         total_cash_base += cash_local * m
         total_invested_base += invested_local * m
-        total_realized_base += float(sleeve.get("realized_pnl", 0.0)) * m
         index_by_region[k] = (index_px, region.currency)
         n_positions += len(positions)
         sleeves_out.append({
@@ -283,7 +290,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "index_state": index_state,
         "history": history,
         "blotter": blotter,
-        "closed": closed_trades(state["trades"], snap_fx),
+        "closed": closed,
         "stamp_duty": [{"currency": c, "amount": round(v, 2)} for c, v in stamp.items()],
         "account": account,
         "base_currency": state.get("base_currency", cfg.BASE_CURRENCY),
