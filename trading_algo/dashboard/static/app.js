@@ -23,7 +23,7 @@ const S = {
   tf: {},                   // per-account timeframe key
   tfOpen: false,
   ta: { ema: true, boll: false, don: false },
-  taPane: null,
+  taPanes: {},              // in-chart oscillator sub-panes: {RSI, MOMENTUM, ADX}
   candleIdx: null,
   meta: null,
   overview: null,
@@ -1320,7 +1320,7 @@ function chartSectionHTML(page) {
 
   /* ---- TA overlays ---- */
   const ta = S.ta;
-  const pane = S.taPane;
+  const panes = S.taPanes || {};
   const closes = cBars.map(b => b.c);
   const cxAt = i => ((i + 0.5) * cbw).toFixed(1);
   const lineOf = (arr, from) => arr.map((v, j) => cxAt(from + j) + ',' + CY(v).toFixed(1)).join(' ');
@@ -1365,57 +1365,71 @@ function chartSectionHTML(page) {
     { key: 'boll', label: 'BOLLINGER ±2σ', dot: '#9db5a0' },
     { key: 'don', label: 'DONCHIAN ' + wD, dot: '#8a7433' },
   ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" data-tip="${c.key}" style="position:relative;display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#262626'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}<span style="color:#3d543f;margin-left:1px">ⓘ</span></span>`).join('\n');
-  const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k =>
-    `<span class="hv-dim" data-act="pane" data-arg="${k}" data-tip="${k}" style="position:relative;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#262626'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k} <span style="color:#3d543f">ⓘ</span></span>`).join('\n');
+  const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k => {
+    const on = !!panes[k];
+    return `<span class="hv-dim" data-act="pane" data-arg="${k}" data-tip="${k}" style="position:relative;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${on ? '#2a4a2c' : '#262626'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k} <span style="color:#3d543f">ⓘ</span></span>`;
+  }).join('\n');
 
-  /* ---- indicator pane ---- */
-  let paneHtml = '';
-  if (pane === 'RSI') {
-    const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
-    let g = 0, l = 0;
-    const rsis = [];
-    for (let i = 1; i < n2; i++) {
-      const ch = closes[i] - closes[i - 1];
-      g = (g * (p - 1) + Math.max(ch, 0)) / p;
-      l = (l * (p - 1) + Math.max(-ch, 0)) / p;
-      rsis.push(l === 0 ? 100 : 100 - 100 / (1 + g / l));
+  /* ---- in-chart indicator sub-panes (docked under price, shared x-axis) ---- */
+  const paneSub = (name) => {
+    if (name === 'RSI') {
+      const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
+      let g = 0, l = 0;
+      const rsis = [];
+      for (let i = 1; i < n2; i++) {
+        const ch = closes[i] - closes[i - 1];
+        g = (g * (p - 1) + Math.max(ch, 0)) / p;
+        l = (l * (p - 1) + Math.max(-ch, 0)) / p;
+        rsis.push(l === 0 ? 100 : 100 - 100 / (1 + g / l));
+      }
+      const last = rsis[rsis.length - 1];
+      const PY = v => 8 + (1 - v / 100) * 64;
+      return _paneHTML('RSI(' + p + ')', last.toFixed(1),
+        (last >= 70 ? 'OVERBOUGHT' : last <= 30 ? 'OVERSOLD' : 'NEUTRAL') + ' · 70 ┄ · 30 ┄',
+        PY(70).toFixed(1), PY(50).toFixed(1), PY(30).toFixed(1),
+        rsis.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
+        last >= 70 ? R : last <= 30 ? G : '#c9e8cc');
     }
-    const PY = v => 8 + (1 - v / 100) * 64;
-    paneHtml = _paneHTML('RSI(' + p + ')', rsis[rsis.length - 1].toFixed(1), '70 OVERBOUGHT ┄ · 30 OVERSOLD ┄',
-      PY(70).toFixed(1), PY(50).toFixed(1), PY(30).toFixed(1),
-      rsis.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '');
-  } else if (pane === 'MOMENTUM') {
-    const w = Math.max(3, Math.min(20, Math.floor(n2 / 3)));
-    const rocs = [];
-    for (let i = w; i < n2; i++) rocs.push((closes[i] / closes[i - w] - 1) * 100);
-    const m = Math.max(...rocs.map(Math.abs), 0.1);
-    const PY = v => 40 - (v / m) * 30;
-    const pts = rocs.map((v, j) => cxAt(w + j) + ',' + PY(v).toFixed(1)).join(' ');
-    const last = rocs[rocs.length - 1];
-    paneHtml = _paneHTML('MOMENTUM · ROC(' + w + ') %', sgn(last, Math.abs(last).toFixed(2) + '%'), 'ZERO LINE CENTRE · RANGE ±' + m.toFixed(1) + '%',
-      PY(m * 0.66).toFixed(1), '40', PY(-m * 0.66).toFixed(1), pts,
-      cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40');
-  } else if (pane === 'ADX') {
-    const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
-    let atr = 0, pd = 0, nd = 0, adx = 0;
-    const adxs = [];
-    for (let i = 1; i < n2; i++) {
-      const b = cBars[i], pb = cBars[i - 1];
-      const tr = Math.max(b.h - b.l, Math.abs(b.h - pb.c), Math.abs(b.l - pb.c));
-      const up = b.h - pb.h, dn = pb.l - b.l;
-      atr = (atr * (p - 1) + tr) / p;
-      pd = (pd * (p - 1) + (up > dn && up > 0 ? up : 0)) / p;
-      nd = (nd * (p - 1) + (dn > up && dn > 0 ? dn : 0)) / p;
-      const pdi = atr ? 100 * pd / atr : 0, ndi = atr ? 100 * nd / atr : 0;
-      const dx = (pdi + ndi) ? 100 * Math.abs(pdi - ndi) / (pdi + ndi) : 0;
-      adx = (adx * (p - 1) + dx) / p;
-      adxs.push(adx);
+    if (name === 'MOMENTUM') {
+      const w = Math.max(3, Math.min(20, Math.floor(n2 / 3)));
+      const rocs = [];
+      for (let i = w; i < n2; i++) rocs.push((closes[i] / closes[i - w] - 1) * 100);
+      const m = Math.max(...rocs.map(Math.abs), 0.1);
+      const PY = v => 40 - (v / m) * 30;
+      const pts = rocs.map((v, j) => cxAt(w + j) + ',' + PY(v).toFixed(1)).join(' ');
+      const last = rocs[rocs.length - 1];
+      return _paneHTML('MOMENTUM · ROC(' + w + ') %', sgn(last, Math.abs(last).toFixed(2) + '%'),
+        (last >= 0 ? 'UP-MOMENTUM' : 'DOWN-MOMENTUM') + ' · ZERO LINE CENTRE',
+        PY(m * 0.66).toFixed(1), '40', PY(-m * 0.66).toFixed(1), pts,
+        cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40', last >= 0 ? G : R);
     }
-    const PY = v => 8 + (1 - Math.min(v, 60) / 60) * 64;
-    paneHtml = _paneHTML('ADX(' + p + ') · TREND STRENGTH', adxs[adxs.length - 1].toFixed(1), '25+ TRENDING ┄ · BELOW 20 RANGING',
-      PY(40).toFixed(1), PY(25).toFixed(1), PY(10).toFixed(1),
-      adxs.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '');
-  }
+    if (name === 'ADX') {
+      const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
+      let atr = 0, pd = 0, nd = 0, adx = 0;
+      const adxs = [];
+      for (let i = 1; i < n2; i++) {
+        const b = cBars[i], pb = cBars[i - 1];
+        const tr = Math.max(b.h - b.l, Math.abs(b.h - pb.c), Math.abs(b.l - pb.c));
+        const up = b.h - pb.h, dn = pb.l - b.l;
+        atr = (atr * (p - 1) + tr) / p;
+        pd = (pd * (p - 1) + (up > dn && up > 0 ? up : 0)) / p;
+        nd = (nd * (p - 1) + (dn > up && dn > 0 ? dn : 0)) / p;
+        const pdi = atr ? 100 * pd / atr : 0, ndi = atr ? 100 * nd / atr : 0;
+        const dx = (pdi + ndi) ? 100 * Math.abs(pdi - ndi) / (pdi + ndi) : 0;
+        adx = (adx * (p - 1) + dx) / p;
+        adxs.push(adx);
+      }
+      const last = adxs[adxs.length - 1];
+      const PY = v => 8 + (1 - Math.min(v, 60) / 60) * 64;
+      return _paneHTML('ADX(' + p + ') · TREND STRENGTH', last.toFixed(1),
+        (last >= 25 ? 'TRENDING' : last < 20 ? 'RANGING' : 'BUILDING') + ' · 25 ┄ · 20 ┄',
+        PY(40).toFixed(1), PY(25).toFixed(1), PY(10).toFixed(1),
+        adxs.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
+        last >= 25 ? G : AMB);
+    }
+    return '';
+  };
+  const panesHtml = ['RSI', 'MOMENTUM', 'ADX'].filter(k => panes[k]).map(paneSub).join('');
 
   /* ---- phases (move breakdown) ---- */
   const barWords = { '1-MIN': 'minute', '60-MIN': 'hour', '4-HR': '4-hour stretch', 'DAILY': 'day', 'WEEKLY': 'week', 'MONTHLY': 'month' };
@@ -1541,6 +1555,7 @@ function chartSectionHTML(page) {
       </svg>
       <div id="candle-pop" style="display:none;position:absolute;top:10px;left:0;width:292px;background:#0d0d0d;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 32px rgba(0,0,0,.8);z-index:70;padding:11px 13px;pointer-events:none"></div>
       </div>
+      ${panesHtml}
       <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px;flex-wrap:wrap">
         <span>${T.label}</span>
         <span>HI <span style="color:#61805f">${cFmt(cHi)}</span></span>
@@ -1552,7 +1567,6 @@ function chartSectionHTML(page) {
         <span style="margin-left:auto;color:#8a7433">${chartSrc}</span>
       </div>
       ${newsPanelHTML(page, selPair)}
-      ${paneHtml}
       <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
         <div style="display:flex;gap:14px;align-items:baseline;font-size:8.5px;letter-spacing:.1em;margin-bottom:9px"><span style="color:#eaffec;letter-spacing:.14em">■ MOVE BREAKDOWN — WHAT HAPPENED &amp; WHY</span><span style="color:#61805f">${esc(phaseSummary)}</span></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
@@ -1569,16 +1583,17 @@ function chartSectionHTML(page) {
   </div>`;
 }
 
-function _paneHTML(label, val, hint, y1, y2, y3, pts, area) {
+function _paneHTML(label, val, hint, y1, y2, y3, pts, area, valColor) {
+  const vc = valColor || '#e3b341';
   return `
-  <div style="border-top:1px solid #1a1a1a;padding-top:8px">
-    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:5px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:#e3b341">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
-    <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:80px;display:block;margin-bottom:8px">
+  <div style="border-top:1px solid #1a1a1a;padding-top:6px;margin-top:2px">
+    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:4px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:${vc};font-weight:600">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
+    <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:70px;display:block">
       <line x1="0" y1="${y1}" x2="1200" y2="${y1}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <line x1="0" y1="${y2}" x2="1200" y2="${y2}" stroke="#1a1a1a" stroke-width="1"></line>
       <line x1="0" y1="${y3}" x2="1200" y2="${y3}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <polygon points="${area}" fill="rgba(201,232,204,0.06)"></polygon>
-      <polyline points="${pts}" fill="none" stroke="#c9e8cc" stroke-width="1.3" stroke-linejoin="round"></polyline>
+      <polyline points="${pts}" fill="none" stroke="${vc}" stroke-width="1.3" stroke-linejoin="round"></polyline>
     </svg>
   </div>`;
 }
@@ -2273,7 +2288,7 @@ document.addEventListener('click', async e => {
   if (act === 'tf') { S.tf[S.account] = arg; S.tfOpen = false; S.candleIdx = null; render(); return; }
   if (act === 'pair') { S.selPair[S.account] = arg; S.candleIdx = null; render(); return; }
   if (act === 'ta') { S.ta[arg] = !S.ta[arg]; render(); return; }
-  if (act === 'pane') { S.taPane = S.taPane === arg ? null : arg; render(); return; }
+  if (act === 'pane') { S.taPanes = { ...S.taPanes, [arg]: !S.taPanes[arg] }; render(); return; }
   if (act === 'zoom') { stepZoom(arg); return; }
 });
 
