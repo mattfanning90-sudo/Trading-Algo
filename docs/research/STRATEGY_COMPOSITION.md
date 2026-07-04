@@ -148,3 +148,25 @@ frontier (AUD, 2007–2026, no leverage, no bias; blends of SPY-in-AUD with the 
 
 The report prints this frontier on every run (`multistrat_report`), so the return/drawdown
 tradeoff is always explicit and the target is a deliberate risk choice — never leverage or bias.
+
+## Round 4 — 93 strategies through the investment council
+
+A multi-agent battery generated **93 concrete strategy variants** across 8 design-space
+slices and ran every one through the `investment-council` agent: **10 STRONG-TEST, 69
+WORTH-TESTING, 14 NO-GO, 0 known-fails re-proposed**. The council's honest verdict up
+front: *none likely to meaningfully raise risk-adjusted return; residual momentum the only
+plausible genuine alpha; the durable 10% stays asset allocation.* The STRONG-TEST survivors
+were then **real-backtested** (de-biased, AUD, full gauntlet):
+
+| Survivor tested | Combined Sharpe | vs baseline 0.28 | Verdict |
+|---|---|---|---|
+| **Residual (market-neutral) momentum** (`--with-resmom`) | 0.27 (MaxDD −23.2%, DSR 98.8%, PBO 0%) | −0.01 | **Wash** — the best genuine-alpha pick did not help; resmom equity sleeve no better (0.14 vs 0.15) |
+| **1/N equal-weight control** (`--method equal`) | 0.20 | −0.08 | ERC **beats** the naive floor → the combiner earns its keep |
+| **Asymmetric vol-target** (de-risk only, gross≤1.0) | ~0.28 at lower vol | ~flat | A risk-dial operating point, not an edge |
+
+**Conclusion after 93 tested + 5 real-backtested survivors:** nothing beats the existing
+book's ~0.28 Sharpe / ~6.5% CAGR. This is the strongest confirmation yet of the project's
+thesis — **there is no hidden signal edge in this data; the edge is diversification + risk
+management, and higher CAGR is an allocation choice (70/30 → ~10.5%), not a new signal.**
+Residual momentum is committed but OFF by default (opt-in `--with-resmom`), joining
+value/carry/BAB in the "built, tested, didn't beat the book" set.
