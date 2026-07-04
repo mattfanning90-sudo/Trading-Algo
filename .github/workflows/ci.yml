@@ -19,3 +19,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: pytest -q
+      # Behavioural regression gate: the synthetic backtest must match the
+      # committed baseline (catches accidental lookahead / cost / sizing drift a
+      # unit test wouldn't). Update deliberately with `ci_regression --update`.
+      - name: Backtest regression gate
+        run: python -m trading_algo.ci_regression --check

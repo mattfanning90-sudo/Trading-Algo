@@ -7,13 +7,36 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from . import config as cfg
-from . import constituents, data
+from . import constituents, data, manifest
 from .backtest import run_backtest
 from .portfolio_backtest import run_portfolio_backtest
 from .regions import get_region
 from .strategy import compute_targets
+
+# Where run manifests + the experiment ledger live (env override for CI).
+_STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
+_LEDGER = os.path.join(_STATE_DIR, "experiment_ledger.jsonl")
+
+
+def _emit_manifest(kind, params, regions, metrics, synthetic, point_in_time,
+                   data_range) -> None:
+    """Record a reproducible manifest for this run and append it to the ledger
+    (backlog F17). Best-effort: a manifest failure must never fail a backtest."""
+    try:
+        m = manifest.build_manifest(
+            kind, params=params, regions=list(regions), metrics=metrics,
+            data_range=data_range, synthetic=synthetic, point_in_time=point_in_time)
+        fp = m["params_fingerprint"]
+        manifest.write_manifest(
+            m, os.path.join(_STATE_DIR, "manifests", f"{kind}_{fp}.json"))
+        manifest.append_run(_LEDGER, m)
+        print(f"  Manifest logged ({kind}, params {fp}) -> ledger "
+              f"[{manifest.trial_count(_LEDGER)} runs]")
+    except Exception as exc:   # pragma: no cover - never break a run over logging
+        print(f"  ⚠ manifest not written: {exc}")
 
 
 def _universe_label(point_in_time: bool) -> str:
@@ -66,6 +89,9 @@ def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
         print(f"  Drawdown halts             {result['drawdown_halts']} "
               f"({result['drawdown_halt_days']} days in cash)")
     _latest_picks(prices, index_px, region)
+    _emit_manifest("backtest", region.params, [region.key], result["metrics"],
+                   synthetic, result["point_in_time"],
+                   (prices.index[0], prices.index[-1]))
     result["equity"].to_csv(f"equity_curve_{region.key}.csv")
     print(f"\n  Equity curve -> equity_curve_{region.key}.csv")
 
@@ -93,6 +119,9 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
                                             for k, v in result["allocations"].items()))
     print(f"  FX rebalance cost (cum.):  {cfg.BASE_CURRENCY} "
           f"{result['fx_rebalance_cost']:,.0f}")
+    _emit_manifest("portfolio", cfg.DEFAULT_PARAMS, list(result["allocations"]),
+                   result["metrics"], synthetic, result["point_in_time"],
+                   (result["equity"].index[0], result["equity"].index[-1]))
     result["equity"].to_csv("equity_curve_portfolio.csv")
     result["sleeve_equity"].to_csv("equity_curve_sleeves.csv")
     print("\n  Equity curves -> equity_curve_portfolio.csv, equity_curve_sleeves.csv")
