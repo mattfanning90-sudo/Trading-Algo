@@ -24,6 +24,7 @@ import pandas as pd
 from . import features as feat
 from . import labels as lab
 from .config import DEFAULT_PARAMS, StrategyParams
+from .datasources import MASK_COLS
 
 _PPY = 12  # monthly rebalance → periods per year
 
@@ -32,9 +33,12 @@ LABEL = "fwd_ret"
 
 
 def feature_cols(df: pd.DataFrame) -> list[str]:
-    """Feature columns in a dataset (everything except the label) — so alt-data columns
-    from `datasources` are picked up automatically without changing the pipeline."""
-    return [c for c in df.columns if c != LABEL]
+    """Feature columns in a dataset (everything except the label AND coverage masks) — so
+    alt-data columns from `datasources` are picked up automatically, but a coverage
+    indicator (`has_sentiment`) is NEVER fed to the model: GDELT coverage is a
+    survivorship/recency proxy, kept only to sub-select the covered cross-section for
+    evaluation, so the ridge must not fit it."""
+    return [c for c in df.columns if c != LABEL and c not in MASK_COLS]
 
 
 def build_dataset(prices: pd.DataFrame, index_prices: pd.Series,
@@ -185,3 +189,103 @@ def summarise(r: pd.Series) -> dict:
     return {"CAGR": float(cagr), "Vol": float(vol),
             "Sharpe": float(r.mean() / r.std() * np.sqrt(_PPY)) if r.std() else float("nan"),
             "hit_rate": float((r > 0).mean())}
+
+
+# ---------------------------------------------------------------------------
+# Honest marginal-edge measurement (does alt-data add anything BEYOND price?)
+# ---------------------------------------------------------------------------
+
+def _rank_ic(a: np.ndarray, b: np.ndarray) -> float:
+    """Cross-sectional rank IC = Spearman = Pearson of ranks (no scipy). NaN if either
+    side has <3 points or zero variance."""
+    sa, sb = pd.Series(np.asarray(a, float)), pd.Series(np.asarray(b, float))
+    if len(sa) < 3 or sa.std() == 0 or sb.std() == 0:
+        return float("nan")
+    return float(sa.rank().corr(sb.rank()))
+
+
+def partial_incremental_ic(df: pd.DataFrame, price_cols: list[str], alt_cols: list[str],
+                           oos_dates=None, sub_universe: pd.Series | None = None,
+                           min_names: int = 5) -> dict:
+    """Price-residualised marginal IC of the alt columns — the honest "edge beyond price".
+
+    On each date: cross-sectionally regress the forward-return label on the PRICE
+    z-features → residual r_y; regress each alt column on the SAME price features → r_alt
+    (pure-NumPy least squares, intercept included); take rank-IC(r_alt, r_y). Averaged
+    over the OOS dates, reported PER alt column and as a combined block (rank-IC of the
+    equal-weight sum of standardised alt residuals). A weak-but-real alt signal that a
+    pooled ridge would shrink to ~0 becomes visible here because price is projected out
+    first. `sub_universe` (bool Series on df.index) restricts scoring to covered names so
+    a sparse feed is not diluted across zero-filled rows (survivor-conditioned → corroborating
+    evidence only, never the sole basis of a claim)."""
+    d = df
+    if oos_dates is not None:
+        d = d[d.index.get_level_values("date").isin(pd.DatetimeIndex(oos_dates))]
+    if sub_universe is not None:
+        keep = sub_universe.reindex(d.index).fillna(False).to_numpy().astype(bool)
+        d = d[keep]
+    alt_cols = [c for c in alt_cols if c in d.columns]
+    price_cols = [c for c in price_cols if c in d.columns]
+    per_col = {c: [] for c in alt_cols}
+    block = []
+    for _, g in d.groupby(level="date"):
+        if len(g) < min_names or not alt_cols:
+            continue
+        Xp = np.column_stack([np.ones(len(g)), g[price_cols].to_numpy()])
+        y = g[LABEL].to_numpy()
+        try:
+            by, *_ = np.linalg.lstsq(Xp, y, rcond=None)
+        except np.linalg.LinAlgError:
+            continue
+        r_y = y - Xp @ by
+        residuals = {}
+        for c in alt_cols:
+            a = g[c].to_numpy()
+            ba, *_ = np.linalg.lstsq(Xp, a, rcond=None)
+            r_a = a - Xp @ ba
+            residuals[c] = r_a
+            ic = _rank_ic(r_a, r_y)
+            if not np.isnan(ic):
+                per_col[c].append(ic)
+        std_res = []
+        for r_a in residuals.values():
+            s = r_a.std()
+            std_res.append(r_a / s if s > 0 else r_a * 0.0)
+        if std_res:
+            ic = _rank_ic(np.sum(std_res, axis=0), r_y)
+            if not np.isnan(ic):
+                block.append(ic)
+    out_per = {c: (float(np.mean(v)) if v else float("nan")) for c, v in per_col.items()}
+    return {"incremental_ic": float(np.mean(block)) if block else float("nan"),
+            "per_col": out_per, "n_dates": len(block)}
+
+
+def incremental_delta(base_res: dict, alt_res: dict, mean_block: int = 3,
+                      n_paths: int = 2000, seed: int = 0) -> dict:
+    """Nested price-only vs price+alt comparison with a bootstrap CI on the PAIRED
+    difference — so we deflate the INCREMENT, not the alt book.
+
+    delta_ic = alt IC − base IC. The paired monthly difference of the market-neutral L/S
+    returns, d = ls(price+alt) − ls(price-only), is the increment's OWN return stream; its
+    annualised information ratio plus a stationary-block-bootstrap CI (reusing
+    stress.stationary_bootstrap) is the honest number. Returns `diff` so the caller can
+    DSR-deflate exactly this difference series. Consumes two run_ml_backtest dicts — no new
+    backtest loop, so the single fit/predict/book path is preserved."""
+    from . import stress
+    delta_ic = float(alt_res.get("ic", float("nan")) - base_res.get("ic", float("nan")))
+    a = alt_res.get("ls_returns", pd.Series(dtype=float))
+    b = base_res.get("ls_returns", pd.Series(dtype=float))
+    idx = a.index.intersection(b.index)
+    d = (a.reindex(idx) - b.reindex(idx)).dropna()
+    if len(d) < 3 or d.std() == 0:
+        return {"delta_ic": delta_ic, "delta_ir": float("nan"), "ci_low": float("nan"),
+                "ci_high": float("nan"), "n": int(len(d)), "diff": d}
+    ir = float(d.mean() / d.std() * np.sqrt(_PPY))
+    paths = stress.stationary_bootstrap(d, mean_block=mean_block, n_paths=n_paths, seed=seed)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sr = paths.mean(axis=1) / paths.std(axis=1) * np.sqrt(_PPY)
+    sr = sr[np.isfinite(sr)]
+    lo, hi = ((float(np.percentile(sr, 5)), float(np.percentile(sr, 95)))
+              if len(sr) else (float("nan"), float("nan")))
+    return {"delta_ic": delta_ic, "delta_ir": ir, "ci_low": lo, "ci_high": hi,
+            "n": int(len(d)), "diff": d}

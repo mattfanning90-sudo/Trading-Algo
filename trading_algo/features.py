@@ -18,6 +18,7 @@ import pandas as pd
 
 from . import lowrisk, signals as sig
 from .config import DEFAULT_PARAMS, StrategyParams
+from .datasources import MASK_COLS
 
 # Ordered list of the columns `build_feature_panel` produces.
 FEATURES = ["mom", "rev1m", "resmom", "lowvol", "lowbeta", "value", "trend_gap", "high52"]
@@ -32,14 +33,19 @@ def _cross_section_z(wide: pd.DataFrame) -> pd.DataFrame:
 
 def build_feature_panel(prices: pd.DataFrame, index_prices: pd.Series,
                         p: StrategyParams = DEFAULT_PARAMS,
-                        extra: pd.DataFrame | None = None) -> pd.DataFrame:
+                        extra: pd.DataFrame | None = None,
+                        raw_cols: tuple[str, ...] = MASK_COLS) -> pd.DataFrame:
     """Causal, cross-sectionally z-scored feature panel.
 
     Returns a long DataFrame indexed by (date, ticker) with one column per price feature
     in `FEATURES`. All price inputs are strictly causal. `extra`, if given, is an
     already-as-of-merged alt-data panel (fundamentals / IV / sentiment from
     `datasources.build_extra_panel`) — its columns are z-scored per date and appended,
-    so new data sources add columns without touching anything downstream."""
+    so new data sources add columns without touching anything downstream.
+
+    `raw_cols` (default the coverage masks in `datasources.MASK_COLS`) are passed through
+    UN-z-scored: a 0/1 coverage indicator's 0 genuinely means "not covered", so it must
+    not be turned into a per-date z nor fake-filled into a neutral value."""
     wide = {
         "mom":       sig.momentum_score(prices, p),                       # 12-1 momentum
         "rev1m":     -(prices / prices.shift(21) - 1.0),                  # short-term reversal
@@ -60,12 +66,17 @@ def build_feature_panel(prices: pd.DataFrame, index_prices: pd.Series,
         # is often SPARSE (fundamentals filed quarterly; sentiment only where covered and
         # only ~2017+ for GDELT), so fill missing with 0 = neutral-after-z-score rather
         # than dropping the row — a sparse feed must not shrink the whole dataset.
-        ez = {}
-        for c in extra.columns:
-            ez[c] = _cross_section_z(extra[c].unstack("ticker")).stack()
-        extra_z = pd.concat(ez, axis=1)
-        extra_z.index.names = ["date", "ticker"]
-        panel = panel.join(extra_z, how="left")
+        raw = [c for c in extra.columns if c in raw_cols]
+        z_cols = [c for c in extra.columns if c not in raw_cols]
+        appended = {}
+        for c in z_cols:
+            appended[c] = _cross_section_z(extra[c].unstack("ticker")).stack()
+        for c in raw:                                    # coverage masks: pass through raw
+            appended[c] = extra[c]
+        extra_a = pd.concat(appended, axis=1)[list(extra.columns)]
+        extra_a.index.names = ["date", "ticker"]
+        panel = panel.join(extra_a, how="left")
+        # z-scored cols → 0 = neutral; raw mask cols → 0 = "not covered". Both fill 0.
         panel[list(extra.columns)] = panel[list(extra.columns)].fillna(0.0)
 
     return panel

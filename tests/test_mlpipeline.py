@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from trading_algo import data, features as feat, labels as lab, mlpipeline as mlp
+from trading_algo import data, datasources as ds, features as feat, labels as lab, mlpipeline as mlp
 from trading_algo.regions import get_region
 
 
@@ -63,3 +63,41 @@ def test_run_ml_backtest_produces_oos_returns():
     assert set(("CAGR", "Vol", "Sharpe", "hit_rate")) <= set(res["metrics"])
     # OOS scores exist and are indexed by (date, ticker)
     assert res["scores"].index.names == ["date", "ticker"]
+
+
+# --- honest marginal-edge harness: the mask stays out of the model; incremental IC is
+#     a real negative control on synthetic; the nested delta returns a bootstrap CI ---
+
+def test_coverage_mask_excluded_from_model():
+    prices, idx = _synth()
+    extra = ds.build_extra_panel(ds.ALL_SOURCES, prices, "2012-01-01", synthetic=True)
+    df = mlp.build_dataset(prices, idx, extra=extra)
+    assert "has_sentiment" in df.columns          # present for sub-universe selection
+    assert "has_sentiment" not in mlp.feature_cols(df)   # but NEVER fed to the ridge
+
+
+def test_partial_incremental_ic_synthetic_null_and_sensitivity():
+    prices, idx = _synth()
+    extra = ds.build_extra_panel(ds.ALL_SOURCES, prices, "2012-01-01", synthetic=True)
+    df = mlp.build_dataset(prices, idx, extra=extra)
+    alt = ["sue", "sentiment_shock", "buzz_shock"]
+    res = mlp.partial_incremental_ic(df, feat.FEATURES, alt)
+    assert res["n_dates"] > 0
+    # NEGATIVE CONTROL: synthetic alt-data is independent of synthetic prices → ~0 edge.
+    # A materially non-zero value here would be a leakage bug in the new feature path.
+    assert abs(res["incremental_ic"]) < 0.05
+    # SENSITIVITY: a planted label-correlated column must read a clearly positive edge,
+    # proving the harness can SEE signal when it is genuinely there.
+    planted = df.copy()
+    planted["fake"] = df[mlp.LABEL]
+    res2 = mlp.partial_incremental_ic(planted, feat.FEATURES, ["fake"])
+    assert res2["incremental_ic"] > 0.3
+
+
+def test_incremental_delta_identical_books_is_zero_with_ci():
+    prices, idx = _synth()
+    base = mlp.run_ml_backtest(prices, idx, n_folds=4, top_n=15)
+    d = mlp.incremental_delta(base, base, n_paths=500)
+    assert abs(d["delta_ic"]) < 1e-12                # same book → zero IC difference
+    assert np.isnan(d["delta_ir"])                   # zero difference series → undefined IR
+    assert "diff" in d                               # exposes the paired difference to DSR-deflate

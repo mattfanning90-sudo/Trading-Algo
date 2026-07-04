@@ -47,9 +47,10 @@ def test_synthetic_sources_have_expected_columns():
     fund = ds.EdgarFundamentals().synthetic(tickers, "2015-01-01", "2020-01-01")
     iv = ds.OptionIV().synthetic(tickers, "2015-01-01", "2020-01-01")
     sent = ds.NewsSentiment().synthetic(tickers, "2015-01-01", "2020-01-01")
-    assert {"roe", "net_margin", "asset_growth"} <= set(fund.columns)
+    assert {"roe", "net_margin", "asset_growth", "sue"} <= set(fund.columns)
     assert {"iv_level", "iv_skew", "put_call"} <= set(iv.columns)
-    assert {"sentiment", "buzz"} <= set(sent.columns)
+    # sentiment is emitted as CHANGES (shocks), not levels, + a raw coverage mask
+    assert {"sentiment_shock", "buzz_shock", "has_sentiment"} <= set(sent.columns)
 
 
 def test_extra_panel_adds_feature_columns():
@@ -60,9 +61,11 @@ def test_extra_panel_adds_feature_columns():
     reg = get_region("US")
     _, idx = data.synthetic_region(reg)
     panel = feat.build_feature_panel(prices, idx, extra=extra)
-    for c in ("roe", "iv_level", "sentiment"):
+    for c in ("roe", "sue", "iv_level", "sentiment_shock", "has_sentiment"):
         assert c in panel.columns
     assert list(panel.index.names) == ["date", "ticker"]
+    # the coverage mask is passed through RAW (0/1), never z-scored into a fake neutral
+    assert set(pd.unique(panel["has_sentiment"])) <= {0.0, 1.0}
 
 
 def test_gdelt_timeline_parser():
@@ -100,3 +103,77 @@ def test_pipeline_runs_with_altdata():
     # the model now sees more than the 8 price features
     df = mlp.build_dataset(prices, idx, extra=extra)
     assert len(mlp.feature_cols(df)) > len(feat.FEATURES)
+
+
+# --- event-decay: a filing/tone print must be a decaying impulse, not a stale plateau ---
+
+def test_asof_decay_linear_fades_and_backward_compat():
+    idx = pd.bdate_range("2020-01-01", periods=120)
+    obs = pd.DataFrame({"known_date": [idx[10]], "ticker": ["A"], "x": [1.0]})
+    # no decay = legacy plain ffill: a flat level carried forward forever
+    flat = ds.asof_panel(obs, idx)
+    assert flat.loc[(idx[10], "A"), "x"] == 1.0 and flat.loc[(idx[110], "A"), "x"] == 1.0
+    # linear decay over a 40-calendar-day gate
+    dec = ds.asof_panel(obs, idx, decay={"x": ("linear", 40, None)})
+    assert dec.loc[(idx[10], "A"), "x"] == 1.0                 # day 0: full weight
+    assert 0.3 < dec.loc[(idx[24], "A"), "x"] < 0.9            # ~20 calendar days in: partial
+    assert dec.loc[(idx[110], "A"), "x"] == 0.0               # past the gate: exactly 0
+
+
+def test_asof_decay_no_lookahead():
+    # truncation invariance: a future obs must not change any value at or before the cut
+    idx = pd.bdate_range("2020-01-01", periods=80)
+    obs = pd.DataFrame({"known_date": [idx[20], idx[50]], "ticker": ["A", "A"], "x": [1.0, 2.0]})
+    dec = {"x": ("linear", 30, None)}
+    full = ds.asof_panel(obs, idx, decay=dec)
+    trunc = ds.asof_panel(obs.iloc[:1], idx, decay=dec)        # drop the future (idx[50]) obs
+    cut = idx[40]
+    for t in idx[idx <= cut]:
+        k = (t, "A")
+        a = full.loc[k, "x"] if k in full.index else float("nan")
+        b = trunc.loc[k, "x"] if k in trunc.index else float("nan")
+        assert (np.isnan(a) and np.isnan(b)) or abs(a - b) < 1e-9
+
+
+# --- SUE / PEAD: the one horizon-matched fundamental surprise ---
+
+def test_seasonal_surprise_sign_scale_and_filing_date():
+    ends = pd.date_range("2015-03-31", periods=12, freq="QE")
+    filed = ends + pd.Timedelta(days=45)
+    # mild quarter-to-quarter noise (so the surprise normaliser has non-zero variance),
+    # then a clear positive jump in the final quarter vs its year-ago comparable
+    rng = np.random.default_rng(0)
+    ni_vals = list(100.0 + rng.normal(0, 5, 11)) + [200.0]
+    ni = pd.DataFrame({"known_date": filed, "end": ends,
+                       "start": ends - pd.Timedelta(days=90), "val": ni_vals})
+    eq = pd.DataFrame({"known_date": filed, "end": ends, "start": pd.NaT, "val": [1000.0] * 12})
+    sue = ds.EdgarFundamentals._seasonal_surprise(ni, eq).sort_values("known_date")
+    assert not sue.empty
+    assert sue["sue"].iloc[-1] > 0                            # positive surprise, pre-signed +
+    assert (pd.to_datetime(sue["known_date"]) > ends.min()).all()   # dated by filing, not period-end
+    assert ds.EdgarFundamentals._seasonal_surprise(ni.head(3), eq.head(3)).empty  # <5 q → empty
+
+
+def test_sue_known_date_guards_equity_filing():
+    # equity is public LATER than the earnings → the surprise must be dated by the later filing
+    ends = pd.date_range("2015-03-31", periods=10, freq="QE")
+    ni_filed, eq_filed = ends + pd.Timedelta(days=30), ends + pd.Timedelta(days=60)
+    ni = pd.DataFrame({"known_date": ni_filed, "end": ends,
+                       "start": ends - pd.Timedelta(days=90), "val": np.arange(1, 11) * 100.0})
+    eq = pd.DataFrame({"known_date": eq_filed, "end": ends, "start": pd.NaT, "val": [1000.0] * 10})
+    sue = ds.EdgarFundamentals._seasonal_surprise(ni, eq)
+    kd = set(pd.to_datetime(sue["known_date"]))
+    assert kd <= set(eq_filed) and not (kd & set(ni_filed))   # later (equity) filing, never NI-only
+
+
+# --- news shocks: differenced from past known prints, no self-leak ---
+
+def test_news_shock_uses_only_past_no_self_leak():
+    s = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0, 5.0])
+    shock = ds.NewsSentiment._shock(s, window=20)
+    assert shock.iloc[:5].isna().all()                       # warmup (min_periods=5, shift(1))
+    assert abs(shock.iloc[5] - 4.0) < 1e-9                    # spike vs trailing mean (~1) of PAST
+    trunc = ds.NewsSentiment._shock(s.iloc[:5], window=20)    # truncation invariance
+    for i in range(5):
+        a, b = shock.iloc[i], trunc.iloc[i]
+        assert (np.isnan(a) and np.isnan(b)) or abs(a - b) < 1e-9
