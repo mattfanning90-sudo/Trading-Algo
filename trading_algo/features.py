@@ -31,11 +31,15 @@ def _cross_section_z(wide: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_feature_panel(prices: pd.DataFrame, index_prices: pd.Series,
-                        p: StrategyParams = DEFAULT_PARAMS) -> pd.DataFrame:
+                        p: StrategyParams = DEFAULT_PARAMS,
+                        extra: pd.DataFrame | None = None) -> pd.DataFrame:
     """Causal, cross-sectionally z-scored feature panel.
 
-    Returns a long DataFrame indexed by (date, ticker) with one column per feature
-    in `FEATURES`. All inputs are price/index only and strictly causal."""
+    Returns a long DataFrame indexed by (date, ticker) with one column per price feature
+    in `FEATURES`. All price inputs are strictly causal. `extra`, if given, is an
+    already-as-of-merged alt-data panel (fundamentals / IV / sentiment from
+    `datasources.build_extra_panel`) — its columns are z-scored per date and appended,
+    so new data sources add columns without touching anything downstream."""
     wide = {
         "mom":       sig.momentum_score(prices, p),                       # 12-1 momentum
         "rev1m":     -(prices / prices.shift(21) - 1.0),                  # short-term reversal
@@ -49,4 +53,20 @@ def build_feature_panel(prices: pd.DataFrame, index_prices: pd.Series,
     cols = {k: _cross_section_z(v).stack() for k, v in wide.items()}
     panel = pd.concat(cols, axis=1)[FEATURES]
     panel.index.names = ["date", "ticker"]
+
+    if extra is not None and not extra.empty:
+        # z-score each alt-data column cross-sectionally per date, then append
+        ez = {}
+        for c in extra.columns:
+            wide_c = extra[c].unstack("ticker")
+            ez[c] = _cross_section_z(wide_c).stack()
+        extra_z = pd.concat(ez, axis=1)
+        extra_z.index.names = ["date", "ticker"]
+        panel = panel.join(extra_z, how="left")
+
     return panel.dropna()
+
+
+def feature_names(extra: pd.DataFrame | None = None) -> list[str]:
+    """The full column list a panel will have, incl. any alt-data columns."""
+    return FEATURES + (list(extra.columns) if extra is not None and not extra.empty else [])

@@ -53,6 +53,10 @@ on:
         description: "Use residual (market-neutral) momentum for the equity sleeve"
         type: boolean
         default: false
+      with_altdata:
+        description: "ML task: merge fundamentals(EDGAR)+options-IV+sentiment feature panels"
+        type: boolean
+        default: false
       method:
         description: "Combiner weighting for the multistrat book (erc/invvol/equal)"
         type: string
@@ -97,7 +101,8 @@ jobs:
           elif [ "${{ inputs.task }}" = "validate" ]; then
             python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "ml" ]; then
-            python -m trading_algo.mlreport $SYN $PIT | tee backtest_report.md
+            ALT="${{ inputs.with_altdata && '--with-altdata' || '' }}"
+            python -m trading_algo.mlreport $SYN $PIT $ALT | tee backtest_report.md
           elif [ "${{ inputs.task }}" = "multistrat" ]; then
             GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
             VAL="${{ inputs.with_value && '--with-value' || '' }}"

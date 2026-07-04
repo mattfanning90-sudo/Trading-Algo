@@ -28,12 +28,22 @@ from .config import DEFAULT_PARAMS, StrategyParams
 _PPY = 12  # monthly rebalance → periods per year
 
 
+LABEL = "fwd_ret"
+
+
+def feature_cols(df: pd.DataFrame) -> list[str]:
+    """Feature columns in a dataset (everything except the label) — so alt-data columns
+    from `datasources` are picked up automatically without changing the pipeline."""
+    return [c for c in df.columns if c != LABEL]
+
+
 def build_dataset(prices: pd.DataFrame, index_prices: pd.Series,
                   p: StrategyParams = DEFAULT_PARAMS, horizon: int = 21,
-                  rebalance: str = "ME") -> pd.DataFrame:
+                  rebalance: str = "ME", extra: pd.DataFrame | None = None) -> pd.DataFrame:
     """Aligned (features + forward-return label) panel, sampled at rebalance dates so
-    label windows don't overlap. Index (date, ticker); columns = FEATURES + 'fwd_ret'."""
-    X = feat.build_feature_panel(prices, index_prices, p)
+    label windows don't overlap. Index (date, ticker); columns = features + 'fwd_ret'.
+    `extra` = an as-of-merged alt-data panel (see datasources.build_extra_panel)."""
+    X = feat.build_feature_panel(prices, index_prices, p, extra=extra)
     y = lab.forward_return(prices, horizon)
     df = X.join(y, how="inner").dropna()
     # last trading date of each rebalance period (as-of dates)
@@ -79,30 +89,56 @@ def fit_predict_walk_forward(df: pd.DataFrame, n_folds: int = 5, embargo: int = 
     """Out-of-sample predicted scores per (date, ticker): for each fold, fit the ridge
     on the purged training rows and score the held-out test rows. Concatenated OOS."""
     dates = df.index.get_level_values("date")
+    cols = feature_cols(df)
     preds = []
     for train_dates, test_dates in purged_walk_forward(pd.unique(dates), n_folds, embargo):
         tr = df[dates.isin(train_dates)]
         te = df[dates.isin(test_dates)]
         if tr.empty or te.empty:
             continue
-        w = cross_sectional_ridge(tr[feat.FEATURES].to_numpy(), tr["fwd_ret"].to_numpy(), alpha)
-        score = te[feat.FEATURES].to_numpy() @ w
+        w = cross_sectional_ridge(tr[cols].to_numpy(), tr[LABEL].to_numpy(), alpha)
+        score = te[cols].to_numpy() @ w
         preds.append(pd.Series(score, index=te.index, name="score"))
     return pd.concat(preds) if preds else pd.Series(dtype=float, name="score")
+
+
+def oos_ic(scores: pd.Series, fwd: pd.Series) -> float:
+    """Mean cross-sectional rank IC: how well OOS scores order the ACTUAL forward
+    returns. The honest skill measure — and the leakage detector: under label
+    shuffling it must collapse to ~0, or the pipeline is peeking."""
+    df = pd.concat([scores.rename("s"), fwd.rename("f")], axis=1).dropna()
+    if df.empty:
+        return float("nan")
+    # Spearman = Pearson of ranks (avoids a scipy dependency)
+    ic = df.groupby(level="date").apply(
+        lambda g: g["s"].rank().corr(g["f"].rank()) if len(g) > 2 else np.nan)
+    return float(ic.mean())
 
 
 def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
                     p: StrategyParams = DEFAULT_PARAMS, horizon: int = 21,
                     rebalance: str = "ME", top_n: int = 20, n_folds: int = 5,
-                    embargo: int = 1, alpha: float = 1.0, cost_bps: float = 10.0) -> dict:
+                    embargo: int = 1, alpha: float = 1.0, cost_bps: float = 10.0,
+                    extra: pd.DataFrame | None = None,
+                    shuffle_seed: int | None = None) -> dict:
     """Walk-forward backtest of the ridge predictor: each as-of date, long the top-N
     names by OOS score (equal weight), realise the next-period return, charge turnover
-    cost. Returns a non-overlapping per-period return series + the OOS scores."""
-    df = build_dataset(prices, index_prices, p, horizon, rebalance)
-    scores = fit_predict_walk_forward(df, n_folds, embargo, alpha)
+    cost. Returns a non-overlapping per-period return series + the OOS scores + the OOS
+    information coefficient. `shuffle_seed` permutes the TRAINING labels within each date
+    (a leakage null: a leak-free pipeline then produces IC ≈ 0)."""
+    df = build_dataset(prices, index_prices, p, horizon, rebalance, extra=extra)
+    if df.empty:
+        return {"returns": pd.Series(dtype=float), "scores": df, "n_periods": 0}
+    fwd = df[LABEL]
+    train_df = df
+    if shuffle_seed is not None:
+        rng = np.random.default_rng(shuffle_seed)
+        train_df = df.copy()
+        train_df[LABEL] = (train_df.groupby(level="date")[LABEL]
+                           .transform(lambda s: rng.permutation(s.to_numpy())))
+    scores = fit_predict_walk_forward(train_df, n_folds, embargo, alpha)
     if scores.empty:
         return {"returns": pd.Series(dtype=float), "scores": scores, "n_periods": 0}
-    fwd = df["fwd_ret"]
     rows, prev = {}, set()
     for date, grp in scores.groupby(level="date"):
         picks = list(grp.nlargest(min(top_n, len(grp))).index.get_level_values("ticker"))
@@ -112,7 +148,7 @@ def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
         prev = set(picks)
     r = pd.Series(rows).sort_index()
     return {"returns": r, "scores": scores, "n_periods": len(r),
-            "metrics": summarise(r)}
+            "ic": oos_ic(scores, fwd), "metrics": summarise(r)}
 
 
 def summarise(r: pd.Series) -> dict:
