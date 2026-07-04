@@ -59,6 +59,12 @@ class FXParams:
     include_carry: bool = True         # apply overnight swap/financing
     bar: str = "1d"                    # informational: intended data bar interval
 
+    # --- Asset-class concentration cap ---------------------------------------
+    # Crypto legs are near-perfectly correlated with each other: several crypto
+    # positions are effectively ONE bet. Cap total crypto gross (Σ|w|) at this
+    # fraction of equity (None = off, e.g. for a crypto-only book).
+    crypto_gross_cap: float | None = 0.25
+
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
     drawdown_cooldown_days: int = 10
@@ -74,11 +80,13 @@ _PROFILES: dict[str, FXParams] = {
     "conservative": FXParams(
         target_vol=0.06, max_gross=2.0, max_vol_scale=2.0,
         per_pair_cap=0.20, max_drawdown_stop=0.12, drawdown_cooldown_days=15,
+        crypto_gross_cap=0.15,
     ),
     "balanced": FXParams(),  # the defaults above
     "aggressive": FXParams(
         target_vol=0.18, max_gross=5.0, max_vol_scale=5.0,
         per_pair_cap=0.35, max_drawdown_stop=0.30, drawdown_cooldown_days=7,
+        crypto_gross_cap=0.40,
     ),
     # Medium-frequency / intraday: shorter windows tuned for 15m–60m bars.
     # NOT high-frequency — see docs/HFT_REALITY.md. Live use needs a real-time
@@ -98,6 +106,7 @@ _PROFILES: dict[str, FXParams] = {
         target_vol=0.20, max_gross=3.0, per_pair_cap=0.40,
         max_drawdown_stop=0.15, drawdown_cooldown_days=240,
         rebalance_min_delta=0.05, include_carry=True, bar="1m",
+        crypto_gross_cap=None,           # crypto-ONLY book: the cap would strangle it
     ),
 }
 

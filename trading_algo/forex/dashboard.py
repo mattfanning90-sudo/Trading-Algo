@@ -27,13 +27,14 @@ import pandas as pd
 import math
 
 from . import fx_data
+from . import fxconv
 from . import indicators as ind
 from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
 from .fx_strategy import min_history, target_weights_history
-from .pairs import get_pair
+from .pairs import ALL_PAIRS, get_pair
 from .validation import (_norm_ppf, deflated_sharpe_ratio, pbo,
                          probabilistic_sharpe_ratio)
 
@@ -97,6 +98,8 @@ GLOSSARY = {
     "Conviction": "Today's ensemble tilt per pair, −1 (max short) to +1 (max long): how strongly the blended agents lean right now. Green = long, red = short, brighter = stronger.",
     "DSR": "Deflated Sharpe Ratio — like PSR, but it also penalises you for how many strategies/agents were tried (the more you test, the higher a Sharpe you'd expect by luck alone). Clears 95% = a genuinely strong result.",
     "PBO": "Probability of Backtest Overfitting — across the agents, how often the in-sample best one underperforms out-of-sample. High = 'the winner is probably luck'. Low is good.",
+    "Turnover": "Total traded weight since inception — every 1.0 means you have traded your whole book's value once. A flow, not a snapshot: high turnover = more spread cost.",
+    "News feed": "Today's scheduled economic releases (CPI, rate decisions, jobs…) for the currencies this book trades, from an economic calendar — the verifiable kind of 'news'. Needs the NEWS_API_KEY secret; events may move prices but are shown as information, never as proof of causation.",
     "Catalyst": "A high-impact scheduled economic release (CPI, a rate decision, jobs…) that landed today on a currency you traded. Shown only when one actually occurred — and it's a POSSIBLE driver (correlation), never proof the release caused your move.",
 }
 
@@ -293,6 +296,29 @@ def _transactions(state, panel, max_rows=400) -> dict:
     closes = fx_data.closes(panel)
     last = closes.iloc[-1] if not closes.empty else pd.Series(dtype=float)
 
+    # AUD/quote translation history so P&L-since matches how the BOOK actually
+    # marks (weight × pair-move × AUD-translation) — audited fix: previously the
+    # blotter dropped the AUD leg entirely.
+    quotes = {get_pair(t["pair"]).quote for t in state.get("trades", [])
+              if t.get("pair") in ALL_PAIRS}
+    audq = (fxconv.aud_per_quote_frame(closes, quotes)
+            if quotes and not closes.empty else pd.DataFrame())
+
+    def fx_factor(quote: str, tdate: str) -> float:
+        """aud_per_quote(now) / aud_per_quote(trade date); 1.0 when underivable."""
+        if audq.empty or quote not in audq.columns:
+            return 1.0
+        try:
+            idx = audq.index.asof(pd.Timestamp(str(tdate)[:10]))
+        except Exception:
+            return 1.0
+        if idx != idx:                                    # NaT: trade predates window
+            return 1.0
+        a0, a1 = audq[quote].get(idx), audq[quote].iloc[-1]
+        if a0 is None or a1 is None or a0 != a0 or a1 != a1 or not a0 or not a1:
+            return 1.0
+        return float(a1 / a0)
+
     rows = []
     tot_cost = tot_notional = tot_pnl = 0.0
     for t in state.get("trades", []):
@@ -309,9 +335,12 @@ def _transactions(state, panel, max_rows=400) -> dict:
         dw = float(t.get("delta_weight") or 0.0)
         notional = abs(dw) * eq
         cost = abs(dw) * 0.5 * pair.spread_fraction(price) * eq   # matches the book's charge
-        lastpx = float(last.get(sym)) if last.get(sym) == last.get(sym) else None
+        lp = last.get(sym)
+        lastpx = float(lp) if lp is not None and lp == lp else None   # audited fix: no float(None)
         move = (lastpx / price - 1.0) if lastpx else None
-        pnl = (dw * move * eq) if move is not None else None
+        # P&L-since in true AUD: pair move AND the AUD/quote move, like the book.
+        fxf = fx_factor(pair.quote, t.get("date", "")) if lastpx else 1.0
+        pnl = (dw * ((lastpx / price) * fxf - 1.0) * eq) if move is not None else None
         tot_cost += cost
         tot_notional += notional
         if pnl is not None:
@@ -447,9 +476,19 @@ def _attribution_rollup(txn: dict) -> dict:
         p["pnl"] += pnl
         p["cost"] += r.get("cost", 0.0) or 0.0
         p["trades"] += 1
-        tgt = r.get("target") or 0.0
-        side = "long" if (tgt > 0 or (tgt == 0 and (r.get("dweight") or 0) < 0)) else "short"
-        by_side[side] += pnl
+        tgt = float(r.get("target") or 0.0)
+        dw = float(r.get("dweight") or 0.0)
+        prev = tgt - dw
+        # Audited fix: a FLIP trade (position crossing zero in one record, e.g.
+        # +0.2 -> -0.1) contains a closing leg that belongs to the OLD side.
+        # Split the P&L pro-rata by |leg|; non-crossing trades keep the old rule.
+        if dw and prev != 0 and tgt != 0 and (prev > 0) != (tgt > 0):
+            close_frac = abs(prev) / abs(dw)
+            by_side["long" if prev > 0 else "short"] += pnl * close_frac
+            by_side["long" if tgt > 0 else "short"] += pnl * (1.0 - close_frac)
+        else:
+            side = "long" if (tgt > 0 or (tgt == 0 and dw < 0)) else "short"
+            by_side[side] += pnl
         reg = r.get("regime") or "—"
         by_regime[reg] = by_regime.get(reg, 0.0) + pnl
     by_pair = {k: {"pnl": round(v["pnl"], 2), "cost": round(v["cost"], 2),
@@ -476,8 +515,11 @@ def _trade_stats(state: dict) -> dict:
     eqh = state.get("equity_history", [])
     if len(eqh) < 3:
         return out
+    # Per-BAR stats: label honestly for intraday books (hourly bars != days).
+    out["unit"] = "hour" if any(" " in str(d) for d, _ in eqh[-3:]) else "day"
     r = pd.Series([float(e) for _, e in eqh], dtype=float).pct_change().dropna()
     gains, losses = r[r > 0], r[r < 0]
+    out["no_losses"] = bool(len(gains)) and not bool(losses.sum())
     out.update({
         "days": int(len(r)),
         "profit_factor": round(float(gains.sum() / abs(losses.sum())), 2) if losses.sum() else None,
@@ -595,6 +637,22 @@ def _with_catalysts(daily: dict | None) -> dict | None:
     return daily
 
 
+def _news_feed(state: dict) -> list[dict]:
+    """Daily currency news feed: medium/high-impact scheduled releases today for
+    the fiat currencies this book trades. Empty (and the card says why) without
+    a NEWS_API_KEY — never fabricated."""
+    curs: set[str] = set()
+    for sym in state.get("symbols", []):
+        try:
+            pr = get_pair(sym)
+        except KeyError:
+            continue
+        curs |= {pr.base, pr.quote} & news.FIAT
+    dy = state.get("daily") or {}
+    date = str(dy.get("date") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return news.calendar_feed(sorted(curs), date) if curs else []
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -674,6 +732,7 @@ def build_payload(account, synthetic=False, bars=180):
         "transactions": txn,
         "risk": risk,
         "daily": _with_catalysts(_daily_summary(state)),
+        "news_feed": _news_feed(state),
         "pnl_attribution": _attribution_rollup(txn),
         "trade_stats": _trade_stats(state),
         "conviction": _conviction(state),
@@ -729,7 +788,11 @@ color:var(--fg);cursor:pointer;font-size:.85rem}.tab.on{border-color:var(--accen
 .bar i{position:absolute;top:0;bottom:0;border-radius:4px}.val{width:60px;text-align:right}
 .metrics{display:grid;grid-template-columns:auto 1fr 1fr;gap:.3rem .8rem;font-size:.82rem;align-items:center}
 .metrics .hd{color:var(--mut);font-size:.7rem;text-transform:uppercase}
-.journal{max-height:560px;overflow:auto}
+.journal{max-height:470px;overflow:auto}
+.readbar{margin:0 0 1rem}
+.readgrid{display:grid;grid-template-columns:1.5fr 1fr;gap:1.2rem;align-items:start}
+@media(max-width:900px){.readgrid{grid-template-columns:1fr}}
+.readgrid #decision{max-height:9.5rem;overflow:auto;padding-right:.4rem}
 .j{border:1px solid var(--bd);border-radius:10px;padding:.7rem;margin-bottom:.6rem;cursor:pointer}
 .j:hover{border-color:var(--accent)}.j .hd{display:flex;justify-content:space-between;font-size:.84rem;gap:.5rem}
 .badge{font-size:.68rem;padding:.05rem .4rem;border-radius:6px;border:1px solid var(--bd);color:var(--mut)}
@@ -879,7 +942,11 @@ table.txn th.sortable:hover{color:var(--fg)}
     <b>which positions drove it</b> and how each one moved, and the day's <b>market backdrop</b> (which currencies
     were broadly strong or weak). When a real <b>high-impact news release</b> hit a currency you traded, it's flagged
     as a <b>possible catalyst</b> — but only if one actually happened, and always as correlation, never invented.</span></span></div>
-  <div class="card" id="dailycard"></div>
+  <div class="cards">
+    <div class="card c8" id="dailycard"></div>
+    <div class="card c4"><h2><span class="tip" data-tip="__T_FEED__">Currency news</span> <span class="muted" style="font-weight:400">today's scheduled releases</span></h2>
+      <div id="newsfeed" class="journal" style="max-height:340px"></div></div>
+  </div>
 </section>
 
 <section id="overview">
@@ -917,7 +984,7 @@ table.txn th.sortable:hover{color:var(--fg)}
 <section id="attrib">
   <div class="band">Attribution &amp; signals <span class="h">where the P&amp;L comes from · what the system thinks now</span> <span class="info" tabindex="0" aria-label="plain-English explainer">ⓘ<span class="pop"><span class="q">In plain English:</span> <b>where did the money come from?</b> The heatmap shows
     what the system wants <b>right now</b> for each pair — green = bet it rises (long), red = bet it falls (short),
-    brighter = stronger conviction. Below, the P&amp;L is split by pair, by up-bets vs down-bets, and by market mood
+    brighter = stronger conviction. Below, the P&amp;L is split by pair, by up-bets vs down-bets, and by the market mood at trade entry
     (trending vs choppy). <b>Trade quality</b> sums up whether the wins outweigh the losses (profit factor &gt; 1 =
     yes) and how much you're trading (turnover).</span></span></div>
   <div class="cards">
@@ -925,7 +992,7 @@ table.txn th.sortable:hover{color:var(--fg)}
       <div id="conviction" class="heat"></div></div>
     <div class="card c6"><h2><span class="tip" data-tip="__T_ATTR__">P&amp;L by pair</span> <span class="muted" style="font-weight:400">contribution-since</span></h2>
       <div id="pnlpair"></div></div>
-    <div class="card c6"><h2>Trade quality <span class="muted" style="font-weight:400">daily-return stats + turnover</span></h2>
+    <div class="card c6"><h2>Trade quality <span class="muted" style="font-weight:400">per-bar return stats + turnover</span></h2>
       <div class="stats" id="tradestats"></div>
       <div id="sideregime" style="margin-top:.8rem"></div></div>
   </div>
@@ -937,13 +1004,14 @@ table.txn th.sortable:hover{color:var(--fg)}
     long-term <b>averages</b> the agents watch. Arrows mark where we <b>bought or sold</b>, and the journal gives a
     <b>plain-English reason for every trade</b> plus whether it worked — built so you can learn how each call was made.</span></span></div>
   <div class="tabs" id="tabs"></div>
+  <div class="card readbar"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
+    <div class="readgrid">
+      <div id="decision" class="why muted"></div>
+      <div><div id="agents"></div><div class="legend" id="legend"></div></div>
+    </div></div>
   <div class="wrap">
     <div><div class="cread" id="pairread"></div><div id="chart"></div></div>
     <div class="side">
-      <div class="card"><h2><span class="tip" data-tip="__T_TILT__">Today's read</span> · <span id="curpair"></span></h2>
-        <div id="decision" class="why muted"></div>
-        <div id="agents" style="margin-top:.7rem"></div>
-        <div class="legend" id="legend"></div></div>
       <div class="card"><h2>Trade journal — plain-English reason &amp; <span class="tip" data-tip="__T_OUT__">outcome</span></h2>
         <div id="journal" class="journal"></div></div>
     </div>
@@ -1050,6 +1118,15 @@ function sparkline(curve,w=110,h=26){
     cat=`<div class=dmkt><b>Possible catalysts</b> ${tip('— correlation, not proof','Catalyst')}: high-impact scheduled releases today on currencies you traded — a <i>possible</i> reason for the moves above.${items}</div>`;
   }
   el.innerHTML=head+brk+`<div class=dgrid>${col('Drivers — helped',winners)}${col('Detractors — hurt',losers)}</div>`+mkt+cat;
+})();
+
+(function(){
+  const nf=document.getElementById('newsfeed'); if(!nf) return;
+  const feed=DASH.news_feed||[];
+  if(!feed.length){nf.innerHTML='<div class=muted>No scheduled releases found for your currencies today — or no NEWS_API_KEY secret is configured (add a free Financial Modeling Prep key in repo Settings → Secrets to enable the feed).</div>';return;}
+  nf.innerHTML=feed.map(e=>{const p=[e.actual!=null?`actual ${e.actual}`:'',e.estimate!=null?`est ${e.estimate}`:'',e.previous!=null?`prev ${e.previous}`:''].filter(Boolean).join(' · ');
+    const hot=e.impact==='high';
+    return `<div class=drow><span class="amt muted">${e.time||'—'}</span><span><b style="${hot?'color:var(--amber)':''}">${e.currency}</b> ${e.event||'release'}${hot?' <span class=badge>high</span>':''}${p?`<div class=dwhy>${p}</div>`:''}</span></div>`;}).join('');
 })();
 
 function bars(obj, hi){
@@ -1243,12 +1320,14 @@ document.addEventListener('keydown',e=>{
   // side + regime split
   const sr=document.getElementById('sideregime');
   if(sr){const blk=(lbl,obj)=>`<div class=muted style="font-size:.7rem;margin:.4rem 0 .2rem">${lbl} (${DASH.currency})</div>`+(Object.keys(obj||{}).length?bars(obj):'<div class=muted>–</div>');
-    sr.innerHTML=blk('Long vs short',at.by_side)+blk('By regime',at.by_regime);}
+    sr.innerHTML=blk('Long vs short',at.by_side)+blk('By regime at entry',at.by_regime);}
   // trade-quality tiles
   const ts=DASH.trade_stats||{};
-  const items=[["Profit factor",ts.profit_factor??'–',"Profit factor"],["Expectancy/day",ts.expectancy!=null?pct(ts.expectancy):'–',"Expectancy"],
+  const u=ts.unit||'day';
+  const pfv=ts.profit_factor??(ts.no_losses?'∞':'–');
+  const items=[["Profit factor",pfv,"Profit factor"],[`Expectancy/${u}`,ts.expectancy!=null?pct(ts.expectancy):'–',"Expectancy"],
     ["Avg win",ts.avg_win!=null?pct(ts.avg_win):'–',null],["Avg loss",ts.avg_loss!=null?pct(ts.avg_loss):'–',null],
-    ["Win streak",ts.win_streak??'–',null],["Turnover",ts.turnover??'–',"Gross leverage"]];
+    ["Win streak",ts.win_streak??'–',null],["Turnover",ts.turnover??'–',"Turnover"]];
   const tsEl=document.getElementById('tradestats');
   if(tsEl)tsEl.innerHTML=items.map(([k,v,g])=>`<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
 })();
@@ -1371,6 +1450,7 @@ def render(payload: dict) -> str:
         "__T_PSR__": g["PSR"], "__T_DD__": g["Drawdown curve"], "__T_WEDGE__": g["Cost wedge"],
         "__T_SCORE__": g["Agent scorecard"], "__T_EXP__": g["Net exposure"],
         "__T_CONV__": g["Conviction"], "__T_ATTR__": g["Attribution"],
+        "__T_FEED__": g["News feed"],
         "__DATA__": json.dumps(payload, separators=(",", ":")),
     }
     html = _PAGE

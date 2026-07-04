@@ -29,6 +29,42 @@ def _is_high(impact) -> bool:
     return str(impact or "").strip().lower() in ("high", "3", "holiday")
 
 
+def calendar_feed(currencies, date: str, *, key: str | None = None,
+                  timeout: float = 8.0) -> list[dict]:
+    """The daily currency news feed: ALL medium/high-impact scheduled releases
+    for `currencies` on `date`, with times — what's on the tape today for the
+    currencies the book trades. Same graceful contract as `economic_events`:
+    ``[]`` with no key / no network / nothing relevant; never raises.
+    """
+    k = _key(key)
+    want = {c.upper() for c in (currencies or []) if c.upper() in FIAT}
+    if not k or not want or not date:
+        return []
+    try:
+        import requests
+        resp = requests.get(_FMP_URL, params={"from": date, "to": date, "apikey": k},
+                            timeout=timeout)
+        rows = resp.json() if resp.ok else []
+    except Exception:
+        return []
+    out: list[dict] = []
+    for e in rows or []:
+        try:
+            cur = str(e.get("currency") or e.get("country") or "").upper()
+            imp = str(e.get("impact") or "").strip().lower()
+            if cur in want and imp in ("high", "medium", "3", "2", "holiday"):
+                ts = str(e.get("date") or "")
+                out.append({"time": ts[11:16] if len(ts) >= 16 else "",
+                            "currency": cur, "event": e.get("event"),
+                            "impact": "high" if _is_high(e.get("impact")) else "medium",
+                            "actual": e.get("actual"), "estimate": e.get("estimate"),
+                            "previous": e.get("previous")})
+        except Exception:
+            continue
+    out.sort(key=lambda x: (x["time"] or "99:99"))
+    return out
+
+
 def economic_events(currencies, date: str, *, key: str | None = None,
                     timeout: float = 8.0) -> list[dict]:
     """High-impact scheduled releases for `currencies` on `date` (YYYY-MM-DD).
