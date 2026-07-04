@@ -6,43 +6,28 @@ import pytest
 
 from trading_algo import config as cfg
 from trading_algo import paper_trade as pt
+from trading_algo import pnl
 from trading_algo.regions import get_region
 
 
-def test_realized_pnl_on_sale():
-    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAPL": 10},
-              "cost_basis": {"AAPL": 100.0}, "realized_pnl": 0.0,
-              "last_rebalance_month": None}
-    px = pd.Series({"AAPL": 120.0})
-    pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(dtype=float),
-                        px, "2026-01-02", [])
-    assert sleeve["positions"] == {}            # fully sold
-    assert sleeve["realized_pnl"] > 150          # ~ (120−100)·10, minus slippage
-
-
-def test_legacy_position_without_basis_books_real_pnl():
-    """A position opened before cost-basis tracking (no entry in cost_basis)
-    must not book $0 on sale — the basis is backfilled from the fills log."""
+def test_sell_stamps_actual_realized_pnl():
+    """Each sell is stamped with its real realised P&L, computed from the actual
+    lots it consumes in the fills ledger — no separate stored tally."""
     trade_log = [{"date": "2026-06-10", "region": "US", "ticker": "AAPL",
                   "side": "BUY", "shares": 10, "fill": 100.0,
                   "commission": 1.0, "stamp_duty": 0.0, "currency": "USD"}]
     sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAPL": 10},
-              "cost_basis": {}, "realized_pnl": 0.0}      # no basis recorded
+              "last_rebalance_month": None}
     px = pd.Series({"AAPL": 120.0})
     pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(dtype=float),
                         px, "2026-07-01", trade_log)
-    assert sleeve["realized_pnl"] > 150      # real gain, not the $0 the bug booked
-
-
-def test_replay_fills_reconstructs_basis_and_realized():
-    trades = [
-        {"region": "US", "ticker": "AAA", "side": "BUY", "shares": 10, "fill": 100.0},
-        {"region": "US", "ticker": "AAA", "side": "BUY", "shares": 10, "fill": 120.0},
-        {"region": "US", "ticker": "AAA", "side": "SELL", "shares": 5, "fill": 150.0},
-    ]
-    basis, realized = pt.replay_fills(trades)
-    assert basis[("US", "AAA")] == pytest.approx(110.0)      # avg cost unchanged by sell
-    assert realized["US"] == pytest.approx((150.0 - 110.0) * 5)
+    assert sleeve["positions"] == {}                 # fully sold
+    sell = trade_log[-1]
+    assert sell["side"] == "SELL"
+    assert sell["entry"] == pytest.approx(100.0)     # actual FIFO cost basis
+    assert sell["realized"] > 150                    # ~ (120−100)·10, minus costs/slippage
+    # no drift-prone stored fields left behind
+    assert "cost_basis" not in sleeve and "realized_pnl" not in sleeve
 
 
 def test_min_gap_guard_blocks_near_inception_churn():
@@ -53,22 +38,6 @@ def test_min_gap_guard_blocks_near_inception_churn():
     assert pt._should_rebalance(sleeve, "2026-07-20", "2026-07") is True    # +22 days
     # a fresh book (never rebalanced) always trades on its first run
     assert pt._should_rebalance({"last_rebalance_month": None}, "2026-07-01", "2026-07") is True
-
-
-def test_repair_pnl_rebuilds_fields(account):
-    pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
-    state = pt.load_state(account)
-    # simulate legacy state: wipe the tracked P&L fields
-    for s in state["sleeves"].values():
-        s["cost_basis"] = {}
-        s["realized_pnl"] = 0.0
-    pt.save_state(account, state)
-    pt.repair_pnl(account)
-    state = pt.load_state(account)
-    for s in state["sleeves"].values():
-        for t in s["positions"]:
-            assert s["cost_basis"].get(t, 0) > 0     # every holding gets a basis back
 
 
 @pytest.fixture
@@ -121,14 +90,17 @@ def test_force_rebalance_resets_months(account):
     pt.run_daily(account, synthetic=True)
 
 
-def test_cost_basis_tracked(account):
+def test_cost_basis_derived_from_fills(account):
     pt.init_account(account, capital=300_000, synthetic=True)
     pt.run_daily(account, synthetic=True)
     state = pt.load_state(account)
+    # Basis is not stored on the sleeve — it is derived from the fills ledger.
     for sleeve in state["sleeves"].values():
-        assert "cost_basis" in sleeve
-        for t in sleeve["positions"]:          # every holding has a positive avg cost
-            assert sleeve["cost_basis"].get(t, 0) > 0
+        assert "cost_basis" not in sleeve and "realized_pnl" not in sleeve
+    basis = pnl.open_basis(pnl.build_lots(state["trades"])[0])
+    for k, sleeve in state["sleeves"].items():
+        for t in sleeve["positions"]:          # every holding traces to a real buy
+            assert basis.get((k, t), 0) > 0
 
 
 def test_single_region_account(account):
