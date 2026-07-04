@@ -168,6 +168,8 @@ def test_calendar_range_one_call_dated_high_impact(monkeypatch):
     assert [e["event"] for e in out] == ["CPI"]  # high-impact only, dated
     assert out[0]["date"] == "2026-07-01" and out[0]["time"] == "12:30"
     assert out[0]["currency"] == "USD" and out[0]["impact"] == "high"
+    # CPI beat (3.1 vs 3.0) → currency-positive predicted impact
+    assert out[0]["bias"] == "positive" and out[0]["bias_text"] == "USD POSITIVE"
     # medium included when high_only=False, still sorted by date/time
     out2 = news.calendar_range(["USD", "EUR"], "2026-06-25", "2026-07-04", high_only=False)
     assert [e["event"] for e in out2] == ["CPI", "PMI"]
@@ -225,3 +227,28 @@ def test_fx_snapshot_carries_news(tmp_path, monkeypatch):
     monkeypatch.setattr(fx_api.fxnews, "calendar_range", lambda *a, **k: [])
     snap2 = fx_api.build_fx_snapshot("matt")
     assert snap2["news"] == [] and snap2["news_available"] is False
+
+
+# ---- predicted currency impact ---------------------------------------------
+def test_predicted_impact_reads():
+    pi = news.predicted_impact
+    # hawkish beat vs miss
+    assert pi("CPI YoY", "USD", 3.1, 3.0)["bias"] == "positive"
+    assert pi("CPI YoY", "USD", 2.8, 3.0)["bias"] == "negative"
+    # labour slack is inverted: higher unemployment = currency-negative
+    assert pi("Unemployment Rate", "USD", 4.3, 4.1)["bias"] == "negative"
+    assert pi("Unemployment Rate", "USD", 3.9, 4.1)["bias"] == "positive"
+    # suffix parsing (K) on a miss
+    assert pi("Nonfarm Payrolls", "USD", "180K", "200K")["bias"] == "negative"
+    # rate hike above expectation
+    assert pi("BoE Interest Rate Decision", "GBP", 4.50, 4.25)["bias"] == "positive"
+    # inline
+    assert pi("US GDP", "USD", 2.0, 2.0)["bias"] == "neutral"
+    # a speech is "watch tone", not a direction
+    assert pi("ECB President Speech", "EUR")["bias"] == "watch"
+    assert pi("ECB President Speech", "EUR")["text"] == "WATCH TONE"
+    # upcoming (forecast only) → convention arrow, no realised direction
+    up = pi("German GDP", "EUR", None, "0.3%", "0.2%")
+    assert up["bias"] == "watch" and up["text"] == "HIGHER → EUR+"
+    # unclassified indicator → unknown, empty text
+    assert pi("Obscure Diffusion Index", "JPY", 5, 4) == {"bias": "unknown", "text": ""}

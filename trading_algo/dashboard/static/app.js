@@ -1488,8 +1488,9 @@ function chartSectionHTML(page) {
       const x = ((+i + 0.5) * cbw).toFixed(1);
       const hi = evs.some(e => e.impact === 'high');
       const col = hi ? '#e3b341' : '#8a7433';
-      const tip = evs.map(e => `${e.time || ''} ${e.currency} ${e.event}` +
-        (e.actual != null ? ` (actual ${e.actual}${e.estimate != null ? ' vs est ' + e.estimate : ''})` : '')).join('\n');
+      const tip = evs.map(e => `${e.date}${e.time ? ' ' + e.time : ''} · ${e.currency} ${e.event}` +
+        (e.actual != null ? ` (actual ${e.actual}${e.estimate != null ? ' vs est ' + e.estimate : ''})` : '') +
+        (e.bias_text ? ` → likely ${e.bias_text}` : '')).join('\n');
       return `<line x1="${x}" y1="0" x2="${x}" y2="240" stroke="${col}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"><title>${esc(tip)}</title></line>` +
              `<path d="M${x},2 l-4,-0 l4,7 l4,-7 Z" fill="${col}"><title>${esc(tip)}</title></path>`;
     }).join('\n');
@@ -1602,30 +1603,34 @@ function newsPanelHTML(page, selPair) {
     </div>`;
   }
 
+  const biasStyle = b => b === 'positive' ? { c: G, t: '▲ ' } : b === 'negative' ? { c: R, t: '▼ ' }
+    : b === 'neutral' ? { c: '#9db5a0', t: '~ ' } : b === 'watch' ? { c: AMB, t: '◷ ' } : { c: '#3d543f', t: '' };
   const rows = news.slice().reverse().slice(0, 14).map(e => {
     const onPair = legs.has(String(e.currency).toUpperCase());
     const dot = e.impact === 'high' ? '#e3b341' : '#8a7433';
     const surprise = (e.actual != null && e.estimate != null)
       ? (parseFloat(e.actual) > parseFloat(e.estimate) ? G
          : parseFloat(e.actual) < parseFloat(e.estimate) ? R : '#c9e8cc') : '#c9e8cc';
+    const b = biasStyle(e.bias);
     return `
-    <div style="display:grid;grid-template-columns:.7fr .5fr .5fr 2fr 1.3fr;gap:8px;padding:5px 0;font-size:10px;border-bottom:1px solid #121212;align-items:baseline${onPair ? ';background:rgba(227,179,65,.05)' : ''}">
+    <div style="display:grid;grid-template-columns:.7fr .45fr .45fr 1.7fr 1.05fr 1.05fr;gap:8px;padding:5px 0;font-size:10px;border-bottom:1px solid #121212;align-items:baseline${onPair ? ';background:rgba(227,179,65,.05)' : ''}">
       <span style="color:#61805f">${esc(mdy(e.date))}${e.time ? ' <span style="color:#3d543f">' + esc(e.time) + '</span>' : ''}</span>
       <span>${onPair ? '<span style="color:#e3b341">◆</span> ' : ''}<span style="color:${onPair ? '#eaffec' : '#9db5a0'}">${esc(e.currency)}</span></span>
       <span style="display:inline-flex;align-items:center;gap:4px;color:#61805f"><span style="width:6px;height:6px;border-radius:50%;background:${dot};display:inline-block"></span>${e.impact === 'high' ? 'HIGH' : 'MED'}</span>
       <span style="color:#c9e8cc">${esc(e.event || '')}</span>
       <span style="text-align:right;color:#61805f">${e.actual != null ? `A <span style="color:${surprise}">${esc(String(e.actual))}</span>` : ''}${e.estimate != null ? ` <span style="color:#3d543f">/ E ${esc(String(e.estimate))}</span>` : ''}</span>
+      <span style="text-align:right;color:${b.c};font-weight:600">${e.bias_text ? b.t + esc(e.bias_text) : '<span style="color:#3d543f">—</span>'}</span>
     </div>`;
   }).join('');
 
   return `
   <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
-    <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:8px">
+    <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:8px;flex-wrap:wrap">
       <span style="font-size:8.5px;color:#eaffec;letter-spacing:.14em">■ KEY NEWS · SCHEDULED ECONOMIC RELEASES</span>
       <span style="font-size:8.5px;color:#61805f">◆ ${esc(selPair)} legs — marked on the chart above</span>
-      <span style="margin-left:auto;font-size:8.5px;color:#3d543f">HIGH-IMPACT · CORRELATION, NOT PROVEN CAUSE</span>
+      <span style="margin-left:auto;font-size:8.5px;color:#3d543f">LIKELY IMPACT = SURPRISE × INDICATOR TYPE · CORRELATION, NOT PROVEN CAUSE</span>
     </div>
-    <div style="display:grid;grid-template-columns:.7fr .5fr .5fr 2fr 1.3fr;gap:8px;padding-bottom:4px;font-size:8px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>WHEN</span><span>CCY</span><span>IMPACT</span><span>EVENT</span><span style="text-align:right">ACTUAL / EST</span></div>
+    <div style="display:grid;grid-template-columns:.7fr .45fr .45fr 1.7fr 1.05fr 1.05fr;gap:8px;padding-bottom:4px;font-size:8px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>WHEN</span><span>CCY</span><span>IMPACT</span><span>EVENT</span><span style="text-align:right">ACTUAL / EST</span><span style="text-align:right">LIKELY IMPACT</span></div>
     ${rows}
   </div>`;
 }

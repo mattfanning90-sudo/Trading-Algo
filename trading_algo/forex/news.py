@@ -88,11 +88,13 @@ def calendar_range(currencies, start: str, end: str, *, key: str | None = None,
             if cur not in want or imp not in ok_imp:
                 continue
             ts = str(e.get("date") or "")
+            actual, estimate, previous = e.get("actual"), e.get("estimate"), e.get("previous")
+            bias = predicted_impact(e.get("event"), cur, actual, estimate, previous)
             out.append({"date": ts[:10], "time": ts[11:16] if len(ts) >= 16 else "",
                         "currency": cur, "event": e.get("event"),
                         "impact": "high" if _is_high(e.get("impact")) else "medium",
-                        "actual": e.get("actual"), "estimate": e.get("estimate"),
-                        "previous": e.get("previous")})
+                        "actual": actual, "estimate": estimate, "previous": previous,
+                        "bias": bias["bias"], "bias_text": bias["text"]})
         except Exception:
             continue
     out.sort(key=lambda x: (x["date"], x["time"] or "99:99"))
@@ -101,6 +103,81 @@ def calendar_range(currencies, start: str, end: str, *, key: str | None = None,
 
 def _is_high(impact) -> bool:
     return str(impact or "").strip().lower() in ("high", "3", "holiday")
+
+
+# --- predicted currency impact --------------------------------------------
+# Indicator polarity: does a HIGHER number strengthen (+1) or weaken (−1) the
+# currency? Growth/inflation/rates prints are hawkish when they beat; labour
+# slack (unemployment, jobless claims) is the inverse. Order matters —
+# "unemployment" is checked before the generic "employment"/growth terms.
+_NEG_KEYS = ("unemployment", "jobless", "initial claims", "continuing claims")
+_POS_KEYS = ("cpi", "inflation", "ppi", "gdp", "retail", "payroll", "nonfarm",
+             "employment change", "pmi", "ism", "confidence", "sentiment",
+             "durable", "industrial production", "interest rate", "rate decision",
+             "cash rate", "bank rate", "wage", "earnings", "housing starts",
+             "building permits", "current account", "factory orders")
+_WATCH_KEYS = ("speech", "minutes", "testimony", "press conference", "statement",
+               "meeting", "holiday", "member", "governor", "chair")
+
+
+def _polarity(event: str):
+    """+1 (higher = stronger currency), −1 (higher = weaker), 0 (speech/watch),
+    or None (unclassified indicator)."""
+    n = str(event or "").lower()
+    if any(k in n for k in _WATCH_KEYS):
+        return 0
+    if any(k in n for k in _NEG_KEYS):
+        return -1
+    if any(k in n for k in _POS_KEYS):
+        return 1
+    return None
+
+
+def _num(x):
+    """Parse a calendar figure ('3.1%', '180K', '1.2M', '-4,500') to a float,
+    or None."""
+    if x is None:
+        return None
+    s = str(x).strip().replace(",", "").replace("%", "")
+    mult = 1.0
+    if s[-1:].upper() in ("K", "M", "B"):
+        mult = {"K": 1e3, "M": 1e6, "B": 1e9}[s[-1].upper()]
+        s = s[:-1]
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
+
+
+def predicted_impact(event: str, currency: str, actual=None, estimate=None,
+                     previous=None) -> dict:
+    """A plain read of how a release likely affects its currency.
+
+    Returns ``{bias, text}`` where bias ∈ {positive, negative, neutral, watch,
+    unknown} relative to `currency`:
+      * actual vs estimate known → the REALISED read (a beat on a hawkish print
+        is currency-positive; on a labour-slack print, negative);
+      * only a forecast (upcoming) → the CONVENTION (which way a beat pushes);
+      * a speech / minutes → ``watch`` ("watch tone");
+      * an unclassified indicator → ``unknown``.
+    """
+    ccy = str(currency or "").upper()
+    pol = _polarity(event)
+    if pol == 0:
+        return {"bias": "watch", "text": "WATCH TONE"}
+    a, e = _num(actual), _num(estimate)
+    if pol is not None and a is not None and e is not None:
+        s = 0 if a == e else (1 if a > e else -1)
+        d = pol * s
+        if d > 0:
+            return {"bias": "positive", "text": f"{ccy} POSITIVE"}
+        if d < 0:
+            return {"bias": "negative", "text": f"{ccy} NEGATIVE"}
+        return {"bias": "neutral", "text": "INLINE"}
+    if pol is not None and (e is not None or _num(previous) is not None):
+        return {"bias": "watch",
+                "text": f"{'HIGHER' if pol > 0 else 'LOWER'} → {ccy}+"}
+    return {"bias": "unknown", "text": ""}
 
 
 def calendar_feed(currencies, date: str, *, key: str | None = None,
