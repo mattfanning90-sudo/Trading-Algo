@@ -119,10 +119,15 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 > - **F16** — `ci_regression.py` compares the deterministic synthetic backtest to
 >   a committed baseline; wired into CI (`ci.yml`) and the test suite so an
 >   accidental lookahead / cost / sizing regression fails the build.
+> - **F7** — `data_quality.py` is the shared pre-signal gate (foundation P0-D):
+>   stale / gap / dead-price / region-aware impossible-move detection, no
+>   lookahead, composing with PIT membership by intersection. Both engines filter
+>   the candidate set through it identically; paper additionally *freezes* a held
+>   flagged name (no trade on an untrusted price). A perfect no-op on clean data.
 >
-> Remaining in Phase 0: refactors R1/R2/R3 (just-in-time before Phase 3) and the
-> data-quality gate **F7**. All four landed items carry no capital risk and
-> harden guarantees every later phase leans on.
+> **Phase 0 foundations complete.** Remaining Phase-0 work is refactors R1/R2/R3,
+> built just-in-time before their Phase-3 consumers. All landed items carry no
+> capital risk and harden guarantees every later phase leans on.
 
 ## 5. Feature readiness at a glance
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import fees
+from . import data_quality, fees
 from . import strategy
 from .config import DRAWDOWN_COOLDOWN_DAYS, INITIAL_CAPITAL, MAX_DRAWDOWN_STOP
 from .metrics import compute_metrics
@@ -48,12 +48,15 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
 
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
+    dq_excluded: set[str] = set()
     for d in rebal_marks:
         loc_idx = prices.index.searchsorted(d, side="right") - 1
         if loc_idx < min_hist:
             continue
         asof = prices.index[loc_idx]
-        eligible = membership.members_asof(asof) if membership is not None else None
+        base_elig = membership.members_asof(asof) if membership is not None else None
+        eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
+        dq_excluded |= dq.excluded
         weight_schedule[asof] = strategy.compute_targets(
             prices, index_prices, p, asof=asof, eligible=eligible)
 
@@ -137,6 +140,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "total_cost_fraction": total_cost,
         "weights": weights_hist,
         "point_in_time": membership is not None,
+        "data_quality_excluded": sorted(dq_excluded),
         "drawdown_halts": halt_events,
         "drawdown_halt_days": halt_days,
         "metrics": compute_metrics(ret_series, eq, currency=region.currency),

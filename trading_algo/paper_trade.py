@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, fees, fx, strategy
+from . import data, data_quality, fees, fx, strategy
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -172,8 +172,10 @@ def init_account(account: str, capital: float, synthetic: bool,
 # Rebalancing one sleeve
 # ---------------------------------------------------------------------------
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
-                     today: str, trade_log: list) -> None:
+                     today: str, trade_log: list,
+                     frozen: set[str] | None = None) -> None:
     equity = sleeve_equity_local(sleeve, px)
+    frozen = frozen or set()
     print(f"\n  [{region.key}] rebalancing — equity {equity:,.0f} {region.currency}")
 
     # Micro-account mode: too small to hold the full book in whole shares.
@@ -196,6 +198,8 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
             desired[t] = int((equity * w) / price)
 
     for t in sorted(set(sleeve["positions"]) | set(desired)):
+        if t in frozen:   # data-quality: don't trade a name on an untrusted price
+            continue
         cur = sleeve["positions"].get(t, 0)
         tgt = desired.get(t, 0)
         delta = tgt - cur
@@ -274,10 +278,16 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
             else:
-                targets = strategy.compute_targets(prices, index_px, region.params)
+                elig, dq = data_quality.eligible(prices, region, prices.index[-1])
+                if dq.excluded:
+                    print(f"  [{k}] data-quality: freezing "
+                          + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
+                targets = strategy.compute_targets(prices, index_px, region.params,
+                                                   eligible=elig)
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
-                rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
+                rebalance_sleeve(region, sleeve, targets, px_today, today,
+                                 state["trades"], frozen=dq.excluded)
             sleeve["last_rebalance_month"] = this_month
 
         eq_local = sleeve_equity_local(sleeve, px_today)

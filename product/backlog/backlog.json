@@ -260,7 +260,7 @@
       "id": "F7",
       "title": "Automated data-quality gate before signals run",
       "epic": "data-integrity",
-      "status": "ready",
+      "status": "in_progress",
       "owner_role": "chief_engineer",
       "problem": "Signals run on whatever the feed returns; a stale, gapped, or split-corrupted print (a known yfinance failure mode) can silently corrupt every downstream number and generate a real order.",
       "hypothesis": "A shared validator that flags stale prices, gaps, outliers and corporate-action jumps before signals — and holds prior weights rather than trade on garbage — prevents bad prints from becoming orders.",
