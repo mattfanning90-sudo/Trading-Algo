@@ -16,9 +16,12 @@ governs what the trading code becomes.
 | [`roles.md`](roles.md) | The four roles — Product Owner, Data Scientist, Chief Engineer, Algo Trader — their decision rights, vetoes, and critique lens |
 | [`PROCESS.md`](PROCESS.md) | The continuous backlog loop, state machine, Definition of Ready/Done, RICE, invariant mapping, rollout discipline, cadence |
 | [`backlog/backlog.json`](backlog/backlog.json) | The live backlog — every item researched, critiqued by all four roles, scored, with acceptance criteria and a rollout plan |
+| [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) | The Architect + Chief Engineer sustainability review: shared foundations, prerequisite refactors, phased build order, invariant guards |
+| [`backlog/build_plan.json`](backlog/build_plan.json) | Machine-readable build plan — the 19 items sequenced into 5 dependency-ordered phases behind 9 foundations |
 | [`schema/backlog_item.schema.json`](schema/backlog_item.schema.json) | JSON Schema (draft 2020-12) for one backlog item |
 | [`schema/rollout.schema.json`](schema/rollout.schema.json) | JSON Schema for a rollout plan |
-| [`validate.py`](validate.py) | Zero-dependency validator + CI gate over the backlog |
+| [`schema/build_plan.schema.json`](schema/build_plan.schema.json) | JSON Schema for the build plan |
+| [`validate.py`](validate.py) | Zero-dependency validator + CI gate over the backlog *and* the build plan |
 
 ## Quick start
 
@@ -65,6 +68,30 @@ and a file-grounded read of the codebase. Highest-RICE, ready-to-build items:
 The full list, evidence, four-role critiques, acceptance criteria and rollout
 plans are in [`backlog/backlog.json`](backlog/backlog.json). RICE is recomputed
 by the validator, so the ranking can't drift from its inputs.
+
+## Are we building this sustainably?
+
+Yes — and it's checked, not asserted. The whole backlog was run through the
+Architect and the Chief Engineer ([`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md)),
+producing a machine-readable [`build_plan.json`](backlog/build_plan.json) that
+sequences all 19 items into **5 dependency-ordered phases behind 9 shared
+foundations**. The key finding: four features are actually platform primitives
+(F7, F11, F17, F18) and are built first; four prerequisite refactors (R1–R4)
+collapse divergence that already exists before it spreads — most importantly
+**R4**, which upgrades `test_consistency.py` from a text grep to numeric
+weight/cost equality so invariant #3 (one weight function) can't be bypassed.
+
+```
+Phase 0 — Foundations & safety        F7  F16 F17 F18   (+ R1 R2 R3 R4)
+Phase 1 — Statistical validity        F8  F2  F19
+Phase 2 — Data integrity              F1  F13 F14
+Phase 3 — Execution realism & capacity F6 F15 F11 F12 F9
+Phase 4 — Live readiness & reporting  F3  F10 F4  F5
+```
+
+`validate.py` asserts every item is placed exactly once and no feature is
+scheduled before something it depends on, so the plan can't silently rot as items
+move.
 
 ## How this connects to the code
 

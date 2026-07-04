@@ -11,15 +11,22 @@ from pathlib import Path
 
 import pytest
 
-from product.validate import ROLES, validate
+from product.validate import ROLES, validate, validate_build_plan
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKLOG = ROOT / "product" / "backlog" / "backlog.json"
+BUILD_PLAN = ROOT / "product" / "backlog" / "build_plan.json"
 
 
 @pytest.fixture(scope="module")
 def backlog():
     with BACKLOG.open() as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def build_plan():
+    with BUILD_PLAN.open() as fh:
         return json.load(fh)
 
 
@@ -65,7 +72,38 @@ def test_dependencies_resolve(backlog):
 
 def test_schemas_are_valid_json(backlog):
     schema_dir = ROOT / "product" / "schema"
-    for name in ("backlog_item.schema.json", "rollout.schema.json"):
+    for name in ("backlog_item.schema.json", "rollout.schema.json", "build_plan.schema.json"):
         with (schema_dir / name).open() as fh:
             doc = json.load(fh)
         assert doc.get("$schema", "").startswith("https://json-schema.org"), name
+
+
+def test_build_plan_passes_validator(backlog, build_plan):
+    errors = validate_build_plan(backlog, build_plan)
+    assert not errors, "Build plan validation failed:\n" + "\n".join(errors)
+
+
+def test_build_plan_places_every_backlog_item_once(backlog, build_plan):
+    ids = {it["id"] for it in backlog["items"]}
+    placed = [fid for ph in build_plan["phases"] for fid in ph["items"]]
+    assert sorted(placed) == sorted(ids), "every backlog item must be placed in exactly one phase"
+    assert len(placed) == len(set(placed)), "an item is placed in more than one phase"
+
+
+def test_build_plan_dependencies_flow_forward(backlog, build_plan):
+    phase_of = {fid: ph["phase"] for ph in build_plan["phases"] for fid in ph["items"]}
+    for it in backlog["items"]:
+        for dep in it.get("dependencies", []):
+            assert phase_of[dep] <= phase_of[it["id"]], (
+                f"{it['id']} (phase {phase_of[it['id']]}) depends on {dep} "
+                f"scheduled later (phase {phase_of[dep]})"
+            )
+
+
+def test_build_plan_foundation_needs_resolve(build_plan):
+    known = {f["id"] for f in build_plan["foundations"]} | {
+        r["id"] for r in build_plan["prerequisite_refactors"]
+    }
+    for fp in build_plan["feature_plan"]:
+        for need in fp.get("needs", []):
+            assert need in known, f"{fp['id']} needs unknown foundation/refactor {need}"

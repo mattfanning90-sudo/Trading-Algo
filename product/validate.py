@@ -27,6 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BACKLOG = HERE / "backlog" / "backlog.json"
+BUILD_PLAN = HERE / "backlog" / "build_plan.json"
 
 ROLES = ("product_owner", "data_scientist", "chief_engineer", "algo_trader")
 VERDICTS = ("strong_yes", "yes", "maybe", "no")
@@ -188,10 +189,95 @@ def validate(backlog: dict) -> list[str]:
     return errors
 
 
+def validate_build_plan(backlog: dict, plan: dict) -> list[str]:
+    """Cross-check the Architect/Chief-Engineer build plan against the backlog.
+
+    The sustainability guarantees this enforces:
+      * every backlog id is placed in exactly one phase (nothing dropped)
+      * every backlog id has exactly one feature_plan entry, and its phase
+        matches the phase whose items list contains it
+      * phase numbers are contiguous from 0
+      * dependencies flow forward: a feature's backlog deps are in the same or
+        an earlier phase (you can't schedule a feature before what it needs)
+      * foundations/refactors referenced by feature_plan.needs actually exist
+      * a feature that requires a foundation isn't scheduled before it (all
+        foundations are Phase-0 primitives, so any needer must be phase >= those)
+    """
+    errors: list[str] = []
+    backlog_ids = {it["id"] for it in backlog.get("items", [])}
+    deps = {it["id"]: set(it.get("dependencies", []) or []) for it in backlog.get("items", [])}
+
+    phases = plan.get("phases", [])
+    nums = sorted(p["phase"] for p in phases)
+    if nums != list(range(len(nums))):
+        errors.append(f"phase numbers must be contiguous from 0, got {nums}")
+
+    # placement: exactly one phase per id
+    placed: dict[str, list[int]] = {}
+    for p in phases:
+        for fid in p.get("items", []):
+            placed.setdefault(fid, []).append(p["phase"])
+            if fid not in backlog_ids:
+                errors.append(f"phase {p['phase']} references unknown id '{fid}'")
+    for fid in backlog_ids:
+        where = placed.get(fid, [])
+        if not where:
+            errors.append(f"[{fid}] is not placed in any phase (add them all)")
+        elif len(where) > 1:
+            errors.append(f"[{fid}] placed in multiple phases {where}")
+    phase_of = {fid: w[0] for fid, w in placed.items() if len(w) == 1}
+
+    # feature_plan: one per id, phase agrees with placement
+    fp_ids: dict[str, int] = {}
+    foundation_ids = {f["id"] for f in plan.get("foundations", [])}
+    refactor_ids = {r["id"] for r in plan.get("prerequisite_refactors", [])}
+    known_needs = foundation_ids | refactor_ids
+    for fp in plan.get("feature_plan", []):
+        fid = fp.get("id")
+        if fid in fp_ids:
+            errors.append(f"[{fid}] has duplicate feature_plan entries")
+        fp_ids[fid] = fp.get("phase")
+        if fid not in backlog_ids:
+            errors.append(f"feature_plan references unknown id '{fid}'")
+        if fid in phase_of and fp.get("phase") != phase_of[fid]:
+            errors.append(f"[{fid}] feature_plan phase {fp.get('phase')} != its phase placement {phase_of[fid]}")
+        for need in fp.get("needs", []) or []:
+            if need not in known_needs:
+                errors.append(f"[{fid}] needs unknown foundation/refactor '{need}'")
+    for fid in backlog_ids:
+        if fid not in fp_ids:
+            errors.append(f"[{fid}] missing a feature_plan entry")
+
+    # dependency ordering: deps in same or earlier phase
+    for fid, dset in deps.items():
+        if fid not in phase_of:
+            continue
+        for d in dset:
+            if d in phase_of and phase_of[d] > phase_of[fid]:
+                errors.append(f"[{fid}] (phase {phase_of[fid]}) depends on {d} scheduled later (phase {phase_of[d]})")
+
+    # foundations must enable real ids
+    for f in plan.get("foundations", []):
+        for fid in f.get("enables", []):
+            if fid not in backlog_ids:
+                errors.append(f"foundation {f['id']} enables unknown id '{fid}'")
+
+    return errors
+
+
 def main() -> int:
     backlog = _load(BACKLOG)
     errors = validate(backlog)
     n = len(backlog.get("items", []))
+
+    plan_note = ""
+    if BUILD_PLAN.exists():
+        plan = _load(BUILD_PLAN)
+        plan_errors = validate_build_plan(backlog, plan)
+        errors += [f"build_plan: {e}" for e in plan_errors]
+        if not plan_errors:
+            plan_note = f"; build plan places all {n} items across {len(plan.get('phases', []))} phases"
+
     if errors:
         print(f"FAIL: {len(errors)} problem(s) in {n} backlog item(s):\n")
         for e in errors:
@@ -199,7 +285,7 @@ def main() -> int:
         return 1
     print(f"OK: {n} backlog items valid "
           f"({sum(1 for i in backlog['items'] if i['status'] in ('ready', 'in_progress', 'in_rollout'))} "
-          f"ready/in-flight).")
+          f"ready/in-flight){plan_note}.")
     return 0
 
 

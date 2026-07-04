@@ -1,0 +1,151 @@
+# Architecture & sustainability review
+
+*Reviewers: the Architect and the Chief Engineer · as of 2026-07-04 · covers all
+19 backlog items.*
+
+This is the answer to "are we building this sustainably?" The full backlog
+([`backlog/backlog.json`](backlog/backlog.json)) was run through two lenses — the
+Architect (coherence, shared foundations, maintainability) and the Chief Engineer
+(invariant safety, build-readiness, tech debt). The machine-readable output is
+[`backlog/build_plan.json`](backlog/build_plan.json), enforced by
+[`validate.py`](validate.py); this document is the narrative.
+
+**Both reviewers converged on one headline finding:** shipping these 19 features
+one-by-one would fork the codebase. Four of them are actually *platform
+primitives*, three others touch sizing/cost and would each grow a second copy of
+logic the invariants forbid, and two cost paths are *already* diverging today.
+The sustainable move is **foundations first, then features, in dependency order.**
+
+---
+
+## 1. The shared foundations (build once)
+
+Nine primitives that multiple features lean on. Building a feature without its
+foundation is precisely how a second copy of the logic — an invariant-#3
+violation — or a pile of tech debt gets created.
+
+| Foundation | Enables | Why it must be shared |
+|---|---|---|
+| **P0-A** Volume/ADV in the data layer | F6, F15, F9 | `data.py` fetches only `Close`; two features need trailing volume |
+| **P0-B** Fill capture in execution | F11, F3, F10 | `execution_ibkr.rebalance()` discards `placeOrder()`'s result today |
+| **P0-C** One unified cost function | F6, F15 | Two cost paths already diverge (see §3) |
+| **P0-D** Pre-signal data pipeline hook | F7, F14, F1 | One seam both engines call before `compute_targets` |
+| **P0-E** Shared equity stats module | F2, F8, F19 | `metrics.py` and `forex/validation.py` already duplicate Sharpe math |
+| **P0-F** Notification/telemetry channel | F12, F9, F10 | The unattended engine only logs to a file today |
+| **P0-G** Run-manifest + experiment ledger | F2, F3, F10, F17 | F2's Deflated Sharpe needs a *real* trial count, not a guess |
+| **P0-H** Schema-validated state files | F10, F4, F18 | `paper_state_*.json` is one flat untyped dict three features mutate |
+| **P0-I** Capacity hook *inside* `compute_targets` | F15, F6 | The single biggest invariant-#3 risk in the backlog (see §2) |
+
+Four of these are themselves backlog items — **F7 = P0-D, F11 = P0-B, F17 = P0-G,
+F18 = P0-H** — so they are not extra work, just *sequenced first*.
+
+## 2. Prerequisite refactors
+
+Small, unglamorous changes that must land before the features that would
+otherwise entrench divergence:
+
+| # | Refactor | Before | Realizes |
+|---|---|---|---|
+| **R1** | Unify the two cost paths into one `fees.py` entrypoint | F6, F15 | P0-C |
+| **R2** | Capture `ib_insync` fill/Trade results in `rebalance()` | F3, F10, F11 | P0-B |
+| **R3** | Centralize ADV/volume ingestion in `data.py` | F6, F15 | P0-A |
+| **R4** | Strengthen `test_consistency.py` beyond string-grep | F3, F9, F15 | invariant #3 guard |
+
+**R4 is the keystone.** `tests/test_consistency.py` today only checks *source
+text* — that `compute_targets` appears and `select_portfolio` doesn't. A second
+sizing path (e.g. an ADV cap trimmed post-hoc in `paper_trade`) would satisfy
+that grep while still bypassing the one weight function. The fix is numeric
+golden-fixture equality: backtest and paper must produce **bit-identical** weights
+and costs on a fixed-seed run. Everything that touches sizing (F3, F6, F15, F9)
+sits behind this guard.
+
+## 3. Where the current architecture strains
+
+Named seams the reviewers found by reading the code, not assuming:
+
+- **Two cost mechanics already diverge.** `backtest.py` charges cost as
+  `turnover × rate`; `paper_trade.py` inlines slippage into the fill price then
+  adds commission + stamp separately. F6 layered on top *without* unifying would
+  be a third path — and would make F6's own "impact-off reproduces today's
+  numbers exactly" acceptance criterion unstateable. → **R1 in Phase 0.**
+- **Fills are thrown away.** `execution_ibkr.rebalance()` calls `placeOrder()`
+  and discards the result, so there is no decision-price-vs-fill record for F3,
+  F10 or F11 to consume. → **R2 ahead of F11.**
+- **`compute_targets` has a closed signature.** No liquidity/cost channel, so an
+  ADV cap added *outside* it in each caller reopens invariant #3. → **P0-I.**
+- **Hardcoded, currency-mismatched thresholds.** `MIN_TRADE_VALUE`
+  (`execution_ibkr.py`) and the micro threshold (`paper_trade.py`) are module
+  constants, not per-`Region`, already mixing AUD/USD/GBP. Left alone, a 4th
+  region silently misbehaves — breaking the "add a region is one entry" property.
+  → move to `Region` fields before F6/F11/F15 add more thresholds.
+- **Cache key ignores schema.** `data.py` caches parquet by ticker+date; adding a
+  Volume column won't invalidate old Close-only caches. → version the cache key
+  when P0-A lands.
+
+## 4. The build order
+
+Five dependency-ordered phases. `validate.py` asserts every item is placed
+exactly once and no feature is scheduled before something it depends on.
+
+```
+Phase 0 — Foundations & safety        F7  F16 F17 F18   (+ R1 R2 R3 R4)
+Phase 1 — Statistical validity        F8  F2  F19
+Phase 2 — Data integrity              F1  F13 F14
+Phase 3 — Execution realism & capacity F6 F15 F11 F12 F9
+Phase 4 — Live readiness & reporting  F3  F10 F4  F5
+```
+
+- **Phase 0** carries no capital risk and unblocks everything: the data-quality
+  gate, the CI regression net, the manifest/ledger, and state-file schemas.
+- **Phase 1 before Phase 2 is deliberate.** F1 (point-in-time data) is blocked on
+  external vendor procurement; the statistical work is pure code and unblocked,
+  so it proceeds *in parallel* with data acquisition. The Architect's fair
+  objection — "don't certify survivorship-biased data" — is handled by the
+  continuous-backlog rule: **F2's DSR/PBO re-runs once F1 lands**, and every
+  non-PIT result keeps its banner (invariant #5).
+- **Phase 4 discipline:** F3 + F10 are the *sole* hard exit criteria for live
+  capital. F4 and F5 are bundled in the phase but ship on their own schedule so
+  they can't create a false "we're live-ready" signal.
+
+## 5. Feature readiness at a glance
+
+From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:
+
+- **Ready now (no blocker):** F5, F7, F12, F14, F16, F17, F18
+- **Needs a foundation first:** F1, F2, F4, F9, F10, F13, F19
+- **Needs a refactor first:** F3, F6, F8, F15
+- **Scope change:** **F6 splits** — ship cost-unification + impact now, **defer
+  the borrow-cost half** until a short-book epic exists (there is no short book
+  today; building it now is speculative generality).
+
+## 6. How the invariants stay held across the whole set
+
+The `invariant_guards` block in `build_plan.json` records, per invariant, which
+items put it at risk, how it's kept, and the test that proves it. The load-bearing
+ones:
+
+- **#3 one weight function** (F3, F6, F15, F9): all sizing/cost logic lives inside
+  `compute_targets` (P0-I) or the single `fees.py` entrypoint (P0-C); R4 upgrades
+  the guard from grep to numeric equality.
+- **#1 no lookahead** (F1, F13, F7, F8, F3): PIT/delisting reveal info only at the
+  effective date; data repairs use trailing data; attribution replays the logged
+  `asof`/eligible set, never a hindsight refetch.
+- **#2 costs always on** (F4, F6): the unified cost function fires regardless of
+  the impact-model flag; FX spread charged on every transfer.
+
+## 7. What this buys us
+
+The point of the review is *sustainable* delivery, not a Gantt chart:
+
+1. **No forked logic** — four features become shared foundations; R1–R4 collapse
+   divergence that already exists before it spreads.
+2. **The invariants get stronger, not just preserved** — R4 turns the weakest
+   guard (a text grep) into numeric equality.
+3. **Nothing is dropped or mis-ordered** — the plan is machine-checked, so it
+   can't silently rot as items move.
+4. **"Add a region" stays one entry** — the per-region-threshold and cache-key
+   fixes protect the project's core extensibility property.
+
+Read the machine-readable plan in
+[`backlog/build_plan.json`](backlog/build_plan.json); it is validated in CI by
+`tests/test_product_backlog.py`.
