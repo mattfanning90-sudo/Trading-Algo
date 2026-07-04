@@ -1084,6 +1084,29 @@ const TA_HELP = {
   },
 };
 
+/* news events whose currency is one of a pair's two legs (crypto pairs keep
+   their USD leg), most-recent first */
+function newsForPair(page, pair) {
+  const news = (page && page.news) || [];
+  if (!news.length || !pair || pair.length !== 6) return [];
+  const legs = new Set([pair.slice(0, 3).toUpperCase(), pair.slice(3).toUpperCase()]);
+  return news.filter(e => legs.has(String(e.currency).toUpperCase()));
+}
+
+/* ISO dates for `n` daily bars ending at `anchor` (index n-1 = anchor),
+   stepping back over weekdays only — the chart's synthetic bars are one
+   trading day apart, anchored to the book's last mark. */
+function tradingDaysBack(anchor, n) {
+  const out = new Array(n);
+  let d = new Date((String(anchor).slice(0, 10) || '2026-01-01') + 'T00:00:00Z');
+  if (isNaN(d)) d = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    out[i] = d.toISOString().slice(0, 10);
+    do { d = new Date(d.getTime() - 86400e3); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  }
+  return out;
+}
+
 function taTipHTML(key) {
   const h = TA_HELP[key];
   if (!h) return '';
@@ -1446,6 +1469,32 @@ function chartSectionHTML(page) {
   /* stash context for the mousemove hover layer */
   _chartCtx = { bars: cBars, cbw, n2, cFmt, barWord, tf };
 
+  /* ---- economic-news markers: vertical lines at the bar a release hit ---- */
+  const newsMarks = newsForPair(page, selPair);
+  let newsLines = '';
+  const newsOnChart = T.desc === 'DAILY' && newsMarks.length;
+  if (newsOnChart) {
+    const barDates = tradingDaysBack(page.last_bar_date, n2);   // barDates[i] = ISO date of bar i
+    const byBar = {};
+    for (const ev of newsMarks) {
+      let i = barDates.indexOf(ev.date);
+      if (i < 0) {                                              // nearest bar on/after the release
+        i = barDates.findIndex(d => d >= ev.date);
+        if (i < 0) continue;                                    // event outside the window
+      }
+      (byBar[i] = byBar[i] || []).push(ev);
+    }
+    newsLines = Object.entries(byBar).map(([i, evs]) => {
+      const x = ((+i + 0.5) * cbw).toFixed(1);
+      const hi = evs.some(e => e.impact === 'high');
+      const col = hi ? '#e3b341' : '#8a7433';
+      const tip = evs.map(e => `${e.time || ''} ${e.currency} ${e.event}` +
+        (e.actual != null ? ` (actual ${e.actual}${e.estimate != null ? ' vs est ' + e.estimate : ''})` : '')).join('\n');
+      return `<line x1="${x}" y1="0" x2="${x}" y2="240" stroke="${col}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"><title>${esc(tip)}</title></line>` +
+             `<path d="M${x},2 l-4,-0 l4,7 l4,-7 Z" fill="${col}"><title>${esc(tip)}</title></path>`;
+    }).join('\n');
+  }
+
   const chartSrc = cReal ? 'LIVE OHLC (candles.json)' : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — DROP A candles.json TO WIRE REAL OHLC';
   const sideColor = row.weight >= 0 ? G : R;
 
@@ -1487,17 +1536,21 @@ function chartSectionHTML(page) {
         <polyline points="${taEmaFast}" stroke="#e3b341" stroke-width="1.4" fill="none"></polyline>
         <polyline points="${taEmaSlow}" stroke="#c9e8cc" stroke-width="1.4" fill="none" opacity="0.85"></polyline>
         <line x1="0" y1="${CY(closeN).toFixed(1)}" x2="1200" y2="${CY(closeN).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"></line>
+        ${newsLines}
       </svg>
       <div id="candle-pop" style="display:none;position:absolute;top:10px;left:0;width:292px;background:#0d0d0d;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 32px rgba(0,0,0,.8);z-index:70;padding:11px 13px;pointer-events:none"></div>
       </div>
-      <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px">
+      <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px;flex-wrap:wrap">
         <span>${T.label}</span>
         <span>HI <span style="color:#61805f">${cFmt(cHi)}</span></span>
         <span>LO <span style="color:#61805f">${cFmt(cLo)}</span></span>
         <span style="color:#e3b341">LAST ${pairPrice(selPair, closeN)} ┄</span>
         <span>BOOK <span style="color:${sideColor}">${sgnPct(row.weight, 1)}</span></span>
+        ${newsOnChart ? `<span style="color:#e3b341">◆ ${newsMarks.length} NEWS MARKER${newsMarks.length > 1 ? 'S' : ''} — HOVER A LINE</span>`
+          : (newsMarks.length ? '<span style="color:#8a7433">◆ NEWS IN FEED BELOW (markers show on the 1M / 6M daily view)</span>' : '')}
         <span style="margin-left:auto;color:#8a7433">${chartSrc}</span>
       </div>
+      ${newsPanelHTML(page, selPair)}
       ${paneHtml}
       <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
         <div style="display:flex;gap:14px;align-items:baseline;font-size:8.5px;letter-spacing:.1em;margin-bottom:9px"><span style="color:#eaffec;letter-spacing:.14em">■ MOVE BREAKDOWN — WHAT HAPPENED &amp; WHY</span><span style="color:#61805f">${esc(phaseSummary)}</span></div>
@@ -1526,6 +1579,54 @@ function _paneHTML(label, val, hint, y1, y2, y3, pts, area) {
       <polygon points="${area}" fill="rgba(201,232,204,0.06)"></polygon>
       <polyline points="${pts}" fill="none" stroke="#c9e8cc" stroke-width="1.3" stroke-linejoin="round"></polyline>
     </svg>
+  </div>`;
+}
+
+/* ---- KEY NEWS panel: real scheduled economic releases for the book's
+   currencies, most-recent first; the pair's own legs are highlighted and
+   marked ◆ (those are the lines drawn on the chart above) ---- */
+function newsPanelHTML(page, selPair) {
+  const news = (page && page.news) || [];
+  const legs = selPair && selPair.length === 6
+    ? new Set([selPair.slice(0, 3).toUpperCase(), selPair.slice(3).toUpperCase()]) : new Set();
+
+  const hasKey = page && page.news_available;
+  if (!news.length) {
+    // Only show the empty panel when the feed is genuinely wired but quiet;
+    // with no API key at all, stay silent rather than nag.
+    if (!hasKey) return '';
+    return `
+    <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
+      <div style="font-size:8.5px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ KEY NEWS · ECONOMIC CALENDAR</div>
+      <div style="font-size:9.5px;color:#61805f;line-height:1.7">No high-impact scheduled releases for this book’s currencies in the last ${45} days.</div>
+    </div>`;
+  }
+
+  const rows = news.slice().reverse().slice(0, 14).map(e => {
+    const onPair = legs.has(String(e.currency).toUpperCase());
+    const dot = e.impact === 'high' ? '#e3b341' : '#8a7433';
+    const surprise = (e.actual != null && e.estimate != null)
+      ? (parseFloat(e.actual) > parseFloat(e.estimate) ? G
+         : parseFloat(e.actual) < parseFloat(e.estimate) ? R : '#c9e8cc') : '#c9e8cc';
+    return `
+    <div style="display:grid;grid-template-columns:.7fr .5fr .5fr 2fr 1.3fr;gap:8px;padding:5px 0;font-size:10px;border-bottom:1px solid #121212;align-items:baseline${onPair ? ';background:rgba(227,179,65,.05)' : ''}">
+      <span style="color:#61805f">${esc(mdy(e.date))}${e.time ? ' <span style="color:#3d543f">' + esc(e.time) + '</span>' : ''}</span>
+      <span>${onPair ? '<span style="color:#e3b341">◆</span> ' : ''}<span style="color:${onPair ? '#eaffec' : '#9db5a0'}">${esc(e.currency)}</span></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;color:#61805f"><span style="width:6px;height:6px;border-radius:50%;background:${dot};display:inline-block"></span>${e.impact === 'high' ? 'HIGH' : 'MED'}</span>
+      <span style="color:#c9e8cc">${esc(e.event || '')}</span>
+      <span style="text-align:right;color:#61805f">${e.actual != null ? `A <span style="color:${surprise}">${esc(String(e.actual))}</span>` : ''}${e.estimate != null ? ` <span style="color:#3d543f">/ E ${esc(String(e.estimate))}</span>` : ''}</span>
+    </div>`;
+  }).join('');
+
+  return `
+  <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
+    <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:8px">
+      <span style="font-size:8.5px;color:#eaffec;letter-spacing:.14em">■ KEY NEWS · SCHEDULED ECONOMIC RELEASES</span>
+      <span style="font-size:8.5px;color:#61805f">◆ ${esc(selPair)} legs — marked on the chart above</span>
+      <span style="margin-left:auto;font-size:8.5px;color:#3d543f">HIGH-IMPACT · CORRELATION, NOT PROVEN CAUSE</span>
+    </div>
+    <div style="display:grid;grid-template-columns:.7fr .5fr .5fr 2fr 1.3fr;gap:8px;padding-bottom:4px;font-size:8px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>WHEN</span><span>CCY</span><span>IMPACT</span><span>EVENT</span><span style="text-align:right">ACTUAL / EST</span></div>
+    ${rows}
   </div>`;
 }
 

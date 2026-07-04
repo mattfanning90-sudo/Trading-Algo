@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ..forex import fx_book
 from ..forex import fx_config as fxcfg
+from ..forex import news as fxnews
 from . import registry
+
+NEWS_WINDOW_DAYS = 45     # how far back the economic-calendar feed reaches
 
 # Vote order the terminal shows: T·B·M·R·C·N.
 AGENT_ORDER = ["trend", "breakout", "momentum", "meanrev", "carry", "neural"]
@@ -68,6 +71,38 @@ def _tape(state: dict) -> list[dict]:
     for pair, px in (state.get("last_close") or {}).items():
         out.append({"k": pair, "price": _f(px, None), "move": moves.get(pair)})
     return out
+
+
+def _pair_currencies(symbols) -> list[str]:
+    """Fiat currency codes referenced by a book's pairs (crypto/equity legs that
+    aren't in the economic calendar drop out via news.FIAT)."""
+    out: list[str] = []
+    for s in symbols or []:
+        s = str(s).upper()
+        if len(s) == 6:
+            for c in (s[:3], s[3:]):
+                if c in fxnews.FIAT and c not in out:
+                    out.append(c)
+    return out
+
+
+def _news(state: dict) -> list[dict]:
+    """Recent high-impact economic releases for the currencies the book trades,
+    dated so the chart can mark when each landed. Offline-safe: [] with no
+    NEWS_API_KEY / no network / nothing relevant (news.calendar_range never
+    raises)."""
+    symbols = list((state.get("decisions") or {}).keys()) or (state.get("symbols") or [])
+    currencies = _pair_currencies(symbols)
+    if not currencies:
+        return []
+    anchor_raw = str(state.get("last_bar_date") or "")[:10]
+    try:
+        anchor = date.fromisoformat(anchor_raw)
+    except ValueError:
+        anchor = datetime.now(timezone.utc).date()
+    start = (anchor - timedelta(days=NEWS_WINDOW_DAYS)).isoformat()
+    end = (anchor + timedelta(days=2)).isoformat()      # include imminent events
+    return fxnews.calendar_range(currencies, start, end, high_only=True)
 
 
 def build_fx_snapshot(account: str) -> dict:
@@ -142,6 +177,8 @@ def build_fx_snapshot(account: str) -> dict:
         "rows": _rows(state),
         "agent_order": AGENT_ORDER,
         "tape": _tape(state),
+        "news": _news(state),
+        "news_available": bool(fxnews._key()),
         "attribution": [
             {"pair": b.get("pair"), "contrib": _f(b.get("contrib")),
              "move": _f(b.get("move")), "fx": _f(b.get("fx")),

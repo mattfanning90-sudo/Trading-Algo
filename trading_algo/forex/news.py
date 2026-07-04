@@ -27,20 +27,12 @@ def _key(explicit: str | None = None) -> str | None:
     return explicit or os.environ.get("NEWS_API_KEY") or os.environ.get("FMP_API_KEY")
 
 
-@functools.lru_cache(maxsize=8)
-def _fetch_rows_cached(date: str, key: str, timeout: float) -> tuple:
-    """The ONE provider fetch (memoised per date/key): GET the FMP calendar for
-    `date` with the graceful never-raise contract — any failure is ().
-
-    Memoisation matters operationally: a `dashboard --all` export calls the
-    calendar twice per book (feed + catalysts) × 4 books = 8 identical GETs;
-    caching collapses that to 1, keeping the hourly CI well clear of the FMP
-    free tier's 250 calls/day. The exporter is a short-lived CLI process, so
-    intra-process staleness is a non-issue.
-    """
+def _get_calendar(start: str, end: str, key: str, timeout: float) -> tuple:
+    """GET the FMP economic_calendar for the `[start, end]` range with the
+    graceful never-raise contract — any failure is ()."""
     try:
         import requests
-        resp = requests.get(_FMP_URL, params={"from": date, "to": date, "apikey": key},
+        resp = requests.get(_FMP_URL, params={"from": start, "to": end, "apikey": key},
                             timeout=timeout)
         rows = resp.json() if resp.ok else []
     except Exception:
@@ -48,11 +40,63 @@ def _fetch_rows_cached(date: str, key: str, timeout: float) -> tuple:
     return tuple(rows or [])
 
 
+@functools.lru_cache(maxsize=8)
+def _fetch_rows_cached(date: str, key: str, timeout: float) -> tuple:
+    """The single-day provider fetch (memoised per date/key) used by the
+    daily-summary callers. Same never-raise contract as `_get_calendar`.
+    """
+    return _get_calendar(date, date, key, timeout)
+
+
+@functools.lru_cache(maxsize=16)
+def _fetch_range_cached(start: str, end: str, key: str, timeout: float) -> tuple:
+    """Ranged provider fetch (memoised per range/key). FMP's endpoint takes a
+    from/to range, so a whole window is ONE HTTP call, not one-per-day —
+    keeping the hourly CI well clear of the free tier's 250 calls/day.
+    """
+    return _get_calendar(start, end, key, timeout)
+
+
 def _fetch_rows(date: str, key: str, timeout: float = 8.0) -> list:
     """Shared FMP fetch for `calendar_feed` and `economic_events` — the provider
     endpoint/params and the graceful-[] failure contract are written ONCE here.
     Deep-copies on the way out so callers can't mutate the cache."""
     return [copy.deepcopy(e) for e in _fetch_rows_cached(date, key, timeout)]
+
+
+def calendar_range(currencies, start: str, end: str, *, key: str | None = None,
+                   high_only: bool = True, timeout: float = 8.0) -> list[dict]:
+    """High-impact (or medium+, if ``high_only=False``) scheduled releases for
+    `currencies` across the ``[start, end]`` date range, dated — the raw material
+    for a news feed and for marking *when* a catalyst hit on a price chart.
+
+    Returns ``[{date, time, currency, event, impact, actual, estimate, previous}]``
+    sorted by timestamp, or ``[]`` with no key / no network / nothing relevant.
+    Never raises. One provider call for the whole window (see `_fetch_range_cached`).
+    """
+    k = _key(key)
+    want = {c.upper() for c in (currencies or []) if c.upper() in FIAT}
+    if not k or not want or not start or not end:
+        return []
+    ok_imp = ("high", "3", "holiday") if high_only else \
+             ("high", "medium", "3", "2", "holiday")
+    out: list[dict] = []
+    for e in (copy.deepcopy(x) for x in _fetch_range_cached(start, end, k, timeout)):
+        try:
+            cur = str(e.get("currency") or e.get("country") or "").upper()
+            imp = str(e.get("impact") or "").strip().lower()
+            if cur not in want or imp not in ok_imp:
+                continue
+            ts = str(e.get("date") or "")
+            out.append({"date": ts[:10], "time": ts[11:16] if len(ts) >= 16 else "",
+                        "currency": cur, "event": e.get("event"),
+                        "impact": "high" if _is_high(e.get("impact")) else "medium",
+                        "actual": e.get("actual"), "estimate": e.get("estimate"),
+                        "previous": e.get("previous")})
+        except Exception:
+            continue
+    out.sort(key=lambda x: (x["date"], x["time"] or "99:99"))
+    return out
 
 
 def _is_high(impact) -> bool:
