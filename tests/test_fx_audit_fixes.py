@@ -44,6 +44,31 @@ def test_blotter_audusd_trade_matches_book_convention():
     assert txn["rows"][0]["pnl"] == pytest.approx(0.0, abs=0.02)
 
 
+def test_blotter_out_of_window_trade_uses_hub_closes():
+    """A trade OLDER than the bounded display panel must keep its real AUD
+    translation via the injected hub closes — not the old fxf=1.0 fallback
+    (which produced pnl 0.0 here)."""
+    st = _state([{"date": "2024-06-01", "pair": "EURUSD", "side": "BUY",
+                  "delta_weight": 1.0, "target_weight": 1.0, "price": 1.08}])
+    hub = pd.DataFrame({"AUDUSD": [0.66, 0.70]},
+                       index=pd.to_datetime(["2024-06-01", "2025-01-03"]))
+    txn = dashboard._transactions(st, _panel(), hub_closes=hub)
+    pnl = txn["rows"][0]["pnl"]
+    assert pnl == pytest.approx(5_000 * (0.66 / 0.70 - 1.0), rel=1e-3)   # ≈ -285.71
+    assert pnl < -280
+
+
+def test_blotter_rejects_corrupt_negative_rate():
+    """fx_factor now delegates to fxconv.conversion_factor, so fxconv._val's
+    v>0 rule applies uniformly: a corrupt NEGATIVE AUDUSD rate on the trade
+    date yields factor 1.0 (the old hand-rolled check produced a negative
+    factor and a spurious P&L)."""
+    st = _state([{"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+                  "delta_weight": 1.0, "target_weight": 1.0, "price": 1.08}])
+    txn = dashboard._transactions(st, _panel(aud=(-0.66, 0.70)))
+    assert txn["rows"][0]["pnl"] == pytest.approx(0.0, abs=0.02)
+
+
 def test_blotter_survives_pair_missing_from_panel():
     """A trade whose pair has left the panel must not crash the page build."""
     st = _state([{"date": "2025-01-02", "pair": "USDJPY", "side": "BUY",

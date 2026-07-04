@@ -33,8 +33,9 @@ from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
 from .fx_config import ANNUALIZATION, FX_RISK_FREE, profile
+from .fx_config import profile_names
 from .fx_strategy import min_history, target_weights_history
-from .pairs import ALL_PAIRS, get_pair
+from .pairs import ALL_PAIRS, currencies_in, get_pair
 from .validation import (_norm_ppf, deflated_sharpe_ratio, pbo,
                          probabilistic_sharpe_ratio)
 
@@ -72,11 +73,11 @@ GLOSSARY = {
     "Max drawdown": "The worst peak-to-trough fall — your maximum pain if you'd bought at the top.",
     "Win rate": "Share of days the book finished up. (High win rate ≠ profit — a few big losses can still sink it.)",
     "Benchmark": "1/N buy-and-hold: just hold every instrument equally, no model. If the algo can't beat this, the model isn't adding value.",
-    "Agent scorecard": "How each agent's signal alone would have done over this window (no leverage). 'ensemble' is the blend; 'buy&hold' is passive. Shows which edge is working — but one good window is NOT proof.",
+    "Agent scorecard": "How each agent's signal alone would have done over this window (no leverage). 'ensemble' is the blend; 'buy&hold' is passive. Shows which edge is working — but one good window is NOT proof. These figures are gross of spread costs — before the ~|Δw|·½·spread the book actually pays; intraday turnover makes this wedge large.",
     "Regime": "Whether the market is trending (ADX high) or ranging/choppy (ADX low). Trend agents shine in trends; mean-reversion shines in ranges.",
     "Tilt": "The ensemble's net conviction for a pair, from -1 (max short) to +1 (max long).",
     "Gross leverage": "Total size of all positions vs your capital. 3x = holding $15k of positions on $5k.",
-    "Outcome": "The signed price move over the next %d days after the trade — did the call actually work? (⏳ until enough days pass.)" % _OUTCOME_BARS,
+    "Outcome": "For DAILY-book trades: the signed price move over the next %d days after the trade — did the call actually work? (⏳ until enough days pass.) Intraday trades are not judged on this daily window — they're measured by realised P&L in the Transactions blotter." % _OUTCOME_BARS,
     "Mid price": "The execution reference price — the midpoint between bid and ask at the time of the trade.",
     "Bid": "The price you can SELL at (what a buyer will pay). Always a touch below mid.",
     "Ask": "The price you can BUY at (what a seller will accept). Always a touch above mid. (Sometimes called the 'offer'.)",
@@ -92,7 +93,7 @@ GLOSSARY = {
     "Drawdown curve": "How far below the previous peak the book is, every day (the 'underwater' plot). Flat at 0 = at a new high; deep dips = the painful stretches.",
     "Net exposure": "Your true bet per CURRENCY once the pairs are decomposed (long EURUSD = long EUR + short USD). Reveals hidden concentration — e.g. several pairs all leaving you short USD.",
     "Realized vol": "How much the book has actually swung (annualised), vs the profile's target. Far below target = under-risked; far above = the vol-targeting isn't keeping up.",
-    "Attribution": "Where the P&L came from — each pair's running contribution (Δweight × move-since × equity), and the split between long vs short positions and trending vs ranging regimes.",
+    "Attribution": "Where the P&L came from — each pair's running contribution (Δweight × move-since × equity), and the split between long vs short positions and trending vs ranging regimes. Agent-level attribution is gross of spread costs — before the ~|Δw|·½·spread the book actually pays.",
     "Profit factor": "Gross gains ÷ gross losses across days. >1 means up-days outweigh down-days; 1.5+ is healthy. Below 1 = losing.",
     "Expectancy": "Average return per day — what you make on a typical day, good and bad blended. The honest 'edge per bet'.",
     "Conviction": "Today's ensemble tilt per pair, −1 (max short) to +1 (max long): how strongly the blended agents lean right now. Green = long, red = short, brighter = stronger.",
@@ -104,15 +105,104 @@ GLOSSARY = {
 }
 
 
+# One fixed daily-bar fetch need shared by EVERY book in the process: the widest
+# profile's warm-up + the display window (+10 pad). A single shared need means a
+# single shared fetch start, so every account produces the same
+# "{sym}:{start}:{end}:1d" cache key and the daytrader page reuses matt's parquet
+# instead of re-downloading the same 10 series with a different start date.
+_MAX_NEED = max([min_history(profile(n)) for n in profile_names()
+                 if profile(n).bar in ("1d", "B")] or
+                [min_history(profile(n)) for n in profile_names()]) + 180 + 10
+
+
+def _panel_start(need_bars: int | None = None) -> str:
+    """The shared fetch start (~1.6 calendar days per business day). `need_bars`
+    is kept as a FLOOR so a future profile larger than _MAX_NEED can't under-fetch;
+    for every current profile the start string is identical across accounts."""
+    days = int(max(_MAX_NEED, need_bars or 0) * 1.6) + 20
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 def _panel(symbols, synthetic, need_bars: int | None = None):
     if synthetic:
         return fx_data.synthetic_panel(symbols)
-    # Fetch exactly the strategy's warm-up + display need (~1.6 calendar days per
-    # business day). The old fixed 550-day window under-fetched min_history, which
-    # silently truncated the ensemble warm-up on real data.
-    days = int((need_bars or 340) * 1.6) + 20
-    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-    return fx_data.load_panel(symbols, start, use_cache=True)
+    return fx_data.load_panel(symbols, _panel_start(need_bars), use_cache=True)
+
+
+def _ppy(idx) -> float:
+    """Periods-per-year implied by a DatetimeIndex's median bar spacing.
+
+    NOTE: this is CALENDAR-time annualisation (hourly => 365.25*24 = 8766 bars/yr,
+    capped there) rather than FX trading-time (~6048 traded hours/yr), so hourly
+    vol/Sharpe are consistently, modestly overstated everywhere they appear — a
+    known calibration choice, kept for simplicity and internal consistency."""
+    med = idx.to_series().diff().median() if len(idx) else pd.NaT
+    secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
+    return min(ANNUALIZATION if secs >= 43200 else 365.25 * 86400.0 / secs, 24 * 365.25)
+
+
+# THE authoritative bar -> (unit label, bars per day) mapping, shared by
+# _risk_costs and _trade_stats so the risk card and the trade-stats card can
+# never disagree about what one observation IS. Do NOT derive bars_per_day from
+# _ppy: _ppy is calendar-based (hourly ppy=8766 with a 24*365.25 cap), so
+# round(ppy/252) would be off by ~41x for minute bars.
+_BAR_UNITS: dict[str, tuple[str, int]] = {
+    "1d": ("day", 1), "B": ("day", 1), "60m": ("hour", 24),
+    "30m": ("30m bar", 48), "15m": ("15m bar", 96), "1m": ("minute", 1440),
+}
+
+
+def _bar_unit(bar: str | None, idx=None) -> tuple[str, int]:
+    """(unit_label, bars_per_day) for a book's bar cadence.
+
+    Known `bar` strings use the authoritative mapping. An unknown non-empty bar
+    keeps the raw bar string as the label with a spacing-derived bars_per_day.
+    A missing bar (legacy states) falls back entirely to the median key spacing
+    of the parsed equity index `idx`."""
+    if bar in _BAR_UNITS:
+        return _BAR_UNITS[bar]
+    unit, bpd = "day", 1
+    if idx is not None and len(idx) >= 2:
+        med = idx.to_series().diff().median()
+        secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
+        bpd = max(1, round(86400.0 / secs))
+        unit = "day" if secs >= 43200 else ("hour" if secs >= 3600 else "minute")
+    if bar:                                    # unknown cadence: label it honestly
+        unit = str(bar)
+    return unit, bpd
+
+
+def _equity_lookup(state):
+    """(equity_on, eq_map): the ONE string-asof equity lookup for trade dates.
+    Intraday keys rely on lexicographic 'd <= date' — a single implementation
+    keeps the blotter and every card that costs trades in agreement."""
+    eqh = state.get("equity_history", [])
+    eq_map = {d: e for d, e in eqh}
+    eq_dates = [d for d, _ in eqh]
+    cur_eq = float(state.get("equity", state.get("initial_capital", 0.0)))
+
+    def equity_on(date: str) -> float:
+        if date in eq_map:
+            return float(eq_map[date])
+        prior = [d for d in eq_dates if d <= date]
+        return float(eq_map[prior[-1]]) if prior else cur_eq
+
+    return equity_on, eq_map
+
+
+def _trade_cost(dw: float, pair, price: float, eq: float) -> float:
+    """Half-spread charge on a weight change, in account currency — mirrors the
+    book's canonical charge (fx_book.run_once, fx_book.py:282:
+    ``cost_frac += abs(delta) * 0.5 * spread_fraction(price)``). Keep in lockstep;
+    test_blotter_matches_book_charge trips if they drift."""
+    return abs(dw) * 0.5 * pair.spread_fraction(price) * eq
+
+
+def _trade_mark(dw: float, price: float, lastpx: float, fxf: float, eq: float) -> float:
+    """Mark-to-market contribution of a weight change since entry, in account
+    currency — mirrors the book's marking (fx_book.run_once, fx_book.py:231:
+    ``contrib = w * ((nc / lc) * fxf - 1.0)``): pair move × AUD-translation."""
+    return dw * ((lastpx / price) * fxf - 1.0) * eq
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +269,15 @@ def _beginner_explanation(side, weight, agents, indicators, pair):
 def _curve_metrics(dates, values) -> dict:
     if not values or len(values) < 2:
         return {}
-    s = pd.Series(values, index=pd.to_datetime(dates), dtype=float)
+    # format='mixed': one documented --bar 60m override run on a daily book mixes
+    # 'YYYY-MM-DD' and 'YYYY-MM-DD HH:MM' keys — must not raise on pandas 2/3.
+    s = pd.Series(values, index=pd.to_datetime(dates, format="mixed"), dtype=float)
     out = {"total_return": round(float(s.iloc[-1] / s.iloc[0] - 1.0), 4)}
     r = s.pct_change().dropna()
     if len(r) >= 5 and r.std() > 0:
         # Annualise by the curve's ACTUAL bar spacing — an hourly book (daytrader)
         # must not be annualised as if its bars were daily.
-        med = s.index.to_series().diff().median()
-        secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
-        ppy = min(ANNUALIZATION if secs >= 43200 else 365.25 * 86400.0 / secs, 24 * 365.25)
+        ppy = _ppy(s.index)
         out["sharpe"] = round(float((r.mean() * ppy - FX_RISK_FREE)
                                     / (r.std() * np.sqrt(ppy))), 2)
         out["vol"] = round(float(r.std() * np.sqrt(ppy)), 4)
@@ -248,12 +338,17 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
         if t.get("pair") != sym or t.get("date", "") < first:
             continue
         # [:10] → date part, so intraday-keyed trades (the daytrader book) still
-        # land on the daily candles for markers, outcomes and click-to-zoom.
-        tday = str(t["date"])[:10]
+        # land on the daily candles for markers and click-to-zoom.
+        tdate = str(t["date"])
+        tday = tdate[:10]
         i = pos_of.get(tday)
         fwd, outcome = None, "open"
         entry = t.get("price")
-        if i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
+        if " " in tdate:
+            # Intraday trade on a daily panel: never judge a position that lived
+            # hours on a 10-DAILY-bar window — realised P&L lives in the blotter.
+            outcome = "intraday"
+        elif i is not None and entry and i + _OUTCOME_BARS < len(closes_arr):
             s = 1.0 if t["side"] == "BUY" else -1.0
             fwd = round(float(s * (closes_arr[i + _OUTCOME_BARS] / entry - 1.0)), 4)
             outcome = "win" if fwd > 0 else "loss"
@@ -273,7 +368,7 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars):
             "trades": out_trades, "decision": decision}
 
 
-def _transactions(state, panel, max_rows=400) -> dict:
+def _transactions(state, panel, hub_closes=None, max_rows=400) -> dict:
     """Enriched transaction blotter: per-trade price economics + P&L since.
 
     For each weight change we reconstruct the bid/ask/spread (from the pair's
@@ -281,43 +376,36 @@ def _transactions(state, panel, max_rows=400) -> dict:
     transaction cost actually charged, and the trade's running mark-to-market
     contribution (Δweight × price move since × equity). The book is weight-based,
     so 'P&L since' is an honest marginal contribution, not lot-by-lot realised P&L.
-    """
-    eqh = state.get("equity_history", [])
-    eq_map = {d: e for d, e in eqh}
-    eq_dates = [d for d, _ in eqh]
-    cur_equity = float(state.get("equity", state.get("initial_capital", 0.0)))
 
-    def equity_on(date: str) -> float:
-        if date in eq_map:
-            return float(eq_map[date])
-        prior = [d for d in eq_dates if d <= date]
-        return float(eq_map[prior[-1]]) if prior else cur_equity
+    `hub_closes`: optional AUD-hub closes frame covering trades OLDER than the
+    bounded display panel, so their AUD translation stays real instead of
+    silently falling back to 1.0. `rows` is ALWAYS the full blotter (the CSV
+    export must reconcile with the footer totals); `shown`/`max_rows` only cap
+    the table DISPLAY client-side.
+    """
+    equity_on, _ = _equity_lookup(state)
 
     closes = fx_data.closes(panel)
     last = closes.iloc[-1] if not closes.empty else pd.Series(dtype=float)
 
-    # AUD/quote translation history so P&L-since matches how the BOOK actually
-    # marks (weight × pair-move × AUD-translation) — audited fix: previously the
-    # blotter dropped the AUD leg entirely.
-    quotes = {get_pair(t["pair"]).quote for t in state.get("trades", [])
-              if t.get("pair") in ALL_PAIRS}
-    audq = (fxconv.aud_per_quote_frame(closes, quotes)
-            if quotes and not closes.empty else pd.DataFrame())
-
     def fx_factor(quote: str, tdate: str) -> float:
-        """aud_per_quote(now) / aud_per_quote(trade date); 1.0 when underivable."""
-        if audq.empty or quote not in audq.columns:
+        """AUD/quote translation since the trade date, via fxconv.conversion_factor
+        — the book's own AUD-translation semantics (one implementation, so corrupt
+        /negative rates are rejected identically). 1.0 only when underivable."""
+        d = pd.Timestamp(str(tdate)[:10]) if tdate else pd.NaT
+        frame = closes
+        if (hub_closes is not None and not hub_closes.empty
+                and (closes.empty or (d == d and d < closes.index[0]))):
+            frame = hub_closes                # trade predates the display window
+        if frame.empty or d != d:
             return 1.0
         try:
-            idx = audq.index.asof(pd.Timestamp(str(tdate)[:10]))
+            idx = frame.index.asof(d)
         except Exception:
             return 1.0
-        if idx != idx:                                    # NaT: trade predates window
+        if idx != idx:                        # NaT: predates even the hub frame
             return 1.0
-        a0, a1 = audq[quote].get(idx), audq[quote].iloc[-1]
-        if a0 is None or a1 is None or a0 != a0 or a1 != a1 or not a0 or not a1:
-            return 1.0
-        return float(a1 / a0)
+        return float(fxconv.conversion_factor(quote, frame.loc[idx], frame.iloc[-1]))
 
     rows = []
     tot_cost = tot_notional = tot_pnl = 0.0
@@ -333,14 +421,15 @@ def _transactions(state, panel, max_rows=400) -> dict:
         half = spread_px / 2.0
         eq = equity_on(t.get("date", ""))
         dw = float(t.get("delta_weight") or 0.0)
-        notional = abs(dw) * eq
-        cost = abs(dw) * 0.5 * pair.spread_fraction(price) * eq   # matches the book's charge
+        notional = round(abs(dw) * eq, 2)
+        cost = round(_trade_cost(dw, pair, price, eq), 4)
         lp = last.get(sym)
         lastpx = float(lp) if lp is not None and lp == lp else None   # audited fix: no float(None)
         move = (lastpx / price - 1.0) if lastpx else None
         # P&L-since in true AUD: pair move AND the AUD/quote move, like the book.
-        fxf = fx_factor(pair.quote, t.get("date", "")) if lastpx else 1.0
-        pnl = (dw * ((lastpx / price) * fxf - 1.0) * eq) if move is not None else None
+        pnl = (round(_trade_mark(dw, price, lastpx,
+                                 fx_factor(pair.quote, t.get("date", "")), eq), 2)
+               if move is not None else None)
         tot_cost += cost
         tot_notional += notional
         if pnl is not None:
@@ -351,14 +440,14 @@ def _transactions(state, panel, max_rows=400) -> dict:
             "price": round(float(price), 6),
             "bid": round(price - half, 6), "ask": round(price + half, 6),
             "spread_bps": round(spread_px / price * 1e4, 2),
-            "notional": round(notional, 2), "cost": round(cost, 4),
+            "notional": notional, "cost": cost,
             "last": round(lastpx, 6) if lastpx else None,
             "move": round(move, 4) if move is not None else None,
-            "pnl": round(pnl, 2) if pnl is not None else None,
+            "pnl": pnl,
             "regime": t.get("regime"), "why": t.get("why"),
         })
     rows.reverse()                                        # newest first
-    return {"rows": rows[:max_rows], "shown": min(len(rows), max_rows),
+    return {"rows": rows, "shown": min(len(rows), max_rows),
             "count": len(rows),
             "totals": {"cost": round(tot_cost, 2), "notional": round(tot_notional, 2),
                        "pnl": round(tot_pnl, 2)}}
@@ -397,41 +486,33 @@ def _min_track_record_days(returns) -> int | None:
     return int(math.ceil(mintrl))
 
 
-def _risk_costs(state, p) -> dict:
+def _risk_costs(state, p, txn) -> dict:
     """Risk, cost-efficiency and statistical-significance analytics for one book.
 
     Honest by design: the cost wedge shows how much spread eats gross P&L, and the
     PSR / minimum-track-record figures say plainly when results are still just noise.
+
+    Per-trade costs come from the blotter `txn` (full, untruncated rows) — the
+    ONE place the cost formula runs — instead of a second pass over the trades.
     """
     eqh = state.get("equity_history", [])
-    eq_map = {d: e for d, e in eqh}
-    eq_dates = [d for d, _ in eqh]
-    cur_eq = float(state.get("equity", state.get("initial_capital", 0.0)))
-
-    def equity_on(date: str) -> float:
-        if date in eq_map:
-            return float(eq_map[date])
-        prior = [d for d in eq_dates if d <= date]
-        return float(eq_map[prior[-1]]) if prior else cur_eq
-
     total_cost = 0.0
     cost_on_date: dict[str, float] = {}
-    for t in state.get("trades", []):
-        sym, price = t.get("pair"), t.get("price")
-        if not sym or not price:
-            continue
-        try:
-            pair = get_pair(sym)
-        except KeyError:
-            continue
-        c = (abs(float(t.get("delta_weight") or 0.0)) * 0.5
-             * pair.spread_fraction(price) * equity_on(t.get("date", "")))
+    for r in txn.get("rows", []):
+        c = float(r.get("cost") or 0.0)
         total_cost += c
-        cost_on_date[t.get("date", "")] = cost_on_date.get(t.get("date", ""), 0.0) + c
+        d = r.get("time") or ""
+        cost_on_date[d] = cost_on_date.get(d, 0.0) + c
+
+    # Parse the equity keys once (format='mixed': a daily book run once with
+    # --bar 60m mixes daily and intraday keys) for bar-spacing annualisation.
+    idx = pd.to_datetime([d for d, _ in eqh], format="mixed")
+    unit, bars_per_day = _bar_unit(state.get("bar"), idx if len(eqh) >= 2 else None)
 
     out = {"target_vol": round(p.target_vol, 4), "exposure": _exposure(state),
            "total_cost": round(total_cost, 2), "n_obs": max(len(eqh) - 1, 0),
            "currency": state.get("currency", "AUD"),
+           "unit": unit, "bars_per_day": bars_per_day,
            "drawdown": [], "cost_curve": [], "psr": None, "realized_vol": None,
            "vol_ratio": None, "cost_drag": None, "min_track_days": None}
     if len(eqh) < 2:
@@ -452,7 +533,10 @@ def _risk_costs(state, p) -> dict:
 
     r = s.pct_change().dropna()
     if len(r) >= 2 and r.std() > 0:
-        out["realized_vol"] = round(float(r.std() * np.sqrt(ANNUALIZATION)), 4)
+        # Annualise by the curve's ACTUAL bar spacing (same rule as the header
+        # Sharpe tile via _curve_metrics) — hourly bars are not days.
+        ppy = _ppy(idx)
+        out["realized_vol"] = round(float(r.std() * np.sqrt(ppy)), 4)
         out["vol_ratio"] = round(out["realized_vol"] / p.target_vol, 2) if p.target_vol else None
     if len(r) >= 3:
         out["psr"] = round(float(probabilistic_sharpe_ratio(r.values)), 3)
@@ -516,7 +600,14 @@ def _trade_stats(state: dict) -> dict:
     if len(eqh) < 3:
         return out
     # Per-BAR stats: label honestly for intraday books (hourly bars != days).
-    out["unit"] = "hour" if any(" " in str(d) for d, _ in eqh[-3:]) else "day"
+    # The authoritative per-book 'bar' field wins; legacy states without one fall
+    # back to the median spacing of the last keys — the SAME _bar_unit mapping
+    # _risk_costs uses, so the two cards can never disagree.
+    try:
+        tail_idx = pd.to_datetime([str(d) for d, _ in eqh[-3:]], format="mixed")
+    except Exception:
+        tail_idx = None
+    out["unit"] = _bar_unit(state.get("bar"), tail_idx)[0]
     r = pd.Series([float(e) for _, e in eqh], dtype=float).pct_change().dropna()
     gains, losses = r[r > 0], r[r < 0]
     out["no_losses"] = bool(len(gains)) and not bool(losses.sum())
@@ -626,14 +717,12 @@ def _with_catalysts(daily: dict | None) -> dict | None:
     silent) without a NEWS_API_KEY / network / matching event. Correlation only."""
     if not daily or not daily.get("date"):
         return daily
-    curs = set()
-    for c in daily.get("drivers", [])[:6]:
-        try:
-            pr = get_pair(c["pair"])
-        except KeyError:
-            continue
-        curs |= {pr.base, pr.quote} & news.FIAT
-    daily["catalysts"] = news.economic_events(sorted(curs), daily["date"]) if curs else []
+    curs = currencies_in([c["pair"] for c in daily.get("drivers", [])[:6]
+                          if c.get("pair") in ALL_PAIRS]) & news.FIAT
+    # [:10] → date part: intraday books key daily['date'] as 'YYYY-MM-DD HH:MM',
+    # but news.economic_events' provider contract is a plain YYYY-MM-DD.
+    daily["catalysts"] = (news.economic_events(sorted(curs), str(daily["date"])[:10])
+                          if curs else [])
     return daily
 
 
@@ -641,15 +730,12 @@ def _news_feed(state: dict) -> list[dict]:
     """Daily currency news feed: medium/high-impact scheduled releases today for
     the fiat currencies this book trades. Empty (and the card says why) without
     a NEWS_API_KEY — never fabricated."""
-    curs: set[str] = set()
-    for sym in state.get("symbols", []):
-        try:
-            pr = get_pair(sym)
-        except KeyError:
-            continue
-        curs |= {pr.base, pr.quote} & news.FIAT
-    dy = state.get("daily") or {}
-    date = str(dy.get("date") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    curs = currencies_in([s for s in state.get("symbols", [])
+                          if s in ALL_PAIRS]) & news.FIAT
+    # The card is titled "today's scheduled releases", so date it from TODAY —
+    # not the book's last completed bar (which is yesterday/Friday all day on
+    # the daily books between their nightly runs).
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return news.calendar_feed(sorted(curs), date) if curs else []
 
 
@@ -693,7 +779,9 @@ def build_payload(account, synthetic=False, bars=180):
         # Before the book has any history, fall back to a longer window so the
         # chart still shows price context.
         if eqh:
-            start = pd.Timestamp(eqh[0][0])
+            # [:10] → date part: an intraday first key ('2026-07-01 09:00') must
+            # not exclude the daily panel's midnight row for that same day.
+            start = pd.Timestamp(str(eqh[0][0])[:10])
             w = closes_df[closes_df.index >= start]
             if len(w) < 2:
                 w = closes_df.tail(bars)
@@ -707,13 +795,53 @@ def build_payload(account, synthetic=False, bars=180):
         bench_metrics = _curve_metrics([d.strftime("%Y-%m-%d") for d in bh_eq.index],
                                        list(bh_eq.values))
 
-    txn = _transactions(state, panel)
-    risk = _risk_costs(state, p)
+    # Trades older than the bounded display panel would silently lose their AUD
+    # translation (factor 1.0) — fetch a small AUD-hub closes frame covering
+    # [first_trade..now] so the blotter's fx_factor stays real for old trades.
+    trades_list = state.get("trades", [])
+    first_trade = min((str(t["date"])[:10] for t in trades_list if t.get("date")),
+                      default=None)
+    hub_closes = None
+    if (first_trade and not synthetic and not closes_df.empty
+            and pd.Timestamp(first_trade) < closes_df.index[0]):
+        quotes = {get_pair(t["pair"]).quote for t in trades_list
+                  if t.get("pair") in ALL_PAIRS}
+        if quotes:
+            try:
+                hub_closes = fx_data.closes(
+                    fx_data.load_panel(fxconv.hub_symbols(quotes), first_trade,
+                                       use_cache=True))
+            except Exception:
+                hub_closes = None                # graceful: blotter falls back
+    txn = _transactions(state, panel, hub_closes=hub_closes)
+    risk = _risk_costs(state, p, txn)
     book_rets = (pd.Series([float(v) for _, v in eqh], dtype=float)
                  .pct_change().dropna().values) if len(eqh) >= 2 else []
     # ONE weight-engine pass shared by attribution, the scorecard and PBO.
     signals, tilts, rets = _signal_parts(panel, p)
     risk.update(_advanced_significance(signals, rets, book_rets, bars))  # DSR + PBO alongside PSR
+
+    # Annualisation for the client-side metrics table: the book's own bar spacing
+    # (hourly ppy ≈ 8766); the buy&hold bench is always the daily panel → 252.
+    book_ppy = 252
+    if len(eqh) >= 2:
+        try:
+            book_ppy = int(round(_ppy(pd.to_datetime([d for d, _ in eqh],
+                                                     format="mixed"))))
+        except Exception:
+            book_ppy = 252
+
+    # Honest labelling for intraday books: the analytics panel is DAILY (a true
+    # 60m panel would ripple through candles/outcomes/PBO windows and Yahoo's
+    # ~730-day 60m cap — flagged as a follow-up), so say so on the page.
+    bar = state.get("bar")
+    signal_note = None
+    if bar not in ("1d", "B", None):
+        signal_note = (f"This book trades {bar} bars; the Agent scorecard, "
+                       "Attribution and DSR/PBO below are computed on a DAILY "
+                       "proxy panel with the intraday parameter set — "
+                       "directionally useful, not the exact hourly signal "
+                       "history the book traded.")
 
     return {
         "account": account, "profile": state.get("profile", "balanced"),
@@ -728,6 +856,7 @@ def build_payload(account, synthetic=False, bars=180):
                       for k, v in sorted(state.get("positions", {}).items(),
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
+        "book_ppy": book_ppy, "signal_note": signal_note,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
         "risk": risk,
@@ -835,7 +964,11 @@ section{padding:1.25rem 1.5rem;scroll-margin-top:3.4rem}
   font-size:.8rem;line-height:1;border:1px solid var(--bd);border-radius:50%;
   width:1.2rem;height:1.2rem;display:inline-flex;align-items:center;justify-content:center;flex:none;align-self:center}
 .band .info:hover,.band .info:focus,.band .info.open{color:var(--amber);border-color:var(--amber);outline:none}
-.band .pop{display:none;position:absolute;left:-.5rem;top:150%;z-index:40;width:min(520px,82vw);
+/* invisible hover bridge: keeps .info:hover true while the cursor crosses the
+   gap down to the popover (the pop is a CHILD of .info, so reaching it holds
+   :hover). Always present; has no visual effect. */
+.band .info::after{content:"";position:absolute;top:100%;left:-1rem;width:3.5rem;height:.8rem}
+.band .pop{display:none;position:absolute;left:-.5rem;top:130%;z-index:40;width:min(520px,82vw);
   background:#10151c;border:1px solid var(--amber);border-left:3px solid var(--amber);border-radius:8px;
   padding:.7rem .9rem;font-size:.84rem;font-weight:400;line-height:1.55;color:#c9d1d9;cursor:auto;
   text-transform:none;letter-spacing:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -870,9 +1003,6 @@ kbd{font-family:var(--mono);font-size:.66rem;color:var(--mut);border:1px solid v
   font-feature-settings:"tnum" 1;font-family:var(--mono)}
 .stat .v,.kpi .v,#riskstats .v{letter-spacing:-.01em}
 section{padding:1rem 1.5rem 1.25rem}
-.plain{margin:0 0 1rem;padding:.7rem .9rem;border:1px solid var(--bd);border-left:3px solid var(--accent);
-  border-radius:8px;background:#10151c;color:#c9d1d9;font-size:.86rem;line-height:1.55;max-width:1000px}
-.plain b{color:var(--fg)}.plain .q{color:var(--amber);font-weight:600}
 .heat{display:flex;flex-wrap:wrap;gap:.4rem}
 .hc{padding:.4rem .55rem;border-radius:8px;border:1px solid var(--bd);font-size:.72rem;
   font-family:var(--mono);min-width:82px;text-align:center;line-height:1.35}
@@ -1043,10 +1173,13 @@ const G = DASH.glossary||{}, ROLES = DASH.agent_roles||{};
 const pct = v => v==null? "–" : (v>=0?"+":"")+(v*100).toFixed(2)+"%";
 const fmt = v => v==null? "–" : (Math.abs(v)>=100? v.toFixed(2) : v.toPrecision(5));
 const tip = (txt,term)=>`<span class="tip" data-tip="${(G[term]||'').replace(/"/g,'&quot;')}">${txt}</span>`;
-// LWC time normaliser: intraday keys ("YYYY-MM-DD HH:MM", e.g. the daytrader
-// book's hourly equity) become UNIX timestamps; daily date strings pass through.
-const toT = s => (typeof s==='string'&&s.includes(' '))?Math.floor(Date.parse(s.replace(' ','T')+':00Z')/1000):s;
-const fmtT = t => typeof t==='number'?new Date(t*1000).toISOString().slice(0,16).replace('T',' ')
+// HTML-escape for third-party (economic-calendar API) strings before innerHTML.
+const esc = s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// LWC time normaliser: EVERY curve time becomes a UNIX timestamp — intraday keys
+// ("YYYY-MM-DD HH:MM") and daily date strings alike — so a series can never mix
+// string and numeric time types (LWC rejects mixed types on one time scale).
+const toT = s => typeof s==='string'?Math.floor(Date.parse(s.includes(' ')?s.replace(' ','T')+':00Z':s+'T00:00:00Z')/1000):s;
+const fmtT = t => typeof t==='number'?new Date(t*1000).toISOString().slice(0,16).replace('T',' ').replace(' 00:00','')
   :(t&&t.year?`${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`:t);
 let chart;
 
@@ -1075,15 +1208,19 @@ function sparkline(curve,w=110,h=26){
 (function(){
   const el=document.getElementById('verdict'); if(!el) return;
   const rk=DASH.risk||{}, ret=DASH.ret, n=rk.n_obs||0, retTxt=pct(ret);
+  // n_obs/min_track_days are OBSERVATION (bar) counts — narrate them in the
+  // book's own bar unit (exact bars/day from the shared server-side mapping).
+  const u=rk.unit||'day', bpd=rk.bars_per_day||1;
+  const nbars=u==='day'?`${n} day${n===1?'':'s'}`:`${n} ${u} bars`;
   let chip,cls,msg;
   if(DASH.halted){chip='⛔ Risk-halted';cls='v-red';
     msg=`The drawdown breaker tripped — the book is flat and cooling off. Return ${retTxt}.`;}
   else if(rk.psr==null||n<10){chip='🟡 Too early to tell';cls='v-amber';
-    msg=`${retTxt} over ${n} day${n===1?'':'s'} — far too little data to mean anything yet. Treat it as noise, not skill.`;}
+    msg=`${retTxt} over ${nbars} — far too little data to mean anything yet. Treat it as noise, not skill.`;}
   else if(rk.psr>=0.95){chip=ret>=0?'🟢 Edge (so far)':'🔴 Losing edge';cls=ret>=0?'v-green':'v-red';
-    msg=`${retTxt} with PSR ${(rk.psr*100).toFixed(0)}% over ${n} days — statistically distinguishable from luck. Keep watching; one window isn't proof.`;}
-  else{const months=rk.min_track_days?Math.round(rk.min_track_days/21):null;chip='🟡 Not proven';cls='v-amber';
-    msg=`${retTxt} over ${n} days · PSR ${(rk.psr*100).toFixed(0)}% — still indistinguishable from luck${months?`; ~${months} months of data needed to tell`:''}. Treat as noise for now.`;}
+    msg=`${retTxt} with PSR ${(rk.psr*100).toFixed(0)}% over ${nbars} — statistically distinguishable from luck. Keep watching; one window isn't proof.`;}
+  else{const months=rk.min_track_days?Math.round(rk.min_track_days/(21*bpd)):null;chip='🟡 Not proven';cls='v-amber';
+    msg=`${retTxt} over ${nbars} · PSR ${(rk.psr*100).toFixed(0)}% — still indistinguishable from luck${months?`; ~${months} months of data needed to tell`:''}. Treat as noise for now.`;}
   el.className='verdict '+cls;
   el.innerHTML=`<span class=vchip>${chip}</span><span>${msg}</span>`;
 })();
@@ -1113,8 +1250,8 @@ function sparkline(curve,w=110,h=26){
   let cat='';
   const ev=d.catalysts||[];
   if(ev.length){
-    const items=ev.map(e=>{const p=[e.actual!=null?`actual ${e.actual}`:'',e.estimate!=null?`est ${e.estimate}`:'',e.previous!=null?`prev ${e.previous}`:''].filter(Boolean).join(' · ');
-      return `<div class=drow><span class=dwhy><b>${e.currency}</b> · ${e.event||'release'}${p?` (${p})`:''}</span></div>`;}).join('');
+    const items=ev.map(e=>{const p=[e.actual!=null?`actual ${esc(e.actual)}`:'',e.estimate!=null?`est ${esc(e.estimate)}`:'',e.previous!=null?`prev ${esc(e.previous)}`:''].filter(Boolean).join(' · ');
+      return `<div class=drow><span class=dwhy><b>${esc(e.currency)}</b> · ${esc(e.event)||'release'}${p?` (${p})`:''}</span></div>`;}).join('');
     cat=`<div class=dmkt><b>Possible catalysts</b> ${tip('— correlation, not proof','Catalyst')}: high-impact scheduled releases today on currencies you traded — a <i>possible</i> reason for the moves above.${items}</div>`;
   }
   el.innerHTML=head+brk+`<div class=dgrid>${col('Drivers — helped',winners)}${col('Detractors — hurt',losers)}</div>`+mkt+cat;
@@ -1124,9 +1261,9 @@ function sparkline(curve,w=110,h=26){
   const nf=document.getElementById('newsfeed'); if(!nf) return;
   const feed=DASH.news_feed||[];
   if(!feed.length){nf.innerHTML='<div class=muted>No scheduled releases found for your currencies today — or no NEWS_API_KEY secret is configured (add a free Financial Modeling Prep key in repo Settings → Secrets to enable the feed).</div>';return;}
-  nf.innerHTML=feed.map(e=>{const p=[e.actual!=null?`actual ${e.actual}`:'',e.estimate!=null?`est ${e.estimate}`:'',e.previous!=null?`prev ${e.previous}`:''].filter(Boolean).join(' · ');
+  nf.innerHTML=feed.map(e=>{const p=[e.actual!=null?`actual ${esc(e.actual)}`:'',e.estimate!=null?`est ${esc(e.estimate)}`:'',e.previous!=null?`prev ${esc(e.previous)}`:''].filter(Boolean).join(' · ');
     const hot=e.impact==='high';
-    return `<div class=drow><span class="amt muted">${e.time||'—'}</span><span><b style="${hot?'color:var(--amber)':''}">${e.currency}</b> ${e.event||'release'}${hot?' <span class=badge>high</span>':''}${p?`<div class=dwhy>${p}</div>`:''}</span></div>`;}).join('');
+    return `<div class=drow><span class="amt muted">${esc(e.time)||'—'}</span><span><b style="${hot?'color:var(--amber)':''}">${esc(e.currency)}</b> ${esc(e.event)||'release'}${hot?' <span class=badge>high</span>':''}${p?`<div class=dwhy>${p}</div>`:''}</span></div>`;}).join('');
 })();
 
 function bars(obj, hi){
@@ -1154,7 +1291,10 @@ function goPair(sym){
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-pair]'); if(t) goPair(t.dataset.pair);});
 document.addEventListener('keydown',e=>{
-  if(e.target.tagName==='INPUT'||!curSym||!(DASH.pairs||[]).length) return;
+  if(e.altKey||e.metaKey||e.ctrlKey) return;   // browser shortcuts (Alt/Cmd+Arrow) pass through
+  const tg=e.target;
+  if(tg.tagName==='INPUT'||tg.tagName==='TEXTAREA'||tg.tagName==='SELECT'||tg.isContentEditable
+     ||!curSym||!(DASH.pairs||[]).length) return;
   const i=DASH.pairs.indexOf(curSym);
   if(e.key==='ArrowRight') showPair(DASH.pairs[(i+1)%DASH.pairs.length]);
   else if(e.key==='ArrowLeft') showPair(DASH.pairs[(i-1+DASH.pairs.length)%DASH.pairs.length]);});
@@ -1165,7 +1305,8 @@ document.addEventListener('keydown',e=>{
   if(bk)bk.innerHTML=(DASH.books||[]).map(b=>b===DASH.account
     ?`<span class="bk cur">${b}</span>`:`<a class=bk href="fx_${b}.html">${b}</a>`).join(' ');
   const ago=document.getElementById('ago');
-  const upd=Date.parse((DASH.updated||'').replace(' UTC','Z').replace(' ','T'));
+  // one parser for one payload format: reuse toT (always-numeric) for freshness
+  const upd=toT((DASH.updated||'').replace(' UTC',''))*1000;
   function tick(){if(!ago||!upd)return;const m=Math.max(0,Math.round((Date.now()-upd)/60000));
     ago.textContent=m<60?`updated ${m}m ago`:`updated ${Math.round(m/60)}h ago`;
     ago.style.color=m>1800?'var(--dn)':'var(--mut)';}   // stale >30h = red
@@ -1226,7 +1367,13 @@ document.addEventListener('keydown',e=>{
 })();
 
 (function(){
-  document.getElementById('agentcard').innerHTML=bars(DASH.attribution,["ensemble","buy&hold"]);
+  // Honest labelling: scorecard/attribution are gross of spread costs, and for
+  // intraday books they're computed on a daily proxy panel (signal_note).
+  const grossNote='Gross of spread costs — before the ~|Δw|·½·spread the book actually pays; intraday turnover makes this wedge large.';
+  const note=`<div class=legend>${grossNote}${DASH.signal_note?' '+DASH.signal_note:''}</div>`;
+  document.getElementById('agentcard').innerHTML=bars(DASH.attribution,["ensemble","buy&hold"])+note;
+  const ab=document.querySelector('#attrib .band');
+  if(ab&&DASH.signal_note)ab.insertAdjacentHTML('afterend',`<div class=legend>${DASH.signal_note}</div>`);
   const pos=DASH.positions||[];
   document.getElementById('positionscard').innerHTML=pos.length?bars(Object.fromEntries(pos.map(p=>[p.sym,p.w]))):'<div class="muted">Flat — no open positions right now.</div>';
 })();
@@ -1234,16 +1381,20 @@ document.addEventListener('keydown',e=>{
 (function(){
   // Equity chart + period selector (1W/1M/3M/ALL) + crosshair readout + metrics.
   const el=document.getElementById('eqchart'), mEl=document.getElementById('metrics');
-  const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[], RF=0.035, ANN=252;
+  const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[], RF=0.035;
+  // Each curve is annualised for its OWN bar spacing: the book by book_ppy
+  // (hourly ≈ 8766, from Python — agrees with the header Sharpe tile), the
+  // buy&hold bench always by 252 (it is built from the daily panel).
+  const BOOK_ANN=DASH.book_ppy||252;
   const ROWS=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
     ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],["Win rate","win_rate",true,"Win rate"]];
-  function compute(series){
+  function compute(series,ann){
     const out={}; if(series.length<2) return out;
     const v=series.map(p=>p.value); out.total_return=v[v.length-1]/v[0]-1;
     const r=[]; for(let i=1;i<v.length;i++) r.push(v[i]/v[i-1]-1);
     if(r.length>=5){const mean=r.reduce((a,b)=>a+b,0)/r.length;
       const sd=Math.sqrt(r.reduce((a,b)=>a+(b-mean)**2,0)/r.length);
-      if(sd>0){out.sharpe=+((mean*ANN-RF)/(sd*Math.sqrt(ANN))).toFixed(2); out.vol=+(sd*Math.sqrt(ANN)).toFixed(4);}
+      if(sd>0){out.sharpe=+((mean*ann-RF)/(sd*Math.sqrt(ann))).toFixed(2); out.vol=+(sd*Math.sqrt(ann)).toFixed(4);}
       let peak=-1e18,dd=0; for(const x of v){peak=Math.max(peak,x); dd=Math.min(dd,x/peak-1);} out.max_dd=+dd.toFixed(4);
       out.win_rate=+(r.filter(x=>x>0).length/r.length).toFixed(3);}
     return out;
@@ -1252,7 +1403,7 @@ document.addEventListener('keydown',e=>{
     mEl.innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
       ROWS.map(([l,key,isP,g])=>`<div>${tip(l,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');}
   if(!BENCH.length&&!BOOK.length){el.innerHTML='<p class=muted style="padding:1rem">This fills in as the book trades over the coming days.</p>';renderMetrics({},{});return;}
-  const toDate=t=>new Date(String(t).replace(' ','T'));
+  const toDate=t=>typeof t==='number'?new Date(t*1000):new Date(String(t).replace(' ','T'));
   const cut=(s,days)=>{if(!days||!s.length) return s.slice(); const co=toDate(s[s.length-1].time).getTime()-days*864e5; return s.filter(p=>toDate(p.time).getTime()>=co);};
   const rebase=s=>{if(!s.length) return []; const b=s[0].value||1; return s.map(p=>({time:p.time,value:+(100*p.value/b).toFixed(4)}));};
   const c=LightweightCharts.createChart(el,{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
@@ -1261,7 +1412,9 @@ document.addEventListener('keydown',e=>{
   const bookS=c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'});
   const lwc=s=>s.map(p=>({time:toT(p.time),value:p.value}));
   function apply(days){const bk=rebase(cut(BOOK,days)),bh=rebase(cut(BENCH,days));
-    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk),compute(bh));}
+    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk,BOOK_ANN),compute(bh,252));}
+  if(BOOK_ANN!==252&&mEl)mEl.insertAdjacentHTML('afterend',
+    '<div class=legend>Book bars are hourly; the Buy&amp;Hold benchmark is daily — each row is annualised for its own bar spacing.</div>');
   const periods=[["1W",7],["1M",30],["3M",90],["ALL",0]], pe=document.getElementById('eqperiod');
   pe.innerHTML=periods.map(([l,d])=>`<button class="pbtn${d===0?' on':''}" data-d="${d}">${l}</button>`).join('');
   pe.querySelectorAll('.pbtn').forEach(btn=>btn.onclick=()=>{pe.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');apply(+btn.dataset.d||null);});
@@ -1283,15 +1436,20 @@ document.addEventListener('keydown',e=>{
     ["Cost drag",dragTxt,"Cost drag"],["Realized vol",volTxt,"Realized vol"],["PSR",psrTxt,"PSR"]];
   const rs=document.getElementById('riskstats');
   if(rs)rs.innerHTML=items.map(([k,v,g])=>`<div class=stat><div class=v>${v}</div><div class=k>${g?tip(k,g):k}</div></div>`).join('');
+  // n_obs/min_track_days are OBSERVATION (bar) counts — convert to trading days
+  // and months with the exact bars/day from the shared server-side mapping.
+  const u=rk.unit||'day', bpd=rk.bars_per_day||1;
   let sig;
-  if(rk.psr==null) sig="Not enough history yet to judge significance — give it a few more days of returns.";
+  if(rk.psr==null) sig="Not enough history yet to judge significance — give it a few more bars of returns.";
   else if(rk.min_track_days==null) sig=`PSR ${psrTxt}: the book isn't beating cash yet, so no length of track record would confirm a real edge at this rate. ${tip('What is this?','Significance')}`;
   else{const more=Math.max(0,rk.min_track_days-rk.n_obs);
-    sig=`<b>PSR ${psrTxt}</b> — the probability the true Sharpe is above zero, from ${rk.n_obs} days of returns. To be 95% confident this isn't luck you'd need ≈ <b>${rk.min_track_days}</b> trading days (~${Math.round(rk.min_track_days/21)} months) — about <b>${more}</b> more. Until then, treat the P&L as noise. ${tip('Why?','Significance')}`;}
+    const months=Math.round(rk.min_track_days/(21*bpd));
+    sig=`<b>PSR ${psrTxt}</b> — the probability the true Sharpe is above zero, from ${rk.n_obs} ${u} bars of returns. To be 95% confident this isn't luck you'd need ≈ <b>${rk.min_track_days}</b> ${u} bars (≈${Math.ceil(rk.min_track_days/bpd)} trading days, ~${months} months) — about <b>${more}</b> more. Until then, treat the P&L as noise. ${tip('Why?','Significance')}`;}
   if(rk.dsr!=null||rk.pbo!=null){
     const dsrTxt=rk.dsr!=null?`${tip('Deflated Sharpe','DSR')} ${(rk.dsr*100).toFixed(0)}% <span class=muted>(penalised for ~${rk.dsr_trials} strategies tried)</span>`:'';
     const pboTxt=rk.pbo!=null?`${tip('PBO','PBO')} ${(rk.pbo*100).toFixed(0)}% <span class=muted>overfit risk</span>`:'';
     sig+=`<div style="margin-top:.5rem">${[dsrTxt,pboTxt].filter(Boolean).join(' · ')}</div>`;}
+  if(DASH.signal_note)sig+=`<div class="legend" style="margin-top:.5rem">${DASH.signal_note}</div>`;
   const st=document.getElementById('sigtext'); if(st)st.innerHTML=sig;
   const exp=rk.exposure||{}, ec=document.getElementById('exposurecard');
   if(ec)ec.innerHTML=Object.keys(exp).length?bars(exp):'<div class=muted>Flat.</div>';
@@ -1376,6 +1534,7 @@ document.addEventListener('keydown',e=>{
     if(sortK)rows.sort((a,b)=>{const x=a[sortK],y=b[sortK];
       if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1;
       return (typeof x==='string'?String(x).localeCompare(String(y)):x-y)*sortDir;});
+    rows=rows.slice(0,400);   // display cap only — T.rows (and the CSV) stay full
     el.innerHTML=head()+'<tbody>'+rows.map(rowHTML).join('')+'</tbody>'+foot;
     el.querySelectorAll('th.sortable').forEach(th=>th.onclick=()=>{
       const k=th.dataset.k;
@@ -1383,12 +1542,13 @@ document.addEventListener('keydown',e=>{
   }
   render();
   document.getElementById('txnsearch').addEventListener('input',e=>{curFilter=e.target.value.trim().toLowerCase();render();});
-  // one-click CSV export of the full blotter (client-side, no server)
+  // one-click CSV export of the FULL blotter (T.rows is untruncated, so the
+  // file reconciles with the footer count/totals), RFC-4180-quoted.
   const csvBtn=document.getElementById('csvbtn');
   if(csvBtn)csvBtn.onclick=()=>{
     const kk=cols.map(c=>c[2]);
-    const csv=[kk.join(',')].concat(T.rows.map(r=>kk.map(k=>{
-      const v=r[k]; return v==null?'':String(v).includes(',')?`"${v}"`:v;}).join(','))).join('\n');
+    const q=v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    const csv=[kk.join(',')].concat(T.rows.map(r=>kk.map(k=>q(r[k])).join(','))).join('\n');
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download=`transactions_${DASH.account}.csv`; a.click(); URL.revokeObjectURL(a.href);};
@@ -1399,6 +1559,10 @@ function showPair(sym){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.s===sym));
   document.getElementById('curpair').textContent=sym;
   const d=DASH.data[sym];
+  // Dispose the previous chart FIRST: chart.remove() detaches LWC's
+  // ResizeObserver/subscriptions (holding ArrowRight would otherwise leak one
+  // live chart instance per keypress). The innerHTML blank stays as belt-and-braces.
+  if(chart){try{chart.remove();}catch(_){}chart=null;}
   document.getElementById('chart').innerHTML='';
   chart=LightweightCharts.createChart(document.getElementById('chart'),{layout:{background:{color:'#161b22'},textColor:'#e6edf3'},
     grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},rightPriceScale:{borderColor:'#30363d'},timeScale:{borderColor:'#30363d'},autoSize:true});
@@ -1425,7 +1589,10 @@ function showPair(sym){
   if(!d.trades.length){j.innerHTML='<div class="muted">No trades for '+sym+' yet.</div>';return;}
   j.innerHTML=d.trades.slice().reverse().map(t=>{
     const cls=t.side==='BUY'?'B':'S';
-    const oc=t.outcome==='win'?`<span class=win>✅ ${pct(t.fwd_return)}</span>`:t.outcome==='loss'?`<span class=loss>❌ ${pct(t.fwd_return)}</span>`:`<span class=muted>⏳ open</span>`;
+    const oc=t.outcome==='win'?`<span class=win>✅ ${pct(t.fwd_return)}</span>`
+      :t.outcome==='loss'?`<span class=loss>❌ ${pct(t.fwd_return)}</span>`
+      :t.outcome==='intraday'?`<span class=muted>⏱ intraday — see blotter P&L</span>`
+      :`<span class=muted>⏳ open</span>`;
     return `<div class="j" data-t="${t.time}"><div class=hd><span class="${cls}">${t.side} ${sym} @ ${fmt(t.price)}</span><span>${oc}</span></div>`+
       `<div class=hd style="margin-top:.2rem"><span class=badge>${t.time}${t.regime?' · '+t.regime:''}</span></div>`+
       `<div class="why" style="margin-top:.4rem">${t.why||'(no rationale)'}</div></div>`;}).join('');
@@ -1451,7 +1618,10 @@ def render(payload: dict) -> str:
         "__T_SCORE__": g["Agent scorecard"], "__T_EXP__": g["Net exposure"],
         "__T_CONV__": g["Conviction"], "__T_ATTR__": g["Attribution"],
         "__T_FEED__": g["News feed"],
-        "__DATA__": json.dumps(payload, separators=(",", ":")),
+        # '</' → '<\/' (JSON-legal escape, zero behaviour change): a third-party
+        # string containing '</script>' can never terminate the inline __DATA__
+        # script at parse time. Client-side rendering additionally esc()apes.
+        "__DATA__": json.dumps(payload, separators=(",", ":")).replace("</", "<\\/"),
     }
     html = _PAGE
     for k, v in repl.items():
@@ -1666,7 +1836,7 @@ def build_index(accounts, out_dir) -> None:
             cards.append(f'<a class=card href="fx_{a}.html"><div class=name>{a}</div>'
                          f'<div class=amt>{eq:,.0f} {s.get("currency","AUD")} '
                          f'({r:+.2%}) · {s.get("profile","")}</div></a>')
-        except SystemExit:
+        except (Exception, SystemExit):    # corrupt/missing state: skip the card
             continue
     html = ("<!doctype html><meta charset=utf-8><title>FX Paper Books</title>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -1699,7 +1869,13 @@ def main(argv=None):
         accts = list_accounts()
         if args.all:
             for a in accts:
-                export_account(a, args.synthetic, os.path.join(args.out_dir, f"fx_{a}.html"), args.bars)
+                # One bad book must not silently drop ALL remaining pages (the
+                # workflows run this under `|| true`).
+                try:
+                    export_account(a, args.synthetic,
+                                   os.path.join(args.out_dir, f"fx_{a}.html"), args.bars)
+                except Exception as exc:
+                    print(f"[skip {a}: {exc!r}]")
         build_index(accts, args.out_dir)
         build_how_page(args.out_dir)
     elif args.account:

@@ -73,6 +73,20 @@ def conversion_factor(quote: str, px_last, px_now) -> float:
     return a1 / a0
 
 
+def hub_symbols(quotes) -> list[str]:
+    """The majors needed to derive aud_per_quote for these quote currencies:
+    the AUDUSD hub plus each quote's USD cross. Lets a caller fetch a minimal
+    historical closes frame (e.g. the dashboard blotter covering trades older
+    than its bounded display panel)."""
+    syms = {"AUDUSD"}
+    for q in set(quotes):
+        if q in _USD_DIRECT:
+            syms.add(_USD_DIRECT[q])
+        elif q in _USD_INVERSE:
+            syms.add(_USD_INVERSE[q])
+    return sorted(syms)
+
+
 def aud_per_quote_frame(closes_df: pd.DataFrame, quotes) -> pd.DataFrame:
     """Vectorised AUD-per-quote series (index = closes_df.index, one column per
     distinct quote currency). NaN where a rate can't be derived from the panel."""

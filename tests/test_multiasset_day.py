@@ -82,6 +82,37 @@ def test_run_all_uses_each_books_cadence(isolated):
     assert " " not in fx_book.load_state("multiasset")["last_bar_date"]
 
 
+def test_cli_init_stores_bar(isolated):
+    """--init --account must pass --bar through to the stored state (issue: the
+    CLI parsed --bar but silently dropped it, pinning every CLI book to 1d)."""
+    fx_book.main(["--init", "--account", "day2", "--profile", "intraday",
+                  "--bar", "60m"])
+    assert fx_book.load_state("day2")["bar"] == "60m"
+    fx_book.main(["--init", "--account", "day3", "--profile", "intraday"])
+    assert fx_book.load_state("day3")["bar"] == "1d"
+
+
+# --- drawdown cooldown scaled to the bar cadence -------------------------------
+def test_intraday_cooldown_rescaled_to_hourly_bars():
+    # counter decrements once per NEW BAR: 240 hourly bars = 10 trading days
+    assert cfg.profile("intraday").drawdown_cooldown_days == 240
+    assert cfg.profile("balanced").drawdown_cooldown_days == 10
+
+
+def test_halted_book_decrements_cooldown_once_per_bar(isolated):
+    fx_book.init_defaults(synthetic=True)
+    cooldown = cfg.profile("intraday").drawdown_cooldown_days
+    s = fx_book.load_state("daytrader")
+    s["risk_halted"] = True
+    s["halt_cooldown"] = cooldown
+    fx_book.save_state("daytrader", s)
+    fx_book.run_once("daytrader", synthetic=True, pool=AgentPool(max_workers=1))
+    s = fx_book.load_state("daytrader")
+    assert s["halt_cooldown"] == cooldown - 1              # exactly one bar
+    assert s["risk_halted"] is True                        # still cooling off
+    assert s["positions"] == {}                            # flat while halted
+
+
 def test_explicit_bar_still_overrides(isolated):
     fx_book.init_defaults(synthetic=True)
     fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1),
@@ -97,7 +128,6 @@ def test_dashboard_handles_hourly_book(isolated):
     p = dashboard.build_payload("daytrader", synthetic=True)
     assert p["books"] == ["daytrader", "matt", "multiasset", "partner"]
     assert p["book_curve"]                                # hourly keys accepted
-    html = dashboard.render_page if False else None
     out = dashboard.export_account("daytrader", synthetic=True)
     assert "const toT" in out                              # LWC time normaliser
     assert "fmtT" in out
