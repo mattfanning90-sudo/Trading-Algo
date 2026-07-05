@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trading-algo/product/schema/build_plan.schema.json",
+  "title": "Build Plan",
+  "description": "The Architect + Chief Engineer sustainability review of the whole backlog, made machine-checkable. It sequences the 19 features into dependency-correct phases behind a set of shared foundations, so we build a coherent platform instead of 19 divergent features. The validator asserts every backlog item is placed exactly once, dependencies flow forward, and each feature's required foundations exist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["meta", "foundations", "prerequisite_refactors", "phases", "feature_plan", "invariant_guards", "sustainability_risks"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["reviewed_by", "as_of", "summary"],
+      "additionalProperties": true,
+      "properties": {
+        "reviewed_by": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "as_of": { "type": "string" },
+        "summary": { "type": "string", "minLength": 20 }
+      }
+    },
+    "foundations": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Shared platform primitives built once that multiple features lean on. Building a feature without its foundation is how a second copy of the logic (invariant #3 risk) or tech debt gets created.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "why", "enables", "touches", "risk_if_skipped"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^P0-[A-Z]$" },
+          "title": { "type": "string", "minLength": 6 },
+          "why": { "type": "string", "minLength": 12 },
+          "enables": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^F[0-9]{1,3}$" } },
+          "touches": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "risk_if_skipped": { "type": "string", "minLength": 12 },
+          "effort": { "type": "string", "enum": ["S", "M", "L"] }
+        }
+      }
+    },
+    "prerequisite_refactors": {
+      "type": "array",
+      "description": "Refactors that must land before a feature to avoid entrenching divergence (e.g. unify the two cost paths before adding to them).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "before", "why", "effort"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^R[0-9]{1,2}$" },
+          "title": { "type": "string", "minLength": 6 },
+          "before": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^F[0-9]{1,3}$" } },
+          "why": { "type": "string", "minLength": 12 },
+          "effort": { "type": "string", "enum": ["S", "M", "L"] }
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered delivery phases. Phase numbers start at 0 and are contiguous. Every backlog id appears in exactly one phase's items.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["phase", "name", "goal", "items", "exit_criteria"],
+        "properties": {
+          "phase": { "type": "integer", "minimum": 0 },
+          "name": { "type": "string", "minLength": 4 },
+          "goal": { "type": "string", "minLength": 12 },
+          "foundations": { "type": "array", "items": { "type": "string", "pattern": "^P0-[A-Z]$" } },
+          "items": { "type": "array", "items": { "type": "string", "pattern": "^F[0-9]{1,3}$" } },
+          "exit_criteria": { "type": "string", "minLength": 12 },
+          "effort": { "type": "string", "enum": ["S", "M", "L", "XL"] }
+        }
+      }
+    },
+    "feature_plan": {
+      "type": "array",
+      "description": "One entry per backlog item: which phase it lands in, its architectural readiness, the foundations it needs, and the build note.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "phase", "readiness", "effort"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F[0-9]{1,3}$" },
+          "phase": { "type": "integer", "minimum": 0 },
+          "readiness": { "type": "string", "enum": ["ready", "needs_foundation", "needs_refactor", "merge", "split"] },
+          "needs": { "type": "array", "items": { "type": "string", "pattern": "^(P0-[A-Z]|R[0-9]{1,2})$" } },
+          "effort": { "type": "string", "enum": ["S", "M", "L"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "invariant_guards": {
+      "type": "array",
+      "minItems": 1,
+      "description": "How the CLAUDE.md invariants stay held across the whole set, especially where several features touch sizing/cost.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invariant", "at_risk_items", "how_kept", "test"],
+        "properties": {
+          "invariant": { "type": "string" },
+          "at_risk_items": { "type": "array", "items": { "type": "string", "pattern": "^F[0-9]{1,3}$" } },
+          "how_kept": { "type": "string", "minLength": 12 },
+          "test": { "type": "string", "minLength": 6 }
+        }
+      }
+    },
+    "sustainability_risks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["risk", "mitigation"],
+        "properties": {
+          "risk": { "type": "string", "minLength": 12 },
+          "seam": { "type": "string" },
+          "mitigation": { "type": "string", "minLength": 12 }
+        }
+      }
+    }
+  }
+}

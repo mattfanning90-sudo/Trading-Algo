@@ -1,15 +1,16 @@
 """Region registry integrity."""
-from trading_algo.regions import REGIONS, get_region
+from trading_algo import config
+from trading_algo.regions import REGIONS, all_region_keys, get_region
 
 
-def test_three_regions():
-    assert set(REGIONS) == {"ASX", "US", "FTSE"}
+def test_registered_regions():
+    assert set(REGIONS) == {"ASX", "US", "FTSE", "TSX"}
 
 
 def test_region_fields_populated():
     for key, r in REGIONS.items():
         assert r.key == key
-        assert r.currency in {"AUD", "USD", "GBP"}
+        assert r.currency in {"AUD", "USD", "GBP", "CAD"}
         assert r.universe, f"{key} has empty universe"
         assert r.index_ticker
         assert r.market_open < r.market_close
@@ -43,3 +44,18 @@ def test_us_has_etfs():
     us = get_region("US")
     assert "SPY" in us.universe and "QQQ" in us.universe
     assert us.stamp_duty_bps == 0
+
+
+def test_tsx_scaffold():
+    tsx = get_region("TSX")
+    assert tsx.currency == "CAD"
+    assert tsx.index_ticker == "^GSPTSE"
+    assert tsx.price_scale == 1.0 and tsx.stamp_duty_bps == 0
+    assert all(t.endswith(".TO") for t in tsx.universe)
+
+
+def test_tsx_registered_but_unfunded():
+    """The backtest gate: TSX is a full region (backtestable on its own) but is
+    deliberately NOT in the funded ALLOCATIONS until a real backtest justifies it."""
+    assert "TSX" in all_region_keys()
+    assert "TSX" not in config.ALLOCATIONS

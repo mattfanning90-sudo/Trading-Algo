@@ -34,6 +34,7 @@ from . import fx_config as cfg
 from . import fx_data
 from . import fxconv
 from . import marks
+from . import pairs
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -447,6 +448,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--exchange", default=None,
                     help="crypto exchange via ccxt (e.g. binance) for the crypto "
                          "source; default binance. See docs/CRYPTO_HF.md.")
+    ap.add_argument("--universe", default=None,
+                    help="on --init with --account, open the book over this set: a "
+                         f"named preset ({', '.join(pairs.UNIVERSES)}) or a comma-"
+                         "separated symbol list. The book is locked to it.")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -461,7 +466,12 @@ def main(argv: list[str] | None = None) -> None:
             src = feeds.resolve_source(args.source, args.exchange)
             if args.profile == "hf_crypto" and src == "yahoo":
                 src = "crypto"
-            symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
+            # An explicit --universe wins over the source's natural set and locks
+            # the book to it (init_account locks whenever symbols is not None).
+            if args.universe:
+                symbols = pairs.resolve_universe(args.universe)
+            else:
+                symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
             init_account(args.account, args.capital, args.profile, symbols=symbols,
                          source=src, bar=args.bar or "1d", force=args.force)
         else:

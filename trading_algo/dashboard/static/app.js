@@ -23,7 +23,7 @@ const S = {
   tf: {},                   // per-account timeframe key
   tfOpen: false,
   ta: { ema: true, boll: false, don: false },
-  taPane: null,
+  taPanes: {},              // in-chart oscillator sub-panes: {RSI, MOMENTUM, ADX}
   candleIdx: null,
   meta: null,
   overview: null,
@@ -931,8 +931,13 @@ function methodHTML() {
 
   const costRows = regions.map(r => {
     const sym = SYM[r.currency] || r.currency;
+    // Scaffolded-but-unfunded sleeves (not in ALLOCATIONS) are shown greyed with
+    // an UNFUNDED tag — backtestable, but receiving no live capital.
+    const keyCell = r.funded === false
+      ? `<span style="color:#9db5a0">${esc(r.key)} <span style="color:#3d543f;font-size:8px">UNFUNDED</span></span>`
+      : `<span style="color:#eaffec">${esc(r.key)}</span>`;
     return `
-    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(r.key)}</span><span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
+    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212">${keyCell}<span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
   }).join('');
 
   const invariants = [
@@ -1083,6 +1088,29 @@ const TA_HELP = {
     apply: 'This is the switch that picks which agents to trust. ADX high → follow Trend, Breakout and Momentum. ADX low → switch to Mean-reversion and fade the extremes instead. Don’t chase breakouts when ADX is under 20 — they tend to fail in chop.',
   },
 };
+
+/* news events whose currency is one of a pair's two legs (crypto pairs keep
+   their USD leg), most-recent first */
+function newsForPair(page, pair) {
+  const news = (page && page.news) || [];
+  if (!news.length || !pair || pair.length !== 6) return [];
+  const legs = new Set([pair.slice(0, 3).toUpperCase(), pair.slice(3).toUpperCase()]);
+  return news.filter(e => legs.has(String(e.currency).toUpperCase()));
+}
+
+/* ISO dates for `n` daily bars ending at `anchor` (index n-1 = anchor),
+   stepping back over weekdays only — the chart's synthetic bars are one
+   trading day apart, anchored to the book's last mark. */
+function tradingDaysBack(anchor, n) {
+  const out = new Array(n);
+  let d = new Date((String(anchor).slice(0, 10) || '2026-01-01') + 'T00:00:00Z');
+  if (isNaN(d)) d = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    out[i] = d.toISOString().slice(0, 10);
+    do { d = new Date(d.getTime() - 86400e3); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  }
+  return out;
+}
 
 function taTipHTML(key) {
   const h = TA_HELP[key];
@@ -1297,7 +1325,7 @@ function chartSectionHTML(page) {
 
   /* ---- TA overlays ---- */
   const ta = S.ta;
-  const pane = S.taPane;
+  const panes = S.taPanes || {};
   const closes = cBars.map(b => b.c);
   const cxAt = i => ((i + 0.5) * cbw).toFixed(1);
   const lineOf = (arr, from) => arr.map((v, j) => cxAt(from + j) + ',' + CY(v).toFixed(1)).join(' ');
@@ -1342,57 +1370,71 @@ function chartSectionHTML(page) {
     { key: 'boll', label: 'BOLLINGER ±2σ', dot: '#9db5a0' },
     { key: 'don', label: 'DONCHIAN ' + wD, dot: '#8a7433' },
   ].map(c => `<span class="hv-dim" data-act="ta" data-arg="${c.key}" data-tip="${c.key}" style="position:relative;display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${ta[c.key] ? '#2a4a2c' : '#262626'};color:${ta[c.key] ? PALE : DIM};background:${ta[c.key] ? '#12200f' : 'transparent'};cursor:pointer;user-select:none"><span style="width:7px;height:2px;background:${c.dot};display:inline-block"></span>${c.label}<span style="color:#3d543f;margin-left:1px">ⓘ</span></span>`).join('\n');
-  const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k =>
-    `<span class="hv-dim" data-act="pane" data-arg="${k}" data-tip="${k}" style="position:relative;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${pane === k ? '#2a4a2c' : '#262626'};color:${pane === k ? PALE : DIM};background:${pane === k ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k} <span style="color:#3d543f">ⓘ</span></span>`).join('\n');
+  const paneChips = ['RSI', 'MOMENTUM', 'ADX'].map(k => {
+    const on = !!panes[k];
+    return `<span class="hv-dim" data-act="pane" data-arg="${k}" data-tip="${k}" style="position:relative;font-size:9px;letter-spacing:.06em;padding:3px 9px;border:1px solid ${on ? '#2a4a2c' : '#262626'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};cursor:pointer;user-select:none">${k} <span style="color:#3d543f">ⓘ</span></span>`;
+  }).join('\n');
 
-  /* ---- indicator pane ---- */
-  let paneHtml = '';
-  if (pane === 'RSI') {
-    const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
-    let g = 0, l = 0;
-    const rsis = [];
-    for (let i = 1; i < n2; i++) {
-      const ch = closes[i] - closes[i - 1];
-      g = (g * (p - 1) + Math.max(ch, 0)) / p;
-      l = (l * (p - 1) + Math.max(-ch, 0)) / p;
-      rsis.push(l === 0 ? 100 : 100 - 100 / (1 + g / l));
+  /* ---- in-chart indicator sub-panes (docked under price, shared x-axis) ---- */
+  const paneSub = (name) => {
+    if (name === 'RSI') {
+      const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
+      let g = 0, l = 0;
+      const rsis = [];
+      for (let i = 1; i < n2; i++) {
+        const ch = closes[i] - closes[i - 1];
+        g = (g * (p - 1) + Math.max(ch, 0)) / p;
+        l = (l * (p - 1) + Math.max(-ch, 0)) / p;
+        rsis.push(l === 0 ? 100 : 100 - 100 / (1 + g / l));
+      }
+      const last = rsis[rsis.length - 1];
+      const PY = v => 8 + (1 - v / 100) * 64;
+      return _paneHTML('RSI(' + p + ')', last.toFixed(1),
+        (last >= 70 ? 'OVERBOUGHT' : last <= 30 ? 'OVERSOLD' : 'NEUTRAL') + ' · 70 ┄ · 30 ┄',
+        PY(70).toFixed(1), PY(50).toFixed(1), PY(30).toFixed(1),
+        rsis.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
+        last >= 70 ? R : last <= 30 ? G : '#c9e8cc');
     }
-    const PY = v => 8 + (1 - v / 100) * 64;
-    paneHtml = _paneHTML('RSI(' + p + ')', rsis[rsis.length - 1].toFixed(1), '70 OVERBOUGHT ┄ · 30 OVERSOLD ┄',
-      PY(70).toFixed(1), PY(50).toFixed(1), PY(30).toFixed(1),
-      rsis.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '');
-  } else if (pane === 'MOMENTUM') {
-    const w = Math.max(3, Math.min(20, Math.floor(n2 / 3)));
-    const rocs = [];
-    for (let i = w; i < n2; i++) rocs.push((closes[i] / closes[i - w] - 1) * 100);
-    const m = Math.max(...rocs.map(Math.abs), 0.1);
-    const PY = v => 40 - (v / m) * 30;
-    const pts = rocs.map((v, j) => cxAt(w + j) + ',' + PY(v).toFixed(1)).join(' ');
-    const last = rocs[rocs.length - 1];
-    paneHtml = _paneHTML('MOMENTUM · ROC(' + w + ') %', sgn(last, Math.abs(last).toFixed(2) + '%'), 'ZERO LINE CENTRE · RANGE ±' + m.toFixed(1) + '%',
-      PY(m * 0.66).toFixed(1), '40', PY(-m * 0.66).toFixed(1), pts,
-      cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40');
-  } else if (pane === 'ADX') {
-    const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
-    let atr = 0, pd = 0, nd = 0, adx = 0;
-    const adxs = [];
-    for (let i = 1; i < n2; i++) {
-      const b = cBars[i], pb = cBars[i - 1];
-      const tr = Math.max(b.h - b.l, Math.abs(b.h - pb.c), Math.abs(b.l - pb.c));
-      const up = b.h - pb.h, dn = pb.l - b.l;
-      atr = (atr * (p - 1) + tr) / p;
-      pd = (pd * (p - 1) + (up > dn && up > 0 ? up : 0)) / p;
-      nd = (nd * (p - 1) + (dn > up && dn > 0 ? dn : 0)) / p;
-      const pdi = atr ? 100 * pd / atr : 0, ndi = atr ? 100 * nd / atr : 0;
-      const dx = (pdi + ndi) ? 100 * Math.abs(pdi - ndi) / (pdi + ndi) : 0;
-      adx = (adx * (p - 1) + dx) / p;
-      adxs.push(adx);
+    if (name === 'MOMENTUM') {
+      const w = Math.max(3, Math.min(20, Math.floor(n2 / 3)));
+      const rocs = [];
+      for (let i = w; i < n2; i++) rocs.push((closes[i] / closes[i - w] - 1) * 100);
+      const m = Math.max(...rocs.map(Math.abs), 0.1);
+      const PY = v => 40 - (v / m) * 30;
+      const pts = rocs.map((v, j) => cxAt(w + j) + ',' + PY(v).toFixed(1)).join(' ');
+      const last = rocs[rocs.length - 1];
+      return _paneHTML('MOMENTUM · ROC(' + w + ') %', sgn(last, Math.abs(last).toFixed(2) + '%'),
+        (last >= 0 ? 'UP-MOMENTUM' : 'DOWN-MOMENTUM') + ' · ZERO LINE CENTRE',
+        PY(m * 0.66).toFixed(1), '40', PY(-m * 0.66).toFixed(1), pts,
+        cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40', last >= 0 ? G : R);
     }
-    const PY = v => 8 + (1 - Math.min(v, 60) / 60) * 64;
-    paneHtml = _paneHTML('ADX(' + p + ') · TREND STRENGTH', adxs[adxs.length - 1].toFixed(1), '25+ TRENDING ┄ · BELOW 20 RANGING',
-      PY(40).toFixed(1), PY(25).toFixed(1), PY(10).toFixed(1),
-      adxs.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '');
-  }
+    if (name === 'ADX') {
+      const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
+      let atr = 0, pd = 0, nd = 0, adx = 0;
+      const adxs = [];
+      for (let i = 1; i < n2; i++) {
+        const b = cBars[i], pb = cBars[i - 1];
+        const tr = Math.max(b.h - b.l, Math.abs(b.h - pb.c), Math.abs(b.l - pb.c));
+        const up = b.h - pb.h, dn = pb.l - b.l;
+        atr = (atr * (p - 1) + tr) / p;
+        pd = (pd * (p - 1) + (up > dn && up > 0 ? up : 0)) / p;
+        nd = (nd * (p - 1) + (dn > up && dn > 0 ? dn : 0)) / p;
+        const pdi = atr ? 100 * pd / atr : 0, ndi = atr ? 100 * nd / atr : 0;
+        const dx = (pdi + ndi) ? 100 * Math.abs(pdi - ndi) / (pdi + ndi) : 0;
+        adx = (adx * (p - 1) + dx) / p;
+        adxs.push(adx);
+      }
+      const last = adxs[adxs.length - 1];
+      const PY = v => 8 + (1 - Math.min(v, 60) / 60) * 64;
+      return _paneHTML('ADX(' + p + ') · TREND STRENGTH', last.toFixed(1),
+        (last >= 25 ? 'TRENDING' : last < 20 ? 'RANGING' : 'BUILDING') + ' · 25 ┄ · 20 ┄',
+        PY(40).toFixed(1), PY(25).toFixed(1), PY(10).toFixed(1),
+        adxs.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
+        last >= 25 ? G : AMB);
+    }
+    return '';
+  };
+  const panesHtml = ['RSI', 'MOMENTUM', 'ADX'].filter(k => panes[k]).map(paneSub).join('');
 
   /* ---- phases (move breakdown) ---- */
   const barWords = { '1-MIN': 'minute', '60-MIN': 'hour', '4-HR': '4-hour stretch', 'DAILY': 'day', 'WEEKLY': 'week', 'MONTHLY': 'month' };
@@ -1446,6 +1488,33 @@ function chartSectionHTML(page) {
   /* stash context for the mousemove hover layer */
   _chartCtx = { bars: cBars, cbw, n2, cFmt, barWord, tf };
 
+  /* ---- economic-news markers: vertical lines at the bar a release hit ---- */
+  const newsMarks = newsForPair(page, selPair);
+  let newsLines = '';
+  const newsOnChart = T.desc === 'DAILY' && newsMarks.length;
+  if (newsOnChart) {
+    const barDates = tradingDaysBack(page.last_bar_date, n2);   // barDates[i] = ISO date of bar i
+    const byBar = {};
+    for (const ev of newsMarks) {
+      let i = barDates.indexOf(ev.date);
+      if (i < 0) {                                              // nearest bar on/after the release
+        i = barDates.findIndex(d => d >= ev.date);
+        if (i < 0) continue;                                    // event outside the window
+      }
+      (byBar[i] = byBar[i] || []).push(ev);
+    }
+    newsLines = Object.entries(byBar).map(([i, evs]) => {
+      const x = ((+i + 0.5) * cbw).toFixed(1);
+      const hi = evs.some(e => e.impact === 'high');
+      const col = hi ? '#e3b341' : '#8a7433';
+      const tip = evs.map(e => `${e.date}${e.time ? ' ' + e.time : ''} · ${e.currency} ${e.event}` +
+        (e.actual != null ? ` (actual ${e.actual}${e.estimate != null ? ' vs est ' + e.estimate : ''})` : '') +
+        (e.bias_text ? ` → likely ${e.bias_text}` : '')).join('\n');
+      return `<line x1="${x}" y1="0" x2="${x}" y2="240" stroke="${col}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"><title>${esc(tip)}</title></line>` +
+             `<path d="M${x},2 l-4,-0 l4,7 l4,-7 Z" fill="${col}"><title>${esc(tip)}</title></path>`;
+    }).join('\n');
+  }
+
   const chartSrc = cReal ? 'LIVE OHLC (candles.json)' : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — DROP A candles.json TO WIRE REAL OHLC';
   const sideColor = row.weight >= 0 ? G : R;
 
@@ -1487,18 +1556,22 @@ function chartSectionHTML(page) {
         <polyline points="${taEmaFast}" stroke="#e3b341" stroke-width="1.4" fill="none"></polyline>
         <polyline points="${taEmaSlow}" stroke="#c9e8cc" stroke-width="1.4" fill="none" opacity="0.85"></polyline>
         <line x1="0" y1="${CY(closeN).toFixed(1)}" x2="1200" y2="${CY(closeN).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"></line>
+        ${newsLines}
       </svg>
       <div id="candle-pop" style="display:none;position:absolute;top:10px;left:0;width:292px;background:#0d0d0d;border:1px solid #2a4a2c;border-radius:3px;box-shadow:0 12px 32px rgba(0,0,0,.8);z-index:70;padding:11px 13px;pointer-events:none"></div>
       </div>
-      <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px">
+      ${panesHtml}
+      <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px;flex-wrap:wrap">
         <span>${T.label}</span>
         <span>HI <span style="color:#61805f">${cFmt(cHi)}</span></span>
         <span>LO <span style="color:#61805f">${cFmt(cLo)}</span></span>
         <span style="color:#e3b341">LAST ${pairPrice(selPair, closeN)} ┄</span>
         <span>BOOK <span style="color:${sideColor}">${sgnPct(row.weight, 1)}</span></span>
+        ${newsOnChart ? `<span style="color:#e3b341">◆ ${newsMarks.length} NEWS MARKER${newsMarks.length > 1 ? 'S' : ''} — HOVER A LINE</span>`
+          : (newsMarks.length ? '<span style="color:#8a7433">◆ NEWS IN FEED BELOW (markers show on the 1M / 6M daily view)</span>' : '')}
         <span style="margin-left:auto;color:#8a7433">${chartSrc}</span>
       </div>
-      ${paneHtml}
+      ${newsPanelHTML(page, selPair)}
       <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
         <div style="display:flex;gap:14px;align-items:baseline;font-size:8.5px;letter-spacing:.1em;margin-bottom:9px"><span style="color:#eaffec;letter-spacing:.14em">■ MOVE BREAKDOWN — WHAT HAPPENED &amp; WHY</span><span style="color:#61805f">${esc(phaseSummary)}</span></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
@@ -1515,17 +1588,70 @@ function chartSectionHTML(page) {
   </div>`;
 }
 
-function _paneHTML(label, val, hint, y1, y2, y3, pts, area) {
+function _paneHTML(label, val, hint, y1, y2, y3, pts, area, valColor) {
+  const vc = valColor || '#e3b341';
   return `
-  <div style="border-top:1px solid #1a1a1a;padding-top:8px">
-    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:5px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:#e3b341">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
-    <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:80px;display:block;margin-bottom:8px">
+  <div style="border-top:1px solid #1a1a1a;padding-top:6px;margin-top:2px">
+    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:4px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:${vc};font-weight:600">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
+    <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:70px;display:block">
       <line x1="0" y1="${y1}" x2="1200" y2="${y1}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <line x1="0" y1="${y2}" x2="1200" y2="${y2}" stroke="#1a1a1a" stroke-width="1"></line>
       <line x1="0" y1="${y3}" x2="1200" y2="${y3}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <polygon points="${area}" fill="rgba(201,232,204,0.06)"></polygon>
-      <polyline points="${pts}" fill="none" stroke="#c9e8cc" stroke-width="1.3" stroke-linejoin="round"></polyline>
+      <polyline points="${pts}" fill="none" stroke="${vc}" stroke-width="1.3" stroke-linejoin="round"></polyline>
     </svg>
+  </div>`;
+}
+
+/* ---- KEY NEWS panel: real scheduled economic releases for the book's
+   currencies, most-recent first; the pair's own legs are highlighted and
+   marked ◆ (those are the lines drawn on the chart above) ---- */
+function newsPanelHTML(page, selPair) {
+  const news = (page && page.news) || [];
+  const legs = selPair && selPair.length === 6
+    ? new Set([selPair.slice(0, 3).toUpperCase(), selPair.slice(3).toUpperCase()]) : new Set();
+
+  const hasKey = page && page.news_available;
+  if (!news.length) {
+    // Only show the empty panel when the feed is genuinely wired but quiet;
+    // with no API key at all, stay silent rather than nag.
+    if (!hasKey) return '';
+    return `
+    <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
+      <div style="font-size:8.5px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ KEY NEWS · ECONOMIC CALENDAR</div>
+      <div style="font-size:9.5px;color:#61805f;line-height:1.7">No high-impact scheduled releases for this book’s currencies in the last ${45} days.</div>
+    </div>`;
+  }
+
+  const biasStyle = b => b === 'positive' ? { c: G, t: '▲ ' } : b === 'negative' ? { c: R, t: '▼ ' }
+    : b === 'neutral' ? { c: '#9db5a0', t: '~ ' } : b === 'watch' ? { c: AMB, t: '◷ ' } : { c: '#3d543f', t: '' };
+  const rows = news.slice().reverse().slice(0, 14).map(e => {
+    const onPair = legs.has(String(e.currency).toUpperCase());
+    const dot = e.impact === 'high' ? '#e3b341' : '#8a7433';
+    const surprise = (e.actual != null && e.estimate != null)
+      ? (parseFloat(e.actual) > parseFloat(e.estimate) ? G
+         : parseFloat(e.actual) < parseFloat(e.estimate) ? R : '#c9e8cc') : '#c9e8cc';
+    const b = biasStyle(e.bias);
+    return `
+    <div style="display:grid;grid-template-columns:.7fr .45fr .45fr 1.7fr 1.05fr 1.05fr;gap:8px;padding:5px 0;font-size:10px;border-bottom:1px solid #121212;align-items:baseline${onPair ? ';background:rgba(227,179,65,.05)' : ''}">
+      <span style="color:#61805f">${esc(mdy(e.date))}${e.time ? ' <span style="color:#3d543f">' + esc(e.time) + '</span>' : ''}</span>
+      <span>${onPair ? '<span style="color:#e3b341">◆</span> ' : ''}<span style="color:${onPair ? '#eaffec' : '#9db5a0'}">${esc(e.currency)}</span></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;color:#61805f"><span style="width:6px;height:6px;border-radius:50%;background:${dot};display:inline-block"></span>${e.impact === 'high' ? 'HIGH' : 'MED'}</span>
+      <span style="color:#c9e8cc">${esc(e.event || '')}</span>
+      <span style="text-align:right;color:#61805f">${e.actual != null ? `A <span style="color:${surprise}">${esc(String(e.actual))}</span>` : ''}${e.estimate != null ? ` <span style="color:#3d543f">/ E ${esc(String(e.estimate))}</span>` : ''}</span>
+      <span style="text-align:right;color:${b.c};font-weight:600">${e.bias_text ? b.t + esc(e.bias_text) : '<span style="color:#3d543f">—</span>'}</span>
+    </div>`;
+  }).join('');
+
+  return `
+  <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
+    <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:8px;flex-wrap:wrap">
+      <span style="font-size:8.5px;color:#eaffec;letter-spacing:.14em">■ KEY NEWS · SCHEDULED ECONOMIC RELEASES</span>
+      <span style="font-size:8.5px;color:#61805f">◆ ${esc(selPair)} legs — marked on the chart above</span>
+      <span style="margin-left:auto;font-size:8.5px;color:#3d543f">LIKELY IMPACT = SURPRISE × INDICATOR TYPE · CORRELATION, NOT PROVEN CAUSE</span>
+    </div>
+    <div style="display:grid;grid-template-columns:.7fr .45fr .45fr 1.7fr 1.05fr 1.05fr;gap:8px;padding-bottom:4px;font-size:8px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>WHEN</span><span>CCY</span><span>IMPACT</span><span>EVENT</span><span style="text-align:right">ACTUAL / EST</span><span style="text-align:right">LIKELY IMPACT</span></div>
+    ${rows}
   </div>`;
 }
 
@@ -2167,7 +2293,7 @@ document.addEventListener('click', async e => {
   if (act === 'tf') { S.tf[S.account] = arg; S.tfOpen = false; S.candleIdx = null; render(); return; }
   if (act === 'pair') { S.selPair[S.account] = arg; S.candleIdx = null; render(); return; }
   if (act === 'ta') { S.ta[arg] = !S.ta[arg]; render(); return; }
-  if (act === 'pane') { S.taPane = S.taPane === arg ? null : arg; render(); return; }
+  if (act === 'pane') { S.taPanes = { ...S.taPanes, [arg]: !S.taPanes[arg] }; render(); return; }
   if (act === 'zoom') { stepZoom(arg); return; }
 });
 

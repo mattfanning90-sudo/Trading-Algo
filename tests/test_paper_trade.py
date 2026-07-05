@@ -12,12 +12,12 @@ from trading_algo.regions import get_region
 
 def test_sell_stamps_actual_realized_pnl():
     """Each sell is stamped with its real realised P&L, computed from the actual
-    lots it consumes in the fills ledger — no separate stored tally."""
+    lots it consumes in the fills ledger — not from a stored tally."""
     trade_log = [{"date": "2026-06-10", "region": "US", "ticker": "AAPL",
                   "side": "BUY", "shares": 10, "fill": 100.0,
                   "commission": 1.0, "stamp_duty": 0.0, "currency": "USD"}]
     sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAPL": 10},
-              "last_rebalance_month": None}
+              "cost_basis": {}, "realized_pnl": 0.0, "last_rebalance_month": None}
     px = pd.Series({"AAPL": 120.0})
     pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(dtype=float),
                         px, "2026-07-01", trade_log)
@@ -26,8 +26,8 @@ def test_sell_stamps_actual_realized_pnl():
     assert sell["side"] == "SELL"
     assert sell["entry"] == pytest.approx(100.0)     # actual FIFO cost basis
     assert sell["realized"] > 150                    # ~ (120−100)·10, minus costs/slippage
-    # no drift-prone stored fields left behind
-    assert "cost_basis" not in sleeve and "realized_pnl" not in sleeve
+    # the vestigial stored fields are NOT used as the source of truth
+    assert sleeve["realized_pnl"] == 0.0 and sleeve["cost_basis"] == {}
 
 
 def test_min_gap_guard_blocks_near_inception_churn():
@@ -94,9 +94,10 @@ def test_cost_basis_derived_from_fills(account):
     pt.init_account(account, capital=300_000, synthetic=True)
     pt.run_daily(account, synthetic=True)
     state = pt.load_state(account)
-    # Basis is not stored on the sleeve — it is derived from the fills ledger.
+    # The stored fields stay at their empty defaults — they are not the source of
+    # truth. Basis and realised P&L are derived from the fills ledger.
     for sleeve in state["sleeves"].values():
-        assert "cost_basis" not in sleeve and "realized_pnl" not in sleeve
+        assert sleeve.get("cost_basis") == {} and sleeve.get("realized_pnl") == 0.0
     basis = pnl.open_basis(pnl.build_lots(state["trades"])[0])
     for k, sleeve in state["sleeves"].items():
         for t in sleeve["positions"]:          # every holding traces to a real buy

@@ -34,7 +34,8 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, fees, fx, pnl, strategy
+from . import data, data_quality, fees, fx, pnl, strategy
+from . import state_schema
 from .regions import REGIONS, get_region
 
 # State location: env override (used by CI to persist to a tracked dir), else repo root.
@@ -54,10 +55,30 @@ def load_state(account: str) -> dict:
     if not os.path.exists(path):
         raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
     with open(path) as f:
-        return json.load(f)
+        state = json.load(f)
+    # Upgrade older files additively (never destructive), then validate. With the
+    # gate on, an invalid file fails safe — we raise rather than trade on / reset
+    # a corrupted book. With it off, we only warn (shadow mode). See config F18.
+    state, _applied = state_schema.migrate_state(state)
+    errors = state_schema.validate_state(state)
+    if errors:
+        msg = (f"State file for account '{account}' is invalid:\n  - "
+               + "\n  - ".join(errors))
+        if cfg.VALIDATE_STATE_FILES:
+            raise state_schema.StateValidationError(msg)
+        print(f"⚠ {msg}\n  (VALIDATE_STATE_FILES is off — continuing in shadow mode)")
+    return state
 
 
 def save_state(account: str, state: dict) -> None:
+    # Refuse to persist a corrupt state when the gate is on, so a bug can't write
+    # garbage that the next run would fail on.
+    if cfg.VALIDATE_STATE_FILES:
+        errors = state_schema.validate_state(state)
+        if errors:
+            raise state_schema.StateValidationError(
+                f"Refusing to save invalid state for '{account}':\n  - "
+                + "\n  - ".join(errors))
     with open(_state_file(account), "w") as f:
         json.dump(state, f, indent=2)
 
@@ -123,13 +144,18 @@ def init_account(account: str, capital: float, synthetic: bool,
             "currency": region.currency,
             "cash": local_cash,
             "positions": {},
-            # P&L is derived from the fills log (state["trades"]), never stored
-            # here — the trade record is the single source of truth.
+            # cost_basis / realized_pnl are retained for the state schema only —
+            # they are NOT the source of truth and nothing reads them. All P&L is
+            # derived from the fills log (state["trades"]) via trading_algo.pnl,
+            # so it can never disagree with the actual trade record.
+            "cost_basis": {},
+            "realized_pnl": 0.0,
             "last_rebalance_month": None,
             "last_rebalance_date": None,
         }
     state = {
         "account": account,
+        "schema_version": state_schema.STATE_SCHEMA_VERSION,
         "base_currency": cfg.BASE_CURRENCY,
         "initial_capital_base": capital,
         "allocations": norm,
@@ -152,8 +178,10 @@ def init_account(account: str, capital: float, synthetic: bool,
 # Rebalancing one sleeve
 # ---------------------------------------------------------------------------
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
-                     today: str, trade_log: list) -> None:
+                     today: str, trade_log: list,
+                     frozen: set[str] | None = None) -> None:
     equity = sleeve_equity_local(sleeve, px)
+    frozen = frozen or set()
     print(f"\n  [{region.key}] rebalancing — equity {equity:,.0f} {region.currency}")
 
     # Micro-account mode: too small to hold the full book in whole shares.
@@ -182,6 +210,8 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
     lots, _ = pnl.build_lots([t for t in trade_log if t["region"] == region.key])
 
     for t in sorted(set(sleeve["positions"]) | set(desired)):
+        if t in frozen:   # data-quality: don't trade a name on an untrusted price
+            continue
         cur = sleeve["positions"].get(t, 0)
         tgt = desired.get(t, 0)
         delta = tgt - cur
@@ -285,10 +315,16 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
             else:
-                targets = strategy.compute_targets(prices, index_px, region.params)
+                elig, dq = data_quality.eligible(prices, region, prices.index[-1])
+                if dq.excluded:
+                    print(f"  [{k}] data-quality: freezing "
+                          + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
+                targets = strategy.compute_targets(prices, index_px, region.params,
+                                                   eligible=elig)
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
-                rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
+                rebalance_sleeve(region, sleeve, targets, px_today, today,
+                                 state["trades"], frozen=dq.excluded)
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
 

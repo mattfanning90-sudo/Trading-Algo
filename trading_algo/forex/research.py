@@ -28,7 +28,7 @@ from . import fx_data, validation
 from . import indicators as ind
 from .fx_config import ANNUALIZATION, profile
 from .ml_backtest import strategy_returns
-from .pairs import DEFAULT_UNIVERSE
+from .pairs import UNIVERSES, resolve_universe
 
 # Economically-related pairs to test for statistical arbitrage (cointegration-ish).
 _STATARB_PAIRS = [("AUDUSD", "NZDUSD"), ("EURUSD", "GBPUSD"), ("USDCHF", "USDCAD")]
@@ -162,13 +162,18 @@ def main(argv=None):
     ap.add_argument("--profile", default="balanced", choices=cfg.profile_names())
     ap.add_argument("--bars", type=int, default=None, help="limit to the last N bars")
     ap.add_argument("--out", default=None, help="write the report to a markdown file")
+    ap.add_argument("--universe", default="default",
+                    help=f"named preset ({', '.join(UNIVERSES)}) or a comma-"
+                         f"separated symbol list. Default: the live universe.")
     args = ap.parse_args(argv)
 
+    universe = resolve_universe(args.universe)
+    print(f"Universe ({args.universe}): {', '.join(universe)}")
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, not performance.")
-        panel = fx_data.synthetic_panel(DEFAULT_UNIVERSE)
+        panel = fx_data.synthetic_panel(universe)
     else:
-        panel = fx_data.load_panel(DEFAULT_UNIVERSE, cfg.START, use_cache=True)
+        panel = fx_data.load_panel(universe, cfg.START, use_cache=True)
     if not panel:
         raise SystemExit("No FX data (offline? try --synthetic).")
 

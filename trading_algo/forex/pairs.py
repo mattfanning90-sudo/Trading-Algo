@@ -131,6 +131,52 @@ BOND_UNIVERSE: list[str] = list(BONDS)
 MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
 
 
+# Named universe presets, so tools (research, backtest, paper) can select a
+# tradable set by name instead of hardcoding one. Extend by adding a key here.
+#   default        : the seven FX majors + the three major cryptos (live default)
+#   majors         : the seven FX majors only
+#   fx / majors+crosses : all G10 FX — majors plus the six dormant crosses
+#   crosses        : the six crosses on their own
+#   crypto         : the three cryptos on their own
+#   equity / bond  : the US-equity / bond-ETF pseudo-pairs
+#   multiasset     : equities + bonds + an AUDUSD overlay
+UNIVERSES: dict[str, list[str]] = {
+    "default": DEFAULT_UNIVERSE,
+    "majors": list(PAIRS),
+    "fx": [*PAIRS, *CROSSES],
+    "majors+crosses": [*PAIRS, *CROSSES],
+    "crosses": list(CROSSES),
+    "crypto": list(CRYPTO),
+    "equity": EQUITY_UNIVERSE,
+    "bond": BOND_UNIVERSE,
+    "multiasset": MULTI_ASSET_UNIVERSE,
+}
+
+
+def resolve_universe(spec: str | None) -> list[str]:
+    """Resolve a universe *spec* into a de-duplicated list of pair symbols.
+
+    A spec is either a named preset from ``UNIVERSES`` or a comma-separated list
+    of explicit symbols (e.g. ``"EURUSD,GBPUSD,EURJPY"``). ``None``/empty falls
+    back to the live ``default`` universe. Every resolved symbol is validated
+    against the registry, so a typo fails loudly rather than silently trading
+    nothing.
+    """
+    if not spec:
+        return list(UNIVERSES["default"])
+    if spec in UNIVERSES:
+        symbols = list(UNIVERSES[spec])
+    else:
+        symbols = [s.strip().upper() for s in spec.split(",") if s.strip()]
+    if not symbols:
+        raise ValueError(f"Universe spec {spec!r} resolved to no symbols.")
+    for s in symbols:               # validate — a typo should fail loudly
+        get_pair(s)
+    # de-dup, preserving order (an explicit list may repeat a symbol)
+    seen: set[str] = set()
+    return [s for s in symbols if not (s in seen or seen.add(s))]
+
+
 def get_pair(symbol: str) -> Pair:
     try:
         return ALL_PAIRS[symbol]
