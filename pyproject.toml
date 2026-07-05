@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,27 +8,27 @@ version = "0.2.0"
 description = "Multi-region (FTSE / US / ASX) cross-sectional momentum trading system with AUD portfolio layer"
 requires-python = ">=3.11"
 dependencies = [
-    "pandas>=2.2",
-    "numpy>=1.26",
-    "yfinance>=0.2.40",
-    "pyarrow>=15.0",
+    "pandas>=3.0.3",
+    "numpy>=2.4.6",
+    "yfinance>=1.5.1",
+    "pyarrow>=24.0.0",
 ]
 
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86"]
 # Free intraday market-data sources (each lazily imported); see docs/DATA_FEEDS.md.
-crypto = ["ccxt>=4.0"]            # real-time crypto OHLCV + funding (free, no key)
-oanda = ["oandapyV20>=0.7.0"]    # real-time FX via a free practice account
-alpaca = ["alpaca-py>=0.20"]     # free real-time US equities (IEX) + paper trading
-openbb = ["openbb>=4.0"]         # open-source research aggregator
-feeds = ["ccxt>=4.0", "oandapyV20>=0.7.0", "alpaca-py>=0.20"]  # all live data feeds
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+crypto = ["ccxt>=4.5.64"]            # real-time crypto OHLCV + funding (free, no key)
+oanda = ["oandapyV20>=0.7.2"]    # real-time FX via a free practice account
+alpaca = ["alpaca-py>=0.43.5"]     # free real-time US equities (IEX) + paper trading
+openbb = ["openbb>=4.7.2"]         # open-source research aggregator
+feeds = ["ccxt>=4.5.64", "oandapyV20>=0.7.2", "alpaca-py>=0.43.5"]  # all live data feeds
+dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0", "ruff>=0.15.20"]
 # Native desktop app (macOS uses the WebKit backend); see packaging/.
 desktop = [
-    "pywebview>=5.0",
+    "pywebview>=6.2.1",
     "pyobjc-framework-WebKit; sys_platform == 'darwin'",
 ]
-mac-build = ["py2app>=0.28; sys_platform == 'darwin'"]
+mac-build = ["py2app>=0.28.10; sys_platform == 'darwin'"]
 
 [tool.setuptools.packages.find]
 include = ["trading_algo*"]
