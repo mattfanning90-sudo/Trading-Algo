@@ -129,6 +129,21 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 > built just-in-time before their Phase-3 consumers. All landed items carry no
 > capital risk and harden guarantees every later phase leans on.
 
+> **Delivery in progress — Phase 1 (Statistical validity).** Landed:
+> - **P0-E** — the López de Prado stats (PSR/DSR/PBO) are promoted to one shared
+>   `trading_algo/validation.py`; `forex/validation.py` re-exports them, so equity
+>   and FX share identical, tested math (no third copy).
+> - **F8** — `walkforward.py` builds a purged & embargoed (>=21d, >=6 folds)
+>   out-of-sample return matrix over the parameter grid, reusing only the
+>   purge/embargo discipline (the equity signal is a fixed formula, not a trained
+>   model).
+> - **F2** — `validation.overfitting_gate` deflates the in-sample-best Sharpe for
+>   the real trial count and computes PBO; surfaced via `sweep --purged-cv`
+>   (n_trials == grid size) and a PSR/DSR line on every `run_backtest` report
+>   (deflated for the F17 ledger's cumulative trial count).
+> - **F19** — `validation.sharpe_haircut` reports the expected live Sharpe after
+>   deducting selection luck, shown next to the raw Sharpe.
+
 ## 5. Feature readiness at a glance
 
 From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:

@@ -10,7 +10,7 @@ import argparse
 import os
 
 from . import config as cfg
-from . import constituents, data, manifest
+from . import constituents, data, manifest, validation
 from .backtest import run_backtest
 from .portfolio_backtest import run_portfolio_backtest
 from .regions import all_region_keys, get_region
@@ -37,6 +37,21 @@ def _emit_manifest(kind, params, regions, metrics, synthetic, point_in_time,
               f"[{manifest.trial_count(_LEDGER)} runs]")
     except Exception as exc:   # pragma: no cover - never break a run over logging
         print(f"  ⚠ manifest not written: {exc}")
+
+
+def _print_deflation(returns) -> None:
+    """F2 / F19: surface PSR, a Deflated Sharpe and a haircut Sharpe next to the
+    raw one. The trial count is the honest cumulative number of runs recorded in
+    the experiment ledger (F17) — so a Sharpe found after many attempts is
+    deflated accordingly. A single fresh ledger deflates by 1 (no penalty)."""
+    n_trials = max(1, manifest.trial_count(_LEDGER))
+    r = returns.to_numpy()
+    summ = validation.deflation_summary(r, n_trials)
+    hc = validation.sharpe_haircut(r, n_trials)
+    print(f"  PSR(>0)                    {summ['psr']:.2f}")
+    print(f"  Deflated Sharpe (N={n_trials:<3} trials) {summ['dsr']:.2f}")
+    print(f"  Haircut Sharpe             {hc['haircut_sharpe_ann']} "
+          f"(raw {hc['raw_sharpe_ann']}, less selection luck {hc['deflation_ann']})")
 
 
 def _universe_label(point_in_time: bool) -> str:
@@ -88,6 +103,7 @@ def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
     if result.get("drawdown_halts"):
         print(f"  Drawdown halts             {result['drawdown_halts']} "
               f"({result['drawdown_halt_days']} days in cash)")
+    _print_deflation(result["returns"])
     _latest_picks(prices, index_px, region)
     _emit_manifest("backtest", region.params, [region.key], result["metrics"],
                    synthetic, result["point_in_time"],
@@ -119,6 +135,7 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
                                             for k, v in result["allocations"].items()))
     print(f"  FX rebalance cost (cum.):  {cfg.BASE_CURRENCY} "
           f"{result['fx_rebalance_cost']:,.0f}")
+    _print_deflation(result["returns"])
     _emit_manifest("portfolio", cfg.DEFAULT_PARAMS, list(result["allocations"]),
                    result["metrics"], synthetic, result["point_in_time"],
                    (result["equity"].index[0], result["equity"].index[-1]))
