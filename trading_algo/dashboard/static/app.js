@@ -243,18 +243,18 @@ function headerHTML(page) {
   const mid = isAll
     ? `<div style="padding:13px 18px;font-size:11px;letter-spacing:.08em;color:#eaffec;border-right:1px solid #262626;background:#12200f;border-bottom:2px solid #7ee787">ACCOUNTS OVERVIEW</div>
        <div style="padding:13px 18px;font-size:10px;letter-spacing:.08em;color:#61805f">${(S.overview ? S.overview.accounts.length : accs.length)} PAPER BOOKS · REPORTED IN AUD</div>`
-    : `<div style="display:flex;font-size:11px;letter-spacing:.08em">${tabs}</div>`;
+    : `<div class="mq-tabs" style="display:flex;font-size:11px;letter-spacing:.08em">${tabs}</div>`;
 
   const base = (S.meta && S.meta.base_currency) || 'AUD';
   return `
-  <div style="display:flex;align-items:center;gap:0;background:#0d0d0d;border-bottom:1px solid #262626;flex:none">
+  <div class="mq-header" style="display:flex;align-items:center;gap:0;background:#0d0d0d;border-bottom:1px solid #262626;flex:none">
     <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-right:1px solid #262626">
       <span style="width:9px;height:9px;background:#7ee787;border-radius:1px;box-shadow:0 0 8px rgba(126,231,135,.8)"></span>
       <span style="font-size:14px;font-weight:600;color:#eaffec;letter-spacing:.1em">MOMENTUM/3R</span>
     </div>
-    <div style="display:flex;align-items:center;gap:4px;padding:0 14px;border-right:1px solid #262626;align-self:stretch;flex-wrap:wrap">${chipHtml}</div>
+    <div class="mq-chips" style="display:flex;align-items:center;gap:4px;padding:0 14px;border-right:1px solid #262626;align-self:stretch;flex-wrap:wrap">${chipHtml}</div>
     ${mid}
-    <div style="margin-left:auto;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:10px;white-space:nowrap">
+    <div class="mq-meta" style="margin-left:auto;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:10px;white-space:nowrap">
       <span style="display:inline-flex;align-items:center;gap:6px;color:#61805f">TEXT
         <span class="hv-dim" data-act="zoom" data-arg="out" title="Smaller" style="border:1px solid #262626;padding:2px 7px;border-radius:2px;cursor:pointer;user-select:none;color:#c9e8cc">A−</span>
         <span style="color:#eaffec;min-width:30px;text-align:center" title="Text size">${Math.round(zoomLevel() * 100)}%</span>
@@ -323,14 +323,14 @@ function equityTapeHTML(page) {
   const sched = (S.meta && S.meta.schedule) || [];
   const closes = sched.map(s => `${REGION_SHORT[s.region] || s.region} ${s.close_hhmm}`).join(' · ');
   items.push(`<span style="margin-left:auto;color:#61805f">NEXT REBAL <span style="color:#c9e8cc">${esc(page.next_rebalance || '')}</span>${closes ? ` · <span style="color:#c9e8cc">${esc(closes)} UTC</span>` : ''}</span>`);
-  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${items.join('\n')}</div>`;
+  return `<div class="mq-tape" style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${items.join('\n')}</div>`;
 }
 
 /* ---- agent / small account ticker tape ---- */
 function acctTapeHTML(items, right) {
   const cells = items.map(t =>
     `<span style="color:#61805f">${esc(t.k)} <span style="color:${t.c || TXT}">${esc(t.v)}</span></span>`).join('\n');
-  return `<div style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${cells}
+  return `<div class="mq-tape" style="display:flex;align-items:center;gap:22px;padding:7px 18px;background:#090909;border-bottom:1px solid #262626;font-size:10px;overflow:hidden;white-space:nowrap;flex:none">${cells}
     <span style="margin-left:auto;color:#61805f">${right}</span></div>`;
 }
 
@@ -342,7 +342,7 @@ function statusBarHTML(page) {
   if (page) mark = page.as_of || page.last_bar_date || '';
   const tests = S.meta && S.meta.tests_total;
   return `
-  <div style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0d0d0d;border-top:1px solid #262626;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
+  <div class="mq-tape" style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0d0d0d;border-top:1px solid #262626;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
     <span><span style="color:#7ee787">●</span> ENGINE IDLE — ${esc(wake)}</span>
     ${mark ? `<span>LAST MARK ${esc(mark)}</span>` : ''}
     ${tests ? `<span>${tests} TESTS</span>` : ''}
@@ -541,8 +541,8 @@ function equityOverviewHTML(page) {
     <div style="display:grid;grid-template-columns:2.1fr 1fr">
       <div style="border-right:1px solid #262626">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN BOOK · ${M.rows.length} POSITIONS</span><span style="font-size:9px;color:#61805f">HOVER A TICKER FOR PRICE HISTORY</span></div>
-        <div style="display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>REGION</span><span>QTY</span><span>PRICE</span><span>VALUE</span><span>WEIGHT</span><span>DAY</span><span>UNRL</span></div>
-        ${bookRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO OPEN POSITIONS.</div>'}
+        <div class="mq-x"><div style="display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>REGION</span><span>QTY</span><span>PRICE</span><span>VALUE</span><span>WEIGHT</span><span>DAY</span><span>UNRL</span></div>
+        ${bookRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO OPEN POSITIONS.</div>'}</div>
       </div>
       <div style="display:flex;flex-direction:column">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${mdy(M.lastDate)} REBALANCE` : ''}</div>
@@ -669,13 +669,13 @@ function equityPositionsHTML(page) {
       : `<span style="font-size:9px;color:#7ee787;border:1px solid #2a4a2c;padding:2px 8px">RISK_ON</span>`;
     const body = rows.length === 0
       ? `<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO OPEN POSITIONS.${s.regime === 'RISK_OFF' ? ` ${esc(s.index_ticker)} IS BELOW ITS ${ma}-DAY MA, SO THIS BOOK HOLDS 100% CASH UNTIL THE REGIME TURNS RISK-ON.` : ''}</div>`
-      : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
+      : `<div class="mq-x"><div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
         rows.map(p => `
         <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
           <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
           <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
           <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
-        </div>`).join('');
+        </div>`).join('') + '</div>';
     return `
     <div style="border-bottom:1px solid #262626">
       <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
@@ -717,8 +717,8 @@ function equityPositionsHTML(page) {
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ALL ${(page.blotter || []).length} FILLS</span>
       <span style="font-size:9px;color:#61805f">COMMISSIONS + UK STAMP DUTY (50BPS ON FTSE BUYS) ITEMISED</span>
     </div>
-    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
-    ${blotterRows}
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
+    ${blotterRows}</div>
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)</span>
       ${regionNetHtml}
@@ -726,8 +726,8 @@ function equityPositionsHTML(page) {
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">INCLUDES COMMISSIONS + UK STAMP DUTY · FILLS ALREADY CARRY MODELLED SPREAD/SLIPPAGE</span>
     </div>
-    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
-    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
   </div>`;
 }
 
@@ -1040,7 +1040,7 @@ function allAccountsHTML() {
       <div style="display:flex;height:14px;border:1px solid #262626">${segs}</div>
       <div style="display:flex;gap:18px;margin-top:7px;font-size:9px;color:#61805f;flex-wrap:wrap">${legend}</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(${cards.length || 1},1fr)">${cardHtml}</div>
+    <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${cards.length || 1},1fr)">${cardHtml}</div>
   </div>`;
 }
 
@@ -1530,7 +1530,7 @@ function chartSectionHTML(page) {
       </div>
       <div style="display:flex;gap:3px;flex-wrap:wrap">${pairChips}</div>
     </div>
-    <div style="display:flex;align-items:center;gap:5px;padding:7px 18px;border-bottom:1px solid #1a1a1a">
+    <div style="display:flex;align-items:center;gap:5px;padding:7px 18px;border-bottom:1px solid #1a1a1a;flex-wrap:wrap">
       <span style="font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-right:4px">TA</span>
       ${taChips}
       <span style="color:#2e2e2e;margin:0 5px">│</span>
@@ -1840,8 +1840,8 @@ function agentPositionsHTML(page) {
   return `
   <div data-screen="agent-positions">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS'} · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A PAIR FOR THE ENSEMBLE'S REASONING</span></div>
-    <div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
-    ${rows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO DECISIONS RECORDED YET. RUN THE FX ENGINE ONCE.</div>'}
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
+    ${rows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO DECISIONS RECORDED YET. RUN THE FX ENGINE ONCE.</div>'}</div>
   </div>`;
 }
 
@@ -2055,7 +2055,7 @@ function agentMethodHTML(page) {
       </div>
       <div style="padding:18px">
         <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ EVERY BAR, IN ORDER</div>
-        <div style="display:flex;align-items:stretch;gap:8px;margin-top:10px">
+        <div class="mq-pipe" style="display:flex;align-items:stretch;gap:8px;margin-top:10px">
           <div style="flex:1;border:1px solid #2a4a2c;padding:10px 12px"><div style="font-size:10px;color:#7ee787;font-weight:600">1 · VOTE</div><div style="font-size:10px;color:#61805f;margin-top:4px;line-height:1.6">6 AGENTS SCORE EVERY PAIR −1…+1</div></div>
           <div style="display:grid;place-items:center;color:#3d543f">→</div>
           <div style="flex:1;border:1px solid #2a4a2c;padding:10px 12px"><div style="font-size:10px;color:#7ee787;font-weight:600">2 · BLEND</div><div style="font-size:10px;color:#61805f;margin-top:4px;line-height:1.6">PERFORMANCE-WEIGHTED NET TILT PER PAIR</div></div>
@@ -2208,8 +2208,8 @@ function smallPositionsHTML(page) {
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">FEE DRAG ON A MICRO BOOK, ITEMISED — THE LESSON THIS ACCOUNT TEACHES</span>
     </div>
-    <div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
-    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
   </div>`;
 }
 
