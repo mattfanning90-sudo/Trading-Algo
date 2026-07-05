@@ -1,6 +1,4 @@
 """Backlog F12 / foundation P0-F: shared notification channel + breaker alerts."""
-import pytest
-
 from trading_algo import config as cfg
 from trading_algo import notifications as N
 
