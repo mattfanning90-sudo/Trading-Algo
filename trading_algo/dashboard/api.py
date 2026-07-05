@@ -143,7 +143,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
 
     sleeves_out, as_of = [], ""
     total_base = total_cash_base = total_unrealized_base = 0.0
-    total_invested_base = 0.0
+    total_invested_base = total_gross_base = 0.0
     total_realized_base = closed["net_base"]   # FIFO round-trips, net of costs
     index_by_region: dict[str, tuple] = {}
     n_positions = 0
@@ -165,6 +165,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
                             "risk_on": regime == "RISK_ON"})
 
         invested_local = 0.0
+        gross_local = 0.0        # Σ|position value| — true gross for a levered/short book
         positions = []
         for t, sh in sleeve["positions"].items():
             if t in prices.columns:
@@ -177,6 +178,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             prev_price = _safe_price(px_prev, t)
             val_local = sh * price
             invested_local += val_local
+            gross_local += abs(val_local)
             avg = float(basis.get((k, t)) or price)   # actual cost from the fills ledger
             day_change = (price / prev_price - 1.0) if prev_price else 0.0
             unrl_pct = (price / avg - 1.0) if avg else 0.0
@@ -200,6 +202,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         total_base += eq_base
         total_cash_base += cash_local * m
         total_invested_base += invested_local * m
+        total_gross_base += gross_local * m
         index_by_region[k] = (index_px, region.currency)
         n_positions += len(positions)
         sleeves_out.append({
@@ -288,7 +291,11 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "realized_base": round(total_realized_base, 2),
             "unrealized_base": round(total_unrealized_base, 2),
             "net_pnl_base": round(total_base - initial, 2),
-            "gross_exposure": round(total_invested_base / denom, 4),
+            # Gross = Σ|position value| / equity — the real leverage of the book
+            # (a 3× book reads ~3.0; a 100/100 long-short book ~2.0). Net long
+            # exposure is invested_base/equity, reported separately below.
+            "gross_exposure": round(total_gross_base / denom, 4),
+            "net_exposure": round(total_invested_base / denom, 4),
             "fees": [{"currency": c, "amount": round(v, 2)} for c, v in fees.items()],
         },
         "allocations": state.get("allocations", cfg.ALLOCATIONS),

@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, data_quality, fees, fx, pnl, storage, strategy
+from . import data, data_quality, fees, fx, pnl, profiles, storage, strategy
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -112,6 +112,24 @@ def _account_regions(state: dict) -> list[str]:
     return list(state.get("allocations") or cfg.ALLOCATIONS)
 
 
+def _account_params(state: dict, region):
+    """Region defaults with this book's profile overrides layered on top.
+
+    Keeps invariant #3 intact: a profile changes the STRATEGY KNOBS, then the
+    same `strategy.compute_targets` builds the weights — there is no second
+    sizing path. A book with no overrides gets the region defaults unchanged.
+    """
+    overrides = state.get("param_overrides") or {}
+    return region.params.with_overrides(**overrides) if overrides else region.params
+
+
+def _account_drawdown_stop(state: dict):
+    """This book's drawdown circuit-breaker threshold. A profile may override it
+    (and set it to None to disable the breaker for a max-risk book); absent, the
+    global default applies."""
+    return state.get("max_drawdown_stop", cfg.MAX_DRAWDOWN_STOP)
+
+
 def fx_snapshot(synthetic: bool) -> dict[str, float]:
     currencies = [get_region(k).currency for k in _regions()]
     if synthetic:
@@ -140,10 +158,21 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
 
 
 def init_account(account: str, capital: float, synthetic: bool,
-                 allocations: dict[str, float] | None = None) -> None:
+                 allocations: dict[str, float] | None = None,
+                 profile: str | None = None) -> None:
     """Open a paper account. `allocations` overrides which regions it trades and
     their weights (e.g. {"US": 1.0} for a single-region small account). Default
-    is the global 3-region split from config."""
+    is the global 3-region split from config.
+
+    `profile` (see trading_algo.profiles) bakes a canned strategy/risk/reporting
+    preset into the book: its region allocations, StrategyParams overrides
+    (leverage, long/short, …), drawdown-breaker override, and reporting group.
+    An explicit `allocations` still wins over the profile's, so a profile can be
+    funded across custom regions if desired.
+    """
+    prof = profiles.get_profile(profile) if profile else None
+    if prof is not None and allocations is None:
+        allocations = prof.allocations
     alloc_src = allocations if allocations is not None else cfg.ALLOCATIONS
     regions = list(alloc_src)
     unknown = [k for k in regions if k not in REGIONS]
@@ -181,10 +210,20 @@ def init_account(account: str, capital: float, synthetic: bool,
         "equity_history": [],
         "sleeve_history": [],
         "fx_snapshot": snap,
+        # Reporting group + strategy/risk shape. CORE books sum into the headline
+        # AUM; other groups get their own separate total on the overview.
+        "group": prof.group if prof else profiles.CORE,
+        "profile": prof.key if prof else None,
+        "param_overrides": dict(prof.param_overrides) if prof else {},
     }
+    if prof is not None:
+        # Store the breaker override explicitly (None = disabled). Absent means
+        # "use the global default", so we only set the key for a profiled book.
+        state["max_drawdown_stop"] = prof.max_drawdown_stop
     save_state(account, state)
     where = "single region" if len(regions) == 1 else f"{len(regions)} regions"
-    print(f"Paper account '{account}' opened with {capital:,.0f} "
+    tag = f" [{prof.label}]" if prof else ""
+    print(f"Paper account '{account}'{tag} opened with {capital:,.0f} "
           f"{cfg.BASE_CURRENCY} across {where}")
     for k in regions:
         s = sleeves[k]
@@ -202,7 +241,10 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
     print(f"\n  [{region.key}] rebalancing — equity {equity:,.0f} {region.currency}")
 
     # Micro-account mode: too small to hold the full book in whole shares.
-    if equity < MICRO_THRESHOLD and not targets.empty:
+    # Only for a long-only book — a long/short (market-neutral) book must keep
+    # both legs, so concentrating it would break the hedge.
+    long_only = targets.empty or bool((targets >= 0).all())
+    if long_only and equity < MICRO_THRESHOLD and not targets.empty:
         affordable = [t for t in targets.index
                       if px.get(t) and px[t] <= equity / 1.05]
         picks = affordable[:max(1, min(3, int(equity // 40)))] if affordable else []
@@ -243,6 +285,8 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
             continue
         fee = fees.commission(region, notional)
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
+        # A short sale (delta<0 opening) CREDITS the book with the proceeds; the
+        # sign of `delta * fill` already handles both directions.
         sleeve["cash"] -= delta * fill + fee + duty
 
         trade = {"date": today, "region": region.key, "ticker": t,
@@ -250,13 +294,12 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
                  "fill": round(fill, 4), "commission": round(fee, 2),
                  "stamp_duty": round(duty, 2), "currency": region.currency}
         key = (region.key, t)
-        if delta > 0:
-            pnl.add_lot(lots, key, delta, fill, fee + duty, today)
-        else:                              # realise against the actual lots sold
-            r = pnl.consume(lots, key, abs(delta), fill, fee)
-            if r is not None:
-                trade["entry"] = round(r["entry"], 4)      # actual FIFO cost basis
-                trade["realized"] = round(r["net"], 2)     # actual gain/loss on this sale
+        # Signed FIFO: opens add a (long or short) lot; closes/covers realise
+        # against the actual lots consumed and stamp the round-trip P&L.
+        r = pnl.apply_fill(lots, key, delta, fill, fee + duty, today)
+        if r is not None:
+            trade["entry"] = round(r["entry"], 4)      # actual FIFO cost basis
+            trade["realized"] = round(r["net"], 2)     # actual gain/loss on this close
 
         if tgt == 0:
             sleeve["positions"].pop(t, None)
@@ -336,7 +379,8 @@ def run_daily(account: str, synthetic: bool) -> None:
                 if dq.excluded:
                     print(f"  [{k}] data-quality: freezing "
                           + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
-                targets = strategy.compute_targets(prices, index_px, region.params,
+                targets = strategy.compute_targets(prices, index_px,
+                                                   _account_params(state, region),
                                                    eligible=elig)
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
@@ -350,15 +394,18 @@ def run_daily(account: str, synthetic: bool) -> None:
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
 
-    # Update peak and decide whether to trip the breaker for the next run.
+    # Update peak and decide whether to trip the breaker for the next run. The
+    # threshold is per-book: a profile may loosen it or disable it (None) for a
+    # max-risk book.
+    stop = _account_drawdown_stop(state)
     peak = max(state.get("peak_equity_base", state["initial_capital_base"]), combined)
     state["peak_equity_base"] = peak
-    if (not halted and cfg.MAX_DRAWDOWN_STOP is not None
-            and combined / peak - 1 <= -cfg.MAX_DRAWDOWN_STOP):
+    if (not halted and stop is not None
+            and combined / peak - 1 <= -stop):
         state["risk_halted"] = True
         state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
         print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
-              f"{cfg.MAX_DRAWDOWN_STOP:.0%} stop — halting for "
+              f"{stop:.0%} stop — halting for "
               f"{cfg.DRAWDOWN_COOLDOWN_DAYS} runs.")
     elif not halted:
         state["risk_halted"] = False
@@ -440,6 +487,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--regions", nargs="+", metavar="KEY", choices=list(REGIONS),
                     help="(--init) restrict the account to these regions, equal-weighted "
                          "(e.g. --regions US). Default: all three.")
+    ap.add_argument("--profile", choices=list(profiles.PROFILES),
+                    help="(--init) open the book from a named strategy/risk preset "
+                         "(e.g. ultra, experimental). See trading_algo/profiles.py.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
@@ -450,7 +500,8 @@ def main(argv: list[str] | None = None) -> None:
         compare(args.compare)
     elif args.init:
         allocations = {r: 1.0 for r in args.regions} if args.regions else None
-        init_account(args.account, args.capital, args.synthetic, allocations)
+        init_account(args.account, args.capital, args.synthetic, allocations,
+                     profile=args.profile)
     elif args.status:
         status(args.account)
     elif args.force_rebalance:

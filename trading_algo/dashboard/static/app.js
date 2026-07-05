@@ -504,7 +504,7 @@ function equityOverviewHTML(page) {
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(sinceDate)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">EXPOSURE</div><div style="font-size:20px;font-weight:600;color:#e3b341;margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${pct0(k.cash_pct)} CASH · VOL-TGT ${pct0(k.target_vol)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">GROSS EXPOSURE</div><div style="font-size:20px;font-weight:600;color:${k.gross_exposure > 1.001 ? R : '#e3b341'};margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${k.net_exposure != null ? 'NET ' + sgnPct(k.net_exposure, 0) + ' · ' : ''}VOL-TGT ${pct0(k.target_vol)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(posCounts)}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">A$${num(k.fees_base, 0)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feesSub}</div></div>
     </div>
@@ -1000,17 +1000,15 @@ function allAccountsHTML() {
   const [aumInt, aumDec] = moneySplit(T.aum);
 
   /* design order: big equity books, then FX books, micro books last */
-  const cards = ov.accounts.slice().sort((a, b) => {
+  const sortCards = arr => arr.slice().sort((a, b) => {
     const rank = c => (c.kind === 'equity' && c.equity < 5000) ? 2 : (c.kind === 'fx' ? 1 : 0);
     return rank(a) - rank(b);
   });
   const colorOf = (key, i) => ALLOC_COLORS[key] || ALLOC_FALLBACK[i % ALLOC_FALLBACK.length];
-
-  const segs = cards.map((c, i) => `<div style="width:${(c.share * 100).toFixed(1)}%;background:${colorOf(c.key, i)}" title="${esc(c.label)} ${num(c.share * 100, 1)}%"></div>`).join('');
-  const legend = cards.map((c, i) => `<span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:${colorOf(c.key, i)};display:inline-block"></span>${esc(c.label)} ${num(c.share * 100, 1)}%</span>`).join('');
-
   const toneColor = t => t === 'bad' ? R : t === 'warn' ? AMB : G;
-  const cardHtml = cards.map(c => {
+
+  /* one book card; `shareLabel` names what the % share is OF (its group) */
+  const cardHtml = (c, shareLabel) => {
     const spark = toPts(c.spark, 120, 30, 3).join(' ');
     const up = c.spark.length > 1 ? c.spark[c.spark.length - 1] >= c.spark[0] : true;
     return `
@@ -1019,29 +1017,63 @@ function allAccountsHTML() {
       <div style="font-size:21px;font-weight:600;color:#eaffec;letter-spacing:-.01em">A$${num(c.equity, 2)}</div>
       <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${cSign(c.day)}">${sgnPct(c.day, 2)} DAY</span></div>
       <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px;display:block"><polyline points="${spark}" fill="none" stroke="${up ? G : R}" stroke-width="1.3"></polyline></svg>
-      <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f"><span>${esc(c.n_line)}</span><span>${num(c.share * 100, 1)}% OF AUM</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f"><span>${esc(c.n_line)}</span><span>${num(c.share * 100, 1)}% ${shareLabel}</span></div>
       <div class="hv-open" style="margin-top:auto;font-size:9px;letter-spacing:.12em;color:#7ee787;border:1px solid #2a4a2c;padding:5px 0;text-align:center">OPEN BOOK →</div>
     </div>`;
-  }).join('');
+  };
 
+  /* capital-allocation bar + legend for one set of cards */
+  const allocBar = cards => {
+    const segs = cards.map((c, i) => `<div style="width:${(c.share * 100).toFixed(1)}%;background:${colorOf(c.key, i)}" title="${esc(c.label)} ${num(c.share * 100, 1)}%"></div>`).join('');
+    const legend = cards.map((c, i) => `<span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:${colorOf(c.key, i)};display:inline-block"></span>${esc(c.label)} ${num(c.share * 100, 1)}%</span>`).join('');
+    return `<div style="padding:12px 18px;border-bottom:1px solid #262626">
+      <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">CAPITAL ALLOCATION</div>
+      <div style="display:flex;height:14px;border:1px solid #262626">${segs}</div>
+      <div style="display:flex;gap:18px;margin-top:7px;font-size:9px;color:#61805f;flex-wrap:wrap">${legend}</div>
+    </div>`;
+  };
+
+  const groups = ov.groups || [{ name: 'CORE', ...T }];
+  const coreCards = sortCards(ov.accounts.filter(c => (c.group || 'CORE') === 'CORE'));
   const best = T.best, worst = T.worst;
-  return `
-  <div data-screen="all">
+
+  /* --- headline (CORE) summary ------------------------------------------ */
+  const headline = `
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
-      <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL AUM · AUD</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${aumInt}<span style="font-size:15px;color:#61805f">${aumDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">ACROSS ${T.books} PAPER BOOKS</div></div>
+      <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL AUM · AUD</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${aumInt}<span style="font-size:15px;color:#61805f">${aumDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">ACROSS ${T.books} CORE BOOKS · EXCL. EXPERIMENTAL</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(T.net_pnl)};margin-top:8px">${sgnNum(T.net_pnl, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.net_pnl_pct, 2)} ON ${num(T.initial, 0)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.books} BOOKS RED</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${T.halts ? R : G};margin-top:8px">${T.halts} / ${T.books}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${T.halts ? 'BREAKER(S) TRIPPED' : 'ALL BREAKERS ARMED'}</div></div>
     </div>
-    <div style="padding:12px 18px;border-bottom:1px solid #262626">
-      <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">CAPITAL ALLOCATION</div>
-      <div style="display:flex;height:14px;border:1px solid #262626">${segs}</div>
-      <div style="display:flex;gap:18px;margin-top:7px;font-size:9px;color:#61805f;flex-wrap:wrap">${legend}</div>
-    </div>
-    <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${cards.length || 1},1fr)">${cardHtml}</div>
-  </div>`;
+    ${coreCards.length ? allocBar(coreCards) : ''}
+    <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${coreCards.length || 1},1fr)">${coreCards.length ? coreCards.map(c => cardHtml(c, 'OF AUM')).join('') : '<div style="padding:26px 18px;font-size:11px;color:#61805f">NO CORE BOOKS YET — open one with <span style="color:#eaffec">paper_trade --init</span>.</div>'}</div>`;
+
+  /* --- separate group sections (EXPERIMENTAL etc.) ---------------------- */
+  const otherSections = groups.filter(g => g.name !== 'CORE').map(g => {
+    const gc = sortCards(ov.accounts.filter(c => c.group === g.name));
+    if (!gc.length) return '';
+    const [gInt, gDec] = moneySplit(g.aum);
+    return `
+    <div style="margin-top:26px;border-top:2px solid ${AMB}">
+      <div style="padding:11px 18px;border-bottom:1px solid #262626;background:#100d07;display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:11px;font-weight:600;color:${AMB};letter-spacing:.14em">${esc(g.name)} · SEPARATE BOOK</span>
+        <span style="font-size:9px;color:#8a6d2f;letter-spacing:.1em">RING-FENCED · NOT COUNTED IN CORE AUM</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
+        <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0b07"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">${esc(g.name)} TOTAL · AUD</div><div style="font-size:26px;font-weight:600;color:${AMB};margin-top:5px;letter-spacing:-.01em">${gInt}<span style="font-size:15px;color:#8a6d2f">${gDec}</span></div><div style="font-size:9px;color:#5c4a20;margin-top:4px">ACROSS ${g.books} BOOK${g.books === 1 ? '' : 'S'}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(g.net_pnl)};margin-top:8px">${sgnNum(g.net_pnl, 2)}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${sgnPct(g.net_pnl_pct, 2)} ON ${num(g.initial, 0)}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(g.day_aud)};margin-top:8px">${sgnNum(g.day_aud, 2)}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${sgnPct(g.day_pct, 2)} · ${g.books_red} OF ${g.books} RED</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">BEST</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(g.best ? g.best.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.best ? sgnPct(g.best.ret, 2) : ''}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">WORST</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(g.worst ? g.worst.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.worst ? sgnPct(g.worst.ret, 2) : ''}</div></div>
+        <div style="padding:14px 16px"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${g.halts ? R : G};margin-top:8px">${g.halts} / ${g.books}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.halts ? 'BREAKER TRIPPED' : 'RUNNING'}</div></div>
+      </div>
+      <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${gc.length || 1},1fr)">${gc.map(c => cardHtml(c, `OF ${g.name}`)).join('')}</div>
+    </div>`;
+  }).join('');
+
+  return `<div data-screen="all">${headline}${otherSections}</div>`;
 }
 
 /* ========================= AGENT BOOKS (FX) ============================ */

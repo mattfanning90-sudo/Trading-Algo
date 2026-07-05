@@ -23,7 +23,9 @@ from numbers import Number
 
 # Bump when the on-disk shape changes; migrate_state stamps it so old files can
 # be recognised and upgraded rather than rejected.
-STATE_SCHEMA_VERSION = 1
+# v2: per-book reporting group + strategy/risk profile fields
+#     (group / profile / param_overrides / max_drawdown_stop).
+STATE_SCHEMA_VERSION = 2
 
 
 class StateValidationError(Exception):
@@ -100,6 +102,19 @@ def validate_state(state) -> list[str]:
         if not isinstance(state.get(key), list):
             errs.append(f"'{key}' must be a list")
 
+    # Optional per-book shape fields (present on profiled books). Validate only
+    # when present so pre-profile files stay valid.
+    if "group" in state and not isinstance(state["group"], str):
+        errs.append("'group' must be a string")
+    if "param_overrides" in state and not isinstance(state["param_overrides"], dict):
+        errs.append("'param_overrides' must be an object")
+    if "profile" in state and state["profile"] is not None \
+            and not isinstance(state["profile"], str):
+        errs.append("'profile' must be a string or null")
+    if "max_drawdown_stop" in state and state["max_drawdown_stop"] is not None \
+            and not _is_number(state["max_drawdown_stop"]):
+        errs.append("'max_drawdown_stop' must be a number or null")
+
     return errs
 
 
@@ -138,6 +153,14 @@ def migrate_state(state: dict) -> tuple[dict, list[str]]:
             if key not in state:
                 state[key] = default
                 applied.append(f"add {key}")
+        # v2: reporting group + strategy shape. A pre-profile book is a plain
+        # CORE, no-override book (max_drawdown_stop left absent → global default).
+        if "group" not in state:
+            state["group"] = "CORE"
+            applied.append("add group")
+        if "param_overrides" not in state:
+            state["param_overrides"] = {}
+            applied.append("add param_overrides")
         state["schema_version"] = STATE_SCHEMA_VERSION
         if not applied:
             applied.append("stamp schema_version")

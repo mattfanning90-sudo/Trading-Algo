@@ -56,11 +56,16 @@ def _card(entry: dict, state: dict) -> dict | None:
     else:
         status, tone = "CLEAR", "ok"
 
+    # Reporting group: CORE books sum into the headline AUM; any other group
+    # (e.g. EXPERIMENTAL) is broken out into its own separate total.
+    group = str(state.get("group") or "CORE").upper() if kind == "equity" else "CORE"
+
     return {
         "key": entry["key"], "account": entry["account"], "kind": kind,
         "name": entry["label"] if kind == "fx" else entry["label"].split(" · ")[0]
         if not micro else entry["label"],
         "label": entry["label"], "sub": entry["sub"],
+        "group": group,
         "equity": round(equity, 2), "initial": round(initial, 2),
         "ret": round(equity / initial - 1.0, 6) if initial else 0.0,
         "day": round(day, 6),
@@ -89,35 +94,60 @@ def build_overview(regime_hints: dict[str, str] | None = None) -> dict:
             card["status"], card["status_tone"] = hint, "warn"
         cards.append(card)
 
-    aum = sum(c["equity"] for c in cards)
-    initial = sum(c["initial"] for c in cards)
-    day_aud = sum(c["equity"] * c["day"] / (1 + c["day"]) if c["day"] > -1 else 0.0
-                  for c in cards)
-    for c in cards:
-        c["share"] = round(c["equity"] / aum, 4) if aum else 0.0
-    reds = sum(1 for c in cards if c["day"] < 0)
-    best = max(cards, key=lambda c: c["ret"], default=None)
-    worst = min(cards, key=lambda c: c["ret"], default=None)
-
     def _pick(c):
         return {"key": c["key"], "name": c["name"], "ret": c["ret"],
                 "since": c["since"]} if c else None
 
-    return {
-        "kind": "all",
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "totals": {
+    def _totals(group_cards: list[dict]) -> dict:
+        aum = sum(c["equity"] for c in group_cards)
+        initial = sum(c["initial"] for c in group_cards)
+        day_aud = sum(c["equity"] * c["day"] / (1 + c["day"]) if c["day"] > -1 else 0.0
+                      for c in group_cards)
+        best = max(group_cards, key=lambda c: c["ret"], default=None)
+        worst = min(group_cards, key=lambda c: c["ret"], default=None)
+        return {
             "aum": round(aum, 2),
             "initial": round(initial, 2),
             "net_pnl": round(aum - initial, 2),
             "net_pnl_pct": round(aum / initial - 1.0, 6) if initial else 0.0,
             "day_aud": round(day_aud, 2),
             "day_pct": round(day_aud / aum, 6) if aum else 0.0,
-            "books": len(cards),
-            "books_red": reds,
-            "halts": sum(1 for c in cards if c["halted"]),
+            "books": len(group_cards),
+            "books_red": sum(1 for c in group_cards if c["day"] < 0),
+            "halts": sum(1 for c in group_cards if c["halted"]),
             "best": _pick(best),
             "worst": _pick(worst),
-        },
+        }
+
+    # Split books by reporting group. CORE is the headline AUM; every other
+    # group (e.g. EXPERIMENTAL) gets its OWN separate total and is EXCLUDED from
+    # the headline — so an unproven / geared book can run live without moving the
+    # number you actually watch.
+    group_names: list[str] = []
+    for c in cards:
+        if c["group"] not in group_names:
+            group_names.append(c["group"])
+    # CORE first, the rest in first-seen order.
+    group_names.sort(key=lambda g: (g != "CORE",))
+
+    # Share is computed WITHIN each group so every group's allocation bar is 100%.
+    for g in group_names:
+        gcards = [c for c in cards if c["group"] == g]
+        gaum = sum(c["equity"] for c in gcards)
+        for c in gcards:
+            c["share"] = round(c["equity"] / gaum, 4) if gaum else 0.0
+
+    groups = [{"name": g, **_totals([c for c in cards if c["group"] == g])}
+              for g in group_names]
+
+    # Headline totals = CORE only, ALWAYS. Experimental books never move it (even
+    # if they're the only books on disk) — that's the whole point of the split.
+    headline = _totals([c for c in cards if c["group"] == "CORE"])
+
+    return {
+        "kind": "all",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "totals": headline,
+        "groups": groups,
         "accounts": cards,
     }

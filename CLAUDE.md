@@ -20,9 +20,16 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 `trading_algo/forex/README.md`.
 
 ## Architecture (everything region-specific lives in one `Region` record)
-- `config.py` — `StrategyParams` (all strategy knobs) + portfolio settings
-  (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital) +
-  risk controls (drawdown circuit breaker, min-viable-size gate)
+- `config.py` — `StrategyParams` (all strategy knobs, incl. `long_short` /
+  `short_n` for a dollar-neutral book) + portfolio settings (ALLOCATIONS,
+  BASE_CURRENCY, FX rebalance cadence/spread, START, capital) + risk controls
+  (drawdown circuit breaker, min-viable-size gate)
+- `profiles.py` — named paper-book presets (`ultra`, `experimental`): per-book
+  StrategyParams overrides (leverage, long/short), a drawdown-breaker override,
+  and a reporting `group`. A profile changes the KNOBS only — weights still route
+  through the one `strategy.compute_targets` (invariant #3). Books in a non-CORE
+  group (e.g. EXPERIMENTAL) get their OWN separate total on the dashboard and are
+  excluded from the headline AUM
 - `regions.py` — Region registry: universe, regime index, currency, fee
   schedule, market calendar, Yahoo suffix, IBKR exchange, price_scale, per-region
   param overrides
@@ -57,6 +64,8 @@ python -m trading_algo.run_backtest --point-in-time # survivorship-bias correcte
 python -m trading_algo.sweep --region US            # parameter robustness sweep
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
+python -m trading_algo.paper_trade --account ultra --init --capital 10000 --profile ultra          # 3× leveraged momentum, breaker OFF
+python -m trading_algo.paper_trade --account experimental --init --capital 10000 --profile experimental  # market-neutral long/short (separate total)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
 # --- FX subsystem (independent; see trading_algo/forex/README.md) ---

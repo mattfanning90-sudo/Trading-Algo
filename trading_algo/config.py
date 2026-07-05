@@ -36,6 +36,15 @@ class StrategyParams:
     avg_correlation: float = 0.6    # diversification assumption for vol targeting
     max_vol_scale: float = 1.5      # cap on vol-target leverage of the raw book
 
+    # --- Long/short (market-neutral) mode ----------------------------------
+    # Off by default → the classic long-only book (unchanged). When on,
+    # compute_targets builds a dollar-neutral book: long the top `top_n` momentum
+    # names and short the bottom `short_n`, each leg inverse-vol weighted, so the
+    # net systematic exposure ≈ 0 and what's left is closer to pure alpha. Shorts
+    # carry NEGATIVE weights; gross exposure = Σ|w| is what `max_gross` caps.
+    long_short: bool = False
+    short_n: int = 0                # names to short (0 → mirror top_n)
+
     # --- Filters ------------------------------------------------------------
     abs_momentum_floor: float = 0.0  # require positive 12-1 return
     stock_trend_ma: int = 200        # stock must be above its N-day MA

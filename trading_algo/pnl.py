@@ -29,19 +29,33 @@ def add_lot(lots: dict, key: tuple, qty: int, price: float,
 
 def consume(lots: dict, key: tuple, qty: int, price: float,
             exit_cost: float) -> dict | None:
-    """Sell `qty` shares of `key`, consuming lots oldest-first (mutates `lots`).
+    """Sell `qty` LONG shares of `key`, consuming lots oldest-first.
 
-    Returns the realised round-trip for this sell (net of both entry and exit
-    commissions), or None if there were no lots to match against.
+    Long-only helper kept for direct callers; the general (short-aware) entry
+    point is `apply_fill`. Returns the realised round-trip, or None if there
+    were no long lots to match against.
     """
     queue = lots.get(key, [])
+    if not queue or queue[0][0] < 0:
+        return None
+    return _close(queue, qty, price, exit_cost)
+
+
+def _close(queue: list, qty: int, price: float, exit_cost: float) -> dict | None:
+    """Consume `qty` shares from a same-signed lot queue oldest-first (mutates
+    it). Works for both long lots (positive qty) and short lots (negative qty):
+    a long lot gains when the exit price is above entry, a short lot when it is
+    below. Returns the realised round-trip, or None if nothing matched."""
+    if not queue:
+        return None
+    lot_dir = 1 if queue[0][0] > 0 else -1   # int → keep integer share counts exact
     remaining, matched, entry_cost = qty, [], 0.0
     while remaining > 0 and queue:
         lot = queue[0]
-        take = min(remaining, lot[0])
+        take = min(remaining, abs(lot[0]))
         matched.append((take, lot[1], lot[3]))
         entry_cost += take * lot[2]
-        lot[0] -= take
+        lot[0] -= lot_dir * take          # shrink the lot toward zero
         remaining -= take
         if lot[0] == 0:
             queue.pop(0)
@@ -49,7 +63,8 @@ def consume(lots: dict, key: tuple, qty: int, price: float,
     if filled <= 0:
         return None
     entry_notional = sum(m * px for m, px, _ in matched)
-    gross = filled * float(price) - entry_notional
+    # Long: gross = exit − entry. Short: gross = entry − exit (sell high, buy back).
+    gross = lot_dir * (filled * float(price) - entry_notional)
     return {
         "filled": filled,
         "entry": entry_notional / filled,
@@ -60,8 +75,50 @@ def consume(lots: dict, key: tuple, qty: int, price: float,
         "exit_cost": float(exit_cost),
         "net": gross - entry_cost - float(exit_cost),
         "entry_date": matched[0][2],
-        "left_over": sum(lot[0] for lot in queue),
+        "left_over": sum(abs(lot[0]) for lot in queue),
     }
+
+
+def _open(queue: list, delta: int, price: float, cost: float,
+          when: str | None) -> None:
+    """Append a signed lot (delta>0 long, delta<0 short) to the queue."""
+    qty = abs(delta)
+    if qty == 0:
+        return
+    sign = 1 if delta > 0 else -1
+    queue.append([sign * qty, float(price), cost / qty, when])
+
+
+def apply_fill(lots: dict, key: tuple, delta: int, price: float,
+               cost: float, when: str | None) -> dict | None:
+    """Apply one signed fill (delta>0 buy, delta<0 sell) with FIFO accounting,
+    handling long AND short positions (mutates `lots`).
+
+    A fill in the same direction as the open position OPENS/adds a lot; a fill in
+    the opposite direction CLOSES lots oldest-first (and may flip through zero,
+    opening a fresh lot with the overshoot). Returns the realised round-trip for
+    the closed portion, or None when the fill only opened exposure.
+    """
+    if delta == 0:
+        return None
+    queue = lots.setdefault(key, [])
+    same_dir = (not queue) or ((queue[0][0] > 0) == (delta > 0))
+    if same_dir:
+        _open(queue, delta, price, cost, when)
+        return None
+
+    qty = abs(delta)
+    open_abs = sum(abs(lot[0]) for lot in queue)
+    close_qty = min(qty, open_abs)
+    exit_cost = cost * close_qty / qty                # split the fee on a flip
+    r = _close(queue, close_qty, price, exit_cost)
+    remainder = qty - close_qty
+    if remainder > 0:                                 # flipped: open the overshoot
+        new_delta = (1 if delta > 0 else -1) * remainder
+        _open(queue, new_delta, price, cost - exit_cost, when)
+    if not queue:
+        lots.pop(key, None)
+    return r
 
 
 def _trade_cost(t: dict) -> float:
@@ -81,16 +138,14 @@ def build_lots(trades: list[dict]) -> tuple[dict, list[dict]]:
     for t in trades:
         key = (t["region"], t["ticker"])
         qty = int(t["shares"])
-        if t["side"] == "BUY":
-            add_lot(lots, key, qty, float(t["fill"]), _trade_cost(t), t.get("date"))
-            continue
-        r = consume(lots, key, qty, float(t["fill"]), _trade_cost(t))
+        delta = qty if t["side"] == "BUY" else -qty
+        r = apply_fill(lots, key, delta, float(t["fill"]), _trade_cost(t), t.get("date"))
         if r is None:
             continue
         r.update({"date": t.get("date"), "region": t["region"],
                   "ticker": t["ticker"], "currency": t.get("currency")})
         realized.append(r)
-    open_lots = {k: q for k, q in lots.items() if sum(lot[0] for lot in q) > 0}
+    open_lots = {k: q for k, q in lots.items() if sum(abs(lot[0]) for lot in q) > 0}
     return open_lots, realized
 
 
@@ -100,7 +155,7 @@ def open_basis(open_lots: dict) -> dict[tuple, float]:
     hold, under FIFO)."""
     out: dict[tuple, float] = {}
     for key, queue in open_lots.items():
-        total = sum(lot[0] for lot in queue)
+        total = sum(abs(lot[0]) for lot in queue)   # abs → also covers short lots
         if total > 0:
-            out[key] = sum(lot[0] * lot[1] for lot in queue) / total
+            out[key] = sum(abs(lot[0]) * lot[1] for lot in queue) / total
     return out
