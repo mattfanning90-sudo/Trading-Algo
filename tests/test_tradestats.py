@@ -1,5 +1,4 @@
 """Trade/period-level statistics — win rate done right."""
-import numpy as np
 import pandas as pd
 
 from trading_algo import tradestats

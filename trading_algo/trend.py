@@ -26,7 +26,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import signals as sig
 from .config import DEFAULT_TREND_PARAMS, TrendParams
 
 

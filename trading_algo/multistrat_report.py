@@ -279,11 +279,11 @@ def build_report(synthetic: bool, start: str = "2007-01-01", method: str = "erc"
     # active book's role is to cut the drawdown vs holding pure equity. No leverage,
     # no bias — just the return-for-drawdown tradeoff, laid out so a target is a choice.
     if spy is not None and len(common):
-        w(f"\n## Equity-allocation frontier (vs CAGR target)\n")
+        w("\n## Equity-allocation frontier (vs CAGR target)\n")
         w(f"Blends of passive global equity (SPY in {base}, the upside taker) with the "
           f"active book (the downside mitigator). Pick your point on the return/drawdown "
           f"tradeoff — a CAGR target is a risk choice, not an alpha problem.\n")
-        w(f"| equity / active | CAGR | Vol | Sharpe | MaxDD |")
+        w("| equity / active | CAGR | Vol | Sharpe | MaxDD |")
         w("|---|---|---|---|---|")
         for we in (0.0, 0.3, 0.5, 0.7, 1.0):
             blend = (we * bench + (1.0 - we) * cr).dropna()

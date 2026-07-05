@@ -1,5 +1,4 @@
 """Carry sleeve: cross-sectional yield signal, sizing, L/S backtest."""
-import numpy as np
 import pandas as pd
 
 from trading_algo import carry, data, universes

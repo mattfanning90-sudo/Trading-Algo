@@ -156,6 +156,22 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 >   failure it tries `config.DATA_FALLBACK_SOURCE`, and the fallback's prices
 >   still flow through the F7 quality gate. Perfect no-op when unset.
 
+> **Delivery in progress — Phase 3 (Execution realism & capacity), slice 1.**
+> Landed the low-risk, observability-only items (no ADV, no invariant-#3 change):
+> - **P0-F** — `notifications.py`, the one shared alert channel (pluggable;
+>   default "log"). `breaker_transition` classifies halt/resume so alerts fire
+>   once per transition, never every halted day.
+> - **F12** — `paper_trade.run_daily` alerts through P0-F on the drawdown
+>   breaker's halt/resume transition.
+> - **F9** — `crowding.py`, a returns-based momentum-crash / crowding monitor
+>   (pairwise correlation, dispersion, vol-spike, bear-then-bounce setup), no
+>   lookahead, read-only (a test asserts `compute_targets` is unchanged); surfaced
+>   on the `run_backtest` report.
+>
+> Slice 2 (the heavier work) remains: refactors **R1** (unify cost paths), **R3**
+> (ADV ingestion), **R2** (fill capture) + **P0-I** (capacity hook), then the
+> features that depend on them — **F6**, **F15**, **F11**.
+
 ## 5. Feature readiness at a glance
 
 From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:

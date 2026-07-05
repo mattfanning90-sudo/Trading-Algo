@@ -14,7 +14,6 @@ entry's weights only from the day AFTER asof_date.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from .metrics import compute_metrics

@@ -85,7 +85,7 @@ jobs:
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -136,7 +136,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat backtest_report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report + equity curves
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backtest-report
           path: |
