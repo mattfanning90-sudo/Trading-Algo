@@ -240,3 +240,33 @@ those three and this crosses from "top-percentile independent quant repo" into
 *Nothing in this review should be read as performance validation: per invariant #5, no
 real-money or non-synthetic track record was evaluated, and the live path should not be
 funded until the Section 5 / #1 issues are resolved.*
+
+---
+
+## 8. Actioned in this change
+
+The following Section-5/6 items were implemented alongside this review (full
+suite green; `ruff` clean; behavioural regression baseline unchanged — the FX
+cost/annualisation refactors are numerically identical on daily data):
+
+- **Live execution (risk #1).** `execution_ibkr.rebalance()` now values positions
+  at market (not cost basis), sizes sells from held shares (never oversells),
+  captures `placeOrder`'s `Trade` result, uses a per-`Region` `min_trade_value`
+  in place of one flat cross-currency constant, and holds cash below a NAV floor.
+  Pinned by a new `tests/test_execution_ibkr.py` (fake `ib_insync`).
+- **Static tooling (risk #2).** Added a `ruff` lint gate, `pytest-cov` coverage
+  (78% today), and a 3.11/3.12 CI matrix; reconciled `requirements.txt` ↔
+  `pyproject.toml` (IBKR is now consistently an optional extra); added Dependabot.
+- **Cost/annualisation fork (risk #4).** One shared `marks.half_spread_fraction`
+  removes the last inlined half-spread copy; the ML/research reports annualise via
+  `marks.periods_per_year` (bar-aware) instead of a hardcoded 252.
+- **Cache-key identity (risk #5).** Data/FX caches key on a hash of the
+  ticker/currency set, not its length.
+- **Drawdown cooldown (risk #6).** Paper trading counts distinct market days, not
+  runs, so the ~1-month window holds when the engine fires several times a day.
+
+**Deliberately deferred** (larger or lower-value; noted for a future pass): the FX
+DSR `n_trials` sourcing from the experiment ledger (risk #3, needs a dev-trial
+counter), git-as-database migration (risk #8), folding the remaining currency-keyed
+side-tables into `Region`, `hypothesis` property tests, a strict `mypy` gate, and
+modularising the dashboard `app.js`.

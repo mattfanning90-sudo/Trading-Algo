@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trading_algo.forex import features, ml_agent, ml_backtest
+from trading_algo.forex import features, ml_backtest
 from trading_algo.forex.agents import PairContext
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel

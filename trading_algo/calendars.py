@@ -8,7 +8,7 @@ the data date), so a holiday at worst means a no-op run.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .regions import Region

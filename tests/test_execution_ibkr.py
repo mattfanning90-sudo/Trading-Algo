@@ -10,7 +10,6 @@ import sys
 import types
 
 import pandas as pd
-import pytest
 
 from trading_algo import execution_ibkr as ex
 

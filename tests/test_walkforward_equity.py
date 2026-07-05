@@ -1,5 +1,4 @@
 """Backlog F8: purged & embargoed walk-forward CV for the equity sleeves."""
-import numpy as np
 import pytest
 
 from trading_algo import data, walkforward

@@ -2,6 +2,10 @@ pandas>=2.2
 numpy>=1.26
 yfinance>=0.2.40
 pyarrow>=15.0
-ib_insync>=0.9.86
+# Live IBKR execution is OPTIONAL and lazily imported (see execution_ibkr.py).
+# Install it with the packaged extra when you actually route orders:
+#   pip install -e .[ibkr]
 # dev / test
 pytest>=8.0
+pytest-cov>=5.0
+ruff>=0.6
