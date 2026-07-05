@@ -29,12 +29,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import date
 
 import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, data_quality, fees, fx, storage, strategy
+from . import data, data_quality, fees, fx, pnl, storage, strategy
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -160,9 +161,14 @@ def init_account(account: str, capital: float, synthetic: bool,
             "currency": region.currency,
             "cash": local_cash,
             "positions": {},
+            # cost_basis / realized_pnl are retained for the state schema only —
+            # they are NOT the source of truth and nothing reads them. All P&L is
+            # derived from the fills log (state["trades"]) via trading_algo.pnl,
+            # so it can never disagree with the actual trade record.
             "cost_basis": {},
             "realized_pnl": 0.0,
             "last_rebalance_month": None,
+            "last_rebalance_date": None,
         }
     state = {
         "account": account,
@@ -214,6 +220,12 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         if price and price == price and price > 0:
             desired[t] = int((equity * w) / price)
 
+    # Seed the FIFO lot book for this region from the fills ledger — the single
+    # source of truth for cost basis. Each executed trade updates it; each sell
+    # is stamped with its actual realised P&L (net of entry + exit costs) drawn
+    # from the real lots it consumes, exactly like a broker trade confirmation.
+    lots, _ = pnl.build_lots([t for t in trade_log if t["region"] == region.key])
+
     for t in sorted(set(sleeve["positions"]) | set(desired)):
         if t in frozen:   # data-quality: don't trade a name on an untrusted price
             continue
@@ -232,32 +244,56 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         fee = fees.commission(region, notional)
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
         sleeve["cash"] -= delta * fill + fee + duty
-        cb = sleeve.setdefault("cost_basis", {})
-        if delta < 0:   # realised P&L on shares sold (average-cost basis)
-            sleeve["realized_pnl"] = (sleeve.get("realized_pnl", 0.0)
-                                      + (fill - cb.get(t, fill)) * abs(delta))
+
+        trade = {"date": today, "region": region.key, "ticker": t,
+                 "side": "BUY" if delta > 0 else "SELL", "shares": abs(delta),
+                 "fill": round(fill, 4), "commission": round(fee, 2),
+                 "stamp_duty": round(duty, 2), "currency": region.currency}
+        key = (region.key, t)
+        if delta > 0:
+            pnl.add_lot(lots, key, delta, fill, fee + duty, today)
+        else:                              # realise against the actual lots sold
+            r = pnl.consume(lots, key, abs(delta), fill, fee)
+            if r is not None:
+                trade["entry"] = round(r["entry"], 4)      # actual FIFO cost basis
+                trade["realized"] = round(r["net"], 2)     # actual gain/loss on this sale
+
         if tgt == 0:
             sleeve["positions"].pop(t, None)
-            cb.pop(t, None)
         else:
-            if delta > 0:   # buy: update the average cost per share (price basis)
-                old_avg = cb.get(t, fill)
-                cb[t] = (cur * old_avg + delta * fill) / tgt
-            # a partial sell leaves the average cost unchanged
             sleeve["positions"][t] = tgt
-        side = "BUY" if delta > 0 else "SELL"
-        trade_log.append({"date": today, "region": region.key, "ticker": t,
-                          "side": side, "shares": abs(delta),
-                          "fill": round(fill, 4), "commission": round(fee, 2),
-                          "stamp_duty": round(duty, 2), "currency": region.currency})
+        trade_log.append(trade)
         extra = f" duty {duty:.2f}" if duty else ""
-        print(f"    {side:<4} {abs(delta):>7} {t:<10} @ {fill:>10.3f}  "
-              f"(fee {fee:.2f}{extra} {region.currency})")
+        booked = f"  P&L {trade['realized']:+.2f}" if "realized" in trade else ""
+        print(f"    {trade['side']:<4} {abs(delta):>7} {t:<10} @ {fill:>10.3f}  "
+              f"(fee {fee:.2f}{extra} {region.currency}){booked}")
 
 
 # ---------------------------------------------------------------------------
 # Daily run
 # ---------------------------------------------------------------------------
+def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
+    """Whether a sleeve should rebalance on this run.
+
+    Fires once per calendar month (mirroring the backtest's month-end signal),
+    but only if at least `cfg.MIN_REBALANCE_GAP_DAYS` have elapsed since the last
+    rebalance — so a book funded late in a month isn't churned days later on the
+    1st. When the gap blocks it, `last_rebalance_month` is left untouched so the
+    next run re-checks and trades as soon as the gap clears.
+    """
+    if sleeve.get("last_rebalance_month") == this_month:
+        return False
+    gap = cfg.MIN_REBALANCE_GAP_DAYS
+    last = sleeve.get("last_rebalance_date")
+    if gap and last:
+        try:
+            if (date.fromisoformat(today) - date.fromisoformat(last)).days < gap:
+                return False
+        except (ValueError, TypeError):
+            pass
+    return True
+
+
 def run_daily(account: str, synthetic: bool) -> None:
     state = load_state(account)
     snap = fx_snapshot(synthetic)
@@ -288,8 +324,9 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
                 rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
                                  px_today, today, state["trades"])
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
-        elif sleeve["last_rebalance_month"] != this_month:
+        elif _should_rebalance(sleeve, today, this_month):
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
@@ -305,6 +342,7 @@ def run_daily(account: str, synthetic: bool) -> None:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
                 rebalance_sleeve(region, sleeve, targets, px_today, today,
                                  state["trades"], frozen=dq.excluded)
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
 
         eq_local = sleeve_equity_local(sleeve, px_today)
@@ -419,6 +457,7 @@ def main(argv: list[str] | None = None) -> None:
         state = load_state(args.account)
         for s in state["sleeves"].values():
             s["last_rebalance_month"] = None
+            s["last_rebalance_date"] = None   # bypass the min-gap guard
         save_state(args.account, state)
         run_daily(args.account, args.synthetic)
     else:

@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 
 from .. import config as cfg
-from .. import fx, paper_trade, signals
+from .. import fx, paper_trade, pnl, signals
 from ..regions import get_region
 
 HISTORY_BARS = 66          # ~90 calendar days of closes for the hover popovers
@@ -43,55 +43,30 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
 
 
 def closed_trades(trades: list[dict], snap_fx: dict) -> dict:
-    """FIFO round-trips reconstructed from the fills list (which paper_trade
-    appends chronologically). Entry costs are allocated per share; the closing
-    fill carries its own commission. Fills already include modelled slippage,
-    so `net` here is commission + stamp on top of price P&L."""
-    lots: dict[tuple, list] = {}          # (region, ticker) -> [qty, fill, cost/share, date]
+    """FIFO round-trips derived from the fills ledger — the single source of
+    truth (see `trading_algo.pnl`). Fills already include modelled slippage, so
+    `net` is price P&L less both entry and exit commissions/stamp. This is the
+    same reconstruction paper_trade stamps onto each sell, presented for the UI
+    with FX conversion, holding period and partial-lot notes."""
+    _, realized = pnl.build_lots(trades)
     rows: list[dict] = []
-    for t in trades:
-        key = (t["region"], t["ticker"])
-        qty = int(t["shares"])
-        cost = float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
-        if t["side"] == "BUY":
-            lots.setdefault(key, []).append([qty, float(t["fill"]), cost / qty if qty else 0.0, t["date"]])
-            continue
-        # SELL: consume lots head-first
-        queue = lots.get(key, [])
-        remaining, matched, entry_cost = qty, [], 0.0
-        while remaining > 0 and queue:
-            lot = queue[0]
-            take = min(remaining, lot[0])
-            matched.append((take, lot[1], lot[3]))
-            entry_cost += take * lot[2]
-            lot[0] -= take
-            remaining -= take
-            if lot[0] == 0:
-                queue.pop(0)
-        filled = qty - remaining
-        if filled <= 0:
-            continue
-        exit_px = float(t["fill"])
-        entry_notional = sum(m * px for m, px, _ in matched)
-        entry_avg = entry_notional / filled
-        gross = filled * exit_px - entry_notional
-        costs = entry_cost + cost
-        net = gross - costs
-        mult = snap_fx.get(t["currency"], 1.0)
+    for r in realized:
+        mult = snap_fx.get(r["currency"], 1.0)
         try:
-            held = (date.fromisoformat(t["date"]) - date.fromisoformat(matched[0][2])).days
-        except ValueError:
+            held = (date.fromisoformat(r["date"]) - date.fromisoformat(r["entry_date"])).days
+        except (ValueError, TypeError):
             held = 0
-        left_over = sum(lot[0] for lot in queue)
+        costs = r["entry_cost"] + r["exit_cost"]
+        net = r["net"]
         rows.append({
-            "date": t["date"], "ticker": t["ticker"], "region": t["region"],
-            "currency": t["currency"], "qty": filled,
-            "entry": round(entry_avg, 4), "exit": round(exit_px, 4),
+            "date": r["date"], "ticker": r["ticker"], "region": r["region"],
+            "currency": r["currency"], "qty": r["filled"],
+            "entry": round(r["entry"], 4), "exit": round(r["exit"], 4),
             "held_days": held,
-            "gross": round(gross, 2), "costs": round(costs, 2),
+            "gross": round(r["gross"], 2), "costs": round(costs, 2),
             "net": round(net, 2), "net_base": round(net * mult, 2),
-            "return_pct": round(net / entry_notional, 4) if entry_notional else 0.0,
-            "note": f"PARTIAL {filled}/{filled + left_over}" if left_over else "",
+            "return_pct": round(net / r["entry_notional"], 4) if r["entry_notional"] else 0.0,
+            "note": f"PARTIAL {r['filled']}/{r['filled'] + r['left_over']}" if r["left_over"] else "",
         })
     rows.sort(key=lambda r: (r["date"], -abs(r["net_base"])))
     by_ccy: dict[str, float] = {}
@@ -159,9 +134,17 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # Iterate the account's OWN regions (a small account may trade only one).
     regions = list(state.get("allocations") or cfg.ALLOCATIONS)
 
+    # Realised P&L and open-position cost basis are both derived from the fills
+    # ledger (the single source of truth), so the OVERVIEW tiles and the
+    # closed-trades ledger are computed the same way and can never disagree.
+    closed = closed_trades(state["trades"], snap_fx)
+    open_lots, _ = pnl.build_lots(state["trades"])
+    basis = pnl.open_basis(open_lots)
+
     sleeves_out, as_of = [], ""
     total_base = total_cash_base = total_unrealized_base = 0.0
-    total_invested_base = total_realized_base = 0.0
+    total_invested_base = 0.0
+    total_realized_base = closed["net_base"]   # FIFO round-trips, net of costs
     index_by_region: dict[str, tuple] = {}
     n_positions = 0
     history: dict[str, dict] = {}
@@ -174,7 +157,6 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         px_prev = prices.iloc[-2] if len(prices) > 1 else px  # for day-change
         as_of = max(as_of, prices.index[-1].strftime("%Y-%m-%d"))
         sleeve = state["sleeves"][k]
-        cost_basis = sleeve.get("cost_basis", {})
         m = snap_fx[region.currency]
         regime = ("RISK_ON"
                   if bool(signals.index_risk_on(index_px, region.params).iloc[-1])
@@ -195,7 +177,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             prev_price = _safe_price(px_prev, t)
             val_local = sh * price
             invested_local += val_local
-            avg = float(cost_basis.get(t) or price)         # fallback: no P&L
+            avg = float(basis.get((k, t)) or price)   # actual cost from the fills ledger
             day_change = (price / prev_price - 1.0) if prev_price else 0.0
             unrl_pct = (price / avg - 1.0) if avg else 0.0
             unrl_base = sh * (price - avg) * m
@@ -218,7 +200,6 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         total_base += eq_base
         total_cash_base += cash_local * m
         total_invested_base += invested_local * m
-        total_realized_base += float(sleeve.get("realized_pnl", 0.0)) * m
         index_by_region[k] = (index_px, region.currency)
         n_positions += len(positions)
         sleeves_out.append({
@@ -283,7 +264,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "index_state": index_state,
         "history": history,
         "blotter": blotter,
-        "closed": closed_trades(state["trades"], snap_fx),
+        "closed": closed,
         "stamp_duty": [{"currency": c, "amount": round(v, 2)} for c, v in stamp.items()],
         "account": account,
         "base_currency": state.get("base_currency", cfg.BASE_CURRENCY),

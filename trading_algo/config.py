@@ -95,6 +95,14 @@ DRAWDOWN_COOLDOWN_DAYS = 21         # ~1 month flat after a breach before re-ent
 # bleeding fees. Set 0 to disable the gate.
 MIN_VIABLE_EQUITY_BASE = 500.0
 
+# Minimum days between paper-trading rebalances. The monthly rebalance fires on
+# the first run of a new calendar month; without a floor, funding a book late in
+# a month (e.g. the 28th) churns the whole book two days later on the 1st,
+# locking in losses on positions that never got a real holding period. This gates
+# the calendar trigger so a freshly-funded book gets a proper hold first. Set 0
+# to disable (pure calendar-month cadence). Does not affect the backtest.
+MIN_REBALANCE_GAP_DAYS = 20
+
 # ---------------------------------------------------------------------------
 # Data-quality gate (backlog F7 / foundation P0-D)
 # ---------------------------------------------------------------------------

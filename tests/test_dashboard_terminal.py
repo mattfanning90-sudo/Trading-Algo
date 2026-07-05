@@ -152,6 +152,13 @@ def test_closed_trades_fifo_partial():
     assert row["held_days"] == 30
 
 
+def test_realized_matches_closed_ledger(books):
+    """The OVERVIEW realised-P&L tile and the closed-trades ledger are sourced
+    from the same FIFO reconstruction, so they can never disagree."""
+    snap = api.build_snapshot("full", synthetic=True)
+    assert snap["kpis"]["realized_base"] == snap["closed"]["net_base"]
+
+
 def test_closed_trades_in_snapshot(books):
     snap = api.build_snapshot("full", synthetic=True)
     assert "closed" in snap and "rows" in snap["closed"]
