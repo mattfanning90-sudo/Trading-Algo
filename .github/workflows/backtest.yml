@@ -18,17 +18,54 @@ on:
       task:
         description: "What to run"
         type: choice
-        options: [backtest, tune]
+        options: [backtest, tune, defensive, trend, validate, multistrat, ml]
         default: backtest
       mode:
         description: "Data mode"
         type: choice
         options: [real, synthetic]
         default: real
+      region:
+        description: "Region for the defensive sweep (defensive task only)"
+        type: choice
+        options: [US, FTSE, ASX]
+        default: US
       point_in_time:
         description: "Point-in-time constituents (needs a constituents file per region)"
         type: boolean
         default: false
+      target_vol:
+        description: "Vol target for the multistrat book (risk/return dial, e.g. 0.12)"
+        type: string
+        default: "0.12"
+      max_leverage:
+        description: "Gross-exposure cap on the multistrat book (e.g. 1.5; >1 needs margin)"
+        type: string
+        default: "1.5"
+      global_equity:
+        description: "Diversify the equity taker across US+ASX+FTSE (multistrat task)"
+        type: boolean
+        default: false
+      with_value:
+        description: "Add a value (long-term reversal) sleeve to the multistrat book"
+        type: boolean
+        default: false
+      with_lowrisk:
+        description: "Add a low-risk / betting-against-beta sleeve to the multistrat book"
+        type: boolean
+        default: false
+      with_resmom:
+        description: "Use residual (market-neutral) momentum for the equity sleeve"
+        type: boolean
+        default: false
+      with_altdata:
+        description: "ML task: merge fundamentals(EDGAR)+options-IV+sentiment feature panels"
+        type: boolean
+        default: false
+      method:
+        description: "Combiner weighting for the multistrat book (erc/invvol/equal)"
+        type: string
+        default: "erc"
       sweep:
         description: "Also run the TOP_N × lookback robustness grid (slow)"
         type: boolean
@@ -55,13 +92,43 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run backtest / tune
+        env:
+          # Optional secrets: enable extra providers when configured in the repo.
+          # TIINGO unlocks delisted US prices (survivorship-free PIT runs). Accept
+          # either secret name (TIINGO_API_KEY or TIINGO_API_SECRET) for convenience.
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY || secrets.TIINGO_API_SECRET }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           mkdir -p state
           SYN="${{ inputs.mode == 'synthetic' && '--synthetic' || '' }}"
           PIT="${{ inputs.point_in_time && '--point-in-time' || '' }}"
           SWEEP="${{ inputs.sweep && '--sweep' || '' }}"
+          # For a real point-in-time run, fetch the free fja05680 S&P 500 history
+          # (incl. delisted names) into the cache; best-effort, never fails the job.
+          if [ -n "$PIT" ] && [ "${{ inputs.mode }}" != "synthetic" ] && [ "${{ inputs.region }}" = "US" ]; then
+            python -c "from trading_algo import constituents as c; print('constituents ->', c.download_constituents('US'))" \
+              || echo "constituents download failed — falling back to current universe"
+          fi
           if [ "${{ inputs.task }}" = "tune" ]; then
             python -m trading_algo.tune $SYN | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "defensive" ]; then
+            python -m trading_algo.defensive_sweep --region "${{ inputs.region }}" $SYN | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "trend" ]; then
+            python -m trading_algo.trend_report $SYN | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "validate" ]; then
+            python -m trading_algo.validate --region "${{ inputs.region }}" $SYN $PIT | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "ml" ]; then
+            ALT="${{ inputs.with_altdata && '--with-altdata' || '' }}"
+            python -m trading_algo.mlreport $SYN $PIT $ALT | tee backtest_report.md
+          elif [ "${{ inputs.task }}" = "multistrat" ]; then
+            GEQ="${{ inputs.global_equity && '--global-equity' || '' }}"
+            VAL="${{ inputs.with_value && '--with-value' || '' }}"
+            LR="${{ inputs.with_lowrisk && '--with-lowrisk' || '' }}"
+            RM="${{ inputs.with_resmom && '--with-resmom' || '' }}"
+            python -m trading_algo.multistrat_report $SYN $PIT $GEQ $VAL $LR $RM --validate \
+              --method "${{ inputs.method }}" \
+              --target-vol "${{ inputs.target_vol }}" \
+              --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else
             # one run produces both the dashboard cache and the report
             python -m trading_algo.dashboard.backtest_store $SYN $PIT $SWEEP --report backtest_report.md

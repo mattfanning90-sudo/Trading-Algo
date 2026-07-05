@@ -34,15 +34,49 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from dataclasses import replace
+
 from . import config as cfg
 from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
-               storage, strategy)
+               storage, strategy, trend, universes)
 from . import state_schema
+from .config import DEFAULT_TREND_PARAMS
 from .regions import REGIONS, get_region
 
 # State location: env override (used by CI to persist to a tracked dir), else repo root.
 STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
 MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
+
+# The trend sleeve trades a USD ETF basket on its own time-series-momentum signal.
+# LONG-ONLY + unlevered so it's whole-share paper-tradeable (no shorting/margin) —
+# it keeps trend's "get out of the way" diversification, minus the short-side crisis
+# alpha (see trend.py). Lets a paper account run the shippable equity+trend book.
+TREND_KEY = "TREND"
+TREND_PAPER_PARAMS = DEFAULT_TREND_PARAMS.with_overrides(long_only=True, max_gross=1.0)
+
+
+def _sleeve_region(key: str):
+    """Region record for a sleeve key — real region, or a USD trend-ETF pseudo-region."""
+    if key == TREND_KEY:
+        return replace(get_region("US"), key=TREND_KEY, name="Trend (ETF)",
+                       universe=universes.TREND, stamp_duty_bps=0.0)
+    return get_region(key)
+
+
+def _sleeve_targets(key: str, region, prices: pd.DataFrame, index_px, state: dict):
+    """(target weights, frozen set) for one sleeve. Trend sleeve: its own time-series
+    signal, nothing frozen. Equity sleeves: the cross-sectional momentum book through the
+    data-quality eligibility gate (F13/F14) and this account's params — exactly the
+    multi-region momentum path. Both route through their single source of truth."""
+    if key == TREND_KEY:
+        return trend.compute_trend_targets(prices, TREND_PAPER_PARAMS), set()
+    elig, dq = data_quality.eligible(prices, region, prices.index[-1])
+    if dq.excluded:
+        print(f"  [{key}] data-quality: freezing "
+              + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
+    targets = strategy.compute_targets(prices, index_px, _account_params(state, region),
+                                       eligible=elig)
+    return targets, dq.excluded
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +210,16 @@ def init_account(account: str, capital: float, synthetic: bool,
         allocations = prof.allocations
     alloc_src = allocations if allocations is not None else cfg.ALLOCATIONS
     regions = list(alloc_src)
-    unknown = [k for k in regions if k not in REGIONS]
+    unknown = [k for k in regions if k not in REGIONS and k != TREND_KEY]
     if unknown:
-        raise SystemExit(f"Unknown region(s) {unknown}. Known: {list(REGIONS)}")
+        raise SystemExit(f"Unknown region(s) {unknown}. Known: {list(REGIONS) + [TREND_KEY]}")
 
     snap = fx_snapshot(synthetic)
     total = sum(alloc_src[k] for k in regions)
     norm = {k: alloc_src[k] / total for k in regions}
     sleeves = {}
     for k in regions:
-        region = get_region(k)
+        region = _sleeve_region(k)
         local_cash = (capital * norm[k]) / snap[region.currency]
         sleeves[k] = {
             "currency": region.currency,
@@ -355,7 +389,7 @@ def run_daily(account: str, synthetic: bool) -> None:
     combined = 0.0
     breakdown = {}
     for k in _account_regions(state):
-        region = get_region(k)
+        region = _sleeve_region(k)
         prices, index_px = latest_region_data(region, synthetic)
         px_today = prices.iloc[-1]
         today = prices.index[-1].strftime("%Y-%m-%d")
@@ -376,17 +410,11 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
             else:
-                elig, dq = data_quality.eligible(prices, region, prices.index[-1])
-                if dq.excluded:
-                    print(f"  [{k}] data-quality: freezing "
-                          + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
-                targets = strategy.compute_targets(prices, index_px,
-                                                   _account_params(state, region),
-                                                   eligible=elig)
+                targets, frozen = _sleeve_targets(k, region, prices, index_px, state)
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
                 rebalance_sleeve(region, sleeve, targets, px_today, today,
-                                 state["trades"], frozen=dq.excluded)
+                                 state["trades"], frozen=frozen)
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
 
@@ -503,9 +531,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
     ap.add_argument("--init", action="store_true")
     ap.add_argument("--capital", type=float, default=cfg.INITIAL_CAPITAL)
-    ap.add_argument("--regions", nargs="+", metavar="KEY", choices=list(REGIONS),
-                    help="(--init) restrict the account to these regions, equal-weighted "
-                         "(e.g. --regions US). Default: all three.")
+    ap.add_argument("--regions", nargs="+", metavar="KEY", choices=list(REGIONS) + [TREND_KEY],
+                    help="(--init) sleeves this account trades, equal-weighted (e.g. "
+                         "--regions US TREND for the momentum+trend book). Default: all regions.")
     ap.add_argument("--profile", choices=list(profiles.PROFILES),
                     help="(--init) open the book from a named strategy/risk preset "
                          "(e.g. ultra, experimental). See trading_algo/profiles.py.")

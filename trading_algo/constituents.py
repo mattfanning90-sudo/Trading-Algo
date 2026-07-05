@@ -27,10 +27,15 @@ from __future__ import annotations
 
 import bisect
 import os
+import re
 
 import pandas as pd
 
 from .regions import Region
+
+# fja05680 tags non-current names with a "-YYYYMM" removal-month suffix
+# (e.g. ENRNQ-200411, AAMRQ-201312); strip it to recover the trading ticker.
+_REMOVAL_SUFFIX = re.compile(r"-\d{6}$")
 
 
 class MembershipTable:
@@ -53,8 +58,34 @@ class MembershipTable:
         return cls(snaps)
 
     @classmethod
+    def from_wide_frame(cls, df: pd.DataFrame, normalize_us: bool = True) -> "MembershipTable":
+        """Parse the 'date, comma-separated tickers' wide format used by the free
+        fja05680/hanshof S&P 500 history CSVs (one row per snapshot, the second
+        column a quoted comma-list). With `normalize_us`, class-share dots are
+        mapped to Yahoo's hyphen (BRK.B -> BRK-B) so the provider chain can route
+        them."""
+        df = df.copy()
+        df.columns = [c.lower() for c in df.columns]
+        tcol = "tickers" if "tickers" in df.columns else df.columns[-1]
+        snaps: dict[pd.Timestamp, set[str]] = {}
+        for _, row in df.iterrows():
+            members = set()
+            for raw in str(row[tcol]).split(","):
+                base = _REMOVAL_SUFFIX.sub("", raw.strip().strip('"'))  # drop -YYYYMM
+                if not base or base.lower() == "nan":
+                    continue
+                members.add(base.replace(".", "-") if normalize_us else base)
+            if members:
+                snaps[pd.Timestamp(row["date"])] = members
+        return cls(snaps)
+
+    @classmethod
     def from_file(cls, path: str) -> "MembershipTable":
         df = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path)
+        cols = {c.lower() for c in df.columns}
+        # 'tickers' (one comma-list column) = wide fja05680 format; else long date,ticker
+        if "tickers" in cols or (len(df.columns) == 2 and "ticker" not in cols):
+            return cls.from_wide_frame(df)
         return cls.from_frame(df)
 
     def members_asof(self, date) -> set[str]:
@@ -72,12 +103,49 @@ class MembershipTable:
         return len(self._dates)
 
 
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+
+# Free, MIT-licensed point-in-time S&P 500 history (dated snapshots incl. the
+# delisted graveyard, 1996->now). Override with SP500_CONSTITUENTS_URL.
+FJA05680_SP500_URL = (
+    "https://raw.githubusercontent.com/fja05680/sp500/master/"
+    "S%26P%20500%20Historical%20Components%20%26%20Changes.csv"
+)
+
+
+def default_constituents_path(region_key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"constituents_{region_key}.csv")
+
+
 def get_membership(region: Region) -> MembershipTable | None:
-    """Load a region's configured PIT file, or None if not set / missing."""
+    """Load a region's PIT membership: the configured `constituents_file` if set,
+    else an auto-discovered cache file at `default_constituents_path(region.key)`
+    (written by `download_constituents`). None if neither exists."""
     path = getattr(region, "constituents_file", None)
-    if path and os.path.exists(path):
-        return MembershipTable.from_file(path)
-    return None
+    if not (path and os.path.exists(path)):
+        cached = default_constituents_path(region.key)
+        path = cached if os.path.exists(cached) else None
+    return MembershipTable.from_file(path) if path else None
+
+
+def download_constituents(region_key: str = "US", url: str | None = None) -> str:
+    """Fetch a free point-in-time constituents CSV into the cache so PIT backtests
+    pick it up automatically. US uses the fja05680 S&P 500 history by default.
+    Needs network (run on your machine or in CI). Returns the written path."""
+    import urllib.request
+
+    url = url or os.environ.get("SP500_CONSTITUENTS_URL") or FJA05680_SP500_URL
+    if region_key != "US" and url == FJA05680_SP500_URL:
+        raise ValueError(f"No default free constituents source for {region_key}; "
+                         "pass url= (e.g. an iShares-holdings export or LSEG list).")
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    dest = default_constituents_path(region_key)
+    req = urllib.request.Request(url, headers={"User-Agent": "trading-algo"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = r.read()
+    with open(dest, "wb") as f:
+        f.write(data)
+    return dest
 
 
 def synthetic_membership(region: Region, start: str = "2012-01-01",

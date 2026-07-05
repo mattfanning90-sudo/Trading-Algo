@@ -21,6 +21,43 @@ crash-protection filters.
 
 ---
 
+## 🗺️ The whole system at a glance
+
+Two machines. A **research judge** (offline) decides what is *allowed* to trade;
+the **live trader** (monthly, in the cloud) runs only what the judge has cleared.
+Nothing becomes a live position — and no new data source earns any weight — until
+it survives the honesty checks on the left.
+
+```mermaid
+flowchart TB
+    subgraph RESEARCH["🔬 Research judge — offline · decides what is ALLOWED to trade"]
+        direction TB
+        R1["Backtest<br/>no lookahead · costs always on"] --> R2["De-bias<br/>point-in-time members<br/>+ delisted prices"]
+        R2 --> R3["Overfitting gauntlet<br/>Deflated Sharpe · PBO<br/>purged walk-forward · stress"]
+        R3 --> R4["Combine premia — ERC<br/>momentum + trend + carry<br/>sized by risk, vol-targeted"]
+        ALT["Alt-data research<br/>earnings surprise · news shocks<br/>price-residualised edge test"] -. "earns weight only if<br/>CI lower bound &gt; 0<br/>AND DSR ≥ 95%" .-> R4
+    end
+    subgraph LIVE["📈 Live trader — monthly · runs in the cloud"]
+        direction TB
+        L1["Daily prices per region<br/>(local currency)"] --> L2["Signals<br/>momentum · trend · regime · vol"]
+        L2 --> L3["strategy.compute_targets<br/>ONE weight function"]
+        L3 --> L4["Assemble portfolio in AUD<br/>+ FX profit/loss"]
+        L4 --> L5["Execute<br/>whole shares · commission<br/>slippage · UK stamp duty"]
+        L5 --> L6["Risk backstop<br/>drawdown halt · min-size gate"]
+        L6 --> L7["Persist state + web dashboard"]
+        L7 -->|"next month"| L1
+    end
+    RESEARCH ==>|"only validated strategies ship"| LIVE
+    SCHED["⏰ Scheduler / GitHub Action<br/>timezone-aware · monthly after the close"] -.-> LIVE
+```
+
+Sections 2–4 zoom into the **live trader**; the per-account books are in the
+[paper accounts](#-the-paper-accounts) section; the research judge is detailed in
+[BACKTEST_VALIDATION.md](research/BACKTEST_VALIDATION.md) and
+[PREDICTIVE_MODEL.md](research/PREDICTIVE_MODEL.md).
+
+---
+
 ## 2. The per-sleeve pipeline
 
 Everything below runs independently for each region, on that region's prices in
@@ -224,6 +261,77 @@ paying a small FX spread on the cash that crosses currencies.
 > The backtest *rebalances* allocations each period; the paper sim *funds each
 > sleeve once* and lets them drift (the realistic “fund the sub-accounts and let
 > them run” model). Both are intentional and documented.
+
+---
+
+## 💼 The paper accounts
+
+The same engine runs several **isolated books**, each with its own capital, its own
+`paper_state_<name>.json`, and its own dashboard page. They differ only in *which
+sleeves they trade and how capital is split* — every one still routes through the
+exact same `compute_targets` weight logic, cost model, and risk backstop above.
+
+```mermaid
+flowchart LR
+    subgraph FULL["full · A$100k"]
+        direction TB
+        FU["US momentum · ⅓"]:::mom
+        FF["FTSE momentum · ⅓"]:::mom
+        FA["ASX momentum · ⅓"]:::mom
+    end
+    subgraph SMALL["small · A$1k"]
+        direction TB
+        SU["US momentum · 100%"]:::mom
+    end
+    subgraph CORE["core · A$100k — the SHIPPABLE book"]
+        direction TB
+        CU["US momentum · 50%"]:::mom
+        CT["Trend ETFs, long-only · 50%"]:::trend
+    end
+    classDef mom fill:#1f6feb,color:#fff,stroke:#1f6feb;
+    classDef trend fill:#2ea043,color:#fff,stroke:#2ea043;
+```
+
+| Account | Capital | Trades | Split | Why it exists |
+|---------|--------:|--------|-------|---------------|
+| **`full`**  | A$100k | US + FTSE + ASX momentum | ⅓ each region | The multi-region momentum book; longest paper history. Regime filter can park any sleeve in cash (e.g. ASX risk-off). |
+| **`small`** | A$1k   | US momentum only | 100% US | Deliberately tiny — demonstrates how **fixed fees + whole-share rounding** dominate a small account (the min-size gate often just holds cash). |
+| **`core`**  | A$100k | US momentum **+ long-only trend ETFs** | 50 / 50 | **The shippable book.** Momentum's returns *plus* trend's crisis diversification — forward-tracks what you'd actually trade. |
+
+### How each account runs a month
+
+- **`full` — diversify the momentum bet across three markets.** Each of the three
+  sleeves independently scores its universe, applies its trend + regime filters,
+  and builds an inverse-vol / vol-targeted book *in its own currency*. The three
+  are funded ⅓ each, then combined and reported in **AUD including FX P&L**. If a
+  region's index is below its 200-day MA, that sleeve sits in cash while the others
+  stay invested — regional crash protection.
+
+- **`small` — the same engine, shrunk to show fee drag.** One US sleeve, A$1k. At
+  this size the book often can't hold the full top-N in whole shares, so the
+  **min-size gate** concentrates into a few names or holds cash rather than paying
+  a US$1 commission floor to nudge tiny positions. It's a teaching account: proof
+  that costs, not signal, decide the outcome for a micro book.
+
+- **`core` — momentum for return, trend for defence.** Half the capital runs the
+  US momentum sleeve (as above); the other half runs a **trend sleeve** — a basket
+  of ETFs (equities, bonds, gold, …) each held *long-only when it's in its own
+  uptrend*, vol-targeted. Trend is deliberately **uncorrelated** to momentum: its
+  job is to hold up or step aside when equities fall (crisis alpha), not to chase
+  the same names. This is the book the research judge has actually cleared to ship.
+  *(Live trade-off recorded honestly: long-only trend keeps the "get out of the
+  way" diversification but gives up the short-side crisis alpha of the full
+  backtest trend sleeve.)*
+
+**Where alt-data fits:** none of these accounts trade the predictive / alt-data
+signals (earnings surprise, news sentiment) **yet** — by design. A data source is
+weighted into a book only after its price-residualised edge clears the honest bar
+on the real-data run (see the [system diagram](#-the-whole-system-at-a-glance) and
+[PREDICTIVE_MODEL.md](research/PREDICTIVE_MODEL.md)). Until it earns weight, it
+stays in research.
+
+➡ Accounts are configured in `.github/workflows/paper-trade.yml`; the sleeve
+routing lives in `paper_trade.py` (`_sleeve_region` / `_sleeve_targets`).
 
 ---
 

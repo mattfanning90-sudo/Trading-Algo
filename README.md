@@ -12,7 +12,9 @@ broker routing — lives in one `Region` record.
 
 > 📖 **New here?** Read **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** for a
 > step-by-step explanation of the algorithm — the maths, the decision flow,
-> diagrams, and how a price history turns into orders.
+> diagrams, and how a price history turns into orders. It now opens with a
+> **whole-system diagram** (research judge → live trader) and a **per-account
+> breakdown** (`full`, `small`, `core`).
 >
 > 🗂️ **Use Obsidian?** The repo ships a self-contained vault in
 > **[`obsidian/`](obsidian/)** — open that folder as a vault (its `Reference`
@@ -242,6 +244,29 @@ report to the run **Summary** (plus a downloadable artifact). Locally:
 `ci.yml` runs the test suite on every push / PR. The scheduled job uses **real**
 market data by default; if Yahoo is rate-limiting in CI, run it in `synthetic`
 mode (the dashboard still publishes, just on synthetic prices).
+
+## Data sources
+
+Market data goes through a **pluggable provider chain with per-ticker routing and
+fallback** (`providers.py`), so a single request — US names + LSE/ASX names + FX —
+is served by whichever provider covers each symbol, and one flaky vendor doesn't
+sink the run. Everything still speaks Yahoo tickers; providers translate.
+
+| Provider | Setup | Covers |
+|---|---|---|
+| `yfinance` | none (default) | everything; flaky / rate-limited |
+| `stooq` | none (free) | US, LSE (`.L`), ASX (`.AX`) EOD — good redundancy |
+| `polygon` | `POLYGON_API_KEY` | **US equities/ETFs, FX, US indices only** — *no* LSE/ASX |
+
+```bash
+export MOMENTUM_DATA_PROVIDER=polygon   # primary; yfinance + stooq auto-appended as fallback
+export POLYGON_API_KEY=...              # required for polygon
+```
+
+> ⚠️ **Polygon does not list London or Australian equities**, so it upgrades the
+> US sleeve + FX + S&P index; FTSE/ASX automatically fall through to yfinance/
+> stooq. For a single global, survivorship-free + point-in-time source, EODHD or
+> Norgate would be the upgrade (see `docs/research/COMBATING_BACKTEST_BIAS.md`).
 
 ## Risk controls
 
