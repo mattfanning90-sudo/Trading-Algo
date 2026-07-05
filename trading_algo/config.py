@@ -116,6 +116,14 @@ MIN_VIABLE_EQUITY_BASE = 500.0
 MIN_REBALANCE_GAP_DAYS = 20
 
 # ---------------------------------------------------------------------------
+# Notifications / telemetry (backlog F12 / foundation P0-F)
+# ---------------------------------------------------------------------------
+# Delivery channel for risk alerts (drawdown breaker, crowding). "log" prints;
+# register a webhook/email channel in notifications.py and name it here to route
+# alerts off-box. See trading_algo/notifications.py.
+NOTIFY_CHANNEL = "log"
+
+# ---------------------------------------------------------------------------
 # Survivorship correction (backlog F13, data integrity)
 # ---------------------------------------------------------------------------
 # Replacement return applied on the day a held name delists with no further price
