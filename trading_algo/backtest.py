@@ -25,7 +25,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  initial_capital: float = INITIAL_CAPITAL,
                  membership=None,
                  max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
-                 cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS) -> dict:
+                 cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS,
+                 apply_delisting: bool = False) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
@@ -34,9 +35,16 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     `max_drawdown_stop` is a circuit breaker: if equity falls more than this from
     its peak, the book liquidates to cash and sits out for `cooldown_days` before
-    resuming. Pass None to disable."""
+    resuming. Pass None to disable.
+
+    `apply_delisting` (backlog F13) injects a delisting return for names whose
+    price series terminates before the sample end — only meaningful with real
+    point-in-time data that includes since-delisted names."""
     p = region.params
     prices = prices.dropna(how="all")
+    if apply_delisting:
+        from . import delisting
+        prices = delisting.apply_delisting_returns(prices, region)
     rets = prices.pct_change(fill_method=None)
 
     # Rebalance dates = last trading day on or before each period end.

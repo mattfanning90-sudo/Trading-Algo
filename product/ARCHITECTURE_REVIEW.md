@@ -144,6 +144,18 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 > - **F19** — `validation.sharpe_haircut` reports the expected live Sharpe after
 >   deducting selection luck, shown next to the raw Sharpe.
 
+> **Delivery in progress — Phase 2 (Data integrity).** Landed (code complete;
+> F1's real survivorship numbers await vendor membership files):
+> - **F1** — `run_backtest --compare-pit` quantifies survivorship bias as the
+>   static-vs-point-in-time CAGR delta; PIT eligibility composes with the F7 gate
+>   by intersection.
+> - **F13** — `delisting.py` injects a Shumway replacement return on the day a
+>   held name delists, behind `config.DELISTING_REPLACEMENT_RETURN` (default off),
+>   applied only in the PIT backtest path.
+> - **F14** — `data.py` gains a fallback-source registry; on a primary (Yahoo)
+>   failure it tries `config.DATA_FALLBACK_SOURCE`, and the fallback's prices
+>   still flow through the F7 quality gate. Perfect no-op when unset.
+
 ## 5. Feature readiness at a glance
 
 From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:
