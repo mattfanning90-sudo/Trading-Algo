@@ -38,6 +38,15 @@ FUND_COLS = ("roe", "net_margin", "asset_growth", "sue")   # SUE is the horizon-
 SENT_COLS = ("sentiment_shock", "buzz_shock")              # tone/attention changes
 
 
+def _num(x):
+    """nan/inf → None for clean JSON; else a plain float (for the forward monitor log)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return x if np.isfinite(x) else None
+
+
 def _shuffle_labels(df, seed: int = 0):
     """Permute the label within each date — the leakage null for the incremental measure."""
     rng = np.random.default_rng(seed)
@@ -59,7 +68,8 @@ def _oos_dates(df, n_folds: int = 5, embargo: int = 1):
 
 
 def build_report(synthetic: bool, point_in_time: bool = False,
-                 with_altdata: bool = False, sent_horizon: int = 10) -> str:
+                 with_altdata: bool = False, sent_horizon: int = 10,
+                 metrics_sink: list | None = None) -> str:
     us = get_region("US")
     note = ""
     if synthetic:
@@ -179,6 +189,24 @@ def build_report(synthetic: bool, point_in_time: bool = False,
         # honest pass / fail read on the increment
         edge = ((not np.isnan(d1["ci_low"])) and d1["ci_low"] > 0
                 and (dsr_d.get("dsr") or 0) >= 0.95 and d1["delta_ic"] >= 0.005 and clean_inc)
+
+        # forward-monitor record: one machine-readable row per run, so the honest test can
+        # be logged over time (does any source EARN weight yet?). See altdata-monitor.yml.
+        if metrics_sink is not None:
+            metrics_sink.append({
+                "universe": "synthetic" if synthetic else ("PIT-US" if point_in_time else "US"),
+                "n_oos": int(base["n_periods"]),
+                "fund_inc_ic": _num(fund_ic["incremental_ic"]),
+                "sue_ic": _num(fund_ic["per_col"].get("sue")),
+                "sent_inc_ic": _num(sent_ic["incremental_ic"]),
+                "sent_dates": int(sent_ic["n_dates"]),
+                "delta_ic": _num(d1["delta_ic"]),
+                "delta_ir": _num(d1["delta_ir"]),
+                "ci_low": _num(d1["ci_low"]),
+                "ci_high": _num(d1["ci_high"]),
+                "dsr_diff": _num(dsr_d.get("dsr")),
+                "passes": bool(edge),
+            })
         if synthetic:
             control_ok = straddle0 and abs(d1["delta_ic"]) < 0.01 and clean_inc
             if control_ok:
@@ -239,8 +267,20 @@ def main(argv: list[str] | None = None) -> None:
                     help="merge fundamentals (EDGAR) + options-IV + sentiment feature panels")
     ap.add_argument("--sent-horizon", type=int, default=10,
                     help="forward-return horizon (days) for the short-horizon sentiment eval")
+    ap.add_argument("--emit-metrics", metavar="PATH",
+                    help="append the marginal-edge metrics as one JSON line to PATH "
+                         "(the forward-monitor log — see .github/workflows/altdata-monitor.yml)")
     args = ap.parse_args(argv)
-    print(build_report(args.synthetic, args.point_in_time, args.with_altdata, args.sent_horizon))
+    sink = [] if args.emit_metrics else None
+    print(build_report(args.synthetic, args.point_in_time, args.with_altdata,
+                       args.sent_horizon, metrics_sink=sink))
+    if args.emit_metrics and sink:
+        import datetime
+        import json as _json
+        rec = dict(sink[-1])
+        rec["run_utc"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(args.emit_metrics, "a") as f:
+            f.write(_json.dumps(rec) + "\n")
 
 
 if __name__ == "__main__":

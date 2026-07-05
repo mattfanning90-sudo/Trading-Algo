@@ -179,3 +179,14 @@ source is weighted into any live book** — the ridge already shrinks these colu
 we do not override it with conviction we have not earned. The durable deliverable is the
 *instrument*: a leakage-controlled, increment-deflated, negative-controlled marginal-edge test
 that will say "yes" honestly the day the data actually carries signal.
+
+### Keeping it learning — the forward monitor
+
+A null today is not a null forever: each quarter adds fresh filings and the walk-forward gains
+OOS months, so the estimate tightens and a real edge — if one emerges — becomes visible. So the
+honest test runs **forward on a schedule** (`.github/workflows/altdata-monitor.yml`, monthly) and
+appends its numbers (`mlreport --emit-metrics`) to `docs/research/altdata_monitor.jsonl` — a
+growing longitudinal record of per-source incremental IC, the increment's CI, and the DSR of the
+difference. It **never trades** (a zero-edge signal in the live book would only churn fees); it
+watches. The day a source's CI lower bound clears 0 and its DSR clears 95% *on that live-updating
+record*, it earns weight — and not one day before.
