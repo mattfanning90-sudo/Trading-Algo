@@ -31,6 +31,7 @@ book-side prints (``fx_book.status``) and the dashboard both route through it.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .fx_config import ANNUALIZATION
@@ -40,14 +41,29 @@ from .pairs import Pair
 # ---------------------------------------------------------------------------
 # Cost model (half the dealing spread on every weight change)
 # ---------------------------------------------------------------------------
+def half_spread_fraction(pair: Pair, price):
+    """Half the round-trip dealing spread as a fraction of price — THE single
+    definition every cost path derives from (book, per-pair backtest, and the
+    panel-wide ML/research backtests), so they can't re-fork.
+
+    A scalar price delegates to ``Pair.spread_fraction`` (guards None/0/NaN/neg
+    -> 0.0). A pandas Series/ndarray price is handled vectorised as
+    ``0.5 * spread_pips * pip / price`` for the panel backtests; feed clean
+    positive closes (NaNs propagate, matching those callers' own dropna).
+    """
+    if isinstance(price, (pd.Series, pd.DataFrame, np.ndarray)):
+        return 0.5 * (pair.spread_pips * pair.pip) / price
+    return 0.5 * pair.spread_fraction(price)
+
+
 def cost_fraction(delta_w: float, pair: Pair, price: float | None) -> float:
     """Half-spread charge on a weight change, as a fraction of equity.
 
-    The canonical book charge: ``abs(delta_w) * 0.5 * pair.spread_fraction(price)``.
-    ``Pair.spread_fraction`` guards bad prices (None/0/NaN/negative -> 0.0), so a
-    missing price charges nothing rather than blowing up.
+    The canonical book charge: ``abs(delta_w) * half_spread_fraction(pair, price)``.
+    The price guard lives in ``half_spread_fraction`` -> ``Pair.spread_fraction``,
+    so a missing price charges nothing rather than blowing up.
     """
-    return abs(delta_w) * 0.5 * pair.spread_fraction(price)
+    return abs(delta_w) * half_spread_fraction(pair, price)
 
 
 def trade_cost(delta_w: float, pair: Pair, price: float | None, equity: float) -> float:

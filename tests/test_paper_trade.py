@@ -145,6 +145,24 @@ def test_drawdown_halt_liquidates(account):
     assert state["risk_halted"] is True              # still halted (cooldown remains)
 
 
+def test_cooldown_counts_market_days_not_runs(account):
+    """The engine fires several times a day; the drawdown cooldown must decrement
+    per distinct report date, not per run."""
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    state["risk_halted"] = True
+    state["halt_cooldown"] = 3
+    state.pop("halt_last_day", None)
+    pt.save_state(account, state)
+    # Two runs land on the SAME synthetic report date -> one day of cooldown.
+    pt.run_daily(account, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    assert state["halt_cooldown"] == 2               # dropped by ONE, not two
+    assert state["risk_halted"] is True
+
+
 def test_micro_account_does_not_crash(account):
     """A tiny account can't afford the full book — must handle gracefully."""
     pt.init_account(account, capital=100, synthetic=True)

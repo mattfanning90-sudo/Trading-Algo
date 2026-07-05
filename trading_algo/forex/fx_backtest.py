@@ -20,6 +20,7 @@ import pandas as pd
 
 from . import fx_strategy
 from . import fxconv
+from . import marks
 from .agents import AgentPool
 from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
 from .fx_data import closes
@@ -86,7 +87,7 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         for s in pairs:
             m = move[s]
             if m:
-                cost += abs(m) * 0.5 * specs[s].spread_fraction(price_d[s])
+                cost += abs(m) * marks.half_spread_fraction(specs[s], price_d[s])
 
         # Overnight carry/financing on the positions held into the next bar.
         carry = 0.0

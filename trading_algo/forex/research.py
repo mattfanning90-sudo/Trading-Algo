@@ -26,7 +26,8 @@ import pandas as pd
 from . import fx_config as cfg
 from . import fx_data, validation
 from . import indicators as ind
-from .fx_config import ANNUALIZATION, profile
+from .fx_config import profile
+from .marks import periods_per_year
 from .ml_backtest import strategy_returns
 from .pairs import UNIVERSES, resolve_universe
 
@@ -123,7 +124,7 @@ def run_research(panel: dict, p, n_bars: int | None = None) -> dict:
             continue
         eq = (1 + r).cumprod()
         out[name] = {
-            "sharpe": round(float(r.mean() / r.std() * np.sqrt(ANNUALIZATION)), 2),
+            "sharpe": round(float(r.mean() / r.std() * np.sqrt(periods_per_year(r.index))), 2),
             "total": round(float(eq.iloc[-1] - 1), 4),
             "psr": round(validation.probabilistic_sharpe_ratio(r.to_numpy()), 3),
             "dsr": round(validation.deflated_sharpe_ratio(r.to_numpy(), n_trials, sr_var), 3),
