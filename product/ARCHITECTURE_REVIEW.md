@@ -168,9 +168,17 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 >   lookahead, read-only (a test asserts `compute_targets` is unchanged); surfaced
 >   on the `run_backtest` report.
 >
-> Slice 2 (the heavier work) remains: refactors **R1** (unify cost paths), **R3**
-> (ADV ingestion), **R2** (fill capture) + **P0-I** (capacity hook), then the
-> features that depend on them — **F6**, **F15**, **F11**.
+> **Slice 2 — started.** **R2 + F11** landed (measurement-only, no invariant/
+> baseline risk): `execution_ibkr` now records the arrival (decision) price and
+> captures the broker's average fill (completing the fill-capture #50 began);
+> paper trades carry a `decision` price; new `tca.py` reports per-region
+> implementation shortfall vs modelled slippage (`paper_trade --tca`) and alerts
+> when realized materially exceeds modelled. The fill-capture piece (P0-B) also
+> feeds Phase 4's F3/F10.
+>
+> Remaining in slice 2: **R1** (unify cost paths) → **F6** (market-impact model);
+> **R3** (ADV ingestion) + **P0-I** (`compute_targets` capacity hook) → **F15**
+> (pre-trade ADV cap).
 
 ## 5. Feature readiness at a glance
 
