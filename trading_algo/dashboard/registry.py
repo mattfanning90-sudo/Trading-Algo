@@ -13,6 +13,7 @@ import json
 import os
 
 from .. import paper_trade
+from .. import profiles
 from ..forex import fx_book
 from ..forex import fx_config as fxcfg
 
@@ -63,10 +64,18 @@ def _peek(path: str) -> dict | None:
 def _equity_entry(account: str, state: dict) -> dict:
     initial = float(state.get("initial_capital_base") or 0.0)
     regions = list(state.get("allocations") or {})
+    group = str(state.get("group") or profiles.CORE).upper()
+    prof = profiles.PROFILES.get(state.get("profile") or "")
     # "micro" here selects the single-sleeve SMALL screens; multi-region books
     # keep the full terminal even if their sleeves trade in concentrated mode.
-    micro = bool(initial) and initial < paper_trade.MICRO_THRESHOLD and len(regions) == 1
-    if micro:
+    # A profiled book (ultra / experimental) is intentionally sized/geared, so it
+    # keeps the full terminal even when funded small.
+    micro = (bool(initial) and initial < paper_trade.MICRO_THRESHOLD
+             and len(regions) == 1 and prof is None)
+    if prof is not None:
+        label = f"{account.upper()} · {prof.label.split(' · ', 1)[-1]}"
+        sub = prof.sub
+    elif micro:
         label = f"{account.upper()} · {_compact_money(initial)}"
         only = " ONLY" if len(regions) == 1 else ""
         sub = f"EQUITIES · {' / '.join(regions)}{only} · MICRO MODE"
@@ -80,6 +89,7 @@ def _equity_entry(account: str, state: dict) -> dict:
         "micro": bool(micro),
         "label": label,
         "sub": sub,
+        "group": group,
         "initial": initial,
         "regions": regions,
     }
