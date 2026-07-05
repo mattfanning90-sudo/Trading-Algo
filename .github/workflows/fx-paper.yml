@@ -62,7 +62,7 @@ jobs:
         # Persists trading_algo/forex/.cache across runners (shared prefix with
         # day-paper.yml so the nightly run warms from the hourly runs and vice
         # versa). Unique key -> always saves; restore-keys picks the most recent.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: trading_algo/forex/.cache
           key: fx-parquet-${{ github.run_id }}
