@@ -94,6 +94,70 @@ def test_partial_incremental_ic_synthetic_null_and_sensitivity():
     assert res2["incremental_ic"] > 0.3
 
 
+_SMALL_GBRT = {"n_rounds": 12, "learning_rate": 0.1, "max_depth": 3, "min_leaf": 10}
+
+
+def test_gbrt_learns_interaction_ridge_cannot():
+    rng = np.random.default_rng(0)
+    n = 4000
+    a, b = rng.normal(size=n), rng.normal(size=n)
+    y = np.sign(a) * np.sign(b) + rng.normal(0, 0.3, n)      # pure interaction, ~0 linear IC
+    X = np.column_stack([a, b])
+    tr, te = slice(0, 3000), slice(3000, n)
+    ridge_ic = mlp._rank_ic(X[te] @ mlp.cross_sectional_ridge(X[tr], y[tr], 1.0), y[te])
+    gbrt_ic = mlp._rank_ic(mlp.gbrt_predict(mlp.gradient_boost(X[tr], y[tr]), X[te]), y[te])
+    assert abs(ridge_ic) < 0.1              # the linear model is blind to the interaction
+    assert gbrt_ic > 0.3                    # the nonlinear learner extracts it
+
+
+def test_gbrt_deterministic_and_pure_numpy():
+    import sys
+    rng = np.random.default_rng(1)
+    X, y = rng.normal(size=(500, 4)), rng.normal(size=500)
+    m1, m2 = mlp.gradient_boost(X, y, n_rounds=20), mlp.gradient_boost(X, y, n_rounds=20)
+    assert np.array_equal(mlp.gbrt_predict(m1, X), mlp.gbrt_predict(m2, X))   # no RNG/seed
+    for mod in ("scipy", "sklearn", "xgboost", "lightgbm"):
+        assert mod not in sys.modules      # pure NumPy — no heavy learner imported
+
+
+def test_gbrt_routes_through_shared_fold_loop():
+    prices, idx = _synth()
+    df = mlp.build_dataset(prices, idx)
+    g = mlp.fit_predict_walk_forward(df, n_folds=3, model="gbrt", gbrt=_SMALL_GBRT)
+    ridge = mlp.fit_predict_walk_forward(df, n_folds=3, model="ridge")
+    assert list(g.index) == list(ridge.index)      # identical OOS (date,ticker) rows + splits
+
+
+def test_gbrt_walkforward_uses_only_past_train_rows():
+    prices, idx = _synth()
+    df = mlp.build_dataset(prices, idx)
+    cols = mlp.feature_cols(df)
+    scores = mlp.fit_predict_walk_forward(df, n_folds=3, model="gbrt", gbrt=_SMALL_GBRT)
+    dates = df.index.get_level_values("date")
+    tr_d, te_d = mlp.purged_walk_forward(pd.unique(dates), n_folds=3, embargo=1)[0]
+    tr, te = df[dates.isin(tr_d)], df[dates.isin(te_d)]
+    manual = mlp._fit_predict(cols, tr, te, model="gbrt", gbrt=_SMALL_GBRT)
+    # the fold's OOS scores == a fresh GBRT fit on ONLY that fold's (past) train rows
+    assert np.allclose(scores.reindex(te.index).to_numpy(), manual)
+
+
+def test_gbrt_shuffle_null_collapses():
+    prices, idx = _synth()
+    res = mlp.run_ml_backtest(prices, idx, model="gbrt", gbrt=_SMALL_GBRT,
+                              n_folds=3, top_n=15, shuffle_seed=0)
+    assert abs(res.get("ic", 0.0)) < 0.05          # label-shuffle leak detector still collapses
+
+
+def test_gbrt_synthetic_negative_control():
+    prices, idx = _synth()
+    extra = ds.build_extra_panel(ds.ALL_SOURCES, prices, "2012-01-01", synthetic=True)
+    base = mlp.run_ml_backtest(prices, idx, extra=None, n_folds=3, model="gbrt", gbrt=_SMALL_GBRT)
+    alt = mlp.run_ml_backtest(prices, idx, extra=extra, n_folds=3, model="gbrt", gbrt=_SMALL_GBRT)
+    d = mlp.incremental_delta(base, alt, n_paths=400)
+    assert abs(d["delta_ic"]) < 0.05                                  # no spurious edge
+    assert np.isnan(d["ci_low"]) or (d["ci_low"] <= 0 <= d["ci_high"])  # increment straddles 0
+
+
 def test_incremental_delta_identical_books_is_zero_with_ci():
     prices, idx = _synth()
     base = mlp.run_ml_backtest(prices, idx, n_folds=4, top_n=15)

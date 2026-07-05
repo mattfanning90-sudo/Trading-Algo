@@ -190,3 +190,35 @@ growing longitudinal record of per-source incremental IC, the increment's CI, an
 difference. It **never trades** (a zero-edge signal in the live book would only churn fees); it
 watches. The day a source's CI lower bound clears 0 and its DSR clears 95% *on that live-updating
 record*, it earns weight — and not one day before.
+
+### The three levers (implemented) — a harder gate, not a softer one
+
+After the null, a data-scientist→architect→staff→engineer→chief-engineer review designed and
+honesty-gated three legitimate levers to a *real* edge. All three are now implemented; crucially,
+each was built to RAISE the ceiling while the pass bar got **stricter**, not looser:
+
+1. **Earnings ANNOUNCEMENT dates (8-K Item 2.02), not filing dates.** PEAD drift starts at the
+   press release; the 10-Q lags it by days-to-weeks. `EdgarFundamentals` now sources 8-K 2.02
+   dates (submissions API, paginated to ~2007) and moves the SUE impulse to the announcement —
+   using **first-reported** values so no restated number is ever back-dated (the chief's
+   magnitude-lookahead guard, with a truncation-invariance test).
+2. **Clean sentiment — the measurable part.** The 0-covered-dates PIT failure was a coverage bug
+   (`tickers[:max_names]` spent the whole budget on leading un-mappable delisted names); fixed by
+   slicing *after* coverability, so sentiment is now measurable. It stays **survivor-conditioned
+   corroboration only** — never a pass. A survivorship-*complete* feed still needs GDELT GKG-bulk
+   (offline, TB-scale, + a point-in-time name→ticker crosswalk) or a paid vendor. That remains
+   deferred and is not dressed up as free.
+3. **A pure-NumPy nonlinear learner (GBRT).** A histogram gradient-boosted-trees model (pinned
+   depth 3 / 200 rounds / lr 0.05, deterministic) slots into the same purged walk-forward, testing
+   an interaction/threshold PEAD effect the linear ridge provably cannot express.
+
+**The gate got stricter.** A source now earns weight only if the SINGLE pre-declared PRIMARY cell —
+GBRT + announcement-dated SUE + full-universe 21d increment — clears *all* of: bootstrap-CI lower
+bound > 0, **Deflated Sharpe of the difference ≥ 95% deflated across the union (model × α) trial
+set**, **PBO/CSCV ≤ 50%** (now wired into `mlreport`, validating the learner/α selection a nonlinear
+model makes riskier), the incremental shuffle-null collapse, and the synthetic negative control
+(increment straddles 0 under BOTH learners). No sign-flipping; no picking the better of
+filed/announcement timing or ridge/GBRT after seeing results. Ridge and covered-sentiment are
+corroboration and can never themselves pass. A GBRT null bounds only *this* pinned capacity — we
+refuse to sweep deeper to buy a pass. Verdict from the real-data CI run is recorded in
+`docs/research/altdata_monitor.jsonl` and read only from there.

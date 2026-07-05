@@ -170,6 +170,113 @@ def test_sue_known_date_guards_equity_filing():
 
 # --- news shocks: differenced from past known prints, no self-leak ---
 
+def _sue_frames(vals, filed_offset=45):
+    ends = pd.date_range("2015-03-31", periods=len(vals), freq="QE")
+    ni = pd.DataFrame({"known_date": ends + pd.Timedelta(days=filed_offset), "end": ends,
+                       "start": ends - pd.Timedelta(days=89), "val": vals})
+    eq = pd.DataFrame({"known_date": ends + pd.Timedelta(days=filed_offset), "end": ends,
+                       "start": pd.NaT, "val": [1000.0] * len(vals)})
+    return ends, ni, eq
+
+
+def test_announcement_backdates_before_10q():
+    rng = np.random.default_rng(0)
+    ends, ni, eq = _sue_frames(list(100 + rng.normal(0, 5, 11)) + [200.0])   # filed at end+45
+    ann = pd.DataFrame({"announce_date": ends + pd.Timedelta(days=30)})       # 8-K at end+30
+    base = ds.EdgarFundamentals._seasonal_surprise(ni, eq)                    # no announce
+    moved = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=ann)
+    assert (pd.to_datetime(moved["known_date"]).to_numpy()
+            < pd.to_datetime(base["known_date"]).to_numpy()).all()           # moved earlier
+    assert np.allclose(moved["sue"].to_numpy(), base["sue"].to_numpy())      # only timing moved
+
+
+def test_announcement_fallback_no_8k():
+    rng = np.random.default_rng(1)
+    ends, ni, eq = _sue_frames(list(100 + rng.normal(0, 5, 11)) + [180.0])
+    base = ds.EdgarFundamentals._seasonal_surprise(ni, eq)
+    empty = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=pd.DataFrame(columns=["announce_date"]))
+    assert np.array_equal(pd.to_datetime(base["known_date"]).to_numpy(),
+                          pd.to_datetime(empty["known_date"]).to_numpy())    # fallback preserved
+
+
+def test_sue_uses_first_reported_value_not_restatement():
+    # THE magnitude guard: back-dating must attach the FIRST-reported number, never a later
+    # restatement — otherwise a value not public at the announcement leaks in.
+    rng = np.random.default_rng(5)
+    ends, ni, eq = _sue_frames(list(100 + rng.normal(0, 5, 10)))
+    ann = pd.DataFrame({"announce_date": ends + pd.Timedelta(days=30)})
+    clean = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=ann)
+    restate = pd.DataFrame({"known_date": [ends[5] + pd.Timedelta(days=400)], "end": [ends[5]],
+                            "start": [ends[5] - pd.Timedelta(days=89)], "val": [ni["val"].iloc[5] * 5]})
+    withr = ds.EdgarFundamentals._seasonal_surprise(pd.concat([ni, restate], ignore_index=True), eq, announce=ann)
+    assert np.allclose(clean["sue"].to_numpy(), withr["sue"].to_numpy())     # restatement ignored
+    assert np.array_equal(pd.to_datetime(clean["known_date"]).to_numpy(),
+                          pd.to_datetime(withr["known_date"]).to_numpy())
+
+
+def test_late_first_filing_not_backdated():
+    # a quarter whose first filing lands > MAX_10Q_LAG after the 8-K is treated as a restatement
+    rng = np.random.default_rng(2)
+    ends = pd.date_range("2015-03-31", periods=12, freq="QE")
+    filed = [e + pd.Timedelta(days=45) for e in ends[:-1]] + [ends[-1] + pd.Timedelta(days=90)]
+    ni = pd.DataFrame({"known_date": filed, "end": ends, "start": ends - pd.Timedelta(days=89),
+                       "val": list(100 + rng.normal(0, 5, 11)) + [200.0]})
+    eq = pd.DataFrame({"known_date": filed, "end": ends, "start": pd.NaT, "val": [1000.0] * 12})
+    ann = pd.DataFrame({"announce_date": ends + pd.Timedelta(days=10)})       # 8-K at end+10
+    moved = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=ann)
+    kd = pd.to_datetime(moved["known_date"]).to_numpy()
+    assert kd[-1] == np.datetime64(ends[-1] + pd.Timedelta(days=90))          # late one NOT back-dated
+    assert kd[-2] == np.datetime64(ends[-2] + pd.Timedelta(days=10))          # normal one back-dated
+
+
+def test_no_out_of_window_8k_matched():
+    rng = np.random.default_rng(4)
+    ends, ni, eq = _sue_frames(list(100 + rng.normal(0, 5, 8)))
+    # all announcements out of window: too early (end+2 < ANN_MIN) and too late (end+200 > filed)
+    ann = pd.DataFrame({"announce_date": list(ends + pd.Timedelta(days=2)) + list(ends + pd.Timedelta(days=200))})
+    base = ds.EdgarFundamentals._seasonal_surprise(ni, eq)
+    moved = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=ann)
+    assert np.array_equal(pd.to_datetime(base["known_date"]).to_numpy(),
+                          pd.to_datetime(moved["known_date"]).to_numpy())     # nothing matched
+
+
+def test_seasonal_surprise_causal_prefix():
+    # no-lookahead: SUE on a prefix of quarters == SUE on the full series for those quarters
+    rng = np.random.default_rng(3)
+    ends, ni, eq = _sue_frames(list(100 + rng.normal(0, 6, 16)))
+    ann = pd.DataFrame({"announce_date": ends + pd.Timedelta(days=30)})
+    full = ds.EdgarFundamentals._seasonal_surprise(ni, eq, announce=ann).set_index("known_date")["sue"]
+    pref = ds.EdgarFundamentals._seasonal_surprise(ni.iloc[:15], eq.iloc[:15],
+                                                   announce=ann.iloc[:15]).set_index("known_date")["sue"]
+    common = pref.index.intersection(full.index)   # SUE warms up after ~8 quarters
+    assert len(common) >= 5 and np.allclose(pref.loc[common].to_numpy(), full.loc[common].to_numpy())
+
+
+def test_earnings_announcements_parses_paginates_and_filters(monkeypatch):
+    recent = {"filings": {"recent": {
+        "form": ["8-K", "10-Q", "8-K"],
+        "filingDate": ["2020-01-30", "2020-02-15", "2020-03-01"],
+        "reportDate": ["2020-01-29", "2019-12-31", "2020-02-28"],
+        "items": ["2.02,9.01", "", "5.02"], "accessionNumber": ["a", "b", "d"]},
+        "files": [{"name": "CIK0000000001-older.json"}]}}
+    older = {"form": ["8-K"], "filingDate": ["2018-04-29"], "reportDate": ["2018-04-28"],
+             "items": ["2.02"], "accessionNumber": ["z"]}
+    monkeypatch.setattr(ds, "_http_get",
+                        lambda url, timeout=30: json.dumps(older if "older" in url else recent).encode())
+    ann = ds.EdgarFundamentals()._earnings_announcements("0000000001")
+    assert list(ann.columns) == ["announce_date", "report_date"]
+    assert set(ann["announce_date"].dt.strftime("%Y-%m-%d")) == {"2020-01-30", "2018-04-29"}  # both 2.02s
+    assert ann["announce_date"].is_monotonic_increasing                       # sorted, paginated
+    monkeypatch.setattr(ds, "_http_get", lambda u, timeout=30: b"not json")
+    assert ds.EdgarFundamentals()._earnings_announcements("0000000001").empty  # malformed → empty
+
+
+def test_coverable_slice_spends_budget_on_mappable():
+    tickers = ["DEAD1", "DEAD2", "AAPL", "DEAD3", "MSFT"]
+    titles = {"AAPL": "Apple Inc", "MSFT": "Microsoft Corp"}
+    assert ds.NewsSentiment._coverable(tickers, titles) == ["AAPL", "MSFT"]   # only mappable, in order
+
+
 def test_edgar_observations_real_path_merges(monkeypatch):
     # drives the REAL observations() parse/merge path with a mocked companyfacts payload
     # (no network) — the path synthetic() bypasses, where a str-vs-datetime 'end' merge

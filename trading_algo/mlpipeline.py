@@ -88,10 +88,129 @@ def cross_sectional_ridge(X: np.ndarray, y: np.ndarray, alpha: float = 1.0) -> n
     return np.linalg.solve(A, X.T @ y)
 
 
+# ---------------------------------------------------------------------------
+# Nonlinear learner — gradient-boosted regression trees (pure NumPy, deterministic)
+# ---------------------------------------------------------------------------
+# The pooled ridge is a weak LINEAR extractor; a ~0 linear increment bounds only that
+# model, not a nonlinear/interaction PEAD or tone effect. This GBRT is the nonlinear
+# hypothesis test — hand-written NumPy so the zero-heavy-dependency invariant holds. Its
+# hyperparameters are PRE-REGISTERED (ESL/Friedman defaults, never swept on this sample), so
+# the model is ONE extra trial, not a grid — the anti-overfit cost is paid by pre-registration.
+GBRT_PARAMS = {"n_rounds": 200, "learning_rate": 0.05, "max_depth": 3, "min_leaf": 20}
+GBRT_BINS = 32   # features are cross-sectionally z-scored & clipped to ±3, so fixed [-3,3]
+                 # bins make split search O(p·bins) instead of O(p·n·log n) — scales to the
+                 # full PIT universe in CI while staying exact for the z-scored feature grid.
+
+
+def _bin_features(X: np.ndarray, n_bins: int = GBRT_BINS) -> np.ndarray:
+    """Map z-scored features (clipped ~±3) to integer bins once → histogram split search."""
+    return np.clip(((np.asarray(X, float) + 3.0) / 6.0 * n_bins).astype(np.int64), 0, n_bins - 1)
+
+
+def _bin_edge(b: int, n_bins: int = GBRT_BINS) -> float:
+    """Real-valued upper edge of bin b on the z-score scale (the stored split threshold)."""
+    return -3.0 + (b + 1) / n_bins * 6.0
+
+
+def _best_split(Xb: np.ndarray, resid: np.ndarray, min_leaf: int, n_bins: int = GBRT_BINS):
+    """Greedy MSE split on BINNED features: maximise Sₗ²/kₗ + Sᵣ²/kᵣ via per-bin residual
+    histograms (bincount) + a prefix scan over bins. Returns (gain, feature, bin) or None."""
+    n, p = Xb.shape
+    S_tot = resid.sum()
+    parent = S_tot * S_tot / n
+    best = None
+    for j in range(p):
+        sums = np.bincount(Xb[:, j], weights=resid, minlength=n_bins)
+        cnts = np.bincount(Xb[:, j], minlength=n_bins).astype(float)
+        SL = np.cumsum(sums)[:-1]            # residual sum in bins <= b, b = 0..n_bins-2
+        kL = np.cumsum(cnts)[:-1]
+        kR = n - kL
+        with np.errstate(invalid="ignore", divide="ignore"):
+            gain = SL * SL / kL + (S_tot - SL) ** 2 / kR - parent
+        gain = np.where((kL >= min_leaf) & (kR >= min_leaf), gain, -np.inf)
+        b = int(np.argmax(gain))
+        if gain[b] > -np.inf and (best is None or gain[b] > best[0]):
+            best = (float(gain[b]), j, b)
+    return best
+
+
+def _fit_tree(Xb: np.ndarray, resid: np.ndarray, max_depth: int, min_leaf: int, depth: int = 0) -> dict:
+    """Greedy regression tree on the current pseudo-residuals (binned features). Leaf =
+    mean(resid); split stores the real-valued bin-edge threshold so prediction uses raw X."""
+    node_val = float(resid.mean()) if len(resid) else 0.0
+    if depth >= max_depth or len(resid) < 2 * min_leaf:
+        return {"leaf": True, "value": node_val}
+    split = _best_split(Xb, resid, min_leaf)
+    if split is None:
+        return {"leaf": True, "value": node_val}
+    _, j, b = split
+    left = Xb[:, j] <= b                     # bin <= b  ⟺  raw feature <= edge(b)
+    if left.sum() < min_leaf or (~left).sum() < min_leaf:
+        return {"leaf": True, "value": node_val}
+    return {"leaf": False, "feat": j, "thr": _bin_edge(b),
+            "left": _fit_tree(Xb[left], resid[left], max_depth, min_leaf, depth + 1),
+            "right": _fit_tree(Xb[~left], resid[~left], max_depth, min_leaf, depth + 1)}
+
+
+def _predict_tree(tree: dict, X: np.ndarray) -> np.ndarray:
+    """Vectorised per-row descent to the leaf value."""
+    out = np.empty(len(X))
+
+    def rec(node, idx):
+        if node["leaf"]:
+            out[idx] = node["value"]
+            return
+        go_left = X[idx, node["feat"]] <= node["thr"]
+        rec(node["left"], idx[go_left])
+        rec(node["right"], idx[~go_left])
+
+    rec(tree, np.arange(len(X)))
+    return out
+
+
+def gradient_boost(X: np.ndarray, y: np.ndarray, n_rounds: int = 200,
+                   learning_rate: float = 0.05, max_depth: int = 3, min_leaf: int = 20) -> dict:
+    """Additive GBRT for squared-error loss (pseudo-residual = y − F). Deterministic
+    (subsample=1.0, no RNG → no seed knob). Returns {base, trees, lr}."""
+    X = np.asarray(X, float)
+    y = np.asarray(y, float)
+    Xb = _bin_features(X)                     # bin once; every round splits on the histogram
+    base = float(y.mean())
+    F = np.full(len(y), base)
+    trees = []
+    for _ in range(n_rounds):
+        tree = _fit_tree(Xb, y - F, max_depth, min_leaf)
+        F = F + learning_rate * _predict_tree(tree, X)
+        trees.append(tree)
+    return {"base": base, "trees": trees, "lr": learning_rate}
+
+
+def gbrt_predict(model: dict, X: np.ndarray) -> np.ndarray:
+    """Score rows: base + lr·Σ tree predictions — the nonlinear analogue of te @ w."""
+    X = np.asarray(X, float)
+    out = np.full(len(X), model["base"])
+    for tree in model["trees"]:
+        out = out + model["lr"] * _predict_tree(tree, X)
+    return out
+
+
+def _fit_predict(cols: list[str], tr: pd.DataFrame, te: pd.DataFrame,
+                 model: str = "ridge", alpha: float = 1.0, gbrt: dict | None = None) -> np.ndarray:
+    """The ONE fit/predict dispatch both estimators pass through inside the fold loop —
+    keeps a single score path (invariant #3). `gbrt` overrides the pre-registered GBRT_PARAMS."""
+    Xtr, ytr, Xte = tr[cols].to_numpy(), tr[LABEL].to_numpy(), te[cols].to_numpy()
+    if model == "gbrt":
+        return gbrt_predict(gradient_boost(Xtr, ytr, **(gbrt or GBRT_PARAMS)), Xte)
+    return Xte @ cross_sectional_ridge(Xtr, ytr, alpha)
+
+
 def fit_predict_walk_forward(df: pd.DataFrame, n_folds: int = 5, embargo: int = 1,
-                             alpha: float = 1.0) -> pd.Series:
-    """Out-of-sample predicted scores per (date, ticker): for each fold, fit the ridge
-    on the purged training rows and score the held-out test rows. Concatenated OOS."""
+                             alpha: float = 1.0, model: str = "ridge",
+                             gbrt: dict | None = None) -> pd.Series:
+    """Out-of-sample predicted scores per (date, ticker): for each fold, fit `model`
+    ('ridge' or 'gbrt') on the purged training rows and score the held-out test rows.
+    GBRT reuses the identical purged/embargoed splits and the single `_fit_predict` path,
+    so every leakage guard is preserved — only the estimator swaps."""
     dates = df.index.get_level_values("date")
     cols = feature_cols(df)
     preds = []
@@ -100,8 +219,7 @@ def fit_predict_walk_forward(df: pd.DataFrame, n_folds: int = 5, embargo: int = 
         te = df[dates.isin(test_dates)]
         if tr.empty or te.empty:
             continue
-        w = cross_sectional_ridge(tr[cols].to_numpy(), tr[LABEL].to_numpy(), alpha)
-        score = te[cols].to_numpy() @ w
+        score = _fit_predict(cols, tr, te, model, alpha, gbrt)
         preds.append(pd.Series(score, index=te.index, name="score"))
     return pd.concat(preds) if preds else pd.Series(dtype=float, name="score")
 
@@ -124,7 +242,8 @@ def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
                     rebalance: str = "ME", top_n: int = 20, n_folds: int = 5,
                     embargo: int = 1, alpha: float = 1.0, cost_bps: float = 10.0,
                     extra: pd.DataFrame | None = None, shuffle_seed: int | None = None,
-                    ls_frac: float = 0.2, target_vol: float = 0.10) -> dict:
+                    ls_frac: float = 0.2, target_vol: float = 0.10,
+                    model: str = "ridge", gbrt: dict | None = None) -> dict:
     """Walk-forward backtest of the ridge predictor. Two books each as-of date:
 
     - **long-only** top-N (reference; dominated by beta/construction), and
@@ -144,7 +263,7 @@ def run_ml_backtest(prices: pd.DataFrame, index_prices: pd.Series,
         train_df = df.copy()
         train_df[LABEL] = (train_df.groupby(level="date")[LABEL]
                            .transform(lambda s: rng.permutation(s.to_numpy())))
-    scores = fit_predict_walk_forward(train_df, n_folds, embargo, alpha)
+    scores = fit_predict_walk_forward(train_df, n_folds, embargo, alpha, model, gbrt)
     if scores.empty:
         return {"returns": pd.Series(dtype=float), "scores": scores, "n_periods": 0}
 
@@ -202,6 +321,17 @@ def _rank_ic(a: np.ndarray, b: np.ndarray) -> float:
     if len(sa) < 3 or sa.std() == 0 or sb.std() == 0:
         return float("nan")
     return float(sa.rank().corr(sb.rank()))
+
+
+def covered_sub_universe(df: pd.DataFrame, min_names: int = 5) -> pd.Series:
+    """Survivor-conditioned coverage mask (has_sentiment==1) as a labelled bool Series for
+    `partial_incremental_ic(sub_universe=...)`. CORROBORATION ONLY: it restricts sentiment
+    scoring to GDELT-covered (current-filer) names, so its IC is survivor-conditioned and must
+    NEVER drive the pass gate — only the display row and the forward monitor's sent_* fields.
+    (min_names is advisory; degenerate dates are dropped downstream by partial_incremental_ic.)"""
+    if "has_sentiment" not in df.columns:
+        return pd.Series(True, index=df.index)
+    return df["has_sentiment"] == 1
 
 
 def partial_incremental_ic(df: pd.DataFrame, price_cols: list[str], alt_cols: list[str],

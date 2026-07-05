@@ -51,6 +51,16 @@ SUE_DRIFT_DAYS = 63        # ~one quarter of trading days: PEAD drift window
 NEWS_SHOCK_DAYS = 10       # ~2 trading weeks: news-shock decay window
 NEWS_SHOCK_WINDOW = 20     # trailing known-day window for the tone/buzz baseline
 
+# Pre-registered PEAD announcement-timing windows (fixed from the SEC filing calendar, never
+# swept). Earnings break in the 8-K Item 2.02 press release; we move the SUE impulse from the
+# (days-to-weeks later) 10-Q filing to that announcement so the drift window aligns with the
+# actual drift start (Bernard-Thomas). Only the TIMING moves — the surprise magnitude is the
+# FIRST-reported value, so no restated/final number is ever back-dated onto the announcement.
+ANN_MIN_DAYS = 5      # an earnings 8-K lands at least a few days after quarter-end
+ANN_MAX_DAYS = 75     # ...and (even for accelerated filers) within ~one quarter, capped <= 10-Q
+MAX_10Q_LAG = 60      # a first 10-Q follows the release within weeks; a value whose kept filing
+                      # lands > this after the 8-K is a restatement → NOT back-dated
+
 
 def _http_get(url: str, timeout: int = 30) -> bytes:
     req = urllib.request.Request(url, headers=_UA)
@@ -182,6 +192,56 @@ class EdgarFundamentals(FeatureSource):
             return {}
 
     @staticmethod
+    def _parse_submission_arrays(block: dict) -> pd.DataFrame:
+        """Zip one EDGAR submissions parallel-array block (filings.recent, or an older
+        filings.files JSON — same flat shape) into rows. Empty on a missing/short block."""
+        cols = ("form", "filingDate", "reportDate", "items", "accessionNumber")
+        if not block or "form" not in block:
+            return pd.DataFrame(columns=cols)
+        n = len(block["form"])
+        return pd.DataFrame({c: (block.get(c) or [None] * n) for c in cols})
+
+    def _submissions(self, cik: str) -> pd.DataFrame:
+        """Full filing history for a CIK (recent + paginated older files back to ~2007) as a
+        flat frame [form, filingDate, reportDate, items, accessionNumber]. Empty on any
+        network/parse failure — a graceful offline fallback, exactly like _ticker_cik."""
+        base = "https://data.sec.gov/submissions"
+        try:
+            data = json.loads(_http_get(f"{base}/CIK{cik}.json"))
+            time.sleep(0.12)                       # SEC fair-access
+        except Exception:
+            return pd.DataFrame()
+        filings = data.get("filings") or {}
+        frames = [self._parse_submission_arrays(filings.get("recent") or {})]
+        for f in filings.get("files") or []:       # older filings, paginated by EDGAR
+            name = f.get("name")
+            if not name:
+                continue
+            try:
+                frames.append(self._parse_submission_arrays(json.loads(_http_get(f"{base}/{name}"))))
+                time.sleep(0.12)
+            except Exception:
+                continue
+        frames = [f for f in frames if not f.empty]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def _earnings_announcements(self, cik: str) -> pd.DataFrame:
+        """8-K Item 2.02 (Results of Operations) filings for a CIK → [announce_date,
+        report_date] sorted. The 8-K filingDate is when the earnings press release became
+        public on EDGAR (>= the item event date, so the conservative announcement stamp)."""
+        subs = self._submissions(cik)
+        cols = ["announce_date", "report_date"]
+        if subs.empty:
+            return pd.DataFrame(columns=cols)
+        m = subs[(subs["form"] == "8-K") & subs["items"].fillna("").str.contains("2.02")]
+        if m.empty:
+            return pd.DataFrame(columns=cols)
+        return (pd.DataFrame({"announce_date": pd.to_datetime(m["filingDate"], errors="coerce"),
+                              "report_date": pd.to_datetime(m["reportDate"], errors="coerce")})
+                .dropna(subset=["announce_date"]).sort_values("announce_date")
+                .reset_index(drop=True))
+
+    @staticmethod
     def _series(facts: dict, concept: str) -> pd.DataFrame:
         """(known_date=filed, end, start, val) rows for one us-gaap concept, USD units.
         `start` (present for flow concepts, absent for balance-sheet stocks) lets us
@@ -208,12 +268,16 @@ class EdgarFundamentals(FeatureSource):
         return df
 
     @staticmethod
-    def _quarterly(s: pd.DataFrame) -> pd.DataFrame:
+    def _quarterly(s: pd.DataFrame, keep: str = "last") -> pd.DataFrame:
         """Filter a us-gaap series to ~quarterly (≈90-day) periods and dedupe by period-
-        end (keep the latest-filed restatement). Flow concepts like NetIncomeLoss mix 10-Q
-        quarterly and 10-K cumulative-YTD/annual values under one tag; a positional
-        seasonal diff over that mix is noise, so keep only true quarters. Balance-sheet
-        stocks (no `start`) skip the duration filter and are just deduped."""
+        end. Flow concepts like NetIncomeLoss mix 10-Q quarterly and 10-K cumulative-YTD/
+        annual values under one tag; a positional seasonal diff over that mix is noise, so
+        keep only true quarters. Balance-sheet stocks (no `start`) skip the duration filter.
+
+        `keep`: which filing to keep per period-end. ``"last"`` = the latest restatement (best
+        current view, for level features). ``"first"`` = the FIRST-reported value — required
+        for the announcement-dated SUE, so a later restatement is never back-dated onto the
+        earnings announcement (the value that was public then is the first-reported one)."""
         if s.empty:
             return s
         s = s.copy()
@@ -222,40 +286,64 @@ class EdgarFundamentals(FeatureSource):
         if "start" in s.columns and s["start"].notna().any():
             dur = (s["end"] - pd.to_datetime(s["start"])).dt.days
             s = s[(dur >= 60) & (dur <= 120)]                    # ~one quarter only
-        # one row per period-end: the latest filing (restatements attach to their own
-        # filed date elsewhere; for the seasonal diff we want the best current view)
-        s = (s.sort_values("known_date").drop_duplicates("end", keep="last")
+        s = (s.sort_values("known_date").drop_duplicates("end", keep=keep)
                .sort_values("end").reset_index(drop=True))
         return s
 
     @staticmethod
-    def _seasonal_surprise(ni: pd.DataFrame, eq: pd.DataFrame,
-                           lookback: int = 8) -> pd.DataFrame:
+    def _attach_announcement(rows: pd.DataFrame, announce: pd.DataFrame) -> pd.Series:
+        """Remap each SUE row's known_date from its (first) filing date to the EARLIEST 8-K
+        Item 2.02 announcement inside the pre-registered window
+        [end+ANN_MIN_DAYS, min(filing, end+ANN_MAX_DAYS)], with a MAX_10Q_LAG restatement
+        guard. Rows with no qualifying announcement keep their filing date (today's behaviour).
+        Only ever moves known_date EARLIER onto another real, already-public date — so it can
+        never introduce lookahead; it fixes a timing mis-specification (PEAD drift starts at the
+        announcement, not the later 10-Q)."""
+        ann = np.sort(pd.to_datetime(announce["announce_date"]).to_numpy())
+        end = pd.to_datetime(rows["end"]).to_numpy()
+        filed = pd.to_datetime(rows["known_date"]).to_numpy()
+        out = filed.copy()
+        day = np.timedelta64(1, "D")
+        for i in range(len(rows)):
+            lo = end[i] + ANN_MIN_DAYS * day
+            hi = min(filed[i], end[i] + ANN_MAX_DAYS * day)
+            if hi < lo or not len(ann):
+                continue
+            j = np.searchsorted(ann, lo, side="left")            # earliest announce >= lo
+            if j < len(ann) and ann[j] <= hi and (filed[i] - ann[j]) <= MAX_10Q_LAG * day:
+                out[i] = ann[j]
+        return pd.Series(out, index=rows.index)
+
+    @staticmethod
+    def _seasonal_surprise(ni: pd.DataFrame, eq: pd.DataFrame, lookback: int = 8,
+                           announce: pd.DataFrame | None = None) -> pd.DataFrame:
         """SUE (PEAD): seasonal earnings surprise per filing, [known_date, sue].
 
         SUE_q = (NI_q − NI_{q−4}) / std(past seasonal diffs), scaled by contemporaneous
-        StockholdersEquity for scale-free comparability. Only quarterly NI is used
-        (duration-filtered), the normaliser uses PAST diffs only (shift(1)), and the
-        known_date is the LATER of the NI and equity filing dates — so no not-yet-public
-        denominator is ever used. Pre-signed positive (higher surprise → higher drift)."""
-        ni = EdgarFundamentals._quarterly(ni)
+        StockholdersEquity for scale-free comparability. Uses FIRST-reported values
+        (`keep='first'`) so a later restatement is never back-dated. known_date starts as the
+        later of the NI and equity first-filing dates (no not-yet-public denominator); if an
+        `announce` frame (8-K Item 2.02 dates) is given, it is moved EARLIER to the earnings-
+        announcement date so the drift window aligns with the actual PEAD start. Pre-signed +."""
+        ni = EdgarFundamentals._quarterly(ni, keep="first")
         if len(ni) < 5:
             return pd.DataFrame(columns=["known_date", "sue"])
         ni = ni.sort_values("end").reset_index(drop=True)
         d = ni["val"] - ni["val"].shift(4)                       # YoY seasonal diff
         sd = d.shift(1).rolling(lookback, min_periods=4).std()   # std of PAST diffs only
-        sue = d / sd.replace(0.0, np.nan)
-        known = ni["known_date"]
+        rows = ni[["end", "known_date"]].copy()
+        rows["sue"] = (d / sd.replace(0.0, np.nan)).to_numpy()
         if eq is not None and not eq.empty:
-            eqq = EdgarFundamentals._quarterly(eq)[["end", "val", "known_date"]]
-            m = (ni.assign(sue=sue)
-                   .merge(eqq.rename(columns={"val": "eqv", "known_date": "eq_kd"}),
-                          on="end", how="left"))
-            # both the earnings and the equity must be public → later of the two filings
-            known = m[["known_date", "eq_kd"]].max(axis=1)
-            sue = m["sue"] / m["eqv"].abs().replace(0.0, np.nan)
-        out = pd.DataFrame({"known_date": known.to_numpy(), "sue": np.asarray(sue, float)})
-        return out.replace([np.inf, -np.inf], np.nan).dropna()
+            eqq = EdgarFundamentals._quarterly(eq, keep="first")[["end", "val", "known_date"]]
+            m = rows.merge(eqq.rename(columns={"val": "eqv", "known_date": "eq_kd"}),
+                           on="end", how="left")
+            m["known_date"] = m[["known_date", "eq_kd"]].max(axis=1)
+            m["sue"] = m["sue"] / m["eqv"].abs().replace(0.0, np.nan)
+            rows = m[["end", "known_date", "sue"]]
+        rows = rows.replace([np.inf, -np.inf], np.nan).dropna(subset=["sue"]).reset_index(drop=True)
+        if announce is not None and not announce.empty and not rows.empty:
+            rows["known_date"] = EdgarFundamentals._attach_announcement(rows, announce)
+        return rows[["known_date", "sue"]]
 
     def observations(self, tickers, start, end):
         cik = self._ticker_cik()
@@ -294,10 +382,12 @@ class EdgarFundamentals(FeatureSource):
                 a["asset_growth"] = -a["val"].pct_change(4)
                 m = m.merge(a[["end", "asset_growth"]], on="end", how="left")
             m["ticker"] = t
-            keep = ["known_date", "ticker"] + [c for c in ("roe", "net_margin", "asset_growth") if c in m]
+            keep = ["known_date", "ticker"] + [k for k in ("roe", "net_margin", "asset_growth") if k in m]
             parts = [m[keep]]
-            # sue: filing-dated surprise impulses, its OWN known_date → separate rows
-            sue = self._seasonal_surprise(ni, eq)
+            # sue: earnings-surprise impulses dated to the 8-K Item 2.02 announcement (PEAD
+            # drift start), falling back to the 10-Q filing date where no 8-K is found.
+            ann = self._earnings_announcements(c)
+            sue = self._seasonal_surprise(ni, eq, announce=ann)
             if not sue.empty:
                 parts.append(sue.assign(ticker=t)[["known_date", "ticker", "sue"]])
             out.append(pd.concat(parts, ignore_index=True))
@@ -326,7 +416,10 @@ class EdgarFundamentals(FeatureSource):
             ni = pd.DataFrame({"known_date": filed, "end": qtrs, "start": starts, "val": ni_vals})
             eq = pd.DataFrame({"known_date": filed, "end": qtrs, "start": pd.NaT,
                                "val": eqv + rng.normal(0, 10, len(qtrs))})
-            sue = self._seasonal_surprise(ni, eq)
+            # synthetic 8-K announcement ~15d before the 10-Q → exercises the back-dating path
+            announce = pd.DataFrame({"announce_date": qtrs + pd.Timedelta(days=30),
+                                     "report_date": qtrs})
+            sue = self._seasonal_surprise(ni, eq, announce=announce)
             if not sue.empty:
                 out.append(sue.assign(ticker=t)[["known_date", "ticker", "sue"]])
         return pd.concat(out, ignore_index=True)
@@ -440,21 +533,28 @@ class NewsSentiment(FeatureSource):
         m["ticker"] = ticker
         return m[cols + ["has_sentiment", "ticker"]]
 
-    def observations(self, tickers, start, end, max_names: int = 40, max_seconds: int = 150):
-        """GDELT per-name tone (+ buzz) as shocks. GDELT's DOC API is rate-limited and
-        slow, so this is capped hard: at most `max_names` names and a `max_seconds`
-        wall-clock budget — a demo-scale, honest test of differentiated data, not a full
-        production feed (that needs GDELT's bulk GKG files or a paid vendor)."""
+    @staticmethod
+    def _coverable(tickers, titles) -> list:
+        """Order-preserving subset of `tickers` GDELT can name-match (have a title). The PIT
+        run passes ~1000 membership names, many delisted/obscure with no current title; the
+        old `tickers[:max_names]` spent the whole budget on those leading un-mappable names and
+        returned 0 covered dates. Slicing AFTER coverability lands the budget on real matches."""
+        return [t for t in tickers if titles.get(t.upper())]
+
+    def observations(self, tickers, start, end, max_names: int = 150, max_seconds: int = 600):
+        """GDELT per-name tone (+ buzz) as shocks. GDELT's DOC API is rate-limited and slow,
+        so this is capped: at most `max_names` COVERABLE names and a `max_seconds` wall-clock
+        budget. Still name-matched to CURRENT filers (company_tickers.json), so the covered set
+        is explicitly survivor-conditioned — its IC is corroboration only, never a pass gate.
+        A survivorship-COMPLETE feed needs GDELT's bulk GKG files or a paid vendor."""
         titles = self._titles()
         if not titles:
             return pd.DataFrame()
         out, deadline = [], time.time() + max_seconds
-        for t in tickers[:max_names]:
+        for t in self._coverable(tickers, titles)[:max_names]:
             if time.time() > deadline:
                 break                             # stay inside the time budget
-            nm = titles.get(t.upper())
-            if not nm:
-                continue
+            nm = titles.get(t.upper())            # guaranteed present by _coverable
             tone = self._timeline(nm, "timelinetone", start, end, "sentiment")
             if tone.empty:
                 continue

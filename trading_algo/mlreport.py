@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 
 import numpy as np
+import pandas as pd
 
 from . import config as cfg
 from . import constituents, data, datasources, mlpipeline as mlp, robust
@@ -54,6 +55,32 @@ def _shuffle_labels(df, seed: int = 0):
     out[mlp.LABEL] = out.groupby(level="date")[mlp.LABEL].transform(
         lambda s: rng.permutation(s.to_numpy()))
     return out
+
+
+def _union_pbo(runs: list) -> dict:
+    """PBO/CSCV over the union of price+alt L/S monthly returns (columns = model×alpha
+    configs) — validates the SELECTION (which learner/alpha), the overfitting risk a
+    nonlinear learner adds that an N+1 DSR bump cannot catch."""
+    series = [r.get("ls_returns") for r in runs
+              if r.get("ls_returns") is not None and len(r.get("ls_returns"))]
+    if len(series) < 2:
+        return {"pbo": float("nan"), "n_combinations": 0}
+    mat = pd.concat(series, axis=1).dropna()
+    if len(mat) < 8:
+        return {"pbo": float("nan"), "n_combinations": 0}
+    return robust.pbo_cscv(mat.to_numpy(), n_splits=8)
+
+
+def _edge_pass(d1: dict, dsr: dict, pbo_v, clean_inc: bool) -> bool:
+    """The pass gate for the pre-declared PRIMARY increment: CI lower bound > 0 AND DSR of the
+    difference ≥ 95% AND PBO/CSCV ≤ 50% AND the shuffle-null collapsed AND Δ IC ≥ 0.005.
+    It takes NO sentiment/covered argument by construction — a survivor-conditioned covered
+    result can never contribute to a pass (the chief-engineer guard)."""
+    ci_low = d1.get("ci_low", float("nan"))
+    pbo_ok = pbo_v is not None and pbo_v == pbo_v and pbo_v <= 0.5
+    return bool((ci_low == ci_low) and ci_low > 0
+                and (dsr.get("dsr") or 0) >= 0.95 and pbo_ok
+                and d1.get("delta_ic", 0.0) >= 0.005 and clean_inc)
 
 
 def _oos_dates(df, n_folds: int = 5, embargo: int = 1):
@@ -128,7 +155,8 @@ def build_report(synthetic: bool, point_in_time: bool = False,
     psr = robust.probabilistic_sharpe_ratio(r)
     w(f"\n**Deflated Sharpe {dsr['dsr']:.1%}** across the {len(GRID)}-point α grid "
       f"{'✅ survives selection' if (dsr['dsr'] or 0) >= 0.95 else '⚠️ not robust to the grid'}; "
-      f"Probabilistic Sharpe (P[SR>0]) {psr:.1%}.\n")
+      f"Probabilistic Sharpe (P[SR>0]) {psr:.1%}. "
+      f"_(long-only reference book — the alt-data pass gate is the INCREMENT DSR + PBO below.)_\n")
 
     # ---------------------------------------------------------------------
     # MARGINAL EDGE — does alt-data add anything BEYOND the price features?
@@ -148,7 +176,7 @@ def build_report(synthetic: bool, point_in_time: bool = False,
         fund_ic = mlp.partial_incremental_ic(df, price_cols, fundamentals, oos_dates=oos)
         # sentiment: short horizon + covered sub-universe (survivor-conditioned → corroboration)
         sent_df = mlp.build_dataset(prices, idx, horizon=sent_horizon, extra=extra)
-        sub = sent_df["has_sentiment"] == 1 if "has_sentiment" in sent_df else None
+        sub = mlp.covered_sub_universe(sent_df)          # survivor-conditioned; corroboration only
         sent_ic = mlp.partial_incremental_ic(sent_df, price_cols, sentiment,
                                              oos_dates=_oos_dates(sent_df), sub_universe=sub)
 
@@ -164,21 +192,42 @@ def build_report(synthetic: bool, point_in_time: bool = False,
             w(f"| options-IV | — | _deferred_ | excluded (no real feed): {', '.join(deferred)} |")
         w("")
 
-        # nested delta: price-only vs price+alt, DSR on the DIFFERENCE (deflate the increment)
-        base_only = {a: mlp.run_ml_backtest(prices, idx, alpha=a, extra=None) for a in GRID}
-        deltas = {a: mlp.incremental_delta(base_only[a], runs[a], n_paths=1000, seed=0) for a in GRID}
-        d1 = mlp.incremental_delta(base_only[1.0], runs[1.0], n_paths=2000, seed=0)
-        trial_irs = [deltas[a]["delta_ir"] for a in GRID if not np.isnan(deltas[a]["delta_ir"])]
+        # Nested price-only vs price+alt under BOTH the ridge (α grid) and the GBRT, DSR on
+        # the DIFFERENCE (deflate the INCREMENT, not the book). The PRE-DECLARED PRIMARY cell
+        # is: nonlinear GBRT + announcement-dated SUE (automatic in datasources) + the
+        # full-universe 21d increment. Ridge is corroboration; sentiment sub-universe is
+        # corroboration; only this one cell can constitute a pass.
+        base_r = {a: mlp.run_ml_backtest(prices, idx, alpha=a, extra=None) for a in GRID}
+        dlt_r = {a: mlp.incremental_delta(base_r[a], runs[a], n_paths=1000, seed=0) for a in GRID}
+        d_rg = mlp.incremental_delta(base_r[1.0], runs[1.0], n_paths=2000, seed=0)
+        gb_alt = mlp.run_ml_backtest(prices, idx, extra=extra, model="gbrt")
+        gb_base = mlp.run_ml_backtest(prices, idx, extra=None, model="gbrt")
+        d_gb = mlp.incremental_delta(gb_base, gb_alt, n_paths=2000, seed=0)
+        d1 = d_gb                                            # the primary
+
+        # UNION trial set (model × alpha) pays the multiplicity: every increment info-ratio
+        # deflates the primary's DSR; every price+alt L/S book is a PBO/CSCV selection column.
+        trial_irs = [dlt_r[a]["delta_ir"] for a in GRID] + [d_gb["delta_ir"]]
+        trial_irs = [x for x in trial_irs if x == x]
         diff = d1.get("diff")
         dsr_d = (robust.deflated_sharpe_ratio(diff, trial_irs, periods_per_year=12)
-                 if diff is not None and len(diff) > 2 and trial_irs else {"dsr": float("nan")})
-        straddle0 = (not np.isnan(d1["ci_low"])) and (d1["ci_low"] <= 0 <= d1["ci_high"])
-        w(f"**Nested delta (price+alt − price-only, α=1):** Δ IC **{d1['delta_ic']:+.3f}**, "
-          f"increment info-ratio **{d1['delta_ir']:+.2f}** "
-          f"(90% bootstrap CI [{d1['ci_low']:+.2f}, {d1['ci_high']:+.2f}], n={d1['n']}). "
-          f"Deflated Sharpe of the DIFFERENCE {dsr_d['dsr']:.1%} across the α grid.\n")
+                 if diff is not None and len(diff) > 2 and len(trial_irs) >= 2 else {"dsr": float("nan")})
+        pbo = _union_pbo([runs[a] for a in GRID] + [gb_alt])
+        pbo_v = pbo.get("pbo")
 
-        # shuffle-null on the incremental measure — must collapse to ~0
+        w("**Nested increment — price+alt − price-only** (the INCREMENT, deflated — not the book):\n")
+        w("| learner | Δ IC | increment info-ratio | 90% bootstrap CI | DSR of difference |")
+        w("|---|---|---|---|---|")
+        w(f"| ridge (α=1) | {d_rg['delta_ic']:+.3f} | {d_rg['delta_ir']:+.2f} | "
+          f"[{d_rg['ci_low']:+.2f}, {d_rg['ci_high']:+.2f}] | — |")
+        w(f"| **GBRT — PRIMARY** | {d_gb['delta_ic']:+.3f} | **{d_gb['delta_ir']:+.2f}** | "
+          f"**[{d_gb['ci_low']:+.2f}, {d_gb['ci_high']:+.2f}]** | **{dsr_d['dsr']:.1%}** |")
+        w(f"\n**PBO/CSCV** over the union {{ridge×{len(GRID)}, GBRT}} price+alt L/S books "
+          f"**{(pbo_v if pbo_v is not None else float('nan')):.1%}** "
+          f"{'✅ robust selection' if (pbo_v is not None and pbo_v == pbo_v and pbo_v <= 0.5) else '⚠️ selection overfits / n/a'}; "
+          f"increment DSR deflated across N={len(trial_irs)} model×α trials.\n")
+
+        # shuffle-null on the incremental measure — model-free, must collapse to ~0
         null_ic = mlp.partial_incremental_ic(_shuffle_labels(df, 0), price_cols,
                                              fundamentals + sentiment, oos_dates=oos)
         clean_inc = abs(null_ic["incremental_ic"]) < 0.02
@@ -186,47 +235,58 @@ def build_report(synthetic: bool, point_in_time: bool = False,
           f"**{null_ic['incremental_ic']:+.3f}** "
           f"{'✅ collapses (no residual timing leak)' if clean_inc else '⚠️ non-zero → leakage in the alt path'}\n")
 
-        # honest pass / fail read on the increment
-        edge = ((not np.isnan(d1["ci_low"])) and d1["ci_low"] > 0
-                and (dsr_d.get("dsr") or 0) >= 0.95 and d1["delta_ic"] >= 0.005 and clean_inc)
+        # PASS GATE — the pre-declared PRIMARY (GBRT increment) must clear ALL: CI lower bound
+        # > 0, DSR of the difference >= 95% (union-deflated), PBO <= 0.5, shuffle-null collapses.
+        straddle0 = (not np.isnan(d1["ci_low"])) and (d1["ci_low"] <= 0 <= d1["ci_high"])
+        rg_straddle = np.isnan(d_rg["ci_low"]) or (d_rg["ci_low"] <= 0 <= d_rg["ci_high"])
+        pbo_ok = pbo_v is not None and pbo_v == pbo_v and pbo_v <= 0.5
+        edge = _edge_pass(d1, dsr_d, pbo_v, clean_inc)
 
-        # forward-monitor record: one machine-readable row per run, so the honest test can
-        # be logged over time (does any source EARN weight yet?). See altdata-monitor.yml.
+        # forward-monitor record: one machine-readable row per run (does a source EARN weight
+        # yet?). Primary = GBRT increment; ridge IR kept as corroboration. See altdata-monitor.yml.
         if metrics_sink is not None:
             metrics_sink.append({
                 "universe": "synthetic" if synthetic else ("PIT-US" if point_in_time else "US"),
-                "n_oos": int(base["n_periods"]),
+                "n_oos": int(base["n_periods"]), "primary_model": "gbrt",
                 "fund_inc_ic": _num(fund_ic["incremental_ic"]),
                 "sue_ic": _num(fund_ic["per_col"].get("sue")),
                 "sent_inc_ic": _num(sent_ic["incremental_ic"]),
                 "sent_dates": int(sent_ic["n_dates"]),
-                "delta_ic": _num(d1["delta_ic"]),
-                "delta_ir": _num(d1["delta_ir"]),
-                "ci_low": _num(d1["ci_low"]),
-                "ci_high": _num(d1["ci_high"]),
-                "dsr_diff": _num(dsr_d.get("dsr")),
+                "delta_ic": _num(d1["delta_ic"]), "delta_ir": _num(d1["delta_ir"]),
+                "ci_low": _num(d1["ci_low"]), "ci_high": _num(d1["ci_high"]),
+                "dsr_diff": _num(dsr_d.get("dsr")), "pbo": _num(pbo_v),
+                "ridge_delta_ir": _num(d_rg["delta_ir"]),
                 "passes": bool(edge),
             })
         if synthetic:
-            control_ok = straddle0 and abs(d1["delta_ic"]) < 0.01 and clean_inc
+            control_ok = straddle0 and rg_straddle and abs(d1["delta_ic"]) < 0.02 and clean_inc
             if control_ok:
-                w("**Negative control (synthetic): ✅ increment straddles 0** — the new "
-                  "feature path (SUE/shock/decay/mask) introduces no lookahead. Real numbers "
-                  "must come from the CI 'ml' run; nothing here is a performance claim.\n")
+                w("**Negative control (synthetic): ✅ increment straddles 0 under BOTH learners** "
+                  "— the full stack (announcement back-dating + coverability fix + GBRT) adds no "
+                  "lookahead. Real numbers come only from the CI 'ml' run; nothing here is a claim.\n")
             else:
                 w("**🛑 LEAKAGE BUG — synthetic increment is NON-ZERO.** Synthetic alt-data is "
                   "independent of synthetic prices, so any edge here is a lookahead artifact "
-                  "(future-dated known_date, shift-0 shock baseline, decay reading a future "
-                  "date). ALL real-data numbers from this path are VOID until fixed.\n")
+                  "(future-dated known_date, value back-dated past first-report, shift-0 baseline). "
+                  "ALL real-data numbers from this path are VOID until fixed.\n")
         elif edge:
-            w("**✅ Alt-data adds a real increment** on this run: the price-residualised edge "
-              "is positive with a bootstrap-CI lower bound > 0 AND the difference survives "
-              "Deflated-Sharpe deflation. Weight it into the book via the ERC combiner, sized "
-              "by its risk-adjusted marginal contribution.\n")
+            w("**✅ Alt-data earns weight** on this run: the PRIMARY (GBRT, announcement-dated) "
+              "increment has a bootstrap-CI lower bound > 0, clears Deflated Sharpe ≥ 95% "
+              "(union-deflated), and survives PBO/CSCV. Size it into the book via the ERC "
+              "combiner by its risk-adjusted marginal contribution.\n")
         else:
-            w("**Not an edge (yet):** the increment's CI lower bound is not > 0, or the "
-              "difference does not clear DSR ≥ 95%. A positive point estimate without both is "
-              "reported as noise — no weight is assigned until a source EARNS it.\n")
+            reasons = []
+            if not ((not np.isnan(d1["ci_low"])) and d1["ci_low"] > 0):
+                reasons.append("CI lower bound ≤ 0")
+            if (dsr_d.get("dsr") or 0) < 0.95:
+                reasons.append(f"DSR {dsr_d.get('dsr') or float('nan'):.0%} < 95%")
+            if not pbo_ok:
+                reasons.append(f"PBO {(pbo_v if pbo_v is not None else float('nan')):.0%} > 50%")
+            if not clean_inc:
+                reasons.append("shuffle-null non-zero")
+            w(f"**Not an edge (yet):** {', '.join(reasons) or 'increment not distinguishable from noise'}. "
+              "No weight is assigned until the primary cell clears every gate — no sign-flip, no "
+              "picking the better of ridge/GBRT or filed/announcement timing.\n")
 
     # Leakage probe (combined model): retrain on SHUFFLED labels. Leak-free → null IC ≈ 0.
     null = mlp.run_ml_backtest(prices, idx, alpha=1.0, extra=extra, shuffle_seed=0)
@@ -250,12 +310,23 @@ def build_report(synthetic: bool, point_in_time: bool = False,
     if not clean:
         w("- ⚠️ Null IC non-zero → leakage. Fix the feature/label timing before trusting anything.")
     w("- **Source weighting is EARNED, not assumed.** A source is weighted into the book only "
-      "after its price-residualised increment clears the CI-lower-bound-> 0 and DSR >= 95% bar "
-      "on the CI real-data run; until then it carries zero weight (the ridge already shrinks "
-      "sparse alt columns toward zero).")
+      "after the PRE-DECLARED PRIMARY cell (nonlinear GBRT + announcement-dated SUE + full-"
+      "universe 21d increment) clears every gate — CI lower bound > 0, DSR of the difference "
+      "≥ 95% (union-deflated), PBO/CSCV ≤ 50%, shuffle-null collapse — on the CI real-data run.")
+    if with_altdata:
+        w("- **Corroboration ≠ pass.** The ridge increment and the covered-sub-universe "
+          "sentiment IC are survivor-/model-variant-conditioned corroboration only; they can "
+          "never themselves earn weight, and we never pick the better of filed/announcement "
+          "timing or ridge/GBRT after seeing results (that is the banned variant-snooping).")
+        w("- **The three levers move the CEILING, not the verdict.** Announcement-dated SUE "
+          "fixes a real PEAD timing mis-specification; the GBRT tests a nonlinear effect the "
+          "linear ridge cannot express; broader GDELT coverage makes sentiment measurable. But "
+          "a GBRT null bounds only *this* pre-registered capacity (we refuse to sweep deeper to "
+          "buy a pass), incomplete 8-K 2.02 coverage dilutes some quarters back to the filing "
+          "date, and survivorship-clean sentiment still needs paid/GKG-bulk data.")
     w("- The durable win is the *pipeline*: market-neutral, leakage-controlled (purged walk-"
-      "forward + shuffle null + synthetic negative control), deflated on the INCREMENT, ready "
-      "to weight new data the day it earns it (docs/research/PREDICTIVE_MODEL.md).")
+      "forward + shuffle null + synthetic negative control), increment-deflated + PBO-gated, "
+      "ready to weight new data the day it earns it (docs/research/PREDICTIVE_MODEL.md).")
     return "\n".join(L)
 
 
