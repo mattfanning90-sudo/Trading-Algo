@@ -144,6 +144,28 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
     print("\n  Equity curves -> equity_curve_portfolio.csv, equity_curve_sleeves.csv")
 
 
+def pit_impact(synthetic: bool) -> dict:
+    """F1: quantify the survivorship bias — CAGR of the static (current-universe)
+    backtest minus the point-in-time backtest. A positive delta is the inflation
+    the current universe carries. Returns both CAGRs and their difference."""
+    static = run_portfolio_backtest(synthetic=synthetic, point_in_time=False)
+    pit = run_portfolio_backtest(synthetic=synthetic, point_in_time=True)
+    s_cagr = float(static["metrics"]["CAGR"])
+    p_cagr = float(pit["metrics"]["CAGR"])
+    return {"static_cagr": s_cagr, "pit_cagr": p_cagr, "delta": s_cagr - p_cagr}
+
+
+def run_compare_pit(synthetic: bool) -> None:
+    imp = pit_impact(synthetic)
+    print("=" * 52)
+    print("  Survivorship bias — static universe vs point-in-time")
+    print("=" * 52)
+    print(f"  Static (current universe) CAGR   {imp['static_cagr']:+.2%}")
+    print(f"  Point-in-time CAGR               {imp['pit_cagr']:+.2%}")
+    print(f"  Survivorship inflation (delta)   {imp['delta']:+.2%}")
+    print("  (positive delta = the current universe flatters returns)")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     # Single-sleeve choices come from the region REGISTRY, not ALLOCATIONS, so a
@@ -152,11 +174,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--point-in-time", action="store_true",
                     help="use point-in-time constituents (survivorship-bias corrected)")
+    ap.add_argument("--compare-pit", action="store_true",
+                    help="report the static-vs-point-in-time CAGR delta (F1)")
     args = ap.parse_args(argv)
 
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, numbers are meaningless\n")
-    if args.region:
+    if args.compare_pit:
+        run_compare_pit(args.synthetic)
+    elif args.region:
         run_single(args.region, args.synthetic, args.point_in_time)
     else:
         run_portfolio(args.synthetic, args.point_in_time)

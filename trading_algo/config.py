@@ -104,6 +104,22 @@ MIN_VIABLE_EQUITY_BASE = 500.0
 MIN_REBALANCE_GAP_DAYS = 20
 
 # ---------------------------------------------------------------------------
+# Survivorship correction (backlog F13, data integrity)
+# ---------------------------------------------------------------------------
+# Replacement return applied on the day a held name delists with no further price
+# (Shumway: ~-30% NYSE/AMEX, ~-55% Nasdaq). None disables the correction. Only
+# takes effect in the point-in-time backtest path; see trading_algo/delisting.py.
+DELISTING_REPLACEMENT_RETURN: float | None = None
+
+# ---------------------------------------------------------------------------
+# Market-data fallback (backlog F14, platform)
+# ---------------------------------------------------------------------------
+# Name of a registered secondary price source to try when the primary (Yahoo)
+# returns nothing (e.g. a 403). None = primary only. Registered in data.py via
+# data.register_fallback(); fallback data still passes the F7 quality gate.
+DATA_FALLBACK_SOURCE: str | None = None
+
+# ---------------------------------------------------------------------------
 # Data-quality gate (backlog F7 / foundation P0-D)
 # ---------------------------------------------------------------------------
 # Run the shared pre-signal validator (stale / gapped / outlier / impossible-move
