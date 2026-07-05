@@ -1,4 +1,6 @@
 """Alt-data sources: the leakage-safe as-of merge + synthetic generators + wiring."""
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -167,6 +169,42 @@ def test_sue_known_date_guards_equity_filing():
 
 
 # --- news shocks: differenced from past known prints, no self-leak ---
+
+def test_edgar_observations_real_path_merges(monkeypatch):
+    # drives the REAL observations() parse/merge path with a mocked companyfacts payload
+    # (no network) — the path synthetic() bypasses, where a str-vs-datetime 'end' merge
+    # crashed on real data. Must parse, merge, and fold into a leakage-safe panel cleanly.
+    ends = pd.date_range("2016-03-31", periods=16, freq="QE")
+
+    def flow(base, noise):                       # 10-Q style flow rows (have 'start')
+        rng = np.random.default_rng(1)
+        return [{"end": e.strftime("%Y-%m-%d"),
+                 "start": (e - pd.Timedelta(days=89)).strftime("%Y-%m-%d"),
+                 "filed": (e + pd.Timedelta(days=40)).strftime("%Y-%m-%d"),
+                 "val": base + rng.normal(0, noise)} for e in ends]
+
+    def stock(vals):                             # balance-sheet stock rows (no 'start')
+        return [{"end": e.strftime("%Y-%m-%d"),
+                 "filed": (e + pd.Timedelta(days=40)).strftime("%Y-%m-%d"),
+                 "val": v} for e, v in zip(ends, vals)]
+
+    facts = {"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": flow(100.0, 8.0)}},
+        "Revenues": {"units": {"USD": flow(500.0, 5.0)}},
+        "StockholdersEquity": {"units": {"USD": stock([1000.0 + 10 * i for i in range(16)])}},
+        "Assets": {"units": {"USD": stock([2000.0 + 30 * i for i in range(16)])}},
+    }}}
+    monkeypatch.setattr(ds.EdgarFundamentals, "_ticker_cik", lambda self: {"AAA": "0000000001"})
+    monkeypatch.setattr(ds, "_http_get", lambda url, timeout=30: json.dumps(facts).encode())
+
+    obs = ds.EdgarFundamentals().observations(["AAA"], "2016-01-01", "2020-06-30")
+    assert not obs.empty
+    assert {"roe", "net_margin", "asset_growth", "sue"} <= set(obs.columns)
+    # the SUE impulses fold into a decaying, leakage-safe panel without raising
+    idx = pd.bdate_range("2016-01-01", "2020-06-30")
+    panel = ds.asof_panel(obs, idx, decay=ds.EdgarFundamentals.decay)
+    assert "sue" in panel.columns and panel["sue"].notna().any()
+
 
 def test_news_shock_uses_only_past_no_self_leak():
     s = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0, 5.0])

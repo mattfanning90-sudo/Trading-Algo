@@ -196,7 +196,16 @@ class EdgarFundamentals(FeatureSource):
         rows = [{"known_date": r["filed"], "end": r["end"], "start": r.get("start"),
                  "val": r["val"]}
                 for r in units[key] if r.get("filed") and r.get("val") is not None]
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            # Normalise date columns up front so every downstream merge on 'end' and
+            # comparison on 'known_date' is datetime-vs-datetime. Real filings arrive as
+            # ISO strings; converting on only SOME paths (e.g. _quarterly) caused a
+            # str-vs-datetime merge-key mismatch that only surfaced on real data.
+            df["end"] = pd.to_datetime(df["end"])
+            df["known_date"] = pd.to_datetime(df["known_date"])
+            df["start"] = pd.to_datetime(df["start"])
+        return df
 
     @staticmethod
     def _quarterly(s: pd.DataFrame) -> pd.DataFrame:
