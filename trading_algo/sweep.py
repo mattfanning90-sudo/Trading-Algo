@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import constituents, data
+from . import constituents, data, walkforward
 from .backtest import run_backtest
 from .regions import Region, all_region_keys, get_region
 
@@ -101,8 +101,25 @@ def _print_grid(region: Region, grid: pd.DataFrame, metric: str) -> None:
         print(f"  {idx:<8} {cells}")
 
 
+def _print_purged_cv(region: Region, prices: pd.DataFrame, index_px: pd.Series,
+                     membership=None) -> None:
+    """F8 + F2: purged/embargoed walk-forward CV over the grid, then the
+    Deflated-Sharpe + PBO overfitting gate (n_trials == grid size)."""
+    rep = walkforward.purged_cv_report(
+        prices, index_px, region, DEFAULT_TOP_NS, DEFAULT_LOOKBACKS,
+        membership=membership)
+    if rep.get("verdict") == "no result":
+        print("\n  Purged CV: no result")
+        return
+    print(f"\n  Purged walk-forward CV ({rep['n_folds']} folds, embargo "
+          f"{rep['embargo']}d, {rep['n_obs']} OOS obs over {rep['grid_size']} configs):")
+    pbo_str = "n/a" if rep["pbo"] is None else f"{rep['pbo']:.2f}"
+    print(f"    DSR {rep['dsr']:.2f}  |  PBO {pbo_str}  |  "
+          f"n_trials {rep['n_trials']}  ->  {rep['verdict']}")
+
+
 def run_sweep(region_key: str | None, synthetic: bool, point_in_time: bool,
-              metric: str = "sharpe") -> None:
+              metric: str = "sharpe", purged_cv: bool = False) -> None:
     keys = [region_key] if region_key else list(cfg.ALLOCATIONS)
     higher_is_better = metric.lower() not in ("maxdrawdown", "annvol")
 
@@ -125,6 +142,8 @@ def run_sweep(region_key: str | None, synthetic: bool, point_in_time: bool,
         print(f"\n  Verdict: {rep['verdict']}")
         print(f"    best {rep['best']} @ {rep['best_params']}  |  mean {rep['mean']} "
               f"std {rep['std']} cv {rep['cv']}  |  %positive {rep['pct_positive']:.0%}")
+        if purged_cv:
+            _print_purged_cv(region, prices, index_px, membership)
         grid.to_csv(f"sweep_{key}_{metric}.csv")
         print(f"    grid -> sweep_{key}_{metric}.csv")
 
@@ -138,10 +157,14 @@ def main(argv: list[str] | None = None) -> None:
                     choices=["sharpe", "CAGR", "MaxDrawdown", "AnnVol", "Calmar"])
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--point-in-time", action="store_true")
+    ap.add_argument("--purged-cv", action="store_true",
+                    help="also run purged/embargoed walk-forward CV + the "
+                         "Deflated-Sharpe/PBO overfitting gate (F8/F2)")
     args = ap.parse_args(argv)
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — surface shape only, numbers are meaningless")
-    run_sweep(args.region, args.synthetic, args.point_in_time, args.metric)
+    run_sweep(args.region, args.synthetic, args.point_in_time, args.metric,
+              purged_cv=args.purged_cv)
 
 
 if __name__ == "__main__":
