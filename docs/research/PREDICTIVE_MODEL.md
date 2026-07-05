@@ -128,3 +128,54 @@ and run its score through `compute_targets` + the validation gauntlet. Expected 
 current book. Value: it stands up the *entire pipeline* so that the day we add fundamentals or
 options data, the only new work is features — and we'll have proven the validation is honest
 on a known-null case first.
+
+---
+
+## Marginal-edge verdict (surprises + shocks, real de-biased data)
+
+A 5-role review flow (data-scientist → architect → staff → engineer → chief-engineer)
+diagnosed why the alt-data read IC≈0 — **stale levels not surprises, a horizon mismatch,
+coverage dilution in a pooled ridge** — and set the guards for a *legitimate* pass. We
+then built the honest instruments and ran them on the **point-in-time, delisting-adjusted
+US universe (real EDGAR + GDELT), 139 OOS months**:
+
+- **New signals only** (sign-flips of existing levels are cosmetic to a linear ridge and were
+  not counted): `sue` (seasonal earnings surprise / PEAD, duration-filtered, equity-filing
+  guarded, decayed over the drift window), `sentiment_shock` / `buzz_shock` (tone/attention
+  changes vs a trailing baseline).
+- **The honest test:** price-**residualised** incremental IC per source; a nested price-only
+  vs price+alt walk-forward whose **difference** (not the alt book) is bootstrap-CI'd and
+  Deflated-Sharpe-deflated; a shuffle-null on the increment; and a synthetic negative control
+  that must straddle 0.
+
+**Result — it does NOT pass:**
+
+| measure | value | bar | verdict |
+|---|---|---|---|
+| SUE incremental IC (21d, PIT) | **−0.014** | > 0 (pre-registered +) | ✗ wrong sign |
+| fundamentals block IC | −0.016 | > 0 | ✗ |
+| sentiment shocks | **0 measurable dates** | — | ✗ untestable (40-name GDELT cap ∩ PIT ≈ ∅) |
+| nested Δ info-ratio | +0.24, **90% CI [−0.28, +0.77]** | CI low > 0 | ✗ straddles 0 |
+| DSR of the difference | **74.7%** | ≥ 95% | ✗ |
+| incremental shuffle-null | −0.004 | ≈ 0 | ✓ no leak |
+
+**Honest read.** On de-biased data, free filing-dated fundamentals + capped GDELT sentiment
+add **no measurable cross-sectional edge** in a monthly linear pipeline. This is a genuine
+null, not a broken test — the negative control passed, the shuffle-null collapsed, and the
+harness deflated the *increment*. A negative SUE with the pre-registered sign is a fail, **not**
+a licence to flip the sign (the chief-engineer guard against sign-snooping).
+
+**What a real pass would need (not p-hacking, actual data/model gaps):**
+1. **Earnings ANNOUNCEMENT dates**, not 10-Q filing dates — PEAD drift starts at the
+   announcement; `filed` lags it by days-to-weeks, so we enter after the initial drift.
+   companyfacts has no announcement date → needs a paid/earnings-calendar feed.
+2. **Real, survivorship-clean sentiment** (paid vendor or GDELT bulk GKG), not a 40-name cap
+   that misses the point-in-time universe.
+3. A **nonlinear learner** (GBM) — the pooled linear ridge bounds what can be extracted; a
+   ~0 linear result does not disprove a nonlinear PEAD effect, it bounds *this* model.
+
+Until one of those clears the same CI-lower-bound-> 0 **and** DSR ≥ 95% bar, **no alt-data
+source is weighted into any live book** — the ridge already shrinks these columns to zero, and
+we do not override it with conviction we have not earned. The durable deliverable is the
+*instrument*: a leakage-controlled, increment-deflated, negative-controlled marginal-edge test
+that will say "yes" honestly the day the data actually carries signal.
