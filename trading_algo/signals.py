@@ -103,3 +103,43 @@ def select_portfolio(scores: pd.Series, trend_ok: pd.Series,
     if total > 1.0:
         w = w / total
     return w
+
+
+def _leg_weights(names, vols: pd.Series, p: StrategyParams, sign: float) -> pd.Series:
+    """Inverse-vol weights for one leg (long or short), normalised to sum to
+    `sign` (±1) before the book-level vol targeting scales it. Returns an empty
+    Series if no name has a usable vol."""
+    inv_vol = 1.0 / vols.reindex(names).replace(0, np.nan).dropna()
+    if inv_vol.empty:
+        return pd.Series(dtype=float)
+    w = inv_vol / inv_vol.sum()
+    w = w.clip(upper=p.max_weight)
+    total = w.sum()
+    if total > 1.0:
+        w = w / total
+    return w * sign
+
+
+def select_long_short(scores: pd.Series, vols: pd.Series,
+                      p: StrategyParams) -> pd.Series:
+    """Raw dollar-neutral weights: long the strongest momentum, short the weakest.
+
+    Purely cross-sectional — no absolute-momentum floor, trend filter or regime
+    gate (those are directional/timing filters; a market-neutral book is designed
+    to be agnostic to them and to hedge out market direction). Ranks every name
+    with a finite score, longs the top `top_n` (positive, inverse-vol) and shorts
+    the bottom `short_n` (negative, inverse-vol). Each leg is normalised to ±1 so
+    the raw book is dollar-neutral; `compute_targets` then vol-targets it. Returns
+    an empty Series if there aren't enough names to form both legs.
+    """
+    ranked = scores.dropna().sort_values(ascending=False)
+    short_n = p.short_n or p.top_n
+    if len(ranked) < p.top_n + short_n:
+        return pd.Series(dtype=float)   # not enough names to hedge — stay flat
+
+    longs = _leg_weights(ranked.index[:p.top_n], vols, p, +1.0)
+    shorts = _leg_weights(ranked.index[-short_n:], vols, p, -1.0)
+    if longs.empty or shorts.empty:
+        return pd.Series(dtype=float)
+    # A name can't be both long and short; disjoint by construction (top vs bottom).
+    return pd.concat([longs, shorts])

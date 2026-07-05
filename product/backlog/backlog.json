@@ -1,0 +1,1983 @@
+{
+  "$schema": "../schema/backlog_item.schema.json",
+  "meta": {
+    "product": "Trading-Algo",
+    "description": "Continuous, evidence-graded feature backlog for the multi-region momentum platform. Every item is critiqued by all four roles (see ../roles.md) and carries acceptance criteria + a rollout plan. Generated with the four-lens process in ../PROCESS.md; validated by ../validate.py.",
+    "as_of": "2026-07-04",
+    "invariants_reference": "../../CLAUDE.md#invariants---do-not-break-these"
+  },
+  "items": [
+    {
+      "id": "F1",
+      "title": "Point-in-time constituents ingestion (kill survivorship bias)",
+      "epic": "data-integrity",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "Default universes are today's liquid names, so every reported CAGR/Sharpe is a survivorship-inflated upper bound and cannot back a real paper->live capital decision.",
+      "hypothesis": "Running the backtest on real point-in-time index membership (plus delisted prices) lowers reported CAGR by a material, believable margin and makes the numbers trustworthy.",
+      "evidence": [
+        {
+          "claim": "The PIT mechanism (--point-in-time, MembershipTable, members_asof) is already built; only real membership/delisted files are missing.",
+          "source": "trading_algo/constituents.py; HANDOFF.md#still-open-roadmap",
+          "confidence": "high"
+        },
+        {
+          "claim": "Backtesting on today's index vs point-in-time constituents inflates returns ~1-4%/yr, worse for high-turnover indices.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#1-survivorship",
+          "confidence": "medium"
+        },
+        {
+          "claim": "Omitting delisting returns biases upward; the missing returns are sharply negative (-30% NYSE/AMEX, -55% Nasdaq).",
+          "source": "Shumway 1997 JF; Shumway & Warther 1999 JF",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "The acknowledged 'big one'. Done means the README survivorship caveat is deleted, not hedged.",
+          "concern": "Norgate/CRSP data cost and FTSE/ASX delisted-price completeness."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Quantify the static-vs-PIT gap; require delisted coverage and effective-date (not announcement-date) membership.",
+          "concern": "Vendor announcement-date files reintroduce lookahead."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Plugs into constituents.py/regions.py/data.py; config_knob rollout. Keep synthetic membership clearly test-only.",
+          "concern": "Symbology mismatch (LSE/ASX renames) vs the data.py loader."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Backtest is fiction until real US/FTSE membership lands; block sizing off non-PIT Sharpe.",
+          "concern": "PIT and non-PIT numbers must diverge sanely before I size a dollar."
+        }
+      },
+      "scoring": {
+        "reach": 9,
+        "impact": 3,
+        "confidence": 1.0,
+        "effort": 3,
+        "score": 9.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "run_backtest --point-in-time runs on real membership files for all three regions.",
+          "measurable": true,
+          "metric": "3/3 regions have a non-synthetic constituents_file loaded"
+        },
+        {
+          "id": "AC2",
+          "statement": "The survivorship-bias magnitude is quantified static vs PIT.",
+          "measurable": true,
+          "metric": "CAGR delta (static - PIT) >= 1.5pp, reported in output"
+        },
+        {
+          "id": "AC3",
+          "statement": "PIT snapshots reconcile against official index history.",
+          "measurable": true,
+          "metric": ">= 99% of month-end memberships match"
+        },
+        {
+          "id": "AC4",
+          "statement": "Delisted-name terminal returns are represented, not silently dropped.",
+          "measurable": true,
+          "metric": ">= 95% of index turnover events covered or Shumway replacement return applied (see F13)"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead",
+        "5-synthetic-is-test-only"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "--point-in-time / region.constituents_file",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "synthetic_membership fixtures in tests",
+            "exit_criteria": "members_asof never returns a future member (boundary tests green)"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "ASX via Norgate file first",
+            "exit_criteria": "AC3 reconciliation >= 99% on ASX"
+          },
+          {
+            "name": "full-live",
+            "scope": "all three regions on real files",
+            "exit_criteria": "AC1-AC4 all met; README caveat removed"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "lookahead tests",
+            "threshold": "no new failures in tests/test_constituents.py"
+          },
+          {
+            "metric": "universe coverage",
+            "threshold": "PIT file covers >= 90% of the current universe or warns"
+          }
+        ],
+        "rollback": "Omit --point-in-time; loader falls back to the static universe with the existing survivorship banner. No state migration."
+      }
+    },
+    {
+      "id": "F2",
+      "title": "Deflated Sharpe + PBO overfitting gate for the equity sleeves",
+      "epic": "statistical-validity",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "The equity sweep reports raw Sharpe with no correction for the number of configurations tried, so a curve-fit parameter set can look like a real edge and reach the book.",
+      "hypothesis": "Porting the FX Deflated-Sharpe/PBO machinery to the equity side lets us reject parameter sets that only clear raw Sharpe, catching overfitting before promotion.",
+      "evidence": [
+        {
+          "claim": "The FX subsystem already implements Deflated Sharpe and PBO in pure region-agnostic NumPy, directly importable.",
+          "source": "trading_algo/forex/validation.py; trading_algo/forex/research.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The bias note is explicit: count trials and deflate for them (DSR + PBO) or you manufacture an edge.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#4",
+          "confidence": "high"
+        },
+        {
+          "claim": "The equity sweep exists (grid over TOP_N x lookback) and already produces the trial set DSR needs.",
+          "source": "trading_algo/sweep.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "Stops 'beat the index by 2%' being manufactured overfitting; FX proves the pattern so it is a port.",
+          "concern": "A passing gate could be mistaken for proof of a live edge."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "n_trials must equal the real grid size; PSR(0) net of costs > 0.95; watch overlapping-window autocorrelation.",
+          "concern": "A small equity grid undercounts n_trials and inflates DSR."
+        },
+        "chief_engineer": {
+          "verdict": "strong_yes",
+          "notes": "validation.py is region-agnostic; mirror test_fx_validation.py as tests/test_equity_validation.py. S effort.",
+          "concern": "Passing DSR could be treated as false confidence (invariant #5 spirit)."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Cheap given the plumbing exists; the only thing stopping curve-fit params reaching my book.",
+          "concern": "Must re-run whenever StrategyParams change."
+        }
+      },
+      "scoring": {
+        "reach": 7,
+        "impact": 2,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 14.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Every reported equity backtest surfaces DSR and a PBO verdict alongside Sharpe.",
+          "measurable": true,
+          "metric": "run_backtest + report.py + dashboard BACKTEST tab all show DSR & PBO"
+        },
+        {
+          "id": "AC2",
+          "statement": "The trial count fed to DSR equals the actual sweep grid size.",
+          "measurable": true,
+          "metric": "n_trials == len(sweep grid) asserted in test"
+        },
+        {
+          "id": "AC3",
+          "statement": "A parameter set that fails the gate is flagged and not promoted.",
+          "measurable": true,
+          "metric": "PBO < 0.5 (target < 0.2) and DSR > 0.95 required to pass"
+        }
+      ],
+      "invariants_touched": [
+        "5-synthetic-is-test-only"
+      ],
+      "dependencies": [
+        "F8",
+        "F17"
+      ],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/validation.py (equity) + sweep.py --deflate",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "unit tests mirroring test_fx_validation.py",
+            "exit_criteria": "DSR/PBO match FX reference values on shared fixtures"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "US sleeve sweep",
+            "exit_criteria": "gate produces a stable verdict across two runs"
+          },
+          {
+            "name": "full-live",
+            "scope": "all reporting surfaces show DSR/PBO",
+            "exit_criteria": "AC1-AC3 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "reported-Sharpe honesty",
+            "threshold": "no backtest metric shown without DSR context"
+          }
+        ],
+        "rollback": "Feature is additive reporting; remove the --deflate flag output. No behaviour change to signals or sizing."
+      }
+    },
+    {
+      "id": "F3",
+      "title": "Live-vs-backtest tracking and P&L attribution",
+      "epic": "reporting-and-attribution",
+      "status": "groomed",
+      "owner_role": "product_owner",
+      "problem": "Nobody can tell whether the paper book's P&L resembles the backtest that justified the strategy, so the 'paper-trade before risking capital' step has no pass/fail signal.",
+      "hypothesis": "Logging realized paper fills vs backtest-predicted fills per rebalance and attributing the gap (selection vs costs vs FX) makes divergence measurable and gate-able.",
+      "evidence": [
+        {
+          "claim": "No live-vs-backtest comparison exists today in paper or live.",
+          "source": "trading_algo/paper_trade.py (status() reports equity only)",
+          "confidence": "high"
+        },
+        {
+          "claim": "The bias literature says to expect live < backtest and to haircut the Sharpe.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#7",
+          "confidence": "high"
+        },
+        {
+          "claim": "The FX book already logs an equity curve that this can borrow its pattern from.",
+          "source": "trading_algo/forex/fx_book.py",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Closes the loop the README caveat implies; must compare like-for-like params, not a moving backtest baseline.",
+          "concern": "Short paper history gives noisy early comparisons."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Target annualized tracking error <= 200bps; >=80% of divergence explained by known buckets over >=6 months.",
+          "concern": "A cost bucket could mask a real signal bug."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Attribution must call strategy.compute_targets on the same eligible set paper saw, no hindsight refetch. Golden-run test.",
+          "concern": "Risks invariant #1 and #3 if it rebuilds weights independently."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Most important missing piece; daily tracking-error alert, kill if divergence > slippage budget for 3 rebalances.",
+          "concern": "Without it I cannot trust the paper P&L at all."
+        }
+      },
+      "scoring": {
+        "reach": 8,
+        "impact": 2,
+        "confidence": 0.8,
+        "effort": 3,
+        "score": 4.27
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A view shows realized vs backtest-predicted CAGR/Sharpe/turnover per sleeve since inception.",
+          "measurable": false
+        },
+        {
+          "id": "AC2",
+          "statement": "Divergence is attributed to selection vs execution vs cost vs FX buckets.",
+          "measurable": true,
+          "metric": ">= 80% of cumulative divergence explained by named buckets"
+        },
+        {
+          "id": "AC3",
+          "statement": "A golden-run test proves paper weights equal backtest weights on a fixed-seed synthetic run.",
+          "measurable": true,
+          "metric": "paper weights == backtest weights bit-for-bit (extends tests/test_consistency.py)"
+        },
+        {
+          "id": "AC4",
+          "statement": "Tracking error is bounded and alertable.",
+          "measurable": true,
+          "metric": "annualized tracking error <= 200bps or alert"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead",
+        "3-one-weight-function",
+        "6-local-currency"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/attribution.py + dashboard tab",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "log expected vs realized fills without surfacing",
+            "exit_criteria": "logs accumulate cleanly for 1 rebalance"
+          },
+          {
+            "name": "paper",
+            "scope": "attribution over >= 6 months paper history",
+            "exit_criteria": "AC2 & AC4 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "weight parity",
+            "threshold": "golden-run parity holds (AC3)"
+          }
+        ],
+        "rollback": "Reporting-only module; disable the tab. No change to trading state."
+      }
+    },
+    {
+      "id": "F4",
+      "title": "Cross-border allocation rebalancing in the paper sim",
+      "epic": "portfolio-mechanics",
+      "status": "groomed",
+      "owner_role": "product_owner",
+      "problem": "The paper sim funds each sleeve once and never rebalances, so it drifts from the equal-third target that the backtest assumes, making the two diverge structurally.",
+      "hypothesis": "Periodically transferring cash between regional books toward target allocation (charging the same FX spread the backtest models) keeps paper and backtest comparable without hurting risk-adjusted return.",
+      "evidence": [
+        {
+          "claim": "config.ALLOCATION_REBALANCE and FX_SPREAD_BPS exist but are used only by portfolio_backtest.py, never paper_trade.py.",
+          "source": "trading_algo/portfolio_backtest.py; trading_algo/paper_trade.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "Cross-border rebalancing in the paper sim is listed as an open roadmap item.",
+          "source": "HANDOFF.md#still-open-roadmap",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "maybe",
+          "notes": "Keeps paper capital at target as sleeves drift; opt-in and documented since some users prefer fund-once treasury.",
+          "concern": "Adds real FX drag to paper P&L, changing headline numbers."
+        },
+        "data_scientist": {
+          "verdict": "maybe",
+          "notes": "Only ship if net Sharpe improvement >= 0 after FX_SPREAD_BPS cost; trigger at >= 5pp drift.",
+          "concern": "FX spread can erode the diversification benefit."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Charge the spread on every transfer exactly like portfolio_backtest.py; keep transfers in the portfolio layer, not per-sleeve accounting.",
+          "concern": "Risks invariant #6 (mixing currencies inside a sleeve) and #2 if the spread is skipped."
+        },
+        "algo_trader": {
+          "verdict": "maybe",
+          "notes": "Treasury/ops decision, not an edge decision; fund-once is fine until drift exceeds ~10pp for a quarter.",
+          "concern": "Low priority vs F3/F7."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 0.5,
+        "confidence": 0.8,
+        "effort": 3,
+        "score": 0.53
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Paper sim periodically transfers cash toward target allocation, charging FX spread.",
+          "measurable": true,
+          "metric": "combined equity conserved except for spread cost (test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Rebalance cadence honours config.ALLOCATION_REBALANCE and is opt-in.",
+          "measurable": true,
+          "metric": "default off; cadence asserted in tests/test_paper_trade.py"
+        },
+        {
+          "id": "AC3",
+          "statement": "Rebalancing does not fire while a sleeve is halted by the drawdown breaker.",
+          "measurable": true,
+          "metric": "no transfer during an active halt (test)"
+        }
+      ],
+      "invariants_touched": [
+        "2-costs-always-on",
+        "6-local-currency"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "config.PAPER_ALLOCATION_REBALANCE",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "multi-period synthetic paper run",
+            "exit_criteria": "equity conserved minus spread (AC1)"
+          },
+          {
+            "name": "paper",
+            "scope": "opt-in on the full account",
+            "exit_criteria": "no unexplained equity drift over a quarter"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "spread accounting",
+            "threshold": "cumulative FX cost logged and matches transfers"
+          }
+        ],
+        "rollback": "Set config.PAPER_ALLOCATION_REBALANCE=False; reverts to funded-once. No state migration."
+      }
+    },
+    {
+      "id": "F5",
+      "title": "Static monthly HTML/PDF tearsheet reports",
+      "epic": "reporting-and-attribution",
+      "status": "parked",
+      "owner_role": "product_owner",
+      "problem": "There is no shareable dated performance snapshot outside the live interactive dashboard.",
+      "hypothesis": "A scheduled monthly tearsheet (equity curve, CAGR/Sharpe/MaxDD, sleeve breakdown) dropped as an artifact gives a distributable record without a manual step.",
+      "evidence": [
+        {
+          "claim": "Static reports are an explicitly open roadmap item; the interactive dashboard covers the live view.",
+          "source": "HANDOFF.md#still-open-roadmap",
+          "confidence": "high"
+        },
+        {
+          "claim": "report.py already renders markdown metrics that a tearsheet can extend.",
+          "source": "trading_algo/report.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "maybe",
+          "notes": "Much of the gap is already closed by the self-contained dashboard export; value is mostly distribution.",
+          "concern": "Redundant unless it adds real distribution value; PDF adds a dependency to a zero-dep stack."
+        },
+        "data_scientist": {
+          "verdict": "maybe",
+          "notes": "No new statistical claim; must reconcile exactly with computed metrics and never omit DSR/PBO context.",
+          "concern": "A stale tearsheet during an active halt misleads."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Small; reuse portfolio_markdown's SYNTHETIC banner and ship as a GH Actions artifact on a monthly cron.",
+          "concern": "Must never drop the synthetic disclaimer (invariant #5)."
+        },
+        "algo_trader": {
+          "verdict": "no",
+          "notes": "Reporting only, nothing to act on faster than the terminal UI; investor-letter theatre for the desk.",
+          "concern": "Zero P&L or risk-control impact."
+        }
+      },
+      "scoring": {
+        "reach": 3,
+        "impact": 0.5,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 1.5
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A monthly cron emits a dated tearsheet with equity curve and headline metrics per sleeve.",
+          "measurable": false
+        },
+        {
+          "id": "AC2",
+          "statement": "Tearsheet numbers reconcile with already-computed metrics and carry the synthetic/PIT disclaimer.",
+          "measurable": true,
+          "metric": "0-tolerance reconciliation vs metrics.py; disclaimer present"
+        },
+        {
+          "id": "AC3",
+          "statement": "Generation is fast enough to run alongside the engine.",
+          "measurable": true,
+          "metric": "runtime < 30s"
+        }
+      ],
+      "invariants_touched": [
+        "5-synthetic-is-test-only"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "report.py --tearsheet",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "snapshot test on synthetic fixture",
+            "exit_criteria": "sections present; disclaimer present (AC2)"
+          },
+          {
+            "name": "full-live",
+            "scope": "monthly cron artifact",
+            "exit_criteria": "0 silent failures over 12 runs"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "reconciliation",
+            "threshold": "tearsheet == metrics.py values"
+          }
+        ],
+        "rollback": "Remove the cron step / --tearsheet flag. Additive; nothing to revert."
+      }
+    },
+    {
+      "id": "F6",
+      "title": "Transaction-cost upgrade: market impact + borrow costs",
+      "epic": "execution-quality",
+      "status": "parked",
+      "owner_role": "data_scientist",
+      "problem": "Costs are a flat bps + commission floor; this understates cost for illiquid names and models no market impact, and there is no borrow cost path for a future short book.",
+      "hypothesis": "A volume-scaled (square-root) impact term keyed off ADV, plus a borrow path that only activates if shorting is added, gives more honest net returns as size scales.",
+      "evidence": [
+        {
+          "claim": "Costs are modelled as flat slippage bps + commission floor; data.py fetches only Close, so ADV/volume is not ingested.",
+          "source": "trading_algo/fees.py; trading_algo/data.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "High-turnover edges die on realistic costs; impact matters as AUM grows.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#3",
+          "confidence": "high"
+        },
+        {
+          "claim": "The strategy is long-only today, so borrow cost is currently a no-op.",
+          "source": "trading_algo/strategy.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "maybe",
+          "notes": "Borrow is moot (long-only); impact only matters past retail scale. Revisit when a short book or larger AUM arrives.",
+          "concern": "Effort spent modelling a cost we don't incur yet."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Only justify if impact changes turnover-heavy names' cost by >= 20% vs flat bps and Sharpe degradation < 0.3.",
+          "concern": "Overfitting impact params to sparse volume data adds noise."
+        },
+        "chief_engineer": {
+          "verdict": "maybe",
+          "notes": "L effort: needs a volume/ADV data-layer addition. Unify cost calc into one fees.py function used by both engines.",
+          "concern": "Two divergent cost paths today (paper inline vs backtest round_trip) risk invariant #3."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Real but modest ROI at current AUM/turnover; matters once size scales. Reject/resize orders whose modelled impact exceeds a bps threshold vs ADV.",
+          "concern": "Calibrate against real IBKR fills for a quarter first."
+        }
+      },
+      "scoring": {
+        "reach": 5,
+        "impact": 1,
+        "confidence": 0.5,
+        "effort": 6,
+        "score": 0.42
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Default-off, the new model reproduces the old flat-cost numbers exactly.",
+          "measurable": true,
+          "metric": "regression test: identical metrics with impact model disabled"
+        },
+        {
+          "id": "AC2",
+          "statement": "Impact cost is reported separately from flat cost.",
+          "measurable": true,
+          "metric": "backtest output + report.py show an impact line"
+        },
+        {
+          "id": "AC3",
+          "statement": "Both engines share one cost function.",
+          "measurable": true,
+          "metric": "paper_trade and backtest call the same fees.py entrypoint (consistency test)"
+        }
+      ],
+      "invariants_touched": [
+        "2-costs-always-on",
+        "3-one-weight-function"
+      ],
+      "dependencies": [
+        "F7"
+      ],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "config.IMPACT_MODEL",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "unit tests on impact-formula monotonicity",
+            "exit_criteria": "monotone in size; AC1 regression holds"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "US sleeve with ADV data",
+            "exit_criteria": "AC2 impact line reconciles"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "backward compatibility",
+            "threshold": "disabled model == prior numbers (AC1)"
+          }
+        ],
+        "rollback": "Set config.IMPACT_MODEL='flat'; restores current behaviour exactly. No migration."
+      }
+    },
+    {
+      "id": "F7",
+      "title": "Automated data-quality gate before signals run",
+      "epic": "data-integrity",
+      "status": "in_progress",
+      "owner_role": "chief_engineer",
+      "problem": "Signals run on whatever the feed returns; a stale, gapped, or split-corrupted print (a known yfinance failure mode) can silently corrupt every downstream number and generate a real order.",
+      "hypothesis": "A shared validator that flags stale prices, gaps, outliers and corporate-action jumps before signals \u2014 and holds prior weights rather than trade on garbage \u2014 prevents bad prints from becoming orders.",
+      "evidence": [
+        {
+          "claim": "yfinance split/dividend errors and LSE pence scaling are called out as known landmines.",
+          "source": "README.md; trading_algo/data.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "Look-ahead / bad-data is the most easily introduced backtest error; remedy is disciplined data checks.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#2",
+          "confidence": "high"
+        },
+        {
+          "claim": "No data-quality module exists today; data.py loads and returns prices directly.",
+          "source": "trading_algo/data.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "Do first: cheap, no external data dependency, and a bad price silently corrupts every other item.",
+          "concern": "Overly strict thresholds could drop legitimate volatile names."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Flag single-day return > 50% (US/ASX) or > 30% (FTSE pence) unless matched to a corp action; false-positive rate < 5%.",
+          "concern": "Without a split/dividend calendar, false positives dominate."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "ONE shared validator called identically by backtest and paper; any repair uses only trailing data.",
+          "concern": "Two divergent implementations would break invariants #1 and #3."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Hard block on rebalance for any stale/duplicate/impossible price; hold prior weights and log the reason.",
+          "concern": "Must run before every paper/live rebalance, not just in backtest."
+        }
+      },
+      "scoring": {
+        "reach": 10,
+        "impact": 3,
+        "confidence": 1.0,
+        "effort": 3,
+        "score": 10.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A single validator flags stale prices, gaps, outliers and corp-action jumps and is called by both backtest and paper_trade.",
+          "measurable": true,
+          "metric": "one module; consistency test asserts both engines call it"
+        },
+        {
+          "id": "AC2",
+          "statement": "Impossible single-day moves are caught region-aware.",
+          "measurable": true,
+          "metric": "return > 50% (US/ASX) / > 30% (FTSE) flagged unless matched corp action; false-positive < 5%"
+        },
+        {
+          "id": "AC3",
+          "statement": "Staleness excludes a ticker.",
+          "measurable": true,
+          "metric": "0 price change > 5 consecutive trading days -> excluded"
+        },
+        {
+          "id": "AC4",
+          "statement": "On a rebalance, flagged names hold prior weight and are logged.",
+          "measurable": true,
+          "metric": "no order generated for a flagged ticker (test); reason logged"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead",
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/data_quality.py + config.DATA_QUALITY_GATE",
+        "default_on": true,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "log flags without excluding",
+            "exit_criteria": "false-positive rate < 5% on historical pulls"
+          },
+          {
+            "name": "synthetic",
+            "scope": "injected NaN gaps / jumps / stale rows",
+            "exit_criteria": "flagged tickers excluded consistently in both engines (AC1)"
+          },
+          {
+            "name": "full-live",
+            "scope": "enforced before every rebalance",
+            "exit_criteria": "AC1-AC4 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "false-positive rate",
+            "threshold": "< 5% of legitimate corp-action moves flagged"
+          },
+          {
+            "metric": "trailing-only repair",
+            "threshold": "no lookahead test regressions"
+          }
+        ],
+        "rollback": "Set config.DATA_QUALITY_GATE=False; signals run on raw data as today. No migration."
+      }
+    },
+    {
+      "id": "F8",
+      "title": "Purged & embargoed walk-forward CV for the equity sleeves",
+      "epic": "statistical-validity",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "The equity sweep only checks a flat-vs-peaky surface; naive walk-forward on overlapping momentum windows leaks the future across fold boundaries, inflating confidence.",
+      "hypothesis": "Porting the FX purge/embargo logic (embargo >= one rebalance period) gives the equity side leakage-free CV splits and honest per-fold performance to feed the F2 gate.",
+      "evidence": [
+        {
+          "claim": "The FX subsystem has purged+embargoed walk-forward (walk_forward_predict, embargo, min_train).",
+          "source": "trading_algo/forex/walkforward.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "Naive k-fold on time series leaks the future; purge and embargo to prevent it.",
+          "source": "Lopez de Prado 2018; docs/research/COMBATING_BACKTEST_BIAS.md#5",
+          "confidence": "high"
+        },
+        {
+          "claim": "The 200-day trend/regime MA can leak across a boundary if the embargo is shorter than its lookback.",
+          "source": "trading_algo/signals.py",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "sweep.py alone doesn't remove overfitting; this gives PBO real CV splits and is a prerequisite for a meaningful F2.",
+          "concern": "Monthly rebalance + limited history leaves few independent splits."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Embargo >= 21 trading days (one rebalance); n_folds >= 6; compute out-of-fold DSR/PBO per fold.",
+          "concern": "Monthly cadence gives wide per-fold Sharpe CIs."
+        },
+        "chief_engineer": {
+          "verdict": "maybe",
+          "notes": "The equity signal is a fixed formula, not a trained model, so walk_forward_predict's fit/predict doesn't map cleanly; may overlap F2's PBO.",
+          "concern": "Defer if it only duplicates F2; risks invariant #1 only if misapplied."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Research hygiene: a param set surviving only non-purged CV should be down-weighted in sizing confidence.",
+          "concern": "Moves the needle on trust, not raw P&L."
+        }
+      },
+      "scoring": {
+        "reach": 6,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 3,
+        "score": 1.6
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Equity CV uses purge + embargo of at least one rebalance period.",
+          "measurable": true,
+          "metric": "embargo >= 21 trading days; purge covers the 12m momentum + 200d MA lookback"
+        },
+        {
+          "id": "AC2",
+          "statement": "Out-of-fold DSR/PBO are reported per fold.",
+          "measurable": true,
+          "metric": "n_folds >= 6, min_train >= 60 months"
+        },
+        {
+          "id": "AC3",
+          "statement": "Purge/embargo boundaries are unit-tested.",
+          "measurable": true,
+          "metric": "tests mirror tests/test_fx_walkforward.py"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "sweep.py --purged-cv",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "boundary tests on synthetic monthly series",
+            "exit_criteria": "no label leakage across folds (AC3)"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "US sleeve",
+            "exit_criteria": "AC1 & AC2 satisfied"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "boundary leakage",
+            "threshold": "purged vs naive CV Sharpe gap reported, not hidden"
+          }
+        ],
+        "rollback": "Drop --purged-cv; sweep reverts to the flat-surface check. Additive."
+      }
+    },
+    {
+      "id": "F9",
+      "title": "Momentum-crash / factor-crowding exposure monitor",
+      "epic": "risk-and-guardrails",
+      "status": "groomed",
+      "owner_role": "algo_trader",
+      "problem": "The only crash defence is the reactive dual 200-day trend/regime filter; there is no early warning when correlation/crowding spikes ahead of a classic momentum-crash setup.",
+      "hypothesis": "A crowding/crash monitor (rolling cross-sectional correlation, vol spikes, the down-then-rebound setup) flags elevated tail risk before the regime filter trips, giving a human a chance to review.",
+      "evidence": [
+        {
+          "claim": "Momentum crashes are the known tail risk of this strategy; the dual 200MA filter is the tested primary defence.",
+          "source": "README.md#why-this-strategy; HANDOFF.md",
+          "confidence": "high"
+        },
+        {
+          "claim": "Daniel & Moskowitz (2016): crashes cluster after market drawdown-then-rebound; conditional beta/skew is predictive.",
+          "source": "Daniel & Moskowitz 2016 JFE",
+          "confidence": "high"
+        },
+        {
+          "claim": "config already caps selection correlation (avg_correlation ~0.6); a monitor can watch realized correlation vs that cap.",
+          "source": "trading_algo/config.py; trading_algo/signals.py",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Adds visibility on top of the mechanical defence; lowest urgency of the yes-items since the regime filter is the tested primary.",
+          "concern": "Crowding metrics are noisy and prone to false alarms."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Flag 60-day realized vol > 2x trailing 3yr avg; flag the index >10% below 200MA AND +5% past-month rally; alert if held pairwise correlation > 0.7.",
+          "concern": "May be redundant with the trend filter; crowding wants external factor data."
+        },
+        "chief_engineer": {
+          "verdict": "maybe",
+          "notes": "Observability-only first (dashboard alert). If ever wired into sizing it MUST flow through strategy.compute_targets.",
+          "concern": "A paper-only bolt-on the backtest lacks would break invariant #3."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Alert, don't auto-liquidate; human reviews before the regime filter would even trip.",
+          "concern": "False alarms in genuine V-shaped recoveries cause costly de-risking."
+        }
+      },
+      "scoring": {
+        "reach": 6,
+        "impact": 1,
+        "confidence": 0.5,
+        "effort": 3,
+        "score": 1.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A crowding/crash metric is surfaced with an elevated-risk flag, not just after a drawdown.",
+          "measurable": true,
+          "metric": "dashboard/report shows the metric + threshold flag"
+        },
+        {
+          "id": "AC2",
+          "statement": "It is observability-only and does not alter sizing.",
+          "measurable": true,
+          "metric": "no change to compute_targets output (consistency test)"
+        },
+        {
+          "id": "AC3",
+          "statement": "It fires on a replayed momentum-crash scenario.",
+          "measurable": true,
+          "metric": "synthetic crash window triggers the flag"
+        }
+      ],
+      "invariants_touched": [
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/crowding.py + dashboard tile",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "replay a crash regime",
+            "exit_criteria": "flag fires (AC3)"
+          },
+          {
+            "name": "paper",
+            "scope": "dashboard tile live",
+            "exit_criteria": "no sizing change observed (AC2)"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "sizing neutrality",
+            "threshold": "compute_targets output unchanged"
+          }
+        ],
+        "rollback": "Remove the tile/module. Pure observability; nothing to revert."
+      }
+    },
+    {
+      "id": "F10",
+      "title": "Paper->live promotion gate (Decision agent) + min-account-size check",
+      "epic": "risk-and-guardrails",
+      "status": "groomed",
+      "owner_role": "algo_trader",
+      "problem": "Switching from paper to real capital is an unguarded manual call; nothing objectively checks track record, overfitting, drawdown, or account solvency before a live order can fire.",
+      "hypothesis": "A hard promotion gate in the execution path \u2014 refusing live unless track-record, DSR/PBO, drawdown and min-account-size criteria are met \u2014 operationalizes the HANDOFF 'Decision agent' and protects capital.",
+      "evidence": [
+        {
+          "claim": "HANDOFF describes a Decision agent that should gate execution, including a minimum-account-size pre-trade check.",
+          "source": "HANDOFF.md#bigger-picture",
+          "confidence": "high"
+        },
+        {
+          "claim": "config has a MIN_VIABLE_EQUITY_BASE solvency floor and MAX_DRAWDOWN_STOP but no promotion gate; execution has no gate check.",
+          "source": "trading_algo/config.py; trading_algo/execution_ibkr.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The $1k micro account already demonstrated fee drag kills small size.",
+          "source": "HANDOFF.md; README.md",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "One command answers 'is this account ready to go live?' against explicit criteria before dry_run=False.",
+          "concern": "Criteria could be loosened under pressure to go live."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Require >= 6 monthly rebalances, live Sharpe within 1 SE of backtest-predicted, equity >= 20x commission floor. Note 6 points is underpowered.",
+          "concern": "Conflating the solvency floor with a promotion-readiness gate under-specifies risk."
+        },
+        "chief_engineer": {
+          "verdict": "strong_yes",
+          "notes": "Hard-block in execution_ibkr.rebalance() at LIVE_PORT unless criteria met; explicit override flag for human bypass; CI gate. S effort.",
+          "concern": "Protects invariant #4 (whole-share/floor) against underfunded live accounts."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Non-negotiable before real IBKR capital: N months paper + tracking error inside budget (F3) + min-size per region.",
+          "concern": "Nothing goes live without it, full stop."
+        }
+      },
+      "scoring": {
+        "reach": 8,
+        "impact": 3,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 19.2
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "execution rebalance() refuses a live (dry_run=False) order unless every promotion criterion is met.",
+          "measurable": true,
+          "metric": "rebalance() raises at LIVE_PORT when criteria unmet (unit test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Criteria include track record, DSR/PBO pass, drawdown bound and min account size per region.",
+          "measurable": true,
+          "metric": ">= 6 rebalances; equity >= 20x commission floor; DSR>0.95 & PBO<0.5"
+        },
+        {
+          "id": "AC3",
+          "statement": "A human override is explicit and audited.",
+          "measurable": true,
+          "metric": "override flag required; decision appended to an audit log"
+        }
+      ],
+      "invariants_touched": [
+        "4-whole-shares"
+      ],
+      "dependencies": [
+        "F2",
+        "F3"
+      ],
+      "rollout": {
+        "mechanism": "ci_gate",
+        "flag": "config.PROMOTION_GATE + execution_ibkr override flag",
+        "default_on": true,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "fabricated qualifying/failing paper_state fixtures",
+            "exit_criteria": "gate raises on fail, passes on qualifying (AC1)"
+          },
+          {
+            "name": "paper",
+            "scope": "run against real paper history",
+            "exit_criteria": "verdict stable and explainable"
+          },
+          {
+            "name": "canary-live",
+            "scope": "smallest funded live account",
+            "exit_criteria": "gate blocks until AC2 fully met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "unguarded live orders",
+            "threshold": "0 live orders when criteria unmet"
+          }
+        ],
+        "rollback": "Set config.PROMOTION_GATE=False only with explicit sign-off; default remains on. Reverting restores the current (unguarded) manual call."
+      }
+    },
+    {
+      "id": "F11",
+      "title": "Execution-quality TCA logging (implementation shortfall)",
+      "epic": "execution-quality",
+      "status": "groomed",
+      "owner_role": "algo_trader",
+      "problem": "No trade records decision price vs fill price, so realized slippage is never measured against the modelled slippage_bps and the backtest-vs-live gap can't be diagnosed.",
+      "hypothesis": "Capturing fills and logging implementation shortfall per order \u2014 rolled up per sleeve vs the modelled cost \u2014 reveals where live underperforms the backtest and recalibrates the cost model.",
+      "evidence": [
+        {
+          "claim": "execution_ibkr.py places orders and discards the result; no fill is captured today.",
+          "source": "trading_algo/execution_ibkr.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The bias literature says expect live < backtest and measure the haircut.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#7",
+          "confidence": "high"
+        },
+        {
+          "claim": "Modelled slippage is a flat per-region bps (ASX 10 / US 5 / FTSE 8) with no realized comparison.",
+          "source": "trading_algo/fees.py; trading_algo/regions.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Measures the exact 'expect live < backtest' haircut; feeds F6 calibration and F3 attribution.",
+          "concern": "Paper sim has no real impact, so paper TCA is only a proxy."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Alert if realized slippage exceeds modelled by > 50% over 20 trades; avg quarterly IS <= modelled cost.",
+          "concern": "Cross-currency IS must convert to AUD correctly or it misattributes by region."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Requires first capturing the ib_insync Trade/fill objects; pure measurement, no invariant risk.",
+          "concern": "None directly."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Where the backtest-vs-live gap actually gets diagnosed; build together with F3.",
+          "concern": "Small-cap ASX spreads not captured by flat 10bps understate true shortfall."
+        }
+      },
+      "scoring": {
+        "reach": 6,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 3,
+        "score": 1.6
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Every fill logs decision price, fill price and computes implementation shortfall.",
+          "measurable": true,
+          "metric": "IS logged per order (mocked-fill test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Realized vs modelled slippage is rolled up per sleeve in AUD.",
+          "measurable": true,
+          "metric": "per-region realized-vs-modelled bps report"
+        },
+        {
+          "id": "AC3",
+          "statement": "An alert fires when realized systematically exceeds modelled.",
+          "measurable": true,
+          "metric": "> 50% over a rolling 20 trades -> alert"
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/tca.py",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "capture fills, compute IS, don't alert",
+            "exit_criteria": "IS logged for 1 rebalance (AC1)"
+          },
+          {
+            "name": "paper",
+            "scope": "per-sleeve rollup",
+            "exit_criteria": "AC2 report reconciles"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "currency correctness",
+            "threshold": "IS aggregated in AUD, not mixed"
+          }
+        ],
+        "rollback": "Disable tca.py logging. Measurement-only; no trading behaviour change."
+      }
+    },
+    {
+      "id": "F12",
+      "title": "Drawdown circuit-breaker telemetry and alerting",
+      "epic": "risk-and-guardrails",
+      "status": "ready",
+      "owner_role": "chief_engineer",
+      "problem": "The drawdown breaker and min-viable-size gate exist but only print to a log; since the engine runs unattended via cron, a halt could go unnoticed for weeks.",
+      "hypothesis": "Firing a notification on the breaker's halt/resume transition makes an unattended halt actionable within one trading day instead of silent.",
+      "evidence": [
+        {
+          "claim": "config defines MAX_DRAWDOWN_STOP and a cooldown; the breaker prints to stdout in paper_trade.py with no notification channel.",
+          "source": "trading_algo/config.py; trading_algo/paper_trade.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The engine is designed to run unattended in the background / via cron.",
+          "source": "trading_algo/engine.py; README.md",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "Ships immediately, no data/research dependency; a silent breaker is worse than none.",
+          "concern": "Alert fatigue if thresholds too sensitive."
+        },
+        "data_scientist": {
+          "verdict": "maybe",
+          "notes": "The breaker logic is already implemented/tested; alerting is fine but the fixed 25%/21d threshold isn't per-region validated (FX uses per-profile 0.12-0.30).",
+          "concern": "Telemetry doesn't re-validate whether 25%/21d is sound."
+        },
+        "chief_engineer": {
+          "verdict": "strong_yes",
+          "notes": "Fire only on the False->True halt transition (and resume) to avoid spam. Pure observability.",
+          "concern": "None; also surface halt state on the dashboard OVERVIEW tab."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Push/email the instant the breaker trips; a silent circuit breaker is the actual gap.",
+          "concern": "Wire it before any live capital."
+        }
+      },
+      "scoring": {
+        "reach": 9,
+        "impact": 2,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 18.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A halt or resume transition (or min-viable-size trip) pushes a notification.",
+          "measurable": true,
+          "metric": "notify() called exactly once per transition (unit test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Alerts do not repeat every day while halted.",
+          "measurable": true,
+          "metric": "0 duplicate alerts across consecutive halted runs (test)"
+        },
+        {
+          "id": "AC3",
+          "statement": "Alert latency fits the engine cadence.",
+          "measurable": true,
+          "metric": "<= 1 trading day from breach to notification"
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "config.BREAKER_ALERT_CHANNEL",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "synthetic drawdown scenario",
+            "exit_criteria": "notify() fires once per transition (AC1/AC2)"
+          },
+          {
+            "name": "paper",
+            "scope": "wired into paper-trade cron",
+            "exit_criteria": "real transition delivers within a day (AC3)"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "alert dedupe",
+            "threshold": "one alert per transition"
+          }
+        ],
+        "rollback": "Unset config.BREAKER_ALERT_CHANNEL; breaker still halts as today, just without notifying."
+      }
+    },
+    {
+      "id": "F13",
+      "title": "Delisting-return correction (Shumway -30%/-55%)",
+      "epic": "data-integrity",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "Even with point-in-time membership, a dropped constituent whose terminal price series is missing contributes no (sharply negative) delisting return, leaving residual upward bias.",
+      "hypothesis": "Applying a Shumway replacement return (-30% NYSE/AMEX, -55% Nasdaq) when a delisted name has no matched terminal price closes the residual survivorship gap left by F1.",
+      "evidence": [
+        {
+          "claim": "constituents.py provides PIT membership but has no terminal-return correction for delisted names with missing prices.",
+          "source": "trading_algo/constituents.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "Delisting bias is big enough to flip conclusions; correct with -30%/-55% replacement returns.",
+          "source": "Shumway & Warther 1999 JF; docs/research/COMBATING_BACKTEST_BIAS.md#1",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Directly completes F1; small once membership data exists.",
+          "concern": "Only meaningful after F1 lands real membership files."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Apply the region-appropriate replacement return; re-run F1's CAGR-delta acceptance to confirm the correction moves the number.",
+          "concern": "Mis-mapping exchange -> replacement rate."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "A pure addition inside the constituents/backtest join; config knob for the replacement rates.",
+          "concern": "Must apply only at the delisting date (no lookahead), invariant #1."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Makes the survivorship fix honest; without it F1 still overstates.",
+          "concern": "Low P&L impact but needed for number integrity."
+        }
+      },
+      "scoring": {
+        "reach": 5,
+        "impact": 2,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 8.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A delisted name with no matched terminal price gets a region-appropriate replacement return.",
+          "measurable": true,
+          "metric": "-30% (NYSE/AMEX) / -55% (Nasdaq) applied at the delisting date"
+        },
+        {
+          "id": "AC2",
+          "statement": "The correction is applied causally.",
+          "measurable": true,
+          "metric": "no lookahead test regression"
+        },
+        {
+          "id": "AC3",
+          "statement": "The correction measurably lowers reported CAGR vs uncorrected PIT.",
+          "measurable": true,
+          "metric": "CAGR(uncorrected) - CAGR(corrected) > 0"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead"
+      ],
+      "dependencies": [
+        "F1"
+      ],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "config.DELISTING_REPLACEMENT_RETURNS",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "fixture with a delisted, price-missing name",
+            "exit_criteria": "replacement return applied at the right date (AC1/AC2)"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "US sleeve PIT run",
+            "exit_criteria": "AC3 CAGR moves in the expected direction"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "causality",
+            "threshold": "no lookahead regression"
+          }
+        ],
+        "rollback": "Disable the replacement-return knob; behaviour reverts to F1-only PIT. Additive."
+      }
+    },
+    {
+      "id": "F14",
+      "title": "Market-data provider fallback / redundancy",
+      "epic": "platform-and-ci",
+      "status": "in_progress",
+      "owner_role": "chief_engineer",
+      "problem": "Yahoo 403 is repeatedly called out as blocking real backtests and CI; a single-source feed means the scheduled engine and CI can silently go stale on an outage.",
+      "hypothesis": "A secondary source (e.g. stooq / cached snapshots) behind the loader keeps the engine and CI running when the primary feed fails, without changing prices when it succeeds.",
+      "evidence": [
+        {
+          "claim": "Yahoo 403 blocking real data is flagged in three places as a known operational risk.",
+          "source": "HANDOFF.md; README.md; CLAUDE.md#environment-notes",
+          "confidence": "high"
+        },
+        {
+          "claim": "data.py has a single primary loader path plus synthetic_region for offline tests.",
+          "source": "trading_algo/data.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Stops the scheduled engine and CI going silently stale; operational resilience.",
+          "concern": "Secondary sources vary in coverage/quality."
+        },
+        "data_scientist": {
+          "verdict": "maybe",
+          "notes": "Fallback prices must reconcile with the primary within tolerance or the switch itself introduces a data break.",
+          "concern": "Provider disagreement on adjusted prices / corp actions."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Lazily-imported secondary loader behind the existing interface; must pass the F7 data-quality gate on either source.",
+          "concern": "Keep to one loader interface (no divergent paths)."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "A dead feed on rebalance day is a real risk; a fallback beats trading on nothing.",
+          "concern": "Never silently trade off a source that disagrees materially with the primary."
+        }
+      },
+      "scoring": {
+        "reach": 7,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 3,
+        "score": 1.87
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "On primary-feed failure the loader falls back to a secondary source behind the same interface.",
+          "measurable": true,
+          "metric": "simulated 403 -> secondary path returns prices (test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Fallback data passes the F7 data-quality gate before use.",
+          "measurable": true,
+          "metric": "gate runs on either source"
+        },
+        {
+          "id": "AC3",
+          "statement": "A provider switch is logged and reconciles within tolerance.",
+          "measurable": true,
+          "metric": "overlap disagreement < 1% or warn"
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [
+        "F7"
+      ],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "config.DATA_FALLBACK_SOURCE",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "mocked primary 403",
+            "exit_criteria": "secondary path exercised (AC1)"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "one region live",
+            "exit_criteria": "AC3 reconciliation holds"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "source agreement",
+            "threshold": "overlap disagreement < 1%"
+          }
+        ],
+        "rollback": "Unset config.DATA_FALLBACK_SOURCE; loader uses the primary only, as today."
+      }
+    },
+    {
+      "id": "F15",
+      "title": "Pre-trade ADV / liquidity cap",
+      "epic": "execution-quality",
+      "status": "groomed",
+      "owner_role": "algo_trader",
+      "problem": "compute_targets has no liquidity check; a capped single-name weight in a thin FTSE/ASX name can be multiple days of that name's volume, which no pre-trade control catches.",
+      "hypothesis": "Capping each order at a fraction of trailing ADV before it reaches execution prevents positions the desk can't realistically enter or exit.",
+      "evidence": [
+        {
+          "claim": "Selection/sizing has no ADV/liquidity constraint; weights are inverse-vol capped only.",
+          "source": "trading_algo/strategy.py; trading_algo/signals.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "ASX/FTSE sleeves include thinner names where a capped weight can exceed daily volume.",
+          "source": "trading_algo/universes.py",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Prevents un-enterable positions; a real desk control.",
+          "concern": "Needs ADV data the loader doesn't fetch yet (shares the F6 volume dependency)."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Cap at e.g. <= 10% of trailing 20-day ADV; measure how often it binds and its return drag.",
+          "concern": "Sparse volume data on thin names makes ADV noisy."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "If it changes sizing it MUST run inside strategy.compute_targets so backtest and paper agree.",
+          "concern": "A paper-only cap the backtest lacks breaks invariant #3."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "Cap order size as % of trailing ADV before it ever reaches execution_ibkr.",
+          "concern": "Without it a thin-name target is days of volume."
+        }
+      },
+      "scoring": {
+        "reach": 6,
+        "impact": 2,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 9.6
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Each target is capped at a configurable fraction of trailing ADV inside compute_targets.",
+          "measurable": true,
+          "metric": "no target > cap * ADV; cap default 10% of 20-day ADV"
+        },
+        {
+          "id": "AC2",
+          "statement": "Backtest and paper apply the identical cap.",
+          "measurable": true,
+          "metric": "consistency test asserts both route through compute_targets"
+        },
+        {
+          "id": "AC3",
+          "statement": "How often the cap binds and its return drag are reported.",
+          "measurable": true,
+          "metric": "bind-rate and CAGR delta logged"
+        }
+      ],
+      "invariants_touched": [
+        "3-one-weight-function"
+      ],
+      "dependencies": [
+        "F6"
+      ],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "config.ADV_CAP_PCT",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "thin-name fixture",
+            "exit_criteria": "cap binds and lowers the target (AC1)"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "ASX sleeve",
+            "exit_criteria": "AC2 parity + AC3 report"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "weight parity",
+            "threshold": "backtest == paper capped weights"
+          }
+        ],
+        "rollback": "Set config.ADV_CAP_PCT=None; sizing reverts to uncapped inverse-vol. No migration."
+      }
+    },
+    {
+      "id": "F16",
+      "title": "CI backtest regression gate",
+      "epic": "platform-and-ci",
+      "status": "in_progress",
+      "owner_role": "chief_engineer",
+      "problem": "CI runs only pytest; nothing checks that a refactor silently changed strategy behaviour (accidental lookahead, cost regression, sizing drift).",
+      "hypothesis": "A CI step running run_backtest --synthetic and asserting Sharpe/CAGR/MaxDD/turnover stay within tolerance of a committed baseline catches behavioural regressions before merge.",
+      "evidence": [
+        {
+          "claim": "CI currently runs only `pytest -q`, with no behavioural backtest check.",
+          "source": ".github/workflows (ci); pyproject.toml addopts",
+          "confidence": "high"
+        },
+        {
+          "claim": "Invariant #1/#2 (no-lookahead, costs-on) are exactly the kind of property a refactor can silently break.",
+          "source": "CLAUDE.md#invariants",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Protects the invariants at merge time; cheap safety net.",
+          "concern": "Baseline must be updated deliberately, not rubber-stamped."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Use synthetic (invariant #5) with a fixed seed; tolerance tight enough to catch a lookahead leak but not flaky.",
+          "concern": "Synthetic metrics are pipeline checks, never performance claims."
+        },
+        "chief_engineer": {
+          "verdict": "strong_yes",
+          "notes": "run_backtest --synthetic vs a committed baseline JSON; fail the build on out-of-tolerance drift. S effort.",
+          "concern": "None; complements tests/test_consistency.py."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Stops a quiet behaviour change reaching the book via a refactor.",
+          "concern": "Moves the needle on trust, not P&L."
+        }
+      },
+      "scoring": {
+        "reach": 8,
+        "impact": 2,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 16.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "CI runs a synthetic backtest and compares to a committed baseline.",
+          "measurable": true,
+          "metric": "Sharpe/CAGR/MaxDD/turnover within +/- tolerance of baseline JSON"
+        },
+        {
+          "id": "AC2",
+          "statement": "The build fails on out-of-tolerance drift.",
+          "measurable": true,
+          "metric": "non-zero exit on regression"
+        },
+        {
+          "id": "AC3",
+          "statement": "Baseline updates are explicit and reviewed.",
+          "measurable": true,
+          "metric": "baseline change requires a committed file diff"
+        }
+      ],
+      "invariants_touched": [
+        "5-synthetic-is-test-only"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "ci_gate",
+        "flag": "n/a",
+        "default_on": true,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "run in CI as non-blocking",
+            "exit_criteria": "stable across 5 runs, no flakiness"
+          },
+          {
+            "name": "full-live",
+            "scope": "blocking CI gate",
+            "exit_criteria": "AC1-AC3 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "flakiness",
+            "threshold": "0 false failures across 5 consecutive runs"
+          }
+        ],
+        "rollback": "Mark the CI step non-blocking (continue-on-error). Tests still run."
+      }
+    },
+    {
+      "id": "F17",
+      "title": "Structured run manifests + experiment ledger",
+      "epic": "platform-and-ci",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "No run records the git commit, StrategyParams, region set, or data date-range; sweep/tune trials aren't persisted, so trial counts (the input to DSR) and reproducibility are lost.",
+      "hypothesis": "Emitting a JSON manifest per run and appending sweep/tune trials to a versioned ledger gives reproducibility, an audit trail, and the honest trial count the F2 gate needs.",
+      "evidence": [
+        {
+          "claim": "Neither backtest.py, paper_trade.py nor report.py record a run manifest today.",
+          "source": "trading_algo/backtest.py; trading_algo/paper_trade.py; trading_algo/report.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The #1 process safeguard is to log your trial count and deflate for it.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#4",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Reproducibility + the missing input to F2/F8; feeds F3 attribution and F10's promotion audit.",
+          "concern": "Only valuable if actually consulted, not write-only."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Persist params, data vintage, metrics, DSR/PBO per run; the ledger IS the trial count.",
+          "concern": "Trial count must be honest (include abandoned runs)."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Emit a JSON manifest (git SHA, params, region set, date range) per run; small, additive.",
+          "concern": "Keep manifests out of trading state files."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Audit trail for what actually ran before capital moved.",
+          "concern": "Low direct P&L impact."
+        }
+      },
+      "scoring": {
+        "reach": 6,
+        "impact": 1,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 6.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Every backtest/paper run emits a JSON manifest.",
+          "measurable": true,
+          "metric": "manifest includes git SHA, params hash, region set, data date-range"
+        },
+        {
+          "id": "AC2",
+          "statement": "Sweep/tune trials append to a versioned ledger.",
+          "measurable": true,
+          "metric": "trial count readable back for DSR n_trials"
+        },
+        {
+          "id": "AC3",
+          "statement": "Manifests validate against a schema.",
+          "measurable": true,
+          "metric": "manifest schema check green (reuse product/validate.py pattern)"
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "trading_algo/manifest.py",
+        "default_on": true,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "manifest written on a synthetic run",
+            "exit_criteria": "AC1 & AC3 schema-valid"
+          },
+          {
+            "name": "full-live",
+            "scope": "ledger accrues across real runs",
+            "exit_criteria": "AC2 trial count reproducible"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "manifest validity",
+            "threshold": "100% of manifests schema-valid"
+          }
+        ],
+        "rollback": "Manifests are additive side-files; stop writing them. No behaviour change."
+      }
+    },
+    {
+      "id": "F18",
+      "title": "Schema-validated paper/FX state files",
+      "epic": "platform-and-ci",
+      "status": "in_progress",
+      "owner_role": "chief_engineer",
+      "problem": "paper_state_{account}.json and fx book state are plain JSON with no schema check on load; a crashed mid-write or a manual edit can silently corrupt live trading state.",
+      "hypothesis": "Validating state shape and types on load/save (and refusing to trade on an invalid file) prevents corrupted state from driving real orders and underpins the F10 promotion gate.",
+      "evidence": [
+        {
+          "claim": "Paper state is persisted as plain JSON with no schema validation on load/save.",
+          "source": "trading_algo/paper_trade.py (load_state/save_state)",
+          "confidence": "high"
+        },
+        {
+          "claim": "F10's promotion gate needs trustworthy state before it can judge readiness.",
+          "source": "product/backlog/backlog.json#F10",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Prevents silent state corruption reaching live; prerequisite-grade for F10.",
+          "concern": "Schema must version cleanly as fields evolve."
+        },
+        "data_scientist": {
+          "verdict": "maybe",
+          "notes": "Low research value but real integrity value; ensure a rejected file fails loudly rather than resetting equity.",
+          "concern": "A too-strict schema could brick a recoverable file."
+        },
+        "chief_engineer": {
+          "verdict": "strong_yes",
+          "notes": "Validate shape/types in load_state/save_state; refuse to trade on an invalid file. Reuses the product schema pattern nicely.",
+          "concern": "None; add a migration path for old files."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "A corrupted state file driving orders is a nightmare; block it.",
+          "concern": "Must fail safe (halt), not silently reinitialize."
+        }
+      },
+      "scoring": {
+        "reach": 7,
+        "impact": 1,
+        "confidence": 1.0,
+        "effort": 1,
+        "score": 7.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "State files are validated against a schema on load and save.",
+          "measurable": true,
+          "metric": "invalid file -> load raises, no trade (test)"
+        },
+        {
+          "id": "AC2",
+          "statement": "A rejected file fails safe (halt), never silently resets equity.",
+          "measurable": true,
+          "metric": "no equity reset on invalid state (test)"
+        },
+        {
+          "id": "AC3",
+          "statement": "A migration path handles pre-schema files.",
+          "measurable": true,
+          "metric": "old-format fixture migrates or is quarantined, not lost"
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "config.VALIDATE_STATE_FILES",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "validate and warn without blocking",
+            "exit_criteria": "0 false rejections on existing state files"
+          },
+          {
+            "name": "paper",
+            "scope": "block trading on invalid state",
+            "exit_criteria": "AC1-AC3 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "false rejection",
+            "threshold": "0 valid files rejected"
+          }
+        ],
+        "rollback": "Set config.VALIDATE_STATE_FILES=False; load behaves as today (no validation)."
+      }
+    },
+    {
+      "id": "F19",
+      "title": "Sharpe haircut for expected live performance",
+      "epic": "reporting-and-attribution",
+      "status": "in_progress",
+      "owner_role": "data_scientist",
+      "problem": "Backtest Sharpe is reported raw, which oversells expected live performance to stakeholders who don't see the multiple-testing penalty.",
+      "hypothesis": "Reporting a haircut-adjusted expected Sharpe (from the F2 DSR / multiple-testing penalty) next to the raw backtest Sharpe sets honest expectations that F3 can later validate against realized live results.",
+      "evidence": [
+        {
+          "claim": "The bias note says expect live < backtest and haircut the Sharpe.",
+          "source": "docs/research/COMBATING_BACKTEST_BIAS.md#7",
+          "confidence": "high"
+        },
+        {
+          "claim": "DSR already quantifies the deflation the haircut expresses (F2 provides it).",
+          "source": "trading_algo/forex/validation.py",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Stops overselling the backtest; a one-line honesty upgrade to reporting.",
+          "concern": "Stakeholders may still anchor on the raw number."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Derive the haircut from the DSR/multiple-testing penalty; later compare to realized live Sharpe via F3.",
+          "concern": "The haircut is an estimate, not a guarantee."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Trivial once F2 exists: a derived column in report.py/dashboard. XS effort.",
+          "concern": "Depends on F2's DSR output."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "I size off the haircut number, not the raw one.",
+          "concern": "Must be shown, not buried."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 0.5,
+        "score": 6.4
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Reports show a haircut-adjusted expected Sharpe next to raw backtest Sharpe.",
+          "measurable": true,
+          "metric": "both values present in report.py + dashboard"
+        },
+        {
+          "id": "AC2",
+          "statement": "The haircut is derived from the DSR / trial-count penalty.",
+          "measurable": true,
+          "metric": "haircut = f(DSR, n_trials); unit test"
+        },
+        {
+          "id": "AC3",
+          "statement": "The haircut can be reconciled against realized live Sharpe over time.",
+          "measurable": false
+        }
+      ],
+      "invariants_touched": [
+        "5-synthetic-is-test-only"
+      ],
+      "dependencies": [
+        "F2"
+      ],
+      "rollout": {
+        "mechanism": "new_module",
+        "flag": "report.py --haircut",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "synthetic",
+            "scope": "unit test on the haircut formula",
+            "exit_criteria": "AC2 holds: haircut = f(DSR, n_trials)"
+          },
+          {
+            "name": "full-live",
+            "scope": "shown in all reports",
+            "exit_criteria": "AC1 met: both values shown in every report"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "no raw-Sharpe-alone",
+            "threshold": "raw Sharpe never shown without the haircut"
+          }
+        ],
+        "rollback": "Remove the derived column. Additive reporting only."
+      }
+    }
+  ]
+}

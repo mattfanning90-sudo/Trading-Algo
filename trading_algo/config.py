@@ -41,6 +41,15 @@ class StrategyParams:
     avg_correlation: float = 0.6    # diversification assumption for vol targeting
     max_vol_scale: float = 1.5      # cap on vol-target leverage of the raw book
 
+    # --- Long/short (market-neutral) mode ----------------------------------
+    # Off by default → the classic long-only book (unchanged). When on,
+    # compute_targets builds a dollar-neutral book: long the top `top_n` momentum
+    # names and short the bottom `short_n`, each leg inverse-vol weighted, so the
+    # net systematic exposure ≈ 0 and what's left is closer to pure alpha. Shorts
+    # carry NEGATIVE weights; gross exposure = Σ|w| is what `max_gross` caps.
+    long_short: bool = False
+    short_n: int = 0                # names to short (0 → mirror top_n)
+
     # --- Filters ------------------------------------------------------------
     abs_momentum_floor: float = 0.0  # require positive 12-1 return
     stock_trend_ma: int = 200        # stock must be above its N-day MA
@@ -202,4 +211,47 @@ LEVERAGE_FINANCING_SPREAD = 0.01   # 1% over rf on the borrowed fraction
 # per-trade commission floors dominate, so the sleeve holds cash instead of
 # bleeding fees. Set 0 to disable the gate.
 MIN_VIABLE_EQUITY_BASE = 500.0
+
+# Minimum days between paper-trading rebalances. The monthly rebalance fires on
+# the first run of a new calendar month; without a floor, funding a book late in
+# a month (e.g. the 28th) churns the whole book two days later on the 1st,
+# locking in losses on positions that never got a real holding period. This gates
+# the calendar trigger so a freshly-funded book gets a proper hold first. Set 0
+# to disable (pure calendar-month cadence). Does not affect the backtest.
+MIN_REBALANCE_GAP_DAYS = 20
+
+# ---------------------------------------------------------------------------
+# Survivorship correction (backlog F13, data integrity)
+# ---------------------------------------------------------------------------
+# Replacement return applied on the day a held name delists with no further price
+# (Shumway: ~-30% NYSE/AMEX, ~-55% Nasdaq). None disables the correction. Only
+# takes effect in the point-in-time backtest path; see trading_algo/delisting.py.
+DELISTING_REPLACEMENT_RETURN: float | None = None
+
+# ---------------------------------------------------------------------------
+# Market-data fallback (backlog F14, platform)
+# ---------------------------------------------------------------------------
+# Name of a registered secondary price source to try when the primary (Yahoo)
+# returns nothing (e.g. a 403). None = primary only. Registered in data.py via
+# data.register_fallback(); fallback data still passes the F7 quality gate.
+DATA_FALLBACK_SOURCE: str | None = None
+
+# ---------------------------------------------------------------------------
+# Data-quality gate (backlog F7 / foundation P0-D)
+# ---------------------------------------------------------------------------
+# Run the shared pre-signal validator (stale / gapped / outlier / impossible-move
+# detection) before compute_targets, in BOTH backtest and paper/live. Flagged
+# names are dropped from the candidate set; in paper trading a flagged name that
+# is already held is frozen (not traded on a bad price). Default on — a bad print
+# silently corrupts every downstream number. See trading_algo/data_quality.py.
+DATA_QUALITY_GATE = True
+
+# ---------------------------------------------------------------------------
+# State-file integrity (backlog F18 / foundation P0-H)
+# ---------------------------------------------------------------------------
+# Validate paper_state_{account}.json against state_schema on load/save. When
+# True a corrupted-but-parseable file makes the run FAIL SAFE (raises, never
+# resets equity or trades on a garbage file); when False the validator only
+# warns (shadow mode). Default off during rollout — see product/backlog F18.
+VALIDATE_STATE_FILES = False
 

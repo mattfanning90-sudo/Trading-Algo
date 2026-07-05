@@ -59,8 +59,28 @@ class FXParams:
     include_carry: bool = True         # apply overnight swap/financing
     bar: str = "1d"                    # informational: intended data bar interval
 
+    # --- Asset-class concentration caps --------------------------------------
+    # Crypto legs are near-perfectly correlated with each other: several crypto
+    # positions are effectively ONE bet. Cap total crypto gross (Σ|w|) at this
+    # fraction of equity (None = off, e.g. for a crypto-only book).
+    crypto_gross_cap: float | None = 0.25
+    # Per-asset-class gross caps (Σ|w| per class, fraction of equity), applied
+    # by risk.size_book by scaling that class's legs down proportionally.
+    # Immutable tuple-of-pairs (FXParams is frozen; a dict default won't do);
+    # None as a cap value disables that class. Classes come from
+    # pairs.Pair.asset_class. FX carries NO entry (uncapped — G10 pairs are
+    # idiosyncratic enough and max_gross still binds); crypto stays driven by
+    # the dedicated `crypto_gross_cap` knob above (back-compat), which
+    # risk.size_book merges into these at run time. Defaults: US equities are
+    # one cluster (~0.75 gross); bond ETFs are one duration bet (~0.50 gross).
+    class_gross_caps: tuple[tuple[str, float | None], ...] = (
+        ("equity", 0.75), ("bond", 0.50),
+    )
+
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
+    # decremented once per bar — scale to the profile's bar (10 for daily,
+    # 240 for 60m; see hf_crypto's 240-for-1m convention).
     drawdown_cooldown_days: int = 10
 
     def with_overrides(self, **kwargs) -> "FXParams":
@@ -74,11 +94,15 @@ _PROFILES: dict[str, FXParams] = {
     "conservative": FXParams(
         target_vol=0.06, max_gross=2.0, max_vol_scale=2.0,
         per_pair_cap=0.20, max_drawdown_stop=0.12, drawdown_cooldown_days=15,
+        crypto_gross_cap=0.15,
+        class_gross_caps=(("equity", 0.60), ("bond", 0.40)),
     ),
-    "balanced": FXParams(),  # the defaults above
+    "balanced": FXParams(),  # the defaults above (equity 0.75 / bond 0.50)
     "aggressive": FXParams(
         target_vol=0.18, max_gross=5.0, max_vol_scale=5.0,
         per_pair_cap=0.35, max_drawdown_stop=0.30, drawdown_cooldown_days=7,
+        crypto_gross_cap=0.40,
+        class_gross_caps=(("equity", 1.00), ("bond", 0.75)),
     ),
     # Medium-frequency / intraday: shorter windows tuned for 15m–60m bars.
     # NOT high-frequency — see docs/HFT_REALITY.md. Live use needs a real-time
@@ -87,6 +111,10 @@ _PROFILES: dict[str, FXParams] = {
         ema_fast=10, ema_slow=40, donchian_window=20, roc_window=24,
         vol_lookback=24, agent_lookback=48, bb_window=20,
         target_vol=0.10, max_gross=3.0, bar="60m",
+        # cooldown decrements once per NEW BAR: 240 hourly bars = 10 trading
+        # days x 24 bars (mirrors hf_crypto's explicit 240-for-1m convention).
+        max_drawdown_stop=0.20, drawdown_cooldown_days=240,
+        # class_gross_caps: inherits the balanced defaults (equity .75 / bond .50).
     ),
     # High-frequency-CAPABLE crypto (minute scale; NOT microsecond HFT — see
     # docs/CRYPTO_HF.md). Short windows, crypto-sized risk, a churn band to keep
@@ -98,6 +126,8 @@ _PROFILES: dict[str, FXParams] = {
         target_vol=0.20, max_gross=3.0, per_pair_cap=0.40,
         max_drawdown_stop=0.15, drawdown_cooldown_days=240,
         rebalance_min_delta=0.05, include_carry=True, bar="1m",
+        crypto_gross_cap=None,           # crypto-ONLY book: the cap would strangle it
+        # class_gross_caps: default is inert here (no equities/bonds in universe).
     ),
 }
 
@@ -121,9 +151,24 @@ FX_RISK_FREE = 0.035                 # AUD cash benchmark for metrics (RBA-ish)
 DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
 START = "2015-01-01"                 # default backtest start
 
-# Two ready-to-run paper books: the account holder and their partner, each with
-# its own isolated state file and risk profile. Add more here or via the CLI.
+# Ready-to-run paper books, each an isolated state file with its own capital,
+# risk profile, universe and bar cadence. Add more here or via the CLI.
+#   matt / partner — the original daily FX+crypto books.
+#   daytrader      — the DAY-TRADING book: $10k, intraday profile on 60m bars,
+#                    advanced hourly by the day-paper workflow. Honest note:
+#                    Yahoo intraday is ~15-min delayed — fine for paper cadence,
+#                    not a live-feed simulation.
+#   multiasset     — the full STOCK + BOND book: $10k, daily bars, US equities +
+#                    bond ETFs plus an AUDUSD overlay (which doubles as the AUD
+#                    translation hub for exact AUD marking).
+from .pairs import MULTI_ASSET_UNIVERSE  # noqa: E402  (no circularity: pairs is leaf)
+
 ACCOUNTS: dict[str, dict] = {
-    "matt":    {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
-    "partner": {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
+    "matt":       {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
+    "partner":    {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
+    "daytrader":  {"capital": 10_000.0, "profile": "intraday", "bar": "60m"},
+    # universe-locked => never receives the FX-trained neural agent
+    # (see fx_book.run_once ML gate).
+    "multiasset": {"capital": 10_000.0, "profile": "balanced",
+                   "symbols": MULTI_ASSET_UNIVERSE},
 }

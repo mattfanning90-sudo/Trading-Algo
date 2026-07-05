@@ -1,0 +1,133 @@
+name: Day Trading Paper (hourly)
+
+# Advances ONLY the day-trading book (daytrader: $10k, intraday profile, 60m
+# bars) once an hour on weekdays, commits its state, and republishes the
+# dashboards so the site tracks the book through the day.
+#
+# Honest scope: this is hourly-cadence paper trading on Yahoo 60m data, which is
+# ~15 minutes delayed — a realistic paper exercise, NOT a live-feed simulation.
+# The heavyweight daily fx-paper workflow (ML retrain, all books) is unchanged.
+# NOTE: schedule: only fires on the DEFAULT branch.
+
+on:
+  schedule:
+    # hour 23 deliberately excluded — fx-paper's 23:00 nightly owns that window
+    # (state race + weekend stale-revert); the 23:00 hourly bar is advanced by
+    # fx-paper's run_all with the same technical pool (see fx_book ML gate).
+    # Do not restore 24-hour firing.
+    - cron: "7 0-22 * * 1-5"    # hourly on weekdays, off the :00 spike
+  workflow_dispatch: {}
+
+permissions:
+  contents: write      # commit updated paper state
+  pages: write         # republish the dashboard
+  id-token: write      # required by deploy-pages
+
+concurrency:
+  group: day-paper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore parquet market-data cache
+        # Persists trading_algo/forex/.cache across the fresh hourly runners so
+        # the 24 weekday runs stop repeating identical Yahoo downloads. The
+        # fx_data cache key embeds sym:start:end:interval and is stable within
+        # a UTC day, so a warm restore skips the repeated yf.download combos.
+        # Unique key -> always saves; restore-keys picks the most recent.
+        uses: actions/cache@v4
+        with:
+          path: trading_algo/forex/.cache
+          key: fx-parquet-${{ github.run_id }}
+          restore-keys: fx-parquet-
+
+      - name: Advance the day-trading book (hourly bar)
+        run: |
+          mkdir -p state public
+          python -m trading_algo.forex.paper --init          # creates daytrader if new
+          python -m trading_algo.forex.engine --once --account daytrader
+
+      - name: Build site (dashboards + landing page)
+        env:
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+          SYNTH: ""
+        run: bash scripts/build_site.sh
+
+      - name: Commit updated paper state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A state/
+          if git diff --cached --quiet; then
+            echo "No state change to commit."
+          else
+            git commit -m "chore: update day-trading state [skip ci]"
+            # Rebase-safe push — used verbatim in every state-committing
+            # workflow (day-paper / fx-paper / paper-trade). Rules:
+            #  * never retry mid-rebase: 'git rebase --abort' before EVERY try;
+            #  * no merge commits (never a plain pull);
+            #  * on a content conflict in the state JSON, '-X theirs' prefers
+            #    the commit being REPLAYED — i.e. OUR just-computed state,
+            #    the correct winner (both runners computed the same or a
+            #    fresher bar);
+            #  * a genuinely failed push fails the step — no '|| true'.
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((5 * attempt))
+            done
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    # Shared with fx-paper's deploy job: GitHub's documented fix for
+    # deploy-pages 409s is one concurrency group across all Pages publishers.
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
+    steps:
+      # Pages occasionally rejects a deploy with "try again later" when another
+      # publish is mid-flight (the shared concurrency group serialises jobs, but
+      # the Pages backend can still transiently reject). A failed deploy silently
+      # strands the LIVE site behind the committed state, so tolerate the first
+      # failure and retry once after a short back-off rather than leaving it stale.
+      - name: Deploy to GitHub Pages
+        id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Back off before retry
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 25
+      - name: Deploy to GitHub Pages (retry)
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4

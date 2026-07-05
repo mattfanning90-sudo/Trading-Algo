@@ -3,8 +3,14 @@ name: FX Paper Trading (live)
 # Runs the multi-agent FX paper books (matt + partner) unattended in the cloud
 # on REAL Yahoo FX + crypto data, commits the updated state back to the repo so
 # the books compound across runs, then publishes a candlestick dashboard (with
-# the reasoning behind every trade) to GitHub Pages. This workflow is the single
-# Pages publisher — it also re-exports the equity dashboards so nothing is lost.
+# the reasoning behind every trade) to GitHub Pages.
+#
+# TWO Pages publishers exist — this nightly workflow and the hourly
+# day-paper.yml — and their deploy jobs share one 'github-pages' concurrency
+# group so deploys serialize instead of 409ing. The scheme is safe only because
+# every deploy publishes the WHOLE site (both run scripts/build_site.sh), so a
+# superseded intermediate deploy loses nothing. This workflow also re-exports
+# the equity dashboards so nothing is lost.
 #
 # ONE-TIME SETUP (repo Settings):
 #   • Settings → Pages → Build and deployment → Source: "GitHub Actions"
@@ -52,6 +58,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore parquet market-data cache
+        # Persists trading_algo/forex/.cache across runners (shared prefix with
+        # day-paper.yml so the nightly run warms from the hourly runs and vice
+        # versa). Unique key -> always saves; restore-keys picks the most recent.
+        uses: actions/cache@v4
+        with:
+          path: trading_algo/forex/.cache
+          key: fx-parquet-${{ github.run_id }}
+          restore-keys: fx-parquet-
+
       - name: Advance the FX paper books (init if new, one daily pass)
         run: |
           mkdir -p state public
@@ -67,36 +83,16 @@ jobs:
           fi
           python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
 
-      - name: Export candlestick dashboards (FX) + equity dashboards
-        run: |
-          # FX books: candlesticks + per-trade rationale.
-          python -m trading_algo.forex.dashboard --all --out-dir public $SYNTH || true
-          # Equity books (best-effort) so the existing Pages site isn't lost.
-          for f in state/paper_state_*.json; do
-            [ -e "$f" ] || continue
-            name=$(basename "$f" .json); name=${name#paper_state_}
-            python -m trading_algo.dashboard.export --account "$name" $SYNTH \
-              -o "public/eq_${name}.html" || echo "skip equity $name"
-          done
-
-      - name: Build combined landing page
-        run: |
-          {
-            echo '<!doctype html><meta charset=utf-8><title>Trading Paper Books</title>'
-            echo '<meta name=viewport content="width=device-width,initial-scale=1">'
-            echo '<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:3rem;max-width:760px}'
-            echo 'h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1rem;color:#8b949e}.s{color:#8b949e;margin:0 0 1rem}'
-            echo 'a.card{display:block;margin:.8rem 0;padding:1.1rem 1.4rem;border:1px solid #30363d;border-radius:14px;background:#161b22;color:#e6edf3;text-decoration:none}'
-            echo 'a.card:hover{border-color:#58a6ff}.n{font-size:1.15rem;font-weight:600;color:#58a6ff}.d{color:#8b949e;font-size:.85rem}</style>'
-            echo "<h1>Trading Paper Books</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC')</p>"
-            echo '<a class=card href="how.html" style="border-color:#1f6feb"><div class=n>📖 How it works — start here</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
-            echo '<h2>FX & crypto — candlesticks + the reasoning behind every trade</h2>'
-            for f in public/fx_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#fx_}
-              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>FX + crypto book</div></a>"; done
-            echo '<h2>Equity momentum (FTSE / US / ASX)</h2>'
-            for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
-              echo "<a class=card href=\"$b.html\"><div class=n>$n</div><div class=d>equity momentum book</div></a>"; done
-          } > public/index.html
+      - name: Build site (dashboards + landing page)
+        # NEWS_API_KEY is optional: with it set (repo secret, a Financial Modeling
+        # Prep key), the daily summary flags high-impact economic releases that hit
+        # a traded currency. Without it the section silently omits — see news.py.
+        # MOMENTUM_STATE_DIR / SYNTH are job-level; restated here to make the
+        # script's env contract explicit.
+        env:
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+        run: bash scripts/build_site.sh
 
       - name: Commit updated paper state
         run: |
@@ -107,7 +103,27 @@ jobs:
             echo "No state change to commit."
           else
             git commit -m "chore: update FX paper state [skip ci]"
-            git push
+            # Rebase-safe push — used verbatim in every state-committing
+            # workflow (day-paper / fx-paper / paper-trade). Rules:
+            #  * never retry mid-rebase: 'git rebase --abort' before EVERY try;
+            #  * no merge commits (never a plain pull);
+            #  * on a content conflict in the state JSON, '-X theirs' prefers
+            #    the commit being REPLAYED — i.e. OUR just-computed state,
+            #    the correct winner (both runners computed the same or a
+            #    fresher bar);
+            #  * a genuinely failed push fails the step — no '|| true'.
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((5 * attempt))
+            done
           fi
 
       - name: Upload Pages artifact
@@ -118,10 +134,28 @@ jobs:
   deploy:
     needs: run
     runs-on: ubuntu-latest
+    # Shared with day-paper's deploy job: GitHub's documented fix for
+    # deploy-pages 409s is one concurrency group across all Pages publishers.
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     steps:
+      # Pages occasionally rejects a deploy with "try again later" when another
+      # publish is mid-flight (the shared concurrency group serialises jobs, but
+      # the Pages backend can still transiently reject). A failed deploy silently
+      # strands the LIVE site behind the committed state, so tolerate the first
+      # failure and retry once after a short back-off rather than leaving it stale.
       - name: Deploy to GitHub Pages
         id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Back off before retry
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 25
+      - name: Deploy to GitHub Pages (retry)
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4

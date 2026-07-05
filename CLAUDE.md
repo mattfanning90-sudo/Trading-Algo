@@ -20,9 +20,16 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 `trading_algo/forex/README.md`.
 
 ## Architecture (everything region-specific lives in one `Region` record)
-- `config.py` — `StrategyParams` (all strategy knobs) + portfolio settings
-  (ALLOCATIONS, BASE_CURRENCY, FX rebalance cadence/spread, START, capital) +
-  risk controls (drawdown circuit breaker, min-viable-size gate)
+- `config.py` — `StrategyParams` (all strategy knobs, incl. `long_short` /
+  `short_n` for a dollar-neutral book) + portfolio settings (ALLOCATIONS,
+  BASE_CURRENCY, FX rebalance cadence/spread, START, capital) + risk controls
+  (drawdown circuit breaker, min-viable-size gate)
+- `profiles.py` — named paper-book presets (`ultra`, `experimental`): per-book
+  StrategyParams overrides (leverage, long/short), a drawdown-breaker override,
+  and a reporting `group`. A profile changes the KNOBS only — weights still route
+  through the one `strategy.compute_targets` (invariant #3). Books in a non-CORE
+  group (e.g. EXPERIMENTAL) get their OWN separate total on the dashboard and are
+  excluded from the headline AUM
 - `regions.py` — Region registry: universe, regime index, currency, fee
   schedule, market calendar, Yahoo suffix, IBKR exchange, price_scale, per-region
   param overrides
@@ -68,13 +75,18 @@ It reuses this project's principles (no lookahead, costs always on, one shared
   overfitting gauntlet on the combined book (DSR/PBO deflated across the combiner's
   own knobs). The research conclusion: combine uncorrelated premia, don't chase one
   signal
-- `features.py` / `labels.py` / `mlpipeline.py` — **predictive-model (ML) data layer**:
-  a causal, cross-sectionally-standardised feature panel + forward-return/triple-barrier
-  labels + a leakage-controlled **purged/embargoed walk-forward** and a dependency-light
-  baseline (cross-sectional ridge). `mlreport.py` runs it OOS + Deflated-Sharpe-deflated.
-  Price-only for now (lands ~the book); built so new data = one more feature column.
+- `features.py` / `labels.py` / `mlpipeline.py` / `datasources.py` — **predictive-model
+  (ML) data layer**: a causal, cross-sectionally-standardised feature panel +
+  forward-return/triple-barrier labels + a leakage-controlled **purged/embargoed
+  walk-forward**, a cross-sectional ridge AND a pure-NumPy gradient-boosted-trees learner,
+  plus alt-data (EDGAR fundamentals incl. 8-K-announcement-dated earnings surprise, GDELT
+  sentiment). `mlreport.py` runs the honest marginal-edge test (price-residualised
+  incremental IC, increment-deflated DSR, PBO/CSCV, shuffle + synthetic negative controls).
   Design + honest expectations: `docs/research/PREDICTIVE_MODEL.md`
-- `dashboard/` — zero-dependency live web dashboard (stdlib server + vanilla SPA)
+- `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
+  vanilla SPA): every paper book (equity + FX) behind one account switcher,
+  OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
+  agent-vote decision book, candlestick pair charts
 
 ## Commands
 ```bash
@@ -90,6 +102,8 @@ python -m trading_algo.multistrat_report --validate  # equity+trend+carry book +
 python -m trading_algo.mlreport --point-in-time      # predictive-model baseline (purged walk-forward)
 python -m trading_algo.paper_trade --account full --init --capital 100000
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
+python -m trading_algo.paper_trade --account ultra --init --capital 10000 --profile ultra          # 3× leveraged momentum, breaker OFF
+python -m trading_algo.paper_trade --account experimental --init --capital 10000 --profile experimental  # market-neutral long/short (separate total)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
 # --- FX subsystem (independent; see trading_algo/forex/README.md) ---
@@ -133,8 +147,16 @@ live intraday needs a real-time broker feed. The honest case against HFT here:
 
 ## Adding a region
 Add one entry to `REGIONS` in `regions.py` (universe in `universes.py`, plus
-index/currency/fees/calendar/routing) and include its key in
-`config.ALLOCATIONS`. Everything else is parameterised.
+index/currency/fees/calendar/routing). Everything else is parameterised.
+
+**Funded vs registered (the backtest gate).** Being in `REGIONS` makes a sleeve
+independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
+--region KEY`) and single-sleeve CLIs read the *registry*, not `ALLOCATIONS`. A
+sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
+(portfolio/paper/engine key off that). So the flow is: register → backtest →
+*then* fund. **TSX (Canada, CAD)** ships as a worked example: fully registered
+but intentionally absent from `ALLOCATIONS` until a walk-forward backtest earns
+it a slot. The dashboard METHOD tab tags such sleeves `UNFUNDED`.
 
 ## Environment notes
 - Fresh containers do NOT ship numpy/pandas/yfinance — `pip install -r

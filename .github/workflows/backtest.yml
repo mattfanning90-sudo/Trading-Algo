@@ -1,9 +1,14 @@
 name: Backtest (real data)
 
 # Manual real-data backtest. GitHub runners have internet, so this fetches live
-# Yahoo prices, runs the full AUD portfolio backtest vs the benchmark, and posts
-# the report to the run summary (Actions → this run → Summary). Also uploads the
-# report + equity curves as a downloadable artifact. Does not commit anything.
+# Yahoo prices, runs the full AUD portfolio backtest vs the benchmark, posts
+# the report to the run summary (Actions → this run → Summary) and uploads it
+# as an artifact.
+#
+# The backtest task ALSO writes the dashboard's BACKTEST-tab cache
+# (state/backtest_equity.json via trading_algo.dashboard.backtest_store) and
+# commits it back to the branch it ran on — real-data runs only; synthetic
+# runs never persist results (CLAUDE.md invariant 5).
 #
 #   Actions → "Backtest (real data)" → Run workflow
 
@@ -61,13 +66,23 @@ on:
         description: "Combiner weighting for the multistrat book (erc/invvol/equal)"
         type: string
         default: "erc"
+      sweep:
+        description: "Also run the TOP_N × lookback robustness grid (slow)"
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write      # commit the dashboard backtest cache
+
+concurrency:
+  group: backtest-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
+    env:
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -84,8 +99,10 @@ jobs:
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY || secrets.TIINGO_API_SECRET }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
+          mkdir -p state
           SYN="${{ inputs.mode == 'synthetic' && '--synthetic' || '' }}"
           PIT="${{ inputs.point_in_time && '--point-in-time' || '' }}"
+          SWEEP="${{ inputs.sweep && '--sweep' || '' }}"
           # For a real point-in-time run, fetch the free fja05680 S&P 500 history
           # (incl. delisted names) into the cache; best-effort, never fails the job.
           if [ -n "$PIT" ] && [ "${{ inputs.mode }}" != "synthetic" ] && [ "${{ inputs.region }}" = "US" ]; then
@@ -113,7 +130,8 @@ jobs:
               --target-vol "${{ inputs.target_vol }}" \
               --max-leverage "${{ inputs.max_leverage }}" | tee backtest_report.md
           else
-            python -m trading_algo.report $SYN $PIT --out backtest_report.md
+            # one run produces both the dashboard cache and the report
+            python -m trading_algo.dashboard.backtest_store $SYN $PIT $SWEEP --report backtest_report.md
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat backtest_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -126,3 +144,30 @@ jobs:
             equity_curve_portfolio.csv
             benchmark_curve.csv
           if-no-files-found: warn
+      - name: Commit dashboard backtest cache (real data only)
+        if: inputs.task == 'backtest' && inputs.mode == 'real'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/backtest_equity.json
+          if git diff --cached --quiet; then
+            echo "No cache change to commit."
+          else
+            git commit -m "chore: update dashboard backtest cache [skip ci]"
+            # Rebase-safe push — the scheme shared by every state-committing
+            # workflow (see tests/test_workflow_sanity.py): abort any
+            # in-progress rebase before every try, never a plain pull, and a
+            # genuinely failed push fails the step.
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((5 * attempt))
+            done
+          fi

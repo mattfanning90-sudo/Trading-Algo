@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import fees
+from . import data_quality, fees
 from . import strategy
 from .config import DRAWDOWN_COOLDOWN_DAYS, INITIAL_CAPITAL, MAX_DRAWDOWN_STOP
 from .metrics import compute_metrics
@@ -26,7 +26,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  membership=None,
                  max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
                  cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS,
-                 defensive_returns: pd.Series | None = None) -> dict:
+                 defensive_returns: pd.Series | None = None,
+                 apply_delisting: bool = False) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
@@ -42,9 +43,16 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     sleeve's own currency). When None the idle fraction earns the constant
     `params.cash_yield` instead (0% by default = plain cash). Either way, only
     the *uninvested* fraction (1 − Σweights) earns it — equities are unaffected,
-    so this adds carry without adding equity-crash risk."""
+    so this adds carry without adding equity-crash risk.
+
+    `apply_delisting` (backlog F13) injects a delisting return for names whose
+    price series terminates before the sample end — only meaningful with real
+    point-in-time data that includes since-delisted names."""
     p = region.params
     prices = prices.dropna(how="all")
+    if apply_delisting:
+        from . import delisting
+        prices = delisting.apply_delisting_returns(prices, region)
     rets = prices.pct_change(fill_method=None)
     # Constant fallback yield as a per-trading-day rate (compounded to annual).
     daily_cash_yield = (1.0 + p.cash_yield) ** (1.0 / 252.0) - 1.0
@@ -65,12 +73,15 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     signals_cache = strategy.precompute(prices, index_prices, p)
 
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
+    dq_excluded: set[str] = set()
     for d in rebal_marks:
         loc_idx = prices.index.searchsorted(d, side="right") - 1
         if loc_idx < min_hist:
             continue
         asof = prices.index[loc_idx]
-        eligible = membership.members_asof(asof) if membership is not None else None
+        base_elig = membership.members_asof(asof) if membership is not None else None
+        eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
+        dq_excluded |= dq.excluded
         weight_schedule[asof] = strategy.compute_targets(
             prices, index_prices, p, asof=asof, eligible=eligible,
             signals_cache=signals_cache)
@@ -162,6 +173,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "total_cost_fraction": total_cost,
         "weights": weights_hist,
         "point_in_time": membership is not None,
+        "data_quality_excluded": sorted(dq_excluded),
         "drawdown_halts": halt_events,
         "drawdown_halt_days": halt_days,
         "metrics": compute_metrics(ret_series, eq, currency=region.currency),

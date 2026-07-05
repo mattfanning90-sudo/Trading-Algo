@@ -59,8 +59,16 @@ def default_universe(source: str, profile_name: str | None = None) -> list[str]:
 
 def load(symbols: list[str], synthetic: bool = False, interval: str = "1d",
          source: str = "yahoo", exchange: str | None = None,
-         use_cache: bool = False) -> dict[str, pd.DataFrame]:
-    """Load an aligned OHLC panel for `symbols` from the chosen `source`."""
+         use_cache: bool = False, min_bars: int | None = None) -> dict[str, pd.DataFrame]:
+    """Load an aligned OHLC panel for `symbols` from the chosen `source`.
+
+    `min_bars` bounds how much daily history is *fetched* (yahoo source): callers
+    that only need the strategy's warm-up window (the live book, the dashboard)
+    pass their `min_history + display` need instead of downloading the full
+    archive since START — a pure latency/bandwidth win; decisions are unchanged
+    because the strategy trims to `min_history` anyway. Backtests omit it and
+    keep the full history.
+    """
     source = resolve_source(source, exchange)
 
     if source == "crypto":
@@ -93,4 +101,17 @@ def load(symbols: list[str], synthetic: bool = False, interval: str = "1d",
         return fx_data.synthetic_panel(symbols, start="2025-01-01",
                                        end="2025-04-01", freq=interval)
     start = cfg.START if daily else _intraday_start(interval)
+    if min_bars:
+        if daily:
+            # ~1.55 calendar days per business day, plus margin for holidays.
+            days = int(min_bars * 1.6) + 20
+        elif interval in ("60m", "1h"):
+            # conservative ≥6 bars per trading day (equities; FX has ~24).
+            days = int(min_bars / 6 * 1.6) + 10
+        else:
+            days = None                      # finer intervals: Yahoo limits apply anyway
+        if days:
+            bounded = (pd.Timestamp.utcnow().tz_localize(None)
+                       - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+            start = max(start, bounded)
     return fx_data.load_panel(symbols, start, interval=interval, use_cache=use_cache)

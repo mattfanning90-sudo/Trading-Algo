@@ -40,7 +40,10 @@ def vol_target(weights: pd.Series, vols: pd.Series, p: StrategyParams) -> pd.Ser
     scale = min(p.target_vol / max(port_vol, 1e-9), p.max_vol_scale)
     w = weights * scale
 
-    gross = w.sum()
+    # Gross exposure is Σ|w| — for a long-only book this equals w.sum(); for a
+    # long/short book the legs net out, so the abs form is what must respect the
+    # leverage cap.
+    gross = w.abs().sum()
     if gross > p.max_gross:
         w = w * (p.max_gross / gross)
     return w
@@ -102,8 +105,15 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
     scores = c["resmom" if p.use_residual_momentum else "momentum"].loc[asof]
     if eligible is not None:
         scores = scores[scores.index.isin(eligible)]
-    trend = c["trend"].loc[asof]
     vols = c["vol"].loc[asof]
+
+    # Market-neutral book: dollar-neutral long/short, no directional filters.
+    # Still routed through the single vol_target so backtest and paper agree.
+    if p.long_short:
+        raw = sig.select_long_short(scores, vols, p)
+        return vol_target(raw, vols, p)
+
+    trend = c["trend"].loc[asof]
     risk_on = True if not p.regime_filter else bool(c["risk_on"].loc[asof])
 
     rank_score = None

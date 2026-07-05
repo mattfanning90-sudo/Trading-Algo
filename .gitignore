@@ -4,12 +4,23 @@ __pycache__/
 *.parquet
 paper_state_*.json
 fx_state_*.json
+# SQLite book stores (source of truth) + WAL/shared-memory sidecars
+paper_books.db
+fx_books.db
+*.db-wal
+*.db-shm
 # …but DO track the CI-managed state (see .github/workflows/paper-trade.yml)
 !state/paper_state_*.json
 !state/fx_state_*.json
+!state/paper_books.db
+!state/fx_books.db
 paper.log
 equity_curve*.csv
+sweep_*.csv
 reports/
+# Run manifests + experiment ledger (F17): per-run reproducibility records.
+state/manifests/
+experiment_ledger.jsonl
 # Derived ML artifacts (trained models + reports) — uploaded by the FX Action.
 trading_algo/forex/models/*.json
 fx_ml_report.md

@@ -56,5 +56,19 @@ jobs:
             echo "No new metrics row to commit."
           else
             git commit -m "chore: alt-data edge monitor [skip ci]"
-            git push
+            # Rebase-safe push — the scheme shared by every state-committing workflow
+            # (see tests/test_workflow_sanity.py): abort any in-progress rebase before
+            # every try, never a plain pull, and a genuinely failed push fails the step.
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((5 * attempt))
+            done
           fi

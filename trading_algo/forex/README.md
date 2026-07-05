@@ -90,6 +90,51 @@ python -m trading_algo.forex.paper --init                          # once
 python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
 ```
 
+## The four paper books
+
+| Book | Capital | Universe | Bar | Cadence |
+|------|---------|----------|-----|---------|
+| `matt` | 5k AUD | FX majors + crypto | 1d | daily (fx-paper.yml) |
+| `partner` | 5k AUD | FX majors + crypto | 1d | daily |
+| `daytrader` | **10k AUD** | FX majors + crypto | **60m** | **hourly** (day-paper.yml) |
+| `multiasset` | **10k AUD** | US stocks + bond ETFs + AUDUSD | 1d | daily |
+
+Each book stores its own **bar cadence** and (optionally) a **locked universe** —
+`engine --once` runs every book at its own cadence. The day-trading book is
+advanced hourly on weekdays by `.github/workflows/day-paper.yml` (which also
+republishes the dashboards so the site tracks it through the day). The
+multi-asset book trades the five liquid US equities, four treasury/aggregate
+bond ETFs (`TLT`/`IEF`/`AGG`/`SHY` — the honest, tradable bond vehicle) and an
+AUDUSD overlay that doubles as the AUD translation hub.
+
+Honest notes: Yahoo 60m data is ~15-minutes delayed — the day book is a real
+hourly-cadence paper exercise, not a live-feed simulation (see
+`docs/HFT_REALITY.md`); bond-ETF financing/borrow isn't modelled (price-only,
+like the equities); and intraday turnover makes spread costs bite harder — watch
+the cost wedge.
+
+### True-bar dashboard panel & the annualisation convention
+
+The dashboard builds each book's analytics panel **at the book's own bar**: the
+daytrader page runs candles, trade outcomes (the next 10 *hourly* bars), the
+agent scorecard, attribution and DSR/PBO on a true 60m panel, with the
+buy-and-hold bench built from the same panel. Every window stays sized in
+**book bars** (the display/attribution tail is 180 of the book's bars — ~1.5
+trading weeks of hourly candles — an explicit bound, not 180 *days* of hourly
+bars). Yahoo caps 60m history at **~730 days**; if the intraday fetch comes
+back empty or shorter than the strategy warm-up (offline/CI builds have no
+feed), the page degrades to the daily proxy panel and says so on the page.
+
+**Annualisation is calendar-time everywhere** (the one convention, implemented
+once in `marks.periods_per_year` and shared by `fx_book.status` and every
+dashboard vol/Sharpe figure): bars spaced ≥ 12 h annualise at 252 trading
+days/yr; faster bars at `365.25 × 86400 / bar_seconds`, capped at hourly
+(`24 × 365.25 = 8766`). This is calendar time, not FX trading time (~6048
+traded hours/yr), so hourly vol/Sharpe are consistently, modestly overstated —
+a known calibration choice, kept for simplicity and internal consistency
+(pinned by `tests/test_fx_marks.py` and
+`tests/test_fx_dashboard_units.py::test_books_and_dashboard_share_one_annualisation`).
+
 ## Data sources (`--source`)
 
 The system is **source-agnostic**: every feed returns the same aligned OHLC panel,
@@ -254,6 +299,10 @@ Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
   result is identical to the full recompute).
 * `AgentPool` reuses one thread pool across cycles and evaluates agents
   concurrently — the benefit grows with the universe size and intraday bar count.
+* The dashboard build runs the weight engine **exactly once per page** (pinned by
+  `tests/test_fx_dashboard.py::test_build_payload_single_weight_engine_pass`) and
+  both the book and the dashboard fetch only `min_history + display` bars instead
+  of the full archive — page-build and live-cycle time stay flat as history grows.
 * `indicators.StreamingEMA` / `StreamingATR` provide O(1)-per-tick incremental
   updates for the latency-critical path, pinned to the vectorized output.
 
@@ -291,7 +340,8 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `crypto_exec.py` | live crypto order execution via ccxt (dry-run by default) |
 | `agents.py` | the five agents + concurrent `AgentPool` |
 | `ensemble.py` | performance-weighted agent blending |
-| `risk.py` | vol targeting + per-pair / gross caps |
+| `risk.py` | vol targeting + per-pair / gross / asset-class caps |
+| `marks.py` | **the one** cost/mark/annualisation formula module (book + dashboard) |
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |
 | `fx_book.py` | persistent multi-account paper books |

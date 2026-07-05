@@ -6,7 +6,8 @@ local currency; thereafter each sleeve compounds in its own currency with
 whole-share lots, the per-region fee schedule (commission floor + UK stamp duty)
 and slippage. Combined equity is reported in the base currency via current FX.
 
-State persists per account in paper_state_{account}.json. Each sleeve trades
+State persists per account in a SQLite store (paper_books.db), with a
+paper_state_{account}.json copy dual-written as a fallback. Each sleeve trades
 only on the first run of a new month (mirroring the backtest's month-end signal
 -> next-day execution).
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -35,7 +37,8 @@ import pandas as pd
 from dataclasses import replace
 
 from . import config as cfg
-from . import data, fees, fx, strategy, trend, universes
+from . import data, data_quality, fees, fx, pnl, profiles, storage, strategy, trend, universes
+from . import state_schema
 from .config import DEFAULT_TREND_PARAMS
 from .regions import REGIONS, get_region
 
@@ -59,32 +62,76 @@ def _sleeve_region(key: str):
     return get_region(key)
 
 
-def _sleeve_targets(key: str, region, prices: pd.DataFrame, index_px) -> pd.Series:
-    """Target weights for one sleeve: trend signal for the TREND sleeve, else the
-    cross-sectional momentum book — both routed through their single source of truth."""
+def _sleeve_targets(key: str, region, prices: pd.DataFrame, index_px, state: dict):
+    """(target weights, frozen set) for one sleeve. Trend sleeve: its own time-series
+    signal, nothing frozen. Equity sleeves: the cross-sectional momentum book through the
+    data-quality eligibility gate (F13/F14) and this account's params — exactly the
+    multi-region momentum path. Both route through their single source of truth."""
     if key == TREND_KEY:
-        return trend.compute_trend_targets(prices, TREND_PAPER_PARAMS)
-    return strategy.compute_targets(prices, index_px, region.params)
+        return trend.compute_trend_targets(prices, TREND_PAPER_PARAMS), set()
+    elig, dq = data_quality.eligible(prices, region, prices.index[-1])
+    if dq.excluded:
+        print(f"  [{key}] data-quality: freezing "
+              + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
+    targets = strategy.compute_targets(prices, index_px, _account_params(state, region),
+                                       eligible=elig)
+    return targets, dq.excluded
 
 
 # ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------
+# SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+# JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+# See trading_algo/storage.py and BACKLOG.md.
+def _db_path() -> str:
+    return os.path.join(STATE_DIR, "paper_books.db")
+
+
 def _state_file(account: str) -> str:
     return os.path.join(STATE_DIR, f"paper_state_{account}.json")
 
 
+def account_exists(account: str) -> bool:
+    return storage.db_has(_db_path(), account) or os.path.exists(_state_file(account))
+
+
 def load_state(account: str) -> dict:
-    path = _state_file(account)
-    if not os.path.exists(path):
-        raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
-    with open(path) as f:
-        return json.load(f)
+    state = storage.db_load(_db_path(), account)
+    if state is None:
+        # Fallback: a book created before the DB existed still lives in JSON only.
+        path = _state_file(account)
+        if not os.path.exists(path):
+            raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
+        with open(path) as f:
+            state = json.load(f)
+    # Upgrade older books additively (never destructive), then validate. With the
+    # gate on, an invalid book fails safe — we raise rather than trade on / reset
+    # a corrupted book. With it off, we only warn (shadow mode). See config F18.
+    state, _applied = state_schema.migrate_state(state)
+    errors = state_schema.validate_state(state)
+    if errors:
+        msg = (f"State file for account '{account}' is invalid:\n  - "
+               + "\n  - ".join(errors))
+        if cfg.VALIDATE_STATE_FILES:
+            raise state_schema.StateValidationError(msg)
+        print(f"⚠ {msg}\n  (VALIDATE_STATE_FILES is off — continuing in shadow mode)")
+    return state
 
 
 def save_state(account: str, state: dict) -> None:
-    with open(_state_file(account), "w") as f:
-        json.dump(state, f, indent=2)
+    # Refuse to persist a corrupt state when the gate is on, so a bug can't write
+    # garbage that the next run would fail on.
+    if cfg.VALIDATE_STATE_FILES:
+        errors = state_schema.validate_state(state)
+        if errors:
+            raise state_schema.StateValidationError(
+                f"Refusing to save invalid state for '{account}':\n  - "
+                + "\n  - ".join(errors))
+    # SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+    # JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+    storage.db_save(_db_path(), account, state)
+    storage.atomic_write_json(_state_file(account), state)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +144,24 @@ def _regions() -> list[str]:
 def _account_regions(state: dict) -> list[str]:
     """The regions this specific account trades (may be a subset of all)."""
     return list(state.get("allocations") or cfg.ALLOCATIONS)
+
+
+def _account_params(state: dict, region):
+    """Region defaults with this book's profile overrides layered on top.
+
+    Keeps invariant #3 intact: a profile changes the STRATEGY KNOBS, then the
+    same `strategy.compute_targets` builds the weights — there is no second
+    sizing path. A book with no overrides gets the region defaults unchanged.
+    """
+    overrides = state.get("param_overrides") or {}
+    return region.params.with_overrides(**overrides) if overrides else region.params
+
+
+def _account_drawdown_stop(state: dict):
+    """This book's drawdown circuit-breaker threshold. A profile may override it
+    (and set it to None to disable the breaker for a max-risk book); absent, the
+    global default applies."""
+    return state.get("max_drawdown_stop", cfg.MAX_DRAWDOWN_STOP)
 
 
 def fx_snapshot(synthetic: bool) -> dict[str, float]:
@@ -127,10 +192,21 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
 
 
 def init_account(account: str, capital: float, synthetic: bool,
-                 allocations: dict[str, float] | None = None) -> None:
+                 allocations: dict[str, float] | None = None,
+                 profile: str | None = None) -> None:
     """Open a paper account. `allocations` overrides which regions it trades and
     their weights (e.g. {"US": 1.0} for a single-region small account). Default
-    is the global 3-region split from config."""
+    is the global 3-region split from config.
+
+    `profile` (see trading_algo.profiles) bakes a canned strategy/risk/reporting
+    preset into the book: its region allocations, StrategyParams overrides
+    (leverage, long/short, …), drawdown-breaker override, and reporting group.
+    An explicit `allocations` still wins over the profile's, so a profile can be
+    funded across custom regions if desired.
+    """
+    prof = profiles.get_profile(profile) if profile else None
+    if prof is not None and allocations is None:
+        allocations = prof.allocations
     alloc_src = allocations if allocations is not None else cfg.ALLOCATIONS
     regions = list(alloc_src)
     unknown = [k for k in regions if k not in REGIONS and k != TREND_KEY]
@@ -148,12 +224,18 @@ def init_account(account: str, capital: float, synthetic: bool,
             "currency": region.currency,
             "cash": local_cash,
             "positions": {},
+            # cost_basis / realized_pnl are retained for the state schema only —
+            # they are NOT the source of truth and nothing reads them. All P&L is
+            # derived from the fills log (state["trades"]) via trading_algo.pnl,
+            # so it can never disagree with the actual trade record.
             "cost_basis": {},
             "realized_pnl": 0.0,
             "last_rebalance_month": None,
+            "last_rebalance_date": None,
         }
     state = {
         "account": account,
+        "schema_version": state_schema.STATE_SCHEMA_VERSION,
         "base_currency": cfg.BASE_CURRENCY,
         "initial_capital_base": capital,
         "allocations": norm,
@@ -162,10 +244,20 @@ def init_account(account: str, capital: float, synthetic: bool,
         "equity_history": [],
         "sleeve_history": [],
         "fx_snapshot": snap,
+        # Reporting group + strategy/risk shape. CORE books sum into the headline
+        # AUM; other groups get their own separate total on the overview.
+        "group": prof.group if prof else profiles.CORE,
+        "profile": prof.key if prof else None,
+        "param_overrides": dict(prof.param_overrides) if prof else {},
     }
+    if prof is not None:
+        # Store the breaker override explicitly (None = disabled). Absent means
+        # "use the global default", so we only set the key for a profiled book.
+        state["max_drawdown_stop"] = prof.max_drawdown_stop
     save_state(account, state)
     where = "single region" if len(regions) == 1 else f"{len(regions)} regions"
-    print(f"Paper account '{account}' opened with {capital:,.0f} "
+    tag = f" [{prof.label}]" if prof else ""
+    print(f"Paper account '{account}'{tag} opened with {capital:,.0f} "
           f"{cfg.BASE_CURRENCY} across {where}")
     for k in regions:
         s = sleeves[k]
@@ -176,12 +268,17 @@ def init_account(account: str, capital: float, synthetic: bool,
 # Rebalancing one sleeve
 # ---------------------------------------------------------------------------
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
-                     today: str, trade_log: list) -> None:
+                     today: str, trade_log: list,
+                     frozen: set[str] | None = None) -> None:
     equity = sleeve_equity_local(sleeve, px)
+    frozen = frozen or set()
     print(f"\n  [{region.key}] rebalancing — equity {equity:,.0f} {region.currency}")
 
     # Micro-account mode: too small to hold the full book in whole shares.
-    if equity < MICRO_THRESHOLD and not targets.empty:
+    # Only for a long-only book — a long/short (market-neutral) book must keep
+    # both legs, so concentrating it would break the hedge.
+    long_only = targets.empty or bool((targets >= 0).all())
+    if long_only and equity < MICRO_THRESHOLD and not targets.empty:
         affordable = [t for t in targets.index
                       if px.get(t) and px[t] <= equity / 1.05]
         picks = affordable[:max(1, min(3, int(equity // 40)))] if affordable else []
@@ -199,7 +296,15 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         if price and price == price and price > 0:
             desired[t] = int((equity * w) / price)
 
+    # Seed the FIFO lot book for this region from the fills ledger — the single
+    # source of truth for cost basis. Each executed trade updates it; each sell
+    # is stamped with its actual realised P&L (net of entry + exit costs) drawn
+    # from the real lots it consumes, exactly like a broker trade confirmation.
+    lots, _ = pnl.build_lots([t for t in trade_log if t["region"] == region.key])
+
     for t in sorted(set(sleeve["positions"]) | set(desired)):
+        if t in frozen:   # data-quality: don't trade a name on an untrusted price
+            continue
         cur = sleeve["positions"].get(t, 0)
         tgt = desired.get(t, 0)
         delta = tgt - cur
@@ -214,33 +319,58 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
             continue
         fee = fees.commission(region, notional)
         duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
+        # A short sale (delta<0 opening) CREDITS the book with the proceeds; the
+        # sign of `delta * fill` already handles both directions.
         sleeve["cash"] -= delta * fill + fee + duty
-        cb = sleeve.setdefault("cost_basis", {})
-        if delta < 0:   # realised P&L on shares sold (average-cost basis)
-            sleeve["realized_pnl"] = (sleeve.get("realized_pnl", 0.0)
-                                      + (fill - cb.get(t, fill)) * abs(delta))
+
+        trade = {"date": today, "region": region.key, "ticker": t,
+                 "side": "BUY" if delta > 0 else "SELL", "shares": abs(delta),
+                 "fill": round(fill, 4), "commission": round(fee, 2),
+                 "stamp_duty": round(duty, 2), "currency": region.currency}
+        key = (region.key, t)
+        # Signed FIFO: opens add a (long or short) lot; closes/covers realise
+        # against the actual lots consumed and stamp the round-trip P&L.
+        r = pnl.apply_fill(lots, key, delta, fill, fee + duty, today)
+        if r is not None:
+            trade["entry"] = round(r["entry"], 4)      # actual FIFO cost basis
+            trade["realized"] = round(r["net"], 2)     # actual gain/loss on this close
+
         if tgt == 0:
             sleeve["positions"].pop(t, None)
-            cb.pop(t, None)
         else:
-            if delta > 0:   # buy: update the average cost per share (price basis)
-                old_avg = cb.get(t, fill)
-                cb[t] = (cur * old_avg + delta * fill) / tgt
-            # a partial sell leaves the average cost unchanged
             sleeve["positions"][t] = tgt
-        side = "BUY" if delta > 0 else "SELL"
-        trade_log.append({"date": today, "region": region.key, "ticker": t,
-                          "side": side, "shares": abs(delta),
-                          "fill": round(fill, 4), "commission": round(fee, 2),
-                          "stamp_duty": round(duty, 2), "currency": region.currency})
+        trade_log.append(trade)
         extra = f" duty {duty:.2f}" if duty else ""
-        print(f"    {side:<4} {abs(delta):>7} {t:<10} @ {fill:>10.3f}  "
-              f"(fee {fee:.2f}{extra} {region.currency})")
+        booked = f"  P&L {trade['realized']:+.2f}" if "realized" in trade else ""
+        print(f"    {trade['side']:<4} {abs(delta):>7} {t:<10} @ {fill:>10.3f}  "
+              f"(fee {fee:.2f}{extra} {region.currency}){booked}")
 
 
 # ---------------------------------------------------------------------------
 # Daily run
 # ---------------------------------------------------------------------------
+def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
+    """Whether a sleeve should rebalance on this run.
+
+    Fires once per calendar month (mirroring the backtest's month-end signal),
+    but only if at least `cfg.MIN_REBALANCE_GAP_DAYS` have elapsed since the last
+    rebalance — so a book funded late in a month isn't churned days later on the
+    1st. When the gap blocks it, `last_rebalance_month` is left untouched so the
+    next run re-checks and trades as soon as the gap clears.
+    """
+    if sleeve.get("last_rebalance_month") == this_month:
+        return False
+    gap = cfg.MIN_REBALANCE_GAP_DAYS
+    last = sleeve.get("last_rebalance_date")
+    if gap and last:
+        try:
+            if (date.fromisoformat(today) - date.fromisoformat(last)).days < gap:
+                return False
+        except (ValueError, TypeError):
+            pass
+    return True
+
+
 def run_daily(account: str, synthetic: bool) -> None:
     state = load_state(account)
     snap = fx_snapshot(synthetic)
@@ -271,17 +401,20 @@ def run_daily(account: str, synthetic: bool) -> None:
                 print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
                 rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
                                  px_today, today, state["trades"])
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
-        elif sleeve["last_rebalance_month"] != this_month:
+        elif _should_rebalance(sleeve, today, this_month):
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
             else:
-                targets = _sleeve_targets(k, region, prices, index_px)
+                targets, frozen = _sleeve_targets(k, region, prices, index_px, state)
                 if targets.empty:
                     print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
-                rebalance_sleeve(region, sleeve, targets, px_today, today, state["trades"])
+                rebalance_sleeve(region, sleeve, targets, px_today, today,
+                                 state["trades"], frozen=frozen)
+                sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
 
         eq_local = sleeve_equity_local(sleeve, px_today)
@@ -289,15 +422,18 @@ def run_daily(account: str, synthetic: bool) -> None:
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
 
-    # Update peak and decide whether to trip the breaker for the next run.
+    # Update peak and decide whether to trip the breaker for the next run. The
+    # threshold is per-book: a profile may loosen it or disable it (None) for a
+    # max-risk book.
+    stop = _account_drawdown_stop(state)
     peak = max(state.get("peak_equity_base", state["initial_capital_base"]), combined)
     state["peak_equity_base"] = peak
-    if (not halted and cfg.MAX_DRAWDOWN_STOP is not None
-            and combined / peak - 1 <= -cfg.MAX_DRAWDOWN_STOP):
+    if (not halted and stop is not None
+            and combined / peak - 1 <= -stop):
         state["risk_halted"] = True
         state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
         print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
-              f"{cfg.MAX_DRAWDOWN_STOP:.0%} stop — halting for "
+              f"{stop:.0%} stop — halting for "
               f"{cfg.DRAWDOWN_COOLDOWN_DAYS} runs.")
     elif not halted:
         state["risk_halted"] = False
@@ -360,7 +496,7 @@ def status(account: str) -> None:
 def compare(accounts: list[str]) -> None:
     print(f"{'Account':<10} {'Capital':>14} {'Equity':>14} {'Return':>9} {'Trades':>7}")
     for name in accounts:
-        if not os.path.exists(_state_file(name)):
+        if not account_exists(name):
             continue
         s = load_state(name)
         eq = s["equity_history"][-1][1] if s["equity_history"] else s["initial_capital_base"]
@@ -379,6 +515,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--regions", nargs="+", metavar="KEY", choices=list(REGIONS) + [TREND_KEY],
                     help="(--init) sleeves this account trades, equal-weighted (e.g. "
                          "--regions US TREND for the momentum+trend book). Default: all regions.")
+    ap.add_argument("--profile", choices=list(profiles.PROFILES),
+                    help="(--init) open the book from a named strategy/risk preset "
+                         "(e.g. ultra, experimental). See trading_algo/profiles.py.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
@@ -389,13 +528,15 @@ def main(argv: list[str] | None = None) -> None:
         compare(args.compare)
     elif args.init:
         allocations = {r: 1.0 for r in args.regions} if args.regions else None
-        init_account(args.account, args.capital, args.synthetic, allocations)
+        init_account(args.account, args.capital, args.synthetic, allocations,
+                     profile=args.profile)
     elif args.status:
         status(args.account)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():
             s["last_rebalance_month"] = None
+            s["last_rebalance_date"] = None   # bypass the min-gap guard
         save_state(args.account, state)
         run_daily(args.account, args.synthetic)
     else:

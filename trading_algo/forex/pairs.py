@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# The four recognised asset classes. Legs within one class are treated as ONE
+# correlated bet by the risk layer's per-class gross caps (risk.size_book).
+ASSET_CLASSES = {"fx", "crypto", "equity", "bond"}
+
 
 @dataclass(frozen=True)
 class Pair:
@@ -32,6 +36,12 @@ class Pair:
     spread_pips: float         # typical dealing spread, in pips (round trip)
     swap_long_pips: float      # daily financing for a long, in pips (+ = you earn)
     swap_short_pips: float     # daily financing for a short, in pips (+ = you earn)
+    asset_class: str = "fx"    # one of ASSET_CLASSES (risk groups legs by this)
+
+    def __post_init__(self) -> None:
+        if self.asset_class not in ASSET_CLASSES:
+            raise ValueError(f"Unknown asset_class {self.asset_class!r} for "
+                             f"{self.symbol}. Known: {sorted(ASSET_CLASSES)}")
 
     @property
     def is_jpy(self) -> bool:
@@ -67,9 +77,9 @@ PAIRS: dict[str, Pair] = {
 # vol-targeting risk layer automatically sizes it down, so it slots into the same
 # ecosystem. Spreads are wider (~0.2% round trip) than majors.
 CRYPTO: dict[str, Pair] = {
-    "BTCUSD": Pair("BTCUSD", "BTC", "USD", "BTC-USD", 1.0, 120.0, 0.0, 0.0),
-    "ETHUSD": Pair("ETHUSD", "ETH", "USD", "ETH-USD", 1.0, 6.0, 0.0, 0.0),
-    "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0),
+    "BTCUSD": Pair("BTCUSD", "BTC", "USD", "BTC-USD", 1.0, 120.0, 0.0, 0.0, "crypto"),
+    "ETHUSD": Pair("ETHUSD", "ETH", "USD", "ETH-USD", 1.0, 6.0, 0.0, 0.0, "crypto"),
+    "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0, "crypto"),
 }
 
 # Extra crosses available but off by default — flip into DEFAULT_UNIVERSE to use.
@@ -89,20 +99,82 @@ CROSSES: dict[str, Pair] = {
 # point or two). Equity borrow/financing is not modelled here, so swap = 0 — the
 # book's carry term is just zero for these (documented in docs/DATA_FEEDS.md).
 EQUITIES: dict[str, Pair] = {
-    "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0),
-    "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0),
-    "NVDA": Pair("NVDA", "NVDA", "USD", "NVDA", 0.01, 2.0, 0.0, 0.0),
-    "SPY":  Pair("SPY",  "SPY",  "USD", "SPY",  0.01, 1.0, 0.0, 0.0),
-    "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0),
+    "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0, "equity"),
+    "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0, "equity"),
+    "NVDA": Pair("NVDA", "NVDA", "USD", "NVDA", 0.01, 2.0, 0.0, 0.0, "equity"),
+    "SPY":  Pair("SPY",  "SPY",  "USD", "SPY",  0.01, 1.0, 0.0, 0.0, "equity"),
+    "QQQ":  Pair("QQQ",  "QQQ",  "USD", "QQQ",  0.01, 1.0, 0.0, 0.0, "equity"),
 }
 
-ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES}
+# US-listed bond ETFs — the honest, tradable bond vehicle for a paper book
+# (direct treasuries need a bond feed/venue we don't have). USD-quoted like the
+# equities; pip = one cent; conservative round-trip spreads in cents; financing
+# not modelled (swap = 0), same as equities.
+BONDS: dict[str, Pair] = {
+    "TLT": Pair("TLT", "TLT", "USD", "TLT", 0.01, 2.0, 0.0, 0.0, "bond"),   # 20y+ treasuries
+    "IEF": Pair("IEF", "IEF", "USD", "IEF", 0.01, 2.0, 0.0, 0.0, "bond"),   # 7–10y treasuries
+    "AGG": Pair("AGG", "AGG", "USD", "AGG", 0.01, 1.0, 0.0, 0.0, "bond"),   # aggregate bond
+    "SHY": Pair("SHY", "SHY", "USD", "SHY", 0.01, 1.0, 0.0, 0.0, "bond"),   # 1–3y treasuries
+}
+
+ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES, **BONDS}
 
 # Default tradable universe: the seven FX majors plus the three major cryptos.
 DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
 
 # A liquid US-equity universe for the Alpaca / OpenBB feeds (off by default).
 EQUITY_UNIVERSE: list[str] = list(EQUITIES)
+BOND_UNIVERSE: list[str] = list(BONDS)
+
+# The multi-asset book: stocks + bond ETFs, plus AUDUSD as a currency overlay —
+# which also gives the AUD account its translation hub (see fxconv) naturally.
+MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
+
+
+# Named universe presets, so tools (research, backtest, paper) can select a
+# tradable set by name instead of hardcoding one. Extend by adding a key here.
+#   default        : the seven FX majors + the three major cryptos (live default)
+#   majors         : the seven FX majors only
+#   fx / majors+crosses : all G10 FX — majors plus the six dormant crosses
+#   crosses        : the six crosses on their own
+#   crypto         : the three cryptos on their own
+#   equity / bond  : the US-equity / bond-ETF pseudo-pairs
+#   multiasset     : equities + bonds + an AUDUSD overlay
+UNIVERSES: dict[str, list[str]] = {
+    "default": DEFAULT_UNIVERSE,
+    "majors": list(PAIRS),
+    "fx": [*PAIRS, *CROSSES],
+    "majors+crosses": [*PAIRS, *CROSSES],
+    "crosses": list(CROSSES),
+    "crypto": list(CRYPTO),
+    "equity": EQUITY_UNIVERSE,
+    "bond": BOND_UNIVERSE,
+    "multiasset": MULTI_ASSET_UNIVERSE,
+}
+
+
+def resolve_universe(spec: str | None) -> list[str]:
+    """Resolve a universe *spec* into a de-duplicated list of pair symbols.
+
+    A spec is either a named preset from ``UNIVERSES`` or a comma-separated list
+    of explicit symbols (e.g. ``"EURUSD,GBPUSD,EURJPY"``). ``None``/empty falls
+    back to the live ``default`` universe. Every resolved symbol is validated
+    against the registry, so a typo fails loudly rather than silently trading
+    nothing.
+    """
+    if not spec:
+        return list(UNIVERSES["default"])
+    if spec in UNIVERSES:
+        symbols = list(UNIVERSES[spec])
+    else:
+        symbols = [s.strip().upper() for s in spec.split(",") if s.strip()]
+    if not symbols:
+        raise ValueError(f"Universe spec {spec!r} resolved to no symbols.")
+    for s in symbols:               # validate — a typo should fail loudly
+        get_pair(s)
+    # de-dup, preserving order (an explicit list may repeat a symbol)
+    seen: set[str] = set()
+    return [s for s in symbols if not (s in seen or seen.add(s))]
 
 
 def get_pair(symbol: str) -> Pair:

@@ -109,6 +109,26 @@ REGIONS: dict[str, Region] = {
         price_scale=0.01,              # pence (GBX) -> pounds (GBP)
         universe=universes.FTSE,
     ),
+    # 4th sleeve, scaffolded but UNFUNDED: fully backtestable via
+    # `run_backtest --region TSX`, but intentionally absent from
+    # config.ALLOCATIONS until a walk-forward backtest justifies capital.
+    "TSX": Region(
+        key="TSX",
+        name="Canada (TSX)",
+        currency="CAD",
+        index_ticker="^GSPTSE",        # S&P/TSX Composite
+        yahoo_suffix=".TO",
+        ibkr_exchange="TSE",           # IBKR Toronto Stock Exchange
+        timezone="America/Toronto",
+        market_open=time(9, 30),
+        market_close=time(16, 0),
+        commission_bps=3.0,            # IBKR Canada tiered ~0.03% equiv
+        min_commission=1.0,            # C$1 floor
+        slippage_bps=8.0,              # liquid large caps, thinner than US mega
+        stamp_duty_bps=0.0,
+        price_scale=1.0,
+        universe=universes.TSX,
+    ),
 }
 
 

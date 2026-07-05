@@ -44,6 +44,9 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     overrides the capital split (both used by the tuner)."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     syn_end = end or "2026-01-01"
+    # F13: apply the delisting-return correction only in the PIT path and only
+    # when the knob is set — otherwise a perfect no-op.
+    apply_delisting = point_in_time and cfg.DELISTING_REPLACEMENT_RETURN is not None
 
     sleeves: dict[str, dict] = {}
     index_by_region: dict[str, tuple] = {}
@@ -69,7 +72,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
             prices, index_px = data.synthetic_region(region, start=start, end=syn_end)
         else:
             prices, index_px = data.load_region(region, start, end, tickers=pit_tickers)
-        bt = run_backtest(prices, index_px, region, membership=membership)
+        bt = run_backtest(prices, index_px, region, membership=membership,
+                          apply_delisting=apply_delisting)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         sleeves[key] = bt

@@ -1,8 +1,10 @@
 """Persistent multi-account FX paper-trading book.
 
-Each account is an isolated JSON state file (``fx_state_{account}.json``) so the
-account holder and their partner — or any number of books — run independently
-with their own capital, risk profile and history. No broker connection required.
+Each account is an isolated book — persisted as a row in a SQLite store
+(``fx_books.db``) with an ``fx_state_{account}.json`` copy dual-written as a
+fallback — so the account holder and their partner — or any number of books —
+run independently with their own capital, risk profile and history. No broker
+connection required.
 
 A *position* is a signed weight (fraction of equity); the book is marked to
 market each run from the move in each pair since the last close, accrues
@@ -28,10 +30,14 @@ import os
 import numpy as np
 import pandas as pd
 
+from .. import storage
 from . import explain
 from . import feeds
 from . import fx_config as cfg
 from . import fx_data
+from . import fxconv
+from . import marks
+from . import pairs
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -40,21 +46,36 @@ STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(os.path.dirname(__fil
 _DUST = 1e-4   # drop near-zero weights
 
 
+# SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+# JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+# See trading_algo/storage.py and BACKLOG.md.
+def _db_path() -> str:
+    return os.path.join(STATE_DIR, "fx_books.db")
+
+
 def _state_file(account: str) -> str:
     return os.path.join(STATE_DIR, f"fx_state_{account}.json")
 
 
+def account_exists(account: str) -> bool:
+    return storage.db_has(_db_path(), account) or os.path.exists(_state_file(account))
+
+
 def load_state(account: str) -> dict:
+    state = storage.db_load(_db_path(), account)
+    if state is not None:
+        return state
+    # Fallback: a book created before the DB existed still lives in JSON only.
     path = _state_file(account)
-    if not os.path.exists(path):
-        raise SystemExit(f"No FX account '{account}'. Run --init first.")
-    with open(path) as f:
-        return json.load(f)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    raise SystemExit(f"No FX account '{account}'. Run --init first.")
 
 
 def save_state(account: str, state: dict) -> None:
-    with open(_state_file(account), "w") as f:
-        json.dump(state, f, indent=2)
+    storage.db_save(_db_path(), account, state)
+    storage.atomic_write_json(_state_file(account), state)
 
 
 def ml_pool(models_dir: str | None = None) -> "AgentPool":
@@ -70,11 +91,23 @@ def ml_pool(models_dir: str | None = None) -> "AgentPool":
     return AgentPool(max_workers=1)
 
 
+_ML_POOL: AgentPool | None = None
+
+
+def _cached_ml_pool() -> "AgentPool":
+    """Memoized ml_pool() so run_all loads the trained model once per process."""
+    global _ML_POOL
+    if _ML_POOL is None:
+        _ML_POOL = ml_pool()
+    return _ML_POOL
+
+
 def list_accounts() -> list[str]:
-    out = []
-    for fn in os.listdir(os.path.abspath(STATE_DIR)):
-        if fn.startswith("fx_state_") and fn.endswith(".json"):
-            out.append(fn[len("fx_state_"):-len(".json")])
+    out = set(storage.db_accounts(_db_path()))
+    if os.path.isdir(os.path.abspath(STATE_DIR)):
+        for fn in os.listdir(os.path.abspath(STATE_DIR)):
+            if fn.startswith("fx_state_") and fn.endswith(".json"):
+                out.add(fn[len("fx_state_"):-len(".json")])
     return sorted(out)
 
 
@@ -86,10 +119,13 @@ def _params(state: dict) -> FXParams:
 
 
 def _panel(symbols: list[str], synthetic: bool, interval: str = "1d",
-           source: str = "yahoo", exchange: str | None = None):
-    """Aligned OHLC panel from any data source (see feeds.SOURCES)."""
+           source: str = "yahoo", exchange: str | None = None,
+           min_bars: int | None = None):
+    """Aligned OHLC panel from any data source (see feeds.SOURCES). `min_bars`
+    bounds the daily fetch to the strategy's warm-up need (see feeds.load)."""
     return feeds.load(symbols, synthetic=synthetic, interval=interval,
-                      source=source, exchange=exchange, use_cache=False)
+                      source=source, exchange=exchange, use_cache=False,
+                      min_bars=min_bars)
 
 
 def _bar_key(ts, interval: str) -> str:
@@ -107,8 +143,8 @@ def _sign(x: float) -> int:
 def init_account(account: str, capital: float, profile_name: str,
                  symbols: list[str] | None = None,
                  currency: str = cfg.ACCOUNT_CURRENCY, source: str = "yahoo",
-                 force: bool = False) -> None:
-    if os.path.exists(_state_file(account)) and not force:
+                 bar: str = "1d", force: bool = False) -> None:
+    if account_exists(account) and not force:
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
     profile(profile_name)  # validate
@@ -117,6 +153,10 @@ def init_account(account: str, capital: float, profile_name: str,
         "currency": currency,
         "profile": profile_name,
         "source": source,
+        "bar": bar,                          # the book's own data cadence
+        # An explicit universe is LOCKED: run_once won't merge in the default
+        # FX+crypto instruments (a stocks/bonds book must stay stocks/bonds).
+        "universe_locked": symbols is not None,
         "symbols": list(symbols or DEFAULT_UNIVERSE),
         "initial_capital": float(capital),
         "equity": float(capital),
@@ -136,9 +176,12 @@ def init_account(account: str, capital: float, profile_name: str,
 
 
 def init_defaults(synthetic: bool, force: bool = False) -> None:
-    """Open the two ready-to-run books from config (matt + partner)."""
+    """Open every ready-to-run book from config (matt, partner, daytrader,
+    multiasset) — each with its own capital / profile / universe / bar."""
     for name, spec in cfg.ACCOUNTS.items():
-        init_account(name, spec["capital"], spec["profile"], force=force)
+        init_account(name, spec["capital"], spec["profile"],
+                     symbols=spec.get("symbols"), bar=spec.get("bar", "1d"),
+                     force=force)
 
 
 # ---------------------------------------------------------------------------
@@ -157,22 +200,44 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 
 
 def run_once(account: str, synthetic: bool = False,
-             pool: AgentPool | None = None, interval: str = "1d",
-             source: str | None = None, exchange: str | None = None) -> None:
+             pool: AgentPool | None = None, interval: str | None = None,
+             source: str | None = None, exchange: str | None = None,
+             use_ml: bool = False) -> None:
     state = load_state(account)
     p = _params(state)
+    # --- ML gate (the ONE mechanism pinning the ML pool to its training set) --
+    # The NeuralAgent is trained on DAILY bars of the default FX+crypto
+    # universe, so with use_ml=True it only ever scores daily-bar books with
+    # the unlocked default universe. Gated-out books (daytrader: 60m bars;
+    # multiasset: universe_locked) keep the CALLER's technical pool — never a
+    # fresh default when a pool was supplied, so --workers is always honored —
+    # which makes daytrader's 23:00 bar identical regardless of whether
+    # fx-paper or day-paper advances it (last_bar_date dedup then makes the
+    # loser a no-op). With use_ml=False (the default) the caller's explicit
+    # pool is used unconditionally.
+    technical_pool = pool          # may be None -> downstream module default
+    if (use_ml and state.get("bar", "1d") in ("1d", "B")
+            and not state.get("universe_locked")):
+        pool = _cached_ml_pool()
+    else:
+        pool = technical_pool
+    # Per-book cadence: explicit CLI override, else the book's own stored bar
+    # (daytrader = 60m, everything else daily).
+    interval = interval or state.get("bar") or "1d"
     # Resolve the data source: explicit CLI override, else the book's own stored
     # source (defaults to yahoo). `--exchange` implies crypto (back-compat).
     src = feeds.resolve_source(source if source is not None
                                else state.get("source", "yahoo"), exchange)
-    if src == "yahoo":
+    if src == "yahoo" and not state.get("universe_locked"):
         # Pick up any newly-added instruments (e.g. crypto) without losing history.
         symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
     else:
-        symbols = list(state.get("symbols") or [])  # non-default feeds trade their own book
+        symbols = list(state.get("symbols") or [])  # locked/non-default books trade their own
     state["symbols"] = symbols
     state["source"] = src
-    panel = _panel(symbols, synthetic, interval, source=src, exchange=exchange)
+    from .fx_strategy import min_history
+    panel = _panel(symbols, synthetic, interval, source=src, exchange=exchange,
+                   min_bars=min_history(p) + 5)
     if not panel:
         print(f"  [{account}] no market data available — skipping.")
         return
@@ -197,14 +262,27 @@ def run_once(account: str, synthetic: bool = False,
 
     positions = {k: float(v) for k, v in state["positions"].items()}
     last_close = state.get("last_close", {})
+    prev_equity = float(state["equity"] if state.get("equity") is not None
+                        else state["initial_capital"])   # before today's mark
 
     # --- mark to market over the move since the last close ----------------
     pnl_frac = 0.0
+    day_contribs: list[dict] = []          # per-pair P&L attribution for the daily summary
     for s, w in positions.items():
         lc = last_close.get(s)
         nc = px_last.get(s)
         if lc and nc and lc == lc and nc == nc and lc > 0:
-            pnl_frac += w * (nc / lc - 1.0)
+            # Translate the position's quote-currency P&L into AUD: an AUD account
+            # converts to the quote currency to hold the pair, so AUD/quote moves
+            # (esp. AUD/USD) are part of the real P&L. Falls back to 1.0 when the
+            # AUD/quote rate can't be derived (e.g. a crypto-only book).
+            fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
+            contrib = marks.position_contribution(w, lc, nc, fxf)
+            pnl_frac += contrib
+            day_contribs.append({"pair": s, "weight": round(w, 4),
+                                 "move": round(nc / lc - 1.0, 6),     # the pair's own move
+                                 "fx": round(fxf - 1.0, 6),           # AUD/quote translation
+                                 "contrib": round(contrib, 6)})        # P&L as a frac of equity
 
     # Carry scales with the actual elapsed time since the last mark (so it's
     # correct for intraday/1-minute bars, not just daily). Daily is unchanged:
@@ -232,7 +310,7 @@ def run_once(account: str, synthetic: bool = False,
         halted = True
         state["halt_cooldown"] = p.drawdown_cooldown_days
         print(f"  [{account}] ⛔ drawdown {equity / peak - 1:.1%} breached "
-              f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} runs.")
+              f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} bars.")
 
     # --- target weights ----------------------------------------------------
     rationale: dict[str, dict] = {}
@@ -250,13 +328,20 @@ def run_once(account: str, synthetic: bool = False,
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        cost_frac += abs(delta) * 0.5 * get_pair(s).spread_fraction(price)
+        cost_frac += marks.cost_fraction(delta, get_pair(s), price)
         why = rationale.get(s, {})
+        # Execution-time AUD/quote factor, stamped at the trade bar's CLOSE (the
+        # same px_last marks the book itself uses — an execution-time
+        # approximation, not a tick-level fill rate). The dashboard blotter
+        # prefers this stored value over reconstructing entry-time context from
+        # today's panel; null when not derivable (e.g. no AUDUSD hub in px_last).
+        apq = fxconv.aud_per_quote(get_pair(s).quote, px_last)
         trades.append({"date": bar_date, "pair": s,
                        "side": "BUY" if delta > 0 else "SELL",
                        "delta_weight": round(delta, 4),
                        "target_weight": round(new_positions.get(s, 0.0), 4),
                        "price": round(float(price), 5) if price == price else None,
+                       "aud_per_quote": round(float(apq), 6) if apq else None,
                        "why": why.get("text"),
                        "regime": why.get("regime"),
                        "agents": why.get("agents"),
@@ -266,11 +351,27 @@ def run_once(account: str, synthetic: bool = False,
     # --- persist -----------------------------------------------------------
     state["equity"] = float(equity)
     state["positions"] = {k: round(v, 5) for k, v in new_positions.items()}
-    state["last_close"] = {s: float(px_last[s]) for s in symbols if px_last.get(s) == px_last.get(s)}
+    state["last_close"] = {s: float(px_last[s]) for s in symbols
+                           if s in px_last.index and px_last[s] == px_last[s]}
     state["last_bar_date"] = bar_date
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
     state["decisions"] = rationale          # latest per-pair read (held or flat)
+    # --- daily P&L attribution snapshot (the "what drove today" summary) ----
+    day_contribs.sort(key=lambda c: -abs(c["contrib"]))
+    state["daily"] = {
+        "date": bar_date,
+        "start_equity": round(prev_equity, 2),
+        "end_equity": round(float(equity), 2),
+        # rounded from the stored contribs so the breakdown sums exactly
+        "pnl_pct": round(sum(c["contrib"] for c in day_contribs), 6) if day_contribs else round(pnl_frac, 6),
+        "carry_pct": round(carry_frac, 6),      # financing/swap
+        "cost_pct": round(-cost_frac, 6),       # spread paid on today's rebalance (negative)
+        "net_pct": round(equity / prev_equity - 1.0, 6) if prev_equity else 0.0,
+        "net_aud": round(float(equity) - prev_equity, 2),
+        "by_pair": day_contribs,
+        "halted": halted,
+    }
     state["trades"].extend(trades)
     if not state["equity_history"] or state["equity_history"][-1][0] != bar_date:
         state["equity_history"].append([bar_date, round(float(equity), 2)])
@@ -284,13 +385,13 @@ def run_once(account: str, synthetic: bool = False,
 
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
-            interval: str = "1d", source: str | None = None,
-            exchange: str | None = None) -> None:
+            interval: str | None = None, source: str | None = None,
+            exchange: str | None = None, use_ml: bool = False) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
-        if os.path.exists(_state_file(name)):
+        if account_exists(name):
             run_once(name, synthetic, pool=pool, interval=interval,
-                     source=source, exchange=exchange)
+                     source=source, exchange=exchange, use_ml=use_ml)
 
 
 # ---------------------------------------------------------------------------
@@ -314,11 +415,15 @@ def status(account: str) -> None:
         print(f"  Current equity   {state['equity']:,.2f} {state['currency']}")
         print(f"  Total return     {state['equity'] / state['initial_capital'] - 1:+.2%}")
         if len(rets) > 20:
-            print(f"  Ann. vol         {rets.std() * np.sqrt(cfg.ANNUALIZATION):.1%}")
+            # Calendar-time annualisation at the book's own bar cadence — the
+            # ONE convention (see marks.periods_per_year); daily books still
+            # annualise at 252, hourly at 24*365.25.
+            ppy = marks.periods_per_year(s.index)
+            print(f"  Ann. vol         {rets.std() * np.sqrt(ppy):.1%}")
             print(f"  Max drawdown     {(s / s.cummax() - 1).min():.2%}")
         print(f"  Trades to date   {len(state['trades'])}")
     if state.get("risk_halted"):
-        print(f"  ⛔ RISK-HALTED   {state.get('halt_cooldown', 0)} runs remaining")
+        print(f"  ⛔ RISK-HALTED   {state.get('halt_cooldown', 0)} bars remaining")
     print("\n  Open positions (signed weight = frac of equity):")
     if not state["positions"]:
         print("    (flat)")
@@ -330,7 +435,7 @@ def status(account: str) -> None:
 def compare(accounts: list[str]) -> None:
     print(f"{'Account':<12}{'Profile':<14}{'Capital':>12}{'Equity':>14}{'Return':>10}{'Trades':>8}")
     for name in accounts:
-        if not os.path.exists(_state_file(name)):
+        if not account_exists(name):
             continue
         s = load_state(name)
         print(f"{name:<12}{s['profile']:<14}{s['initial_capital']:>12,.0f}"
@@ -352,15 +457,20 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
-    ap.add_argument("--bar", default="1d",
-                    help="data bar interval, e.g. 60m / 15m / 1m (default daily). "
-                         "Live intraday needs a real-time feed; see docs/HFT_REALITY.md.")
+    ap.add_argument("--bar", default=None,
+                    help="data bar interval, e.g. 60m / 15m / 1m (default: each "
+                         "book's own cadence, else daily). Live intraday needs a "
+                         "real-time feed; see docs/HFT_REALITY.md.")
     ap.add_argument("--source", default=None, choices=feeds.SOURCES,
                     help="market-data source: yahoo (default), crypto, oanda, "
                          "alpaca, openbb. See docs/DATA_FEEDS.md.")
     ap.add_argument("--exchange", default=None,
                     help="crypto exchange via ccxt (e.g. binance) for the crypto "
                          "source; default binance. See docs/CRYPTO_HF.md.")
+    ap.add_argument("--universe", default=None,
+                    help="on --init with --account, open the book over this set: a "
+                         f"named preset ({', '.join(pairs.UNIVERSES)}) or a comma-"
+                         "separated symbol list. The book is locked to it.")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -375,9 +485,14 @@ def main(argv: list[str] | None = None) -> None:
             src = feeds.resolve_source(args.source, args.exchange)
             if args.profile == "hf_crypto" and src == "yahoo":
                 src = "crypto"
-            symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
+            # An explicit --universe wins over the source's natural set and locks
+            # the book to it (init_account locks whenever symbols is not None).
+            if args.universe:
+                symbols = pairs.resolve_universe(args.universe)
+            else:
+                symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
             init_account(args.account, args.capital, args.profile, symbols=symbols,
-                         source=src, force=args.force)
+                         source=src, bar=args.bar or "1d", force=args.force)
         else:
             init_defaults(args.synthetic, force=args.force)
     elif args.status:

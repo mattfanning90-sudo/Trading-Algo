@@ -62,11 +62,31 @@ FTSE = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# TSX — S&P/TSX liquid large caps (Yahoo .TO suffix; prices quoted in CAD).
+# A 4th sleeve, scaffolded but NOT funded: it is a full region so it can be
+# backtested on its own (`run_backtest --region TSX`), but it is deliberately
+# left out of config.ALLOCATIONS until a real backtest justifies capital.
+# Class-B / dual-class names use Yahoo's hyphen convention (e.g. RCI-B.TO).
+# ---------------------------------------------------------------------------
+TSX = [
+    "RY.TO", "TD.TO", "BNS.TO", "BMO.TO", "CM.TO", "NA.TO", "ENB.TO", "TRP.TO",
+    "CNQ.TO", "SU.TO", "CVE.TO", "IMO.TO", "CNR.TO", "CP.TO", "BCE.TO", "T.TO",
+    "RCI-B.TO", "SHOP.TO", "BN.TO", "BAM.TO", "MFC.TO", "SLF.TO", "GWO.TO",
+    "POW.TO", "FFH.TO", "IFC.TO", "ATD.TO", "L.TO", "MRU.TO", "DOL.TO",
+    "QSR.TO", "NTR.TO", "AEM.TO", "ABX.TO", "FNV.TO", "WPM.TO", "K.TO",
+    "TECK-B.TO", "CCO.TO", "FM.TO", "WCN.TO", "GIB-A.TO", "OTEX.TO", "CSU.TO",
+    "TRI.TO", "MG.TO", "WSP.TO", "GFL.TO", "FTS.TO", "EMA.TO", "H.TO", "PPL.TO",
+    "FSV.TO", "SAP.TO", "X.TO",
+]
+
+
 # Convenience map (region key -> universe). Mirrors regions.REGIONS keys.
 UNIVERSES: dict[str, list[str]] = {
     "ASX": ASX,
     "US": US,
     "FTSE": FTSE,
+    "TSX": TSX,
 }
 
 # ---------------------------------------------------------------------------

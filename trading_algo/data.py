@@ -13,14 +13,64 @@ import os
 import numpy as np
 import pandas as pd
 
+from . import config as cfg
 from .regions import Region
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+
+# --- Market-data fallback registry (backlog F14) ---------------------------
+# A secondary source is tried when the primary (Yahoo) returns nothing. Sources
+# register a loader(tickers, start, end) -> DataFrame[Close] here; the active one
+# is selected by config.DATA_FALLBACK_SOURCE. Kept as a registry so a source can
+# be added (or injected in tests) without touching load_prices.
+_FALLBACK_LOADERS: dict[str, "callable"] = {}
+
+
+def register_fallback(name: str, loader) -> None:
+    """Register a secondary price loader under `name` (see config.DATA_FALLBACK_SOURCE)."""
+    _FALLBACK_LOADERS[name] = loader
+
+
+def _try_fallback(tickers: list[str], start: str, end: str | None):
+    """Return a fallback price frame, or None if no usable fallback is configured."""
+    name = getattr(cfg, "DATA_FALLBACK_SOURCE", None)
+    if not name:
+        return None
+    loader = _FALLBACK_LOADERS.get(name)
+    if loader is None:
+        return None
+    try:
+        df = loader(tickers, start, end)
+    except Exception:
+        return None
+    if df is None or not len(df):
+        return None
+    return df
 
 
 def _cache_path(cache_key: str) -> str:
     safe = hashlib.sha1(cache_key.encode()).hexdigest()[:16]
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
+
+
+def _download_primary(tickers: list[str], start: str, end: str | None):
+    """Primary price source (Yahoo via yfinance). Raises on repeated failure."""
+    import time
+
+    import yfinance as yf  # imported lazily so the package works offline
+
+    backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
+    for attempt, wait in enumerate(backoffs):
+        try:
+            raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                              progress=False)["Close"]
+            if raw is not None and len(raw):
+                return raw
+        except Exception:
+            if attempt == len(backoffs) - 1:
+                raise
+        time.sleep(wait)
+    return None
 
 
 def load_prices(tickers: list[str], start: str, end: str | None = None,
@@ -38,10 +88,28 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
         if have:
             return df.loc[start:end, have]
 
-    # Route each ticker through the pluggable provider chain (primary + fallbacks);
-    # see providers.py. Imported lazily so the package works offline.
-    from . import providers
-    raw = providers.fetch_prices(tickers, start, end)
+    # Primary source (Yahoo); on failure or an empty result, try the configured
+    # fallback (F14) before giving up. The fallback's data still flows through the
+    # F7 quality gate downstream, so a poor secondary source can't slip bad prints
+    # into a rebalance.
+    raw = None
+    primary_error: Exception | None = None
+    try:
+        raw = _download_primary(tickers, start, end)
+    except Exception as exc:
+        primary_error = exc
+    if raw is None or not len(raw):
+        fb = _try_fallback(tickers, start, end)
+        if fb is not None:
+            raw = fb
+        elif primary_error is not None:
+            raise primary_error
+    if raw is None or not len(raw):
+        raise RuntimeError(
+            f"no price data for {len(tickers)} tickers from primary or fallback")
+    if isinstance(raw, pd.Series):
+        raw = raw.to_frame(tickers[0])
+    raw = raw.reindex(columns=tickers)
     raw = raw.dropna(how="all").dropna(axis=1, how="all")
     try:
         raw.to_parquet(cache_file)

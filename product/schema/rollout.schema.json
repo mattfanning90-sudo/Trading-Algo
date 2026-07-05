@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trading-algo/product/schema/rollout.schema.json",
+  "title": "Rollout Plan",
+  "description": "How a groomed feature actually reaches production without breaking the book. Every feature carries a mechanism, staged gates with guardrail metrics, and a rollback path — the same discipline the trading side applies to capital, applied to shipping.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mechanism", "flag", "stages", "guardrail_metrics", "rollback"],
+  "properties": {
+    "mechanism": {
+      "type": "string",
+      "enum": ["config_knob", "feature_flag", "new_module", "ci_gate"],
+      "description": "How the change is introduced and controlled. new_module = additive, off unless invoked; config_knob/feature_flag = default-off toggle; ci_gate = enforced in CI."
+    },
+    "flag": {
+      "type": "string",
+      "description": "The concrete switch name (config attr, env var, CLI flag) or 'n/a' for a pure ci_gate. Default-off is the rule unless justified in notes.",
+      "minLength": 3
+    },
+    "default_on": {
+      "type": "boolean",
+      "description": "Whether the feature is on by default at merge. Defaults to false; a true value should be justified by a passed prior stage.",
+      "default": false
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered gates from first-merge to full-on. Each stage must state what is validated before advancing.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "scope", "exit_criteria"],
+        "properties": {
+          "name": { "type": "string", "enum": ["shadow", "synthetic", "single-sleeve", "paper", "canary-live", "full-live"] },
+          "scope": { "type": "string", "minLength": 6, "description": "What/where it runs at this stage, e.g. 'US sleeve only, dry_run'." },
+          "exit_criteria": { "type": "string", "minLength": 10, "description": "The measurable condition to advance to the next stage." }
+        }
+      }
+    },
+    "guardrail_metrics": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Metrics that must NOT regress during rollout. If any breaches, the rollback triggers.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["metric", "threshold"],
+        "properties": {
+          "metric": { "type": "string", "minLength": 3 },
+          "threshold": { "type": "string", "minLength": 2, "description": "e.g. 'turnover within +/-10% of baseline', 'no new lookahead test failures'." }
+        }
+      }
+    },
+    "rollback": {
+      "type": "string",
+      "minLength": 12,
+      "description": "The exact action to revert safely, e.g. 'set config.DATA_QUALITY_GATE=False; prior behaviour restored, no state migration needed'."
+    }
+  }
+}
