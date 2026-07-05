@@ -69,7 +69,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat backtest_report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report + equity curves
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backtest-report
           path: |
