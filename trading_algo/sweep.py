@@ -21,7 +21,7 @@ import pandas as pd
 from . import config as cfg
 from . import constituents, data
 from .backtest import run_backtest
-from .regions import Region, get_region
+from .regions import Region, all_region_keys, get_region
 
 DEFAULT_TOP_NS = [6, 8, 10, 12, 15]
 DEFAULT_LOOKBACKS = [126, 189, 252, 315]   # ~6, 9, 12, 15 months
@@ -131,7 +131,9 @@ def run_sweep(region_key: str | None, synthetic: bool, point_in_time: bool,
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Parameter robustness sweep")
-    ap.add_argument("--region", choices=list(cfg.ALLOCATIONS))
+    # Explicit --region can target any registered sleeve (incl. unfunded TSX);
+    # the no-region default still sweeps only the funded ALLOCATIONS sleeves.
+    ap.add_argument("--region", choices=all_region_keys())
     ap.add_argument("--metric", default="sharpe",
                     choices=["sharpe", "CAGR", "MaxDrawdown", "AnnVol", "Calmar"])
     ap.add_argument("--synthetic", action="store_true")

@@ -931,8 +931,13 @@ function methodHTML() {
 
   const costRows = regions.map(r => {
     const sym = SYM[r.currency] || r.currency;
+    // Scaffolded-but-unfunded sleeves (not in ALLOCATIONS) are shown greyed with
+    // an UNFUNDED tag — backtestable, but receiving no live capital.
+    const keyCell = r.funded === false
+      ? `<span style="color:#9db5a0">${esc(r.key)} <span style="color:#3d543f;font-size:8px">UNFUNDED</span></span>`
+      : `<span style="color:#eaffec">${esc(r.key)}</span>`;
     return `
-    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(r.key)}</span><span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
+    <div style="display:grid;grid-template-columns:.8fr 1fr .6fr .8fr .9fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212">${keyCell}<span style="color:#9db5a0">${num(r.commission_bps, 0)} BPS</span><span style="color:#9db5a0">${sym}${num(r.min_commission, 0)}</span><span style="color:#9db5a0">${num(r.slippage_bps, 0)} BPS</span><span style="color:${r.stamp_duty_bps ? AMB : FAINT}">${r.stamp_duty_bps ? num(r.stamp_duty_bps, 0) + ' BPS ON BUYS' : '—'}</span></div>`;
   }).join('');
 
   const invariants = [

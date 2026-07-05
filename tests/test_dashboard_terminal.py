@@ -171,7 +171,9 @@ def test_meta_contract(books):
     m = meta.build_meta()
     assert m["params"]["top_n"] >= 1
     assert m["risk"]["max_drawdown_stop"] == pytest.approx(0.25)
-    assert len(m["regions"]) == 3
+    assert len(m["regions"]) == 4        # ASX/US/FTSE funded + TSX scaffolded
+    funded = {r["key"]: r["funded"] for r in m["regions"]}
+    assert funded == {"ASX": True, "US": True, "FTSE": True, "TSX": False}
     assert "matt" in m["fx_profiles"]
     assert {a["key"] for a in m["accounts"]} == {"FULL", "MATT"}
 
