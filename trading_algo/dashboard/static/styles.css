@@ -77,3 +77,76 @@ body {
   color: #ff7b72;
 }
 .err-panel .hint { color: #61805f; }
+
+/* ============================== mobile ================================= */
+/* The terminal is a dense, fixed-density design ported 1:1 from the canvas —
+   every screen is inline-styled with px sizes and multi-column grids. On a
+   phone we reflow it without touching the desktop look: stack the side-by-side
+   splits, collapse the wide KPI strips, let the widest data tables swipe
+   horizontally inside their own panel, and wrap the header/tape rows. The
+   grid rules reach the inline `grid-template-columns` via attribute selectors;
+   `!important` beats the inline style. */
+@media (max-width: 820px) {
+  /* never let the whole page scroll sideways — wide tables scroll in their box */
+  html, body { overflow-x: hidden; }
+
+  /* ---- header reflow: logo, then chips / tabs / meta each on their own row */
+  .mq-header { flex-wrap: wrap; }
+  .mq-header > * { border-right: none !important; }
+  .mq-chips  { order: 1; flex: 1 1 100%; padding: 7px 14px !important;
+               border-top: 1px solid #262626; }
+  .mq-tabs   { order: 2; flex: 1 1 100%; overflow-x: auto;
+               border-top: 1px solid #262626; }
+  .mq-meta   { order: 3; flex: 1 1 100%; margin-left: 0 !important;
+               flex-wrap: wrap; gap: 8px 14px !important; padding: 8px 14px !important;
+               justify-content: flex-start; border-top: 1px solid #262626; }
+
+  /* ---- tapes + status bar: swipe instead of clipping the overflow ---- */
+  .mq-tape { overflow-x: auto !important; }
+
+  /* ---- stack every side-by-side layout split into one column ---- */
+  #app [style*="grid-template-columns:2.1fr 1fr"],
+  #app [style*="grid-template-columns:1.4fr 1fr"],
+  #app [style*="grid-template-columns:1.25fr 1fr"],
+  #app [style*="grid-template-columns:1.05fr 1.25fr 1.1fr"],
+  #app [style*="grid-template-columns:1fr 1fr 1fr"],
+  #app [style*="grid-template-columns:1fr 1fr;"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* the internal right-border becomes a divider between the stacked blocks */
+  #app [style*="grid-template-columns:2.1fr 1fr"] > div,
+  #app [style*="grid-template-columns:1.4fr 1fr"] > div,
+  #app [style*="grid-template-columns:1.05fr 1.25fr 1.1fr"] > div {
+    border-right: none !important;
+  }
+  #app [style*="grid-template-columns:2.1fr 1fr"] > div:not(:last-child),
+  #app [style*="grid-template-columns:1.4fr 1fr"] > div:not(:last-child) {
+    border-bottom: 1px solid #262626;
+  }
+
+  /* ---- collapse the KPI strips (6/7-col) to two columns (must come AFTER
+         the stack rules so a 4-col strip lands on 2, not 1) ---- */
+  #app [style*="grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr"],
+  #app [style*="grid-template-columns:repeat(6,1fr)"],
+  #app [style*="grid-template-columns:repeat(4,1fr)"],
+  #app [style*="grid-template-columns:1fr 1fr 1fr 1fr"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  #app [style*="grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr"] > div,
+  #app [style*="grid-template-columns:repeat(6,1fr)"] > div {
+    border-right: none !important;
+    border-bottom: 1px solid #1a1a1a;
+  }
+
+  /* ---- account cards (all-accounts overview): a steady 2-up regardless of
+         how many books there are (the dynamic repeat(N,1fr) would otherwise
+         stay N-wide and crush at N≥3) ---- */
+  .mq-cards { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* ---- the "every bar, in order" step pipeline stacks vertically ---- */
+  .mq-pipe { flex-direction: column; }
+
+  /* ---- the widest data tables swipe horizontally inside their panel ---- */
+  .mq-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .mq-x > div { min-width: 660px; }
+}
