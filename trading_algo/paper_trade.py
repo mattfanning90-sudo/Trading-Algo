@@ -6,7 +6,8 @@ local currency; thereafter each sleeve compounds in its own currency with
 whole-share lots, the per-region fee schedule (commission floor + UK stamp duty)
 and slippage. Combined equity is reported in the base currency via current FX.
 
-State persists per account in paper_state_{account}.json. Each sleeve trades
+State persists per account in a SQLite store (paper_books.db), with a
+paper_state_{account}.json copy dual-written as a fallback. Each sleeve trades
 only on the first run of a new month (mirroring the backtest's month-end signal
 -> next-day execution).
 
@@ -33,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, data_quality, fees, fx, strategy
+from . import data, data_quality, fees, fx, storage, strategy
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -45,18 +46,32 @@ MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
 # ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------
+# SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+# JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+# See trading_algo/storage.py and BACKLOG.md.
+def _db_path() -> str:
+    return os.path.join(STATE_DIR, "paper_books.db")
+
+
 def _state_file(account: str) -> str:
     return os.path.join(STATE_DIR, f"paper_state_{account}.json")
 
 
+def account_exists(account: str) -> bool:
+    return storage.db_has(_db_path(), account) or os.path.exists(_state_file(account))
+
+
 def load_state(account: str) -> dict:
-    path = _state_file(account)
-    if not os.path.exists(path):
-        raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
-    with open(path) as f:
-        state = json.load(f)
-    # Upgrade older files additively (never destructive), then validate. With the
-    # gate on, an invalid file fails safe — we raise rather than trade on / reset
+    state = storage.db_load(_db_path(), account)
+    if state is None:
+        # Fallback: a book created before the DB existed still lives in JSON only.
+        path = _state_file(account)
+        if not os.path.exists(path):
+            raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
+        with open(path) as f:
+            state = json.load(f)
+    # Upgrade older books additively (never destructive), then validate. With the
+    # gate on, an invalid book fails safe — we raise rather than trade on / reset
     # a corrupted book. With it off, we only warn (shadow mode). See config F18.
     state, _applied = state_schema.migrate_state(state)
     errors = state_schema.validate_state(state)
@@ -78,8 +93,10 @@ def save_state(account: str, state: dict) -> None:
             raise state_schema.StateValidationError(
                 f"Refusing to save invalid state for '{account}':\n  - "
                 + "\n  - ".join(errors))
-    with open(_state_file(account), "w") as f:
-        json.dump(state, f, indent=2)
+    # SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+    # JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+    storage.db_save(_db_path(), account, state)
+    storage.atomic_write_json(_state_file(account), state)
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +383,7 @@ def status(account: str) -> None:
 def compare(accounts: list[str]) -> None:
     print(f"{'Account':<10} {'Capital':>14} {'Equity':>14} {'Return':>9} {'Trades':>7}")
     for name in accounts:
-        if not os.path.exists(_state_file(name)):
+        if not account_exists(name):
             continue
         s = load_state(name)
         eq = s["equity_history"][-1][1] if s["equity_history"] else s["initial_capital_base"]
