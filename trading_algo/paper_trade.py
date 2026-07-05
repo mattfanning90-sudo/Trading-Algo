@@ -35,7 +35,8 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import data, data_quality, fees, fx, pnl, profiles, storage, strategy
+from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
+               storage, strategy)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -348,6 +349,7 @@ def run_daily(account: str, synthetic: bool) -> None:
     # engine fires up to 3x a day (one pass per regional close), and a per-run
     # countdown would expire ~3x too fast.
     halted = state.get("risk_halted", False)
+    was_halted = halted                       # F12: detect the halt/resume transition
 
     report_date = ""
     combined = 0.0
@@ -415,6 +417,17 @@ def run_daily(account: str, synthetic: bool) -> None:
               f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
     else:
         state["risk_halted"] = False
+
+    # F12: alert exactly once on a halt/resume transition (not every halted day).
+    transition = notifications.breaker_transition(was_halted, state["risk_halted"])
+    if transition:
+        dd = combined / peak - 1
+        notifications.notify(
+            f"breaker_{transition}",
+            f"[{account}] drawdown breaker {transition.upper()} on {report_date} — "
+            f"equity {combined:,.0f} {cfg.BASE_CURRENCY} ({dd:+.1%} vs peak)",
+            level="alert", account=account, transition=transition,
+            equity=round(combined, 2), drawdown=round(float(dd), 4))
 
     if not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])

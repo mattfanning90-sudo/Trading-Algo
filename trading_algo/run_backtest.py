@@ -10,7 +10,7 @@ import argparse
 import os
 
 from . import config as cfg
-from . import constituents, data, manifest, validation
+from . import constituents, crowding, data, manifest, validation
 from .backtest import run_backtest
 from .portfolio_backtest import run_portfolio_backtest
 from .regions import all_region_keys, get_region
@@ -104,6 +104,10 @@ def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
         print(f"  Drawdown halts             {result['drawdown_halts']} "
               f"({result['drawdown_halt_days']} days in cash)")
     _print_deflation(result["returns"])
+    cr = crowding.crowding_report(prices, index_px, region)
+    flag = "⚠ ELEVATED" if cr["elevated"] else "normal"
+    detail = f" — {', '.join(cr['reasons'])}" if cr["reasons"] else ""
+    print(f"  Crowding/crash risk        {flag}{detail}")
     _latest_picks(prices, index_px, region)
     _emit_manifest("backtest", region.params, [region.key], result["metrics"],
                    synthetic, result["point_in_time"],
