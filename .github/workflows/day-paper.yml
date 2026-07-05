@@ -47,7 +47,7 @@ jobs:
         # fx_data cache key embeds sym:start:end:interval and is stable within
         # a UTC day, so a warm restore skips the repeated yf.download combos.
         # Unique key -> always saves; restore-keys picks the most recent.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: trading_algo/forex/.cache
           key: fx-parquet-${{ github.run_id }}

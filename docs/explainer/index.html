@@ -1,0 +1,973 @@
+<title>Multi-Region Momentum — A Field Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ============================================================= TOKENS */
+:root{
+  --ground:#eceeec;
+  --surface:#f8faf8;
+  --surface-2:#e4e8e5;
+  --ink:#14181b;
+  --ink-soft:#39424a;
+  --muted:#67727b;
+  --faint:#8b959d;
+  --line:#d3d9d5;
+  --line-strong:#b9c2bc;
+  --accent:#0d7a56;      /* momentum emerald */
+  --accent-deep:#0a5e43;
+  --accent-soft:#d7ebe2;
+  --up:#0f7a52;
+  --down:#b5432c;        /* semantic only */
+  --gold:#9a7118;
+  --code-bg:#0f1417;
+  --code-ink:#d8e0dc;
+  --code-line:#243036;
+  --shadow:0 1px 2px rgba(20,30,25,.06),0 8px 30px rgba(20,30,25,.05);
+  --measure:70ch;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#0c1013; --surface:#12181c; --surface-2:#1a2228;
+    --ink:#e7ece9; --ink-soft:#c2cbc6; --muted:#8d9a94; --faint:#68766f;
+    --line:#232d31; --line-strong:#33403f;
+    --accent:#37b98a; --accent-deep:#59cfa2; --accent-soft:#12312a;
+    --up:#37b98a; --down:#e0765c; --gold:#c99b3e;
+    --code-bg:#0a0e10; --code-ink:#cdd6d1; --code-line:#1d262a;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="light"]{
+  --ground:#eceeec; --surface:#f8faf8; --surface-2:#e4e8e5;
+  --ink:#14181b; --ink-soft:#39424a; --muted:#67727b; --faint:#8b959d;
+  --line:#d3d9d5; --line-strong:#b9c2bc;
+  --accent:#0d7a56; --accent-deep:#0a5e43; --accent-soft:#d7ebe2;
+  --up:#0f7a52; --down:#b5432c; --gold:#9a7118;
+  --code-bg:#0f1417; --code-ink:#d8e0dc; --code-line:#243036;
+}
+:root[data-theme="dark"]{
+  --ground:#0c1013; --surface:#12181c; --surface-2:#1a2228;
+  --ink:#e7ece9; --ink-soft:#c2cbc6; --muted:#8d9a94; --faint:#68766f;
+  --line:#232d31; --line-strong:#33403f;
+  --accent:#37b98a; --accent-deep:#59cfa2; --accent-soft:#12312a;
+  --up:#37b98a; --down:#e0765c; --gold:#c99b3e;
+  --code-bg:#0a0e10; --code-ink:#cdd6d1; --code-line:#1d262a;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--sans);font-size:17px;line-height:1.7;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+/* subtle grid backdrop */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:34px 34px;opacity:.28;
+  -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 75%);
+          mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 75%);
+}
+a{color:var(--accent-deep);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}
+
+/* ============================================================= LAYOUT */
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(18px,4vw,40px)}
+.shell{display:grid;grid-template-columns:1fr;gap:0}
+@media(min-width:1040px){
+  .shell{grid-template-columns:240px minmax(0,1fr);gap:48px;align-items:start}
+  .toc{position:sticky;top:0;height:100vh;overflow:auto;padding:36px 0 40px}
+}
+main{min-width:0;padding-bottom:120px}
+
+/* ============================================================= TOC */
+.toc{font-family:var(--mono);font-size:12.5px;line-height:1.5;border-right:1px solid var(--line)}
+.toc-inner{padding-right:22px}
+.toc .brand{font-family:var(--serif);font-size:17px;font-weight:600;color:var(--ink);
+  letter-spacing:-.01em;margin-bottom:2px;line-height:1.2}
+.toc .brand small{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--accent-deep);margin-top:8px;font-weight:600}
+.toc ol{list-style:none;margin:22px 0 0;padding:0;counter-reset:t}
+.toc li{margin:0}
+.toc a{display:flex;gap:9px;padding:5px 0;color:var(--muted);border:0;align-items:baseline}
+.toc a:hover{color:var(--ink);text-decoration:none}
+.toc a .n{color:var(--faint);font-size:11px;min-width:18px}
+.toc a.active{color:var(--accent-deep);font-weight:600}
+.toc a.active .n{color:var(--accent)}
+.toc .grp{margin-top:18px;padding-top:12px;border-top:1px dashed var(--line-strong);
+  color:var(--faint);text-transform:uppercase;letter-spacing:.16em;font-size:10px}
+.themetog{margin-top:26px;font-family:var(--mono);font-size:11px;background:none;border:1px solid var(--line-strong);
+  color:var(--muted);padding:7px 12px;border-radius:6px;cursor:pointer;letter-spacing:.08em}
+.themetog:hover{border-color:var(--accent);color:var(--accent-deep)}
+
+/* mobile top bar */
+.mobilebar{display:none}
+@media(max-width:1039px){
+  .mobilebar{display:flex;position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+    justify-content:space-between;align-items:center;padding:12px clamp(18px,4vw,40px);
+    font-family:var(--mono);font-size:12px}
+  .mobilebar b{font-family:var(--serif);font-size:15px}
+  .toc{display:none}
+}
+
+/* ============================================================= HERO */
+.hero{padding:70px 0 46px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--accent-deep);font-weight:600;display:flex;align-items:center;gap:12px}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--line-strong);max-width:120px}
+h1.title{font-family:var(--serif);font-weight:600;letter-spacing:-.02em;line-height:1.03;
+  font-size:clamp(38px,6.4vw,68px);margin:20px 0 0;text-wrap:balance}
+h1.title em{font-style:italic;color:var(--accent-deep)}
+.lede{font-size:clamp(18px,2.4vw,22px);line-height:1.55;color:var(--ink-soft);
+  max-width:34ch;margin:22px 0 0;text-wrap:pretty}
+.herofig{margin:38px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--surface);box-shadow:var(--shadow)}
+.herofig canvas{display:block;width:100%;height:220px}
+.herocap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);padding:10px 16px;border-top:1px solid var(--line)}
+.herocap b{color:var(--accent-deep)}
+
+.statrow{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin:34px 0 0;
+  background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.stat{background:var(--surface);padding:18px 16px}
+.stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.stat .v{font-family:var(--serif);font-size:clamp(24px,3.4vw,34px);font-weight:600;margin-top:6px;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+.stat .v small{font-size:14px;color:var(--muted);font-family:var(--mono);font-weight:400}
+@media(max-width:620px){.statrow{grid-template-columns:repeat(2,1fr)}}
+
+/* ============================================================= SECTIONS */
+section{padding:64px 0;border-bottom:1px solid var(--line);scroll-margin-top:20px}
+.part-no{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--accent-deep);font-weight:600}
+h2{font-family:var(--serif);font-weight:600;letter-spacing:-.018em;line-height:1.08;
+  font-size:clamp(28px,4.2vw,42px);margin:10px 0 0;text-wrap:balance}
+h3{font-family:var(--serif);font-weight:600;font-size:clamp(20px,2.6vw,25px);margin:44px 0 0;letter-spacing:-.01em}
+h4{font-family:var(--mono);font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-deep);
+  margin:30px 0 0;font-weight:600}
+p{max-width:var(--measure);margin:18px 0 0}
+.sub{color:var(--muted);font-size:16px;max-width:var(--measure);margin-top:14px}
+strong{font-weight:650;color:var(--ink)}
+em.term{font-style:normal;font-family:var(--mono);font-size:.9em;background:var(--surface-2);
+  padding:1px 6px;border-radius:5px;color:var(--accent-deep)}
+ul.clean{max-width:var(--measure);margin:16px 0 0;padding:0;list-style:none}
+ul.clean li{position:relative;padding-left:22px;margin-top:11px}
+ul.clean li::before{content:"›";position:absolute;left:2px;color:var(--accent);font-family:var(--mono);font-weight:700}
+ul.clean li strong{color:var(--ink)}
+
+/* code */
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;overflow-x:auto;
+  padding:18px 20px;margin:22px 0 0;font-family:var(--mono);font-size:13px;line-height:1.6;
+  border:1px solid var(--code-line);box-shadow:var(--shadow)}
+pre .cm{color:#7f9488}
+pre .kw{color:#7fd4b0}
+pre .st{color:#d8b57a}
+pre .fn{color:#8fc9ff}
+pre .nb{color:#e0a0a0}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface-2);padding:1.5px 5px;border-radius:5px;color:var(--ink-soft)}
+pre code{background:none;padding:0;color:inherit}
+.codecap{font-family:var(--mono);font-size:11px;color:var(--muted);margin:22px 0 -14px;
+  display:flex;gap:8px;align-items:center}
+.codecap::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--accent)}
+
+/* lesson callout */
+.lesson{margin:30px 0 0;border:1px solid var(--line);border-left:3px solid var(--accent);
+  background:var(--surface);border-radius:0 10px 10px 0;padding:20px 22px;box-shadow:var(--shadow);
+  max-width:var(--measure)}
+.lesson .tag{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-deep);font-weight:700;display:flex;gap:9px;align-items:center}
+.lesson .tag .kind{color:var(--muted);font-weight:400}
+.lesson p{margin:12px 0 0;font-size:15.5px}
+.lesson.trade{border-left-color:var(--gold)}
+.lesson.trade .tag{color:var(--gold)}
+.lesson.warn{border-left-color:var(--down)}
+.lesson.warn .tag{color:var(--down)}
+
+/* figures */
+figure{margin:34px 0 0;border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  overflow:hidden;box-shadow:var(--shadow)}
+figure .figbody{padding:24px;overflow-x:auto}
+figure svg{display:block;margin:0 auto;max-width:100%;height:auto}
+figcaption{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding:11px 18px;
+  border-top:1px solid var(--line);background:var(--surface-2)}
+figcaption b{color:var(--accent-deep)}
+.svg-lbl{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+.svg-lbl-b{font-family:var(--mono);font-size:11px;fill:var(--ink);font-weight:600}
+.svg-ttl{font-family:var(--sans);font-size:13px;fill:var(--ink);font-weight:600}
+.svg-box{fill:var(--surface-2);stroke:var(--line-strong)}
+.svg-accent{fill:var(--accent)}
+
+/* tables */
+.tablewrap{overflow-x:auto;margin:26px 0 0;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:14px;background:var(--surface);min-width:520px}
+th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--line)}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  background:var(--surface-2);font-weight:600}
+td{color:var(--ink-soft)}
+td.mono,th.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+td strong{color:var(--ink)}
+
+/* two-col */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:24px 0 0}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+.card{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:18px 20px;box-shadow:var(--shadow)}
+.card h4{margin-top:0}
+.card p{margin-top:10px;font-size:15px}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+  padding:2px 9px;border-radius:20px;border:1px solid var(--line-strong);color:var(--muted);
+  text-transform:uppercase;vertical-align:middle}
+.pill.on{border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)}
+
+.big-quote{font-family:var(--serif);font-size:clamp(21px,3vw,28px);line-height:1.4;
+  font-style:italic;color:var(--ink);max-width:26ch;margin:36px 0 0;text-wrap:balance}
+.big-quote::before{content:"“";color:var(--accent);font-size:1.4em;line-height:0;vertical-align:-.2em}
+
+footer{padding:56px 0 40px;color:var(--muted);font-family:var(--mono);font-size:12.5px;line-height:1.7}
+footer b{color:var(--ink)}
+.kbd{font-family:var(--mono);font-size:.85em;background:var(--surface-2);border:1px solid var(--line-strong);
+  border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--ink-soft)}
+.disc{margin-top:14px;padding:16px 18px;border:1px dashed var(--line-strong);border-radius:10px;
+  color:var(--muted);font-size:13.5px;max-width:var(--measure);font-family:var(--sans);line-height:1.6}
+</style>
+
+<div class="mobilebar"><b>Momentum Field Guide</b><button class="themetog" id="tg2" aria-label="Toggle theme">◐ theme</button></div>
+
+<div class="wrap shell">
+<!-- ================= TOC ================= -->
+<nav class="toc" aria-label="Contents"><div class="toc-inner">
+  <div class="brand">Multi-Region Momentum<small>Engineering · Trading · Field Guide</small></div>
+  <ol id="tocList">
+    <li><a href="#intro"><span class="n">00</span><span>The whole thing in 60s</span></a></li>
+    <li class="grp">Part I · The equity engine</li>
+    <li><a href="#arch"><span class="n">01</span><span>One Region to rule them</span></a></li>
+    <li><a href="#signal"><span class="n">02</span><span>The 12-1 signal</span></a></li>
+    <li><a href="#sizing"><span class="n">03</span><span>Sizing &amp; vol targeting</span></a></li>
+    <li><a href="#truth"><span class="n">04</span><span>One weight function</span></a></li>
+    <li><a href="#backtest"><span class="n">05</span><span>The no-lookahead backtest</span></a></li>
+    <li><a href="#costs"><span class="n">06</span><span>Costs, always on</span></a></li>
+    <li><a href="#portfolio"><span class="n">07</span><span>Portfolio &amp; currency</span></a></li>
+    <li class="grp">Part II · Reality</li>
+    <li><a href="#paper"><span class="n">08</span><span>Backtest → live paper</span></a></li>
+    <li><a href="#honesty"><span class="n">09</span><span>Survivorship &amp; data quality</span></a></li>
+    <li class="grp">Part III · The FX system</li>
+    <li><a href="#fx"><span class="n">10</span><span>A parallel-agent ecosystem</span></a></li>
+    <li><a href="#validation"><span class="n">11</span><span>Not fooling yourself</span></a></li>
+    <li class="grp">Part IV · Craft</li>
+    <li><a href="#process"><span class="n">12</span><span>Invariants as code</span></a></li>
+    <li><a href="#lessons"><span class="n">13</span><span>The transferable lessons</span></a></li>
+  </ol>
+  <button class="themetog" id="tg" aria-label="Toggle colour theme">◐ toggle theme</button>
+</div></nav>
+
+<main>
+<!-- ================= HERO ================= -->
+<header class="hero" id="top">
+  <div class="eyebrow">A field guide to the codebase</div>
+  <h1 class="title">How a <em>momentum</em> machine is built — and why every line earns its place</h1>
+  <p class="lede">A tour of a real, multi-region trading system: the maths, the architecture, and the engineering discipline that keeps it honest.</p>
+
+  <figure class="herofig" aria-label="Illustrative equity curves">
+    <canvas id="heroCanvas" width="1100" height="220"></canvas>
+    <div class="herocap">
+      <span><b>Illustrative</b> — synthetic curves, shape not performance</span>
+      <span>momentum sleeve · buy-&amp;-hold benchmark · risk-off shading</span>
+    </div>
+  </figure>
+
+  <div class="statrow">
+    <div class="stat"><div class="k">Regions</div><div class="v">4 <small>sleeves</small></div></div>
+    <div class="stat"><div class="k">Python</div><div class="v">11.7<small>k LOC</small></div></div>
+    <div class="stat"><div class="k">Tests</div><div class="v">170 <small>green</small></div></div>
+    <div class="stat"><div class="k">Subsystems</div><div class="v">2 <small>equity · FX</small></div></div>
+  </div>
+</header>
+
+<!-- ================= 00 INTRO ================= -->
+<section id="intro">
+  <div class="part-no">00 — Orientation</div>
+  <h2>The whole thing, in sixty seconds</h2>
+  <p>Strip away the code and this is one sentence: <strong>each month, in each country, buy the stocks that have been going up — but only while the market itself is healthy — size them so the risk is steady, and report the combined result in one currency.</strong></p>
+  <p>That is a <em class="term">cross-sectional momentum</em> strategy, the single most-replicated anomaly in finance (Jegadeesh &amp; Titman, 1993). The interesting part isn't the idea — it's everything built <em>around</em> the idea to stop it lying to you: no-lookahead accounting, costs that are never switched off, one weight function shared by the simulation and the live book, and a test suite that fails the build if any of those slip.</p>
+
+  <div class="grid2">
+    <div class="card"><h4>What you'll learn — engineering</h4>
+      <p>Data-driven design, a single source of truth, idempotency, fail-safe persistence, invariants enforced as executable tests, and how to structure a system so adding a market is one line of config.</p></div>
+    <div class="card"><h4>What you'll learn — trading</h4>
+      <p>Momentum &amp; trend filters, inverse-vol and volatility targeting, transaction costs &amp; tax asymmetry, currency P&amp;L, survivorship bias, and how professionals measure whether an "edge" is real or a mirage.</p></div>
+  </div>
+
+  <div class="lesson">
+    <div class="tag">Lesson 00 <span class="kind">· the meta-lesson</span></div>
+    <p>In quant trading, <strong>the strategy is the easy 20%.</strong> The 80% that separates a toy from a system is the plumbing that keeps you honest: accounting for time correctly, never hiding a cost, and building so that the thing you test is <em>exactly</em> the thing you run. This guide is mostly about that 80%.</p>
+  </div>
+</section>
+
+<!-- ================= 01 ARCH ================= -->
+<section id="arch">
+  <div class="part-no">01 — Architecture</div>
+  <h2>One <span style="font-family:var(--mono);font-size:.8em;color:var(--accent-deep)">Region</span> record to rule them all</h2>
+  <p>The system runs three live markets — London (FTSE), the US, and Australia (ASX) — plus a fourth (Canada/TSX) scaffolded but deliberately unfunded. The naïve way to do this is to copy the ASX code three times and edit the ticker suffixes. That path guarantees three subtly different bugs.</p>
+  <p>Instead, <strong>everything that differs between markets is data, not code.</strong> A single frozen <code>Region</code> dataclass captures the entire difference between London and Sydney: its universe, its regime index, its currency, its fee schedule, its trading calendar, its Yahoo ticker convention, its broker routing, and its price scaling.</p>
+
+  <div class="codecap">regions.py — the difference between two markets is a record</div>
+<pre><code><span class="kw">@dataclass</span>(frozen=True)
+<span class="kw">class</span> <span class="fn">Region</span>:
+    key: str                 <span class="cm"># "ASX"</span>
+    currency: str            <span class="cm"># local trading currency: AUD / USD / GBP</span>
+    index_ticker: str        <span class="cm"># regime filter index, e.g. ^GSPC</span>
+    yahoo_suffix: str        <span class="cm"># ".AX", "", ".L"</span>
+    commission_bps: float; min_commission: float; slippage_bps: float
+    stamp_duty_bps: float    <span class="cm"># tax on BUYS only (UK SDRT); 0 elsewhere</span>
+    price_scale: float       <span class="cm"># 0.01 turns LSE pence into pounds</span>
+    universe: list[str] = field(default_factory=list)
+    params: StrategyParams = DEFAULT_PARAMS   <span class="cm"># per-region overrides</span></code></pre>
+
+  <p>Adding Canada was, quite literally, one entry in a dictionary. The comment in the code is the whole thesis of the architecture:</p>
+  <p class="sub">“Everything downstream is parameterised by a <code>Region</code>, so adding a fourth market (e.g. TSX or HKEX) is just one more entry here.”</p>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 760 340" role="img" aria-label="Layered architecture from Region records up to AUD reporting">
+        <!-- layer 1 region records -->
+        <text x="20" y="26" class="svg-ttl">Region registry (data)</text>
+        <g font-family="var(--mono)">
+          <rect x="20" y="38" width="120" height="52" rx="7" class="svg-box"/><text x="80" y="60" text-anchor="middle" class="svg-lbl-b">ASX · AUD</text><text x="80" y="78" text-anchor="middle" class="svg-lbl">.AX · ^AXJO</text>
+          <rect x="150" y="38" width="120" height="52" rx="7" class="svg-box"/><text x="210" y="60" text-anchor="middle" class="svg-lbl-b">US · USD</text><text x="210" y="78" text-anchor="middle" class="svg-lbl">·  · ^GSPC</text>
+          <rect x="280" y="38" width="120" height="52" rx="7" class="svg-box"/><text x="340" y="60" text-anchor="middle" class="svg-lbl-b">FTSE · GBP</text><text x="340" y="78" text-anchor="middle" class="svg-lbl">.L · ^FTSE</text>
+          <rect x="410" y="38" width="120" height="52" rx="7" class="svg-box" stroke-dasharray="4 3"/><text x="470" y="60" text-anchor="middle" class="svg-lbl-b">TSX · CAD</text><text x="470" y="78" text-anchor="middle" class="svg-lbl">unfunded</text>
+        </g>
+        <!-- arrows down -->
+        <g stroke="var(--line-strong)" stroke-width="1.5" fill="none">
+          <path d="M80 90 L80 120"/><path d="M210 90 L210 120"/><path d="M340 90 L340 120"/><path d="M470 90 L470 120"/>
+        </g>
+        <!-- shared engine -->
+        <rect x="20" y="122" width="510" height="58" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="275" y="148" text-anchor="middle" class="svg-ttl" fill="var(--accent-deep)">compute_targets( )  —  one weight function</text>
+        <text x="275" y="168" text-anchor="middle" class="svg-lbl">signals · selection · inverse-vol · vol targeting</text>
+        <!-- two consumers -->
+        <g stroke="var(--accent)" stroke-width="1.5" fill="none"><path d="M160 180 L160 208"/><path d="M390 180 L390 208"/></g>
+        <rect x="70" y="210" width="180" height="44" rx="7" class="svg-box"/><text x="160" y="237" text-anchor="middle" class="svg-lbl-b">backtest.py</text>
+        <rect x="300" y="210" width="180" height="44" rx="7" class="svg-box"/><text x="390" y="237" text-anchor="middle" class="svg-lbl-b">paper_trade.py</text>
+        <!-- portfolio layer -->
+        <g stroke="var(--line-strong)" stroke-width="1.5" fill="none"><path d="M160 254 L160 282"/><path d="M390 254 L390 282"/></g>
+        <rect x="70" y="284" width="410" height="46" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+        <text x="275" y="312" text-anchor="middle" class="svg-ttl">Portfolio layer → combine sleeves → report in AUD (via FX)</text>
+        <!-- side note -->
+        <text x="560" y="140" class="svg-lbl">local currency</text>
+        <text x="560" y="156" class="svg-lbl">per sleeve →</text>
+        <text x="560" y="300" class="svg-lbl">base currency</text>
+        <text x="560" y="316" class="svg-lbl">AUD only here</text>
+      </svg>
+    </div>
+    <figcaption>Market-specific facts live only in the <b>Region</b> records at the top. Below that, one shared <b>compute_targets</b> feeds both the backtest and the live book. Currency conversion happens only at the very top of the stack.</figcaption>
+  </figure>
+
+  <h3>The knobs live in one frozen dataclass too</h3>
+  <p>Every strategy parameter — the momentum window, the number of names to hold, the volatility target — lives in a single immutable <code>StrategyParams</code>. Nothing reads a module-level global; the parameters are always <em>passed in</em>. That is why the exact same signal code runs identically for four markets and in both the backtest and live trading. Immutability (<code>frozen=True</code>) means a parameter set can be shared across threads and sleeves with zero risk of one mutating another's config.</p>
+
+  <div class="lesson">
+    <div class="tag">Lesson 01 <span class="kind">· engineering</span></div>
+    <p><strong>Push variation into data.</strong> When the things that differ between cases become records rather than branches, the code that <em>acts</em> on them stays small, uniform, and testable — and the surface area for copy-paste bugs collapses to near zero. "Add a market" should be a config change, not a code change.</p>
+  </div>
+</section>
+
+<!-- ================= 02 SIGNAL ================= -->
+<section id="signal">
+  <div class="part-no">02 — The signal</div>
+  <h2>12-1 momentum: buy what's winning, minus last month</h2>
+  <p>The core signal is one line. For each stock, take its total return over roughly the last twelve months — but <strong>skip the most recent month</strong>:</p>
+
+  <div class="codecap">signals.py — the entire alpha idea in one expression</div>
+<pre><code><span class="kw">def</span> <span class="fn">momentum_score</span>(prices, p):
+    <span class="cm"># return over lookback (252d) excluding the most recent skip (21d)</span>
+    <span class="kw">return</span> prices.shift(p.skip_days) / prices.shift(p.lookback_days) - <span class="nb">1.0</span></code></pre>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 700 210" role="img" aria-label="12 minus 1 momentum measurement window on a price line">
+        <!-- price line -->
+        <polyline points="30,150 90,140 150,120 210,130 270,95 330,105 390,70 450,60 510,80 560,45 600,60 650,30"
+          fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+        <!-- lookback window -->
+        <rect x="90" y="20" width="470" height="160" fill="var(--accent-soft)" opacity=".5"/>
+        <!-- skip window -->
+        <rect x="560" y="20" width="90" height="160" fill="var(--down)" opacity=".14"/>
+        <line x1="90" y1="20" x2="90" y2="180" stroke="var(--accent)" stroke-dasharray="3 3"/>
+        <line x1="560" y1="20" x2="560" y2="180" stroke="var(--down)" stroke-dasharray="3 3"/>
+        <text x="95" y="200" class="svg-lbl">t − 252</text>
+        <text x="520" y="200" class="svg-lbl">t − 21</text>
+        <text x="632" y="200" class="svg-lbl-b">t</text>
+        <text x="300" y="38" text-anchor="middle" class="svg-lbl-b" fill="var(--accent-deep)">measured: the 12-month trend</text>
+        <text x="605" y="14" text-anchor="middle" class="svg-lbl" fill="var(--down)">skipped</text>
+        <circle cx="650" cy="30" r="4" fill="var(--ink)"/>
+      </svg>
+    </div>
+    <figcaption>The score is the price ratio between <b>t−252</b> and <b>t−21</b>. The last month is deliberately excluded — recent winners tend to bounce <b>down</b> briefly (short-term reversal), so skipping it isolates the persistent trend instead of buying a spike.</figcaption>
+  </figure>
+
+  <p>Notice the tool doing the work: <code>.shift()</code>. Every signal is built purely from <em>past</em> prices. This isn't a stylistic choice — it is the load-bearing wall of the whole system, and we'll return to it in <a href="#backtest">Part 05</a>.</p>
+
+  <h3>Three filters turn a score into a decision</h3>
+  <p>A high momentum score is necessary but not sufficient. A name only enters the book if it clears three gates — and the whole book goes to cash if the market itself is unhealthy:</p>
+  <ul class="clean">
+    <li><strong>Absolute momentum</strong> — the 12-1 return must be positive. Don't buy the "best of a falling universe."</li>
+    <li><strong>Per-stock trend</strong> — price must be above its own 200-day moving average. An individual name in a downtrend is disqualified however good its ranking.</li>
+    <li><strong>Regime filter</strong> — if the <em>index</em> is below its 200-day MA, the market is risk-off and the sleeve holds <strong>100% cash</strong>. This is the crash protection: momentum's worst enemy is a sharp market reversal, and this gate sidesteps most of it.</li>
+  </ul>
+
+  <p>An optional <strong>value factor</strong> (long-term reversal — cheap = past losers) can be blended in by cross-sectional percentile rank. It's off by default, but its design is instructive: it is negatively correlated with momentum <em>by construction</em>, which is exactly what makes it a diversifying signal rather than a redundant one.</p>
+
+  <div class="lesson trade">
+    <div class="tag">Lesson 02 <span class="kind">· trading</span></div>
+    <p><strong>An edge is a filter, not a prediction.</strong> The system never claims to know a stock will rise. It ranks, gates on trend, and defers to the regime. The filters do more for the risk profile than the ranking does for the return — crash protection (the index MA gate) is worth more than a cleverer score.</p>
+  </div>
+</section>
+
+<!-- ================= 03 SIZING ================= -->
+<section id="sizing">
+  <div class="part-no">03 — Position sizing</div>
+  <h2>Steady risk, not steady money</h2>
+  <p>Picking the names is half the job. <em>How much</em> of each to hold is the other half, and it's where the risk discipline lives. Sizing happens in two stages.</p>
+
+  <h4>Stage 1 — Inverse-volatility weights</h4>
+  <p>Calmer stocks get more capital; wilder stocks get less. Each weight is proportional to <code>1/volatility</code>, then capped at 15% per name so nothing dominates. If the cap pushes the book above 100% invested, it's renormalised back down — but <strong>never levered up</strong> from a cap.</p>
+
+  <h4>Stage 2 — Volatility targeting</h4>
+  <p>The whole book is then scaled toward a <strong>12% annualised volatility target</strong>. In calm markets the book scales up; in turbulent markets it scales down. The point is that <em>risk</em> stays roughly constant through time, rather than the dollar amount invested.</p>
+  <p>Portfolio volatility is estimated with a <em class="term">constant-average-correlation</em> approximation — you don't need a full covariance matrix, just an assumed average pairwise correlation ρ:</p>
+
+  <div class="codecap">strategy.py — vol targeting, capped and never levered past gross</div>
+<pre><code><span class="cm"># var ≈ (1−ρ)·Σ(wᵢσᵢ)²  +  ρ·(Σ wᵢσᵢ)²</span>
+port_var = (<span class="nb">1.0</span> - rho) * (wv**<span class="nb">2</span>).sum() + rho * (wv.sum() ** <span class="nb">2</span>)
+port_vol = <span class="fn">float</span>(np.sqrt(<span class="fn">max</span>(port_var, <span class="nb">0.0</span>)))
+
+scale = <span class="fn">min</span>(p.target_vol / <span class="fn">max</span>(port_vol, <span class="nb">1e-9</span>), p.max_vol_scale)
+w = weights * scale
+<span class="kw">if</span> w.sum() > p.max_gross:          <span class="cm"># gross exposure never exceeds 100%</span>
+    w = w * (p.max_gross / w.sum())</code></pre>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 700 230" role="img" aria-label="Inverse vol weights then scaled to target vol">
+        <text x="20" y="20" class="svg-ttl">1 · inverse-vol raw weights</text>
+        <!-- bars -->
+        <g>
+          <rect x="30" y="60" width="46" height="70" fill="var(--accent)"/><text x="53" y="148" text-anchor="middle" class="svg-lbl">calm A</text>
+          <rect x="90" y="80" width="46" height="50" fill="var(--accent)"/><text x="113" y="148" text-anchor="middle" class="svg-lbl">B</text>
+          <rect x="150" y="95" width="46" height="35" fill="var(--accent)"/><text x="173" y="148" text-anchor="middle" class="svg-lbl">C</text>
+          <rect x="210" y="108" width="46" height="22" fill="var(--accent)"/><text x="233" y="148" text-anchor="middle" class="svg-lbl">wild D</text>
+        </g>
+        <text x="150" y="180" text-anchor="middle" class="svg-lbl">low vol → big weight,  high vol → small weight</text>
+        <!-- arrow -->
+        <path d="M300 95 L360 95" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ar)"/>
+        <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker></defs>
+        <!-- scaled -->
+        <text x="400" y="20" class="svg-ttl">2 · scale whole book → 12% vol</text>
+        <line x1="400" y1="70" x2="670" y2="70" stroke="var(--line-strong)" stroke-dasharray="4 3"/>
+        <text x="675" y="74" class="svg-lbl" text-anchor="end" transform="translate(0,-14)"></text>
+        <text x="400" y="62" class="svg-lbl">target 12%</text>
+        <rect x="420" y="70" width="70" height="46" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="455" y="132" text-anchor="middle" class="svg-lbl">calm mkt</text><text x="455" y="97" text-anchor="middle" class="svg-lbl-b" fill="var(--accent-deep)">×1.4</text>
+        <rect x="520" y="90" width="70" height="26" fill="var(--surface-2)" stroke="var(--line-strong)"/><text x="555" y="132" text-anchor="middle" class="svg-lbl">turbulent</text><text x="555" y="107" text-anchor="middle" class="svg-lbl-b">×0.6</text>
+        <text x="420" y="180" class="svg-lbl">exposure moves inversely with market vol —</text>
+        <text x="420" y="196" class="svg-lbl">risk held steady, capped at 100% gross (no leverage)</text>
+      </svg>
+    </div>
+    <figcaption>Two-stage sizing: inverse-vol <b>within</b> the book, then a single scale factor to hold <b>portfolio</b> vol near target. The scale is capped (<code>max_vol_scale</code>) and gross is hard-capped at 100% — the book can de-risk aggressively but can never borrow.</figcaption>
+  </figure>
+
+  <div class="lesson trade">
+    <div class="tag">Lesson 03 <span class="kind">· trading</span></div>
+    <p><strong>Volatility targeting is the closest thing to a free lunch in systematic trading.</strong> It doesn't improve your average return, but it stabilises the ride — cutting exposure into turbulence and adding it into calm. Steady risk compounds better than steady capital, and it makes the strategy psychologically survivable.</p>
+  </div>
+</section>
+
+<!-- ================= 04 TRUTH ================= -->
+<section id="truth">
+  <div class="part-no">04 — Single source of truth</div>
+  <h2>One weight function, called by everything</h2>
+  <p>Here is the most important architectural decision in the entire system, and it is almost invisible. Selection and sizing live in exactly one function — <code>strategy.compute_targets()</code> — and <strong>both the backtester and the live paper-trading engine call it.</strong></p>
+
+  <div class="codecap">strategy.py — the only place target weights are ever born</div>
+<pre><code><span class="kw">def</span> <span class="fn">compute_targets</span>(prices, index_prices, p, asof=None, eligible=None):
+    scores  = sig.momentum_score(prices, p).loc[asof]
+    trend   = sig.stock_trend_ok(prices, p).loc[asof]
+    vols    = sig.realised_vol(prices, p).loc[asof]
+    risk_on = sig.index_risk_on(index_prices, p)...loc[asof]
+    raw = sig.select_portfolio(scores, trend, vols, risk_on, p, ...)
+    <span class="kw">return</span> vol_target(raw, vols, p)     <span class="cm"># selection + sizing, one path</span></code></pre>
+
+  <p>Why does this matter so much? Because the number-one way backtests betray you is <strong>drift between simulation and reality</strong>. You test one version of the sizing logic, then live trading grows a slightly different copy — an extra cap here, a rounding tweak there — and now your backtest is describing a strategy you don't actually run. The results become fiction.</p>
+
+  <p>This system makes that class of bug <em>impossible by construction</em>: there is no second copy to drift. And it doesn't just trust that — it <strong>proves it in the test suite</strong>, at two levels:</p>
+
+  <div class="codecap">tests/test_consistency.py — the guarantee is executable</div>
+<pre><code><span class="cm"># Layer 1 — source-level: neither engine may bypass the shared path</span>
+<span class="kw">assert</span> <span class="st">"select_portfolio"</span> <span class="kw">not in</span> inspect.getsource(backtest)
+<span class="kw">assert</span> <span class="st">"select_portfolio"</span> <span class="kw">not in</span> inspect.getsource(paper_trade)
+
+<span class="cm"># Layer 2 — numeric golden equality: the weights each engine ACTS on</span>
+<span class="cm"># equal compute_targets' output bit-for-bit. A sneaky second sizing</span>
+<span class="cm"># path (an ADV cap trimmed post-hoc) can't slip past a text grep.</span></code></pre>
+
+  <div class="lesson">
+    <div class="tag">Lesson 04 <span class="kind">· engineering</span></div>
+    <p><strong>Don't Repeat Yourself is a correctness property, not a tidiness preference.</strong> When two things must agree, don't write them twice and hope — write them once and route both callers through it. Then write a test that <em>fails the build</em> if anyone forks it. An invariant a human has to remember is an invariant that will eventually break.</p>
+  </div>
+</section>
+
+<!-- ================= 05 BACKTEST ================= -->
+<section id="backtest">
+  <div class="part-no">05 — The backtest</div>
+  <h2>No lookahead: decide at <span style="font-family:var(--mono);font-size:.8em">t</span>, trade at <span style="font-family:var(--mono);font-size:.8em">t+1</span></h2>
+  <p>A backtest's only job is to answer "what would have happened?" honestly. The single easiest way to fake a brilliant one is to peek — to let a decision on Monday quietly use Monday's closing price that you wouldn't have known until the day was over. The system's first invariant exists to forbid this:</p>
+  <p class="big-quote">A decision at time t uses only data available at t, and is acted on at t+1.</p>
+
+  <p>The backtester separates two clocks. <strong>Decisions</strong> happen on month-end rebalance dates, using data up to and including that day. <strong>Execution</strong> and mark-to-market happen every trading day — and crucially, yesterday's decided target becomes today's trade:</p>
+
+  <div class="codecap">backtest.py — the t+1 execution loop (abridged)</div>
+<pre><code><span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="nb">1</span>, <span class="fn">len</span>(dates)):
+    today, yday = dates[i], dates[i-<span class="nb">1</span>]
+    <span class="kw">if</span> pending <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span>:              <span class="cm"># apply YESTERDAY's target at TODAY's prices</span>
+        delta = pending - current_w
+        cost  = turnover*cost_rate + buy_turnover*stamp_rate
+        current_w = pending
+    r = (current_w * day_rets).sum() - cost
+    equity.append(equity[-<span class="nb">1</span>] * (<span class="nb">1</span> + r))
+    <span class="kw">if</span> yday <span class="kw">in</span> weight_schedule:        <span class="cm"># schedule computed at t, fires at t+1</span>
+        pending = weight_schedule[yday]</code></pre>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 700 170" role="img" aria-label="No lookahead timeline: signal at t, execution at t plus one">
+        <line x1="40" y1="90" x2="660" y2="90" stroke="var(--line-strong)" stroke-width="2"/>
+        <!-- ticks -->
+        <g class="svg-lbl" text-anchor="middle">
+          <line x1="120" y1="84" x2="120" y2="96" stroke="var(--line-strong)"/><text x="120" y="118">month-end t</text>
+          <line x1="260" y1="84" x2="260" y2="96" stroke="var(--line-strong)"/><text x="260" y="118">t+1</text>
+          <line x1="400" y1="84" x2="400" y2="96" stroke="var(--line-strong)"/><text x="400" y="118">t+2 … drift</text>
+          <line x1="560" y1="84" x2="560" y2="96" stroke="var(--line-strong)"/><text x="560" y="118">next month-end</text>
+        </g>
+        <!-- decision -->
+        <circle cx="120" cy="90" r="7" fill="var(--accent)"/>
+        <rect x="60" y="40" width="120" height="30" rx="6" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="120" y="60" text-anchor="middle" class="svg-lbl-b" fill="var(--accent-deep)">decide (data ≤ t)</text>
+        <!-- execution -->
+        <circle cx="260" cy="90" r="7" fill="var(--ink)"/>
+        <rect x="200" y="40" width="120" height="30" rx="6" class="svg-box"/>
+        <text x="260" y="60" text-anchor="middle" class="svg-lbl-b">execute + pay cost</text>
+        <path d="M132 78 Q190 40 236 74" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <defs><marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker></defs>
+        <text x="360" y="152" text-anchor="middle" class="svg-lbl">between rebalances the held weights simply drift with daily returns</text>
+      </svg>
+    </div>
+    <figcaption>The one-day gap between <b>deciding</b> and <b>executing</b> is what makes the backtest honest. Between rebalances, weights aren't re-optimised — they drift with the market, exactly as a real un-touched book would.</figcaption>
+  </figure>
+
+  <h3>The drawdown circuit breaker</h3>
+  <p>Layered on top is a portfolio-level safety valve: if equity falls more than 25% from its peak, the book liquidates to cash and sits out a cooldown (~one month) before re-entering. It's a coarse instrument — but momentum strategies die in fast crashes, and a hard stop is a blunt, reliable defence. Notice it obeys the same discipline: the breach is detected at the close and the flatten executes the next day.</p>
+
+  <div class="lesson">
+    <div class="tag">Lesson 05 <span class="kind">· engineering + trading</span></div>
+    <p><strong>Model time as carefully as you model money.</strong> Off-by-one-day errors don't crash — they silently inflate returns and make a losing strategy look like a winner. The fix is structural: separate the moment of <em>decision</em> from the moment of <em>action</em>, and let data flow only forward. Then pin it with a test that recomputes a signal on truncated history and demands the same answer.</p>
+  </div>
+</section>
+
+<!-- ================= 06 COSTS ================= -->
+<section id="costs">
+  <div class="part-no">06 — Frictions</div>
+  <h2>Costs are always on — including the tax nobody models</h2>
+  <p>A backtest with costs switched off is a fantasy generator. Momentum is a relatively high-turnover strategy — it rebalances monthly and chases moving names — so it is <em>especially</em> sensitive to frictions. This system charges three, every single rebalance:</p>
+
+  <div class="grid2">
+    <div class="card"><h4>Commission</h4><p><code>max(floor, notional × bps)</code>. The <strong>floor</strong> matters enormously for small accounts — a $1 minimum on a $50 trade is a 2% cost. This is why the project runs a deliberate <code>micro</code> account: to <em>show</em> fee drag, not hide it.</p></div>
+    <div class="card"><h4>Slippage</h4><p>A per-side price impact in basis points, wider for thinner markets (ASX 10bps) than deep ones (US 5bps). Modelled as an adverse fill, not a fee.</p></div>
+  </div>
+
+  <h3>UK stamp duty: the asymmetry that changes the answer</h3>
+  <p>The UK charges 0.5% Stamp Duty Reserve Tax on share <strong>purchases only</strong> — not sales, and not in any other market. Most toy backtests ignore this entirely. For a high-turnover UK momentum book it's a material, recurring, <em>one-sided</em> drag, so the system models it explicitly and separately from symmetric costs:</p>
+
+  <div class="codecap">fees.py — asymmetric by design</div>
+<pre><code><span class="kw">def</span> <span class="fn">stamp_duty</span>(region, buy_notional):
+    <span class="cm"># tax charged on the BUY notional only (0 for sells / non-UK)</span>
+    <span class="kw">return</span> <span class="fn">max</span>(buy_notional, <span class="nb">0.0</span>) * region.stamp_duty_bps / <span class="nb">1e4</span></code></pre>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Region</th><th class="mono">Commission</th><th class="mono">Floor</th><th class="mono">Slippage</th><th class="mono">Stamp duty</th></tr></thead>
+    <tbody>
+      <tr><td><strong>ASX</strong></td><td class="mono">8 bps</td><td class="mono">A$5</td><td class="mono">10 bps</td><td class="mono">—</td></tr>
+      <tr><td><strong>US</strong></td><td class="mono">2 bps</td><td class="mono">US$1</td><td class="mono">5 bps</td><td class="mono">—</td></tr>
+      <tr><td><strong>FTSE</strong></td><td class="mono">5 bps</td><td class="mono">£1</td><td class="mono">8 bps</td><td class="mono">50 bps (buys)</td></tr>
+      <tr><td><strong>TSX</strong></td><td class="mono">3 bps</td><td class="mono">C$1</td><td class="mono">8 bps</td><td class="mono">—</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="lesson trade">
+    <div class="tag">Lesson 06 <span class="kind">· trading</span></div>
+    <p><strong>The gap between a backtest and reality is mostly costs.</strong> Turnover, floors, slippage, and jurisdiction-specific taxes are not footnotes — they are the difference between a strategy that survives contact with a broker and one that quietly bleeds. Model the frictions that are <em>asymmetric</em> or <em>fixed</em> especially carefully; those are the ones that ambush small accounts.</p>
+  </div>
+</section>
+
+<!-- ================= 07 PORTFOLIO ================= -->
+<section id="portfolio">
+  <div class="part-no">07 — Portfolio &amp; currency</div>
+  <h2>Three books, three currencies, one AUD number</h2>
+  <p>Each sleeve trades and compounds entirely in its <strong>own local currency</strong> — an invariant: you never mix GBP and USD <em>inside</em> a sleeve. Currency only enters at the very top, when the portfolio layer combines everything into the base reporting currency (AUD). And when it does, it captures the currency move as real P&amp;L:</p>
+
+  <div class="codecap">portfolio_backtest.py — a foreign sleeve's return in AUD includes the FX move</div>
+<pre><code><span class="cm"># m = base units per 1 local unit (AUD per GBP, etc.)</span>
+fx_ret = m / m.shift(<span class="nb">1</span>) - <span class="nb">1.0</span>
+<span class="kw">return</span> (<span class="nb">1</span> + local_rets) * (<span class="nb">1</span> + fx_ret) - <span class="nb">1.0</span>     <span class="cm"># stock P&amp;L compounded with FX P&amp;L</span></code></pre>
+
+  <p>A British stock can rise 3% while the pound falls 2% against the Aussie dollar — an Australian investor's real return is neither number, it's the product. Ignoring this is a classic error that makes multi-market backtests wrong in ways that are invisible until you actually wire real money across a border.</p>
+
+  <h3>Allocation, diversification, and an honest benchmark</h3>
+  <ul class="clean">
+    <li><strong>Equal thirds, rebalanced.</strong> Capital splits evenly across sleeves and is trued back to target on a cadence — paying a small FX spread on the cash that crosses currencies (again: the cost is never free).</li>
+    <li><strong>Diversification is measurable.</strong> Because the three markets aren't perfectly correlated, the combined book's volatility is <em>lower</em> than any single sleeve's — the synthetic sanity check confirms it, which is how you know the plumbing is right.</li>
+    <li><strong>The benchmark is fair.</strong> Performance is judged against an equal-weight buy-and-hold of the three regional indices, converted to AUD the same way — plus beta, Jensen's alpha, tracking error and information ratio. You only get to claim skill relative to the cheap alternative.</li>
+  </ul>
+
+  <div class="lesson">
+    <div class="tag">Lesson 07 <span class="kind">· engineering + trading</span></div>
+    <p><strong>Currency is a position, not a display setting.</strong> Keep each unit of the system in one honest currency and convert only at a single, well-defined boundary — capturing the conversion's P&amp;L, not papering over it. The same discipline generalises: don't mix units (currencies, timezones, price scales) inside a component; convert at the edges, explicitly.</p>
+  </div>
+</section>
+
+<!-- ================= 08 PAPER ================= -->
+<section id="paper">
+  <div class="part-no">08 — Backtest → live</div>
+  <h2>The jump from simulation to a real, persistent book</h2>
+  <p>A backtest deals in fractional weights and continuous equity. A live book cannot — it buys <strong>whole shares</strong>, pays a commission floor on every ticket, holds state across days on a machine that might crash mid-run, and must never trade twice on the same signal. The paper-trading engine is where the strategy meets these hard edges. It's the largest, most defensive module in the system, and it teaches the most about production engineering.</p>
+
+  <h3>Whole shares &amp; the tyranny of the floor</h3>
+  <p>Targets are fractional; reality is integer. Converting is a floor division — you can only buy shares you can fully afford — and tiny "dust" adjustments are skipped entirely, because paying a $5 commission to rebalance a $30 drift is lighting money on fire:</p>
+
+  <div class="codecap">paper_trade.py — fractional target → integer lot</div>
+<pre><code>desired[t] = <span class="fn">int</span>((equity * w) / price)          <span class="cm"># whole shares only</span>
+...
+<span class="kw">if</span> notional &lt; dust <span class="kw">and</span> tgt != <span class="nb">0</span>:                <span class="cm"># skip dust; always allow a full exit</span>
+    <span class="kw">continue</span>
+fee  = fees.commission(region, notional)
+duty = fees.stamp_duty(region, notional) <span class="kw">if</span> delta &gt; <span class="nb">0</span> <span class="kw">else</span> <span class="nb">0.0</span></code></pre>
+
+  <p>Very small accounts can't even hold the full book in whole shares, so there's an explicit <strong>micro mode</strong> that concentrates into a few affordable names rather than pretending to own fractional slices — an honest degradation instead of a silent lie.</p>
+
+  <h3>P&amp;L comes from the fills ledger — the one source of truth</h3>
+  <p>This is a subtle and excellent decision. The book stores positions and cash, but <strong>realised P&amp;L is never stored as a running total.</strong> Instead it's <em>derived</em> from the immutable log of actual fills, replayed through a FIFO lot-matching engine — exactly like a broker's trade confirmations. Each sale is stamped with the real cost basis of the specific lots it consumed:</p>
+
+  <div class="codecap">paper_trade.py — realised P&amp;L reconstructed from the trade record, not a cached counter</div>
+<pre><code>lots, _ = pnl.build_lots([t <span class="kw">for</span> t <span class="kw">in</span> trade_log <span class="kw">if</span> t[<span class="st">"region"</span>] == region.key])
+...
+<span class="kw">if</span> delta &gt; <span class="nb">0</span>:
+    pnl.add_lot(lots, key, delta, fill, fee+duty, today)   <span class="cm"># a buy opens a lot</span>
+<span class="kw">else</span>:
+    r = pnl.consume(lots, key, <span class="fn">abs</span>(delta), fill, fee)     <span class="cm"># a sell eats FIFO lots</span>
+    trade[<span class="st">"realized"</span>] = <span class="fn">round</span>(r[<span class="st">"net"</span>], <span class="nb">2</span>)             <span class="cm"># actual gain/loss on this sale</span></code></pre>
+  <p>The code comment says it best: cost-basis counters "are NOT the source of truth and nothing reads them… so it can never disagree with the actual trade record." A derived number can't drift from the events that produced it.</p>
+
+  <h3>Idempotency: safe to run five times a day</h3>
+  <p>A scheduler fires after each regional market close — so the engine might run three times in one day. It must be <strong>idempotent</strong>: a sleeve rebalances only on the first run of a new calendar month, and merely marks-to-market otherwise. There's even a subtle guard against churning a freshly-funded book: a minimum-gap rule stops an account funded on the 28th from being torn up on the 1st.</p>
+
+  <h3>Fail-safe persistence</h3>
+  <p>State is the crown jewels — lose it or corrupt it and you've "reset" a real book. The design is belt-and-braces:</p>
+  <ul class="clean">
+    <li><strong>Two stores.</strong> SQLite is the durable, atomic source of truth (WAL mode + a busy-timeout so a manual run and the scheduler serialise instead of clobbering); a per-account JSON file is dual-written as a human-readable fallback that dashboards and CI can glob.</li>
+    <li><strong>Atomic writes.</strong> The JSON is written to a temp file, <code>fsync</code>ed, then atomically renamed over the target — a crash leaves <em>either</em> the old file or the new one, never a half-written book.</li>
+    <li><strong>Additive migration.</strong> Older state files are upgraded on load, never destructively — new fields are added, nothing existing is dropped.</li>
+    <li><strong>Fail safe, don't fail silent.</strong> With the validation gate on, a corrupt-but-parseable state file makes the run <em>raise</em> rather than trade on garbage or reset equity. The default is a "shadow mode" that only warns during rollout — a staged, reversible way to turn on a strict check.</li>
+  </ul>
+
+  <div class="codecap">storage.py — the canonical torn-write-proof file update (memorise this)</div>
+<pre><code>tmp = f<span class="st">"{path}.tmp"</span>
+<span class="kw">with</span> <span class="fn">open</span>(tmp, <span class="st">"w"</span>) <span class="kw">as</span> f:
+    json.dump(state, f, indent=<span class="nb">2</span>)
+    f.flush(); os.fsync(f.fileno())      <span class="cm"># force bytes to disk first</span>
+os.replace(tmp, path)                     <span class="cm"># atomic on POSIX — no torn-write window</span></code></pre>
+
+  <div class="lesson">
+    <div class="tag">Lesson 08 <span class="kind">· engineering</span></div>
+    <p><strong>Derive, don't cache; and make the unsafe path the one that fails loudly.</strong> Store the immutable facts (the fills) and compute everything else from them — a derived total can never disagree with its inputs. For anything that persists real state, assume the process will be killed mid-write, run twice by accident, and handed yesterday's file format. Idempotency, atomic writes, additive migrations and fail-safe validation aren't paranoia — they're the difference between a demo and a system you can leave running.</p>
+  </div>
+</section>
+
+<!-- ================= 09 HONESTY ================= -->
+<section id="honesty">
+  <div class="part-no">09 — Honest measurement</div>
+  <h2>Survivorship bias &amp; the bad-print problem</h2>
+  <p>Two quieter systems exist purely to stop the data from flattering you.</p>
+
+  <h3>Survivorship bias — the backtest is an upper bound</h3>
+  <p>Today's index members are the <em>survivors</em>. A stock that collapsed and dropped out of the ASX 200 in 2015 isn't in today's universe — so a naïve backtest never "buys" it and never takes its loss. The results are silently inflated. The <code>constituents.py</code> module fixes this with <strong>point-in-time membership</strong>: at each historical rebalance, only names that were <em>actually in the index that month</em> are eligible, and since-delisted names are included if their prices can be fetched.</p>
+  <p>Tellingly, the system labels its own output. Without a point-in-time file it falls back to today's universe and <strong>says so</strong> — it never presents a survivorship-biased number as if it were clean.</p>
+
+  <h3>Data quality — one bad print corrupts everything downstream</h3>
+  <p>Before <code>compute_targets</code> ever runs, a shared validator screens every price series for staleness, gaps, outliers and impossible moves. Flagged names are dropped from the candidate set. In live trading a flagged name that's <em>already held</em> is <strong>frozen</strong> — not traded on an untrusted price — rather than dumped at a bad quote. The gate runs in <em>both</em> the backtest and live, so they stay consistent.</p>
+
+  <div class="lesson warn">
+    <div class="tag">Lesson 09 <span class="kind">· trading + engineering</span></div>
+    <p><strong>Your backtest is a best case, and your data is guilty until proven innocent.</strong> Survivorship bias, look-ahead, and bad prints all push results in the flattering direction — the direction you <em>want</em> to believe. The professional instinct is the opposite of the amateur's: assume the impressive number is wrong, and build the machinery to prove it isn't. When you can't, label it honestly.</p>
+  </div>
+</section>
+
+<!-- ================= 10 FX ================= -->
+<section id="fx">
+  <div class="part-no">10 — The FX subsystem</div>
+  <h2>A parallel ecosystem of opinions</h2>
+  <p>Living alongside the equity sleeves is a separate, self-contained foreign-exchange system. It reuses the same principles — no lookahead, costs always on, one shared weight function — but redesigns them for a different world: currency <em>pairs</em> instead of single names, <strong>long/short</strong> leverage instead of long-only, a fast per-bar cycle instead of a monthly rebalance, and — most interestingly — <strong>five competing strategy agents instead of one momentum score.</strong></p>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 720 250" role="img" aria-label="FX pipeline from agents to ensemble to risk to book">
+        <text x="20" y="22" class="svg-ttl">Five agents form independent opinions, per pair, per bar</text>
+        <g font-family="var(--mono)">
+          <rect x="20" y="40" width="120" height="34" rx="6" class="svg-box"/><text x="80" y="62" text-anchor="middle" class="svg-lbl-b">Trend</text>
+          <rect x="20" y="80" width="120" height="34" rx="6" class="svg-box"/><text x="80" y="102" text-anchor="middle" class="svg-lbl-b">Breakout</text>
+          <rect x="20" y="120" width="120" height="34" rx="6" class="svg-box"/><text x="80" y="142" text-anchor="middle" class="svg-lbl-b">MeanRevert</text>
+          <rect x="20" y="160" width="120" height="34" rx="6" class="svg-box"/><text x="80" y="182" text-anchor="middle" class="svg-lbl-b">Momentum</text>
+          <rect x="20" y="200" width="120" height="34" rx="6" class="svg-box"/><text x="80" y="222" text-anchor="middle" class="svg-lbl-b">Carry</text>
+        </g>
+        <g stroke="var(--line-strong)" stroke-width="1.4" fill="none">
+          <path d="M140 57 L210 120"/><path d="M140 97 L210 128"/><path d="M140 137 L210 137"/><path d="M140 177 L210 146"/><path d="M140 217 L210 154"/>
+        </g>
+        <rect x="210" y="112" width="130" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="275" y="132" text-anchor="middle" class="svg-lbl-b" fill="var(--accent-deep)">Ensemble</text>
+        <text x="275" y="150" text-anchor="middle" class="svg-lbl">perf-weighted blend</text>
+        <path d="M340 137 L400 137" stroke="var(--line-strong)" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <defs><marker id="ar3" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker></defs>
+        <rect x="400" y="112" width="130" height="50" rx="8" class="svg-box"/>
+        <text x="465" y="132" text-anchor="middle" class="svg-lbl-b">Risk layer</text>
+        <text x="465" y="150" text-anchor="middle" class="svg-lbl">vol target · caps</text>
+        <path d="M530 137 L590 137" stroke="var(--line-strong)" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <rect x="590" y="112" width="110" height="50" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+        <text x="645" y="132" text-anchor="middle" class="svg-lbl-b">Books</text>
+        <text x="645" y="150" text-anchor="middle" class="svg-lbl">±weights</text>
+        <text x="210" y="205" class="svg-lbl">signal ∈ [−1,+1]  ·  evaluated concurrently (AgentPool)</text>
+      </svg>
+    </div>
+    <figcaption>Each agent emits a signal in <b>[−1,+1]</b> for every pair; the ensemble blends them; the risk layer turns the blend into vol-targeted, capped long/short weights; the books trade them. Because agents share one interface, adding a sixth is a single class.</figcaption>
+  </figure>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Agent</th><th>Edge</th><th>Fires when</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Trend</strong></td><td>EMA fast/slow spread, ATR-normalised</td><td class="mono">ADX says trending</td></tr>
+      <tr><td><strong>Breakout</strong></td><td>Donchian N-bar channel (turtle)</td><td class="mono">new N-bar high/low</td></tr>
+      <tr><td><strong>MeanReversion</strong></td><td>fades Bollinger/RSI extremes</td><td class="mono">ADX says ranging</td></tr>
+      <tr><td><strong>Momentum</strong></td><td>rate-of-change, vol-normalised</td><td class="mono">always</td></tr>
+      <tr><td><strong>Carry</strong></td><td>tilts to the positive-carry side</td><td class="mono">always</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>The ensemble: lean on whoever's currently right</h3>
+  <p>The clever part is how the five opinions are combined. In adaptive mode, each agent is weighted by its <strong>own recent risk-adjusted performance on that specific pair</strong> — the rolling information ratio of "signal yesterday × return today." Agents that have been right get more say; agents that have been wrong get backed off — but a <strong>floor</strong> ensures none is ever fully muted, because today's laggard is tomorrow's star when the regime flips. The default blending uses the <em class="term">Hedge</em> algorithm (multiplicative weights), which carries a provable regret bound — a rare thing: a combining rule with a mathematical guarantee it won't do much worse than the best agent in hindsight.</p>
+
+  <h3>The deep-learning layer — that augments, never replaces</h3>
+  <p>A pure-NumPy neural network sits as an optional sixth agent. Two design choices make it worth studying:</p>
+  <ul class="clean">
+    <li><strong>A Sharpe-ratio loss, not MSE.</strong> The network outputs a <em>position</em> and is trained to directly maximise risk-adjusted return (Deep Momentum Networks, 2019). Predicting the next price accurately is the wrong objective — you don't get paid for low forecast error, you get paid for good positions. Optimise the thing you actually care about.</li>
+    <li><strong>Meta-labeling.</strong> A secondary classifier (López de Prado's technique) decides how <em>big</em> a bet to place on the primary signal's side, using triple-barrier labels. Separating "which way" from "how much" is a powerful decomposition.</li>
+  </ul>
+  <p>The honesty is baked in even here: the README states plainly that daily FX is near-random-walk and that this layer is "built to <em>measure honestly</em>, not to overclaim." A small regularised MLP is chosen over an LSTM or Transformer precisely because the evidence says simpler models win on noisy financial data.</p>
+
+  <h3>The risk layer, and a truth naive caps miss</h3>
+  <p>Turning the ensemble's convictions into positions runs through four sequential controls: vol targeting (with <em>signed</em> weights, so offsetting longs and shorts correctly <em>reduce</em> estimated risk), a per-pair cap, per-asset-class gross caps, and a final gross-leverage cap. The third one encodes a lesson most retail systems get wrong:</p>
+  <p><strong>"Diversification" inside a correlated cluster is fake diversification.</strong> Three "different" cryptos are, to a risk model, essentially one bet; four treasury ETFs are one duration bet; five US mega-caps are one cluster. So the system caps the <em>combined</em> gross exposure of each class, not just each position. It's a risk policy, not a market view — and it's the kind of thing that only shows up when you take correlation seriously.</p>
+
+  <h4>And a neat latency trick</h4>
+  <p>Because the live cycle should stay fast no matter how many years of history pile up, <code>compute_targets(fast=True)</code> trims the price panel to exactly the number of recent bars that can still <em>mathematically</em> affect the latest weight (EMA settle time plus the rolling-window chain). A test proves the trimmed answer is <strong>bit-for-bit identical</strong> to recomputing on the full archive — so you get bounded, flat latency with zero loss of correctness.</p>
+
+  <div class="lesson">
+    <div class="tag">Lesson 10 <span class="kind">· engineering + ML</span></div>
+    <p><strong>An ensemble of simple, diverse opinions beats one clever model — and you should optimise the objective you're actually paid for.</strong> Five interpretable agents you can reason about, weighted by live performance with a floor, is more robust and more debuggable than a monolith. And when you do reach for ML, train it on your real goal (risk-adjusted return), not a convenient proxy (price error).</p>
+  </div>
+</section>
+
+<!-- ================= 11 VALIDATION ================= -->
+<section id="validation">
+  <div class="part-no">11 — Not fooling yourself</div>
+  <h2>The hardest problem in quant is self-deception</h2>
+  <p>If you try 500 strategy variants, one will look brilliant by pure luck. The FX subsystem takes this threat seriously enough to build a whole validation apparatus whose <em>job is to disprove edges</em>. This is the most intellectually honest part of the codebase, and the most transferable.</p>
+
+  <div class="grid2">
+    <div class="card"><h4>Deflated Sharpe Ratio</h4><p>Adjusts a strategy's Sharpe downward for <strong>how many strategies you tried</strong> and how non-normal the returns are. A Sharpe of 2 found after 200 attempts is not a Sharpe of 2. It makes "we found something" a <em>falsifiable</em> claim.</p></div>
+    <div class="card"><h4>Probability of Backtest Overfitting</h4><p>Via combinatorially-symmetric cross-validation (CSCV): how often does the "best" in-sample configuration underperform out-of-sample? A high PBO means your selection process is fitting noise.</p></div>
+  </div>
+
+  <h3>Purged &amp; embargoed walk-forward</h3>
+  <p>Ordinary cross-validation leaks the future into the past when your labels span multiple bars. The fix is to <strong>purge</strong> training samples whose outcome windows overlap the test set, and <strong>embargo</strong> a gap after each test fold. Scalers are fit on the training fold only. The result: every out-of-sample prediction is genuinely out-of-sample — no subtle leakage inflating the score.</p>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 700 130" role="img" aria-label="Purged and embargoed walk forward split">
+        <!-- train -->
+        <rect x="30" y="40" width="300" height="34" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="180" y="62" text-anchor="middle" class="svg-lbl-b" fill="var(--accent-deep)">train (scalers fit here only)</text>
+        <!-- purge -->
+        <rect x="330" y="40" width="34" height="34" fill="var(--down)" opacity=".25"/>
+        <text x="347" y="96" text-anchor="middle" class="svg-lbl" fill="var(--down)">purge</text>
+        <!-- embargo -->
+        <rect x="364" y="40" width="24" height="34" fill="var(--gold)" opacity=".3"/>
+        <text x="376" y="110" text-anchor="middle" class="svg-lbl">embargo</text>
+        <!-- test -->
+        <rect x="388" y="40" width="150" height="34" rx="4" class="svg-box"/>
+        <text x="463" y="62" text-anchor="middle" class="svg-lbl-b">test (out-of-sample)</text>
+        <text x="30" y="24" class="svg-lbl">time →</text>
+        <text x="560" y="60" class="svg-lbl">overlap between train</text>
+        <text x="560" y="74" class="svg-lbl">labels &amp; test is removed</text>
+      </svg>
+    </div>
+    <figcaption>The <b>purge</b> deletes training samples whose forward-looking labels overlap the test window; the <b>embargo</b> adds a buffer. Without these, a walk-forward looks clean but quietly leaks tomorrow's information.</figcaption>
+  </figure>
+
+  <p>Two more honesty guardrails run throughout:</p>
+  <ul class="clean">
+    <li><strong>The research agent mostly says "no."</strong> <code>research.py</code> systematically searches candidate edges (mean-reversion, breakouts, stat-arb pairs) and judges each with DSR and PBO — "it mostly <em>disproves</em> edges; that's the point."</li>
+    <li><strong>Synthetic ≠ performance.</strong> Every synthetic run is labelled a pipeline test only. The generator has unrealistically persistent trends; the CLI itself warns you never to read its numbers as returns. And a whole doc (<code>HFT_REALITY.md</code>) exists to argue honestly why true high-frequency trading is <em>out of scope</em> rather than faking it.</li>
+  </ul>
+
+  <div class="lesson warn">
+    <div class="tag">Lesson 11 <span class="kind">· the deepest lesson</span></div>
+    <p><strong>The market's job is to find the flaw in your reasoning; your job is to find it first.</strong> Multiple-testing inflation, leakage, and overfitting are not exotic risks — they are the <em>default outcome</em> of searching for patterns in noisy data. Real rigor means building tools that penalise you for looking, that quarantine the future from the past, and that are happiest when they kill your favourite idea.</p>
+  </div>
+</section>
+
+<!-- ================= 12 PROCESS ================= -->
+<section id="process">
+  <div class="part-no">12 — Craft &amp; process</div>
+  <h2>Invariants that can't be quietly broken</h2>
+  <p>A system this careful is only as good as its ability to <em>stay</em> careful as it changes. The answer isn't discipline (humans forget) — it's turning every rule into an executable check.</p>
+
+  <h3>The invariants are written down — and enforced</h3>
+  <p>The project's <code>CLAUDE.md</code> lists six invariants: no lookahead, costs always on, one weight function, whole shares, "synthetic is never performance," and "each sleeve trades in its local currency." Crucially, these aren't aspirations in a doc — each is pinned by tests:</p>
+  <ul class="clean">
+    <li><strong>No lookahead</strong> → tests recompute a signal on truncated history and assert it's unchanged.</li>
+    <li><strong>One weight function</strong> → the consistency tests grep both engines <em>and</em> check numeric bit-for-bit equality.</li>
+    <li><strong>Behavioural regression gate</strong> → CI runs the synthetic backtest and compares it to a committed baseline, catching accidental lookahead/cost/sizing drift a unit test wouldn't. It's updated only deliberately.</li>
+  </ul>
+
+  <h3>Shipping with the same discipline as trading</h3>
+  <p>Even the roadmap is run like a trading desk. The <code>product/</code> backlog is an evidence-first state machine: every feature is researched, critiqued through <strong>four independent lenses</strong> (Product Owner, Data Scientist, Chief Engineer, Algo Trader), and can't reach "ready" until it has acceptance criteria and a staged rollout plan. The backlog is machine-checked in CI. As the process doc puts it — it's "the same discipline the trading side applies to money — hypothesis, evidence, staged exposure, guardrails, rollback — applied to <em>shipping</em>."</p>
+
+  <div class="lesson">
+    <div class="tag">Lesson 12 <span class="kind">· engineering</span></div>
+    <p><strong>An invariant a human must remember is already broken.</strong> Write the rule as a test that fails the build. The best codebases don't rely on care — they make carelessness <em>mechanically impossible to merge</em>. And the same rigor you apply to the risky thing (money) is worth applying to the other risky thing (change).</p>
+  </div>
+</section>
+
+<!-- ================= 13 LESSONS ================= -->
+<section id="lessons">
+  <div class="part-no">13 — Distilled</div>
+  <h2>The transferable lessons</h2>
+  <p>Almost none of this is really about trading. Strip the domain away and you're left with a set of principles that apply to any system where correctness matters and reality is unforgiving.</p>
+
+  <h3>Engineering</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Principle</th><th>Where it lives here</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Push variation into data</strong></td><td>Adding a market is one <code>Region</code> record, not a code fork</td></tr>
+      <tr><td><strong>Single source of truth</strong></td><td>One <code>compute_targets</code>; P&amp;L derived from the fills ledger</td></tr>
+      <tr><td><strong>Derive, don't cache</strong></td><td>Realised P&amp;L replayed from immutable fills, never stored as a total</td></tr>
+      <tr><td><strong>Model time explicitly</strong></td><td>Decide at <code>t</code>, execute at <code>t+1</code>; data flows only forward</td></tr>
+      <tr><td><strong>Idempotency</strong></td><td>Run the engine 3×/day safely; rebalance once per month</td></tr>
+      <tr><td><strong>Fail safe, fail loud</strong></td><td>Corrupt state raises; atomic writes; additive migrations</td></tr>
+      <tr><td><strong>Convert at the edges</strong></td><td>Currency enters only at the reporting boundary, with P&amp;L</td></tr>
+      <tr><td><strong>Invariants as tests</strong></td><td>Every rule in <code>CLAUDE.md</code> has a test that fails the build</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Trading</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Principle</th><th>Where it lives here</th></tr></thead>
+    <tbody>
+      <tr><td><strong>An edge is a filter, not a prophecy</strong></td><td>Rank + trend gate + regime gate, then defer to cash</td></tr>
+      <tr><td><strong>Manage risk, not return</strong></td><td>Inverse-vol + 12% vol target + drawdown breaker</td></tr>
+      <tr><td><strong>Costs are the story</strong></td><td>Commission floors, slippage, one-sided UK stamp duty — always on</td></tr>
+      <tr><td><strong>Assume the data lies</strong></td><td>Point-in-time membership; pre-signal data-quality gate</td></tr>
+      <tr><td><strong>Don't fool yourself</strong></td><td>Deflated Sharpe, PBO, purged walk-forward, "synthetic ≠ performance"</td></tr>
+      <tr><td><strong>Diversify measurably</strong></td><td>Three low-correlation sleeves; combined vol &lt; any single sleeve</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="big-quote" style="max-width:32ch">The strategy is a hypothesis. The engineering is what makes the hypothesis testable — and keeps it honest once real money is watching.</p>
+
+  <div class="disc">
+    <strong>A note on honesty:</strong> This guide describes the <em>design and engineering</em> of the system. All illustrative charts and numbers here are for shape and intuition, not performance. In the codebase itself, synthetic-data results are explicitly pipeline tests only, real backtests are labelled as upper bounds until survivorship-corrected, and nothing here is investment advice.
+  </div>
+</section>
+
+<footer>
+  <div><b>Multi-Region Momentum · Field Guide</b> — a tour of the trading-algo codebase.</div>
+  <div style="margin-top:8px">Source of truth: <code>CLAUDE.md</code> · <code>HANDOFF.md</code> · <code>docs/HOW_IT_WORKS.md</code> · <code>trading_algo/forex/README.md</code> · the Obsidian concept vault.</div>
+  <div style="margin-top:8px">Read it top-to-bottom as a curriculum, or jump around via the index. Use <span class="kbd">◐ toggle theme</span> to switch light/dark.</div>
+</footer>
+</main>
+</div>
+
+<script>
+(function(){
+  // theme toggle
+  var root=document.documentElement;
+  function cur(){return root.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');}
+  function flip(){var n=cur()==='dark'?'light':'dark';root.setAttribute('data-theme',n);draw();}
+  ['tg','tg2'].forEach(function(id){var b=document.getElementById(id);if(b)b.onclick=flip;});
+
+  // scrollspy
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var map={};links.forEach(function(a){var id=a.getAttribute('href').slice(1);map[id]=a;});
+  var secs=[].slice.call(document.querySelectorAll('section[id], header[id]'));
+  var obs=new IntersectionObserver(function(es){
+    es.forEach(function(e){if(e.isIntersecting){links.forEach(function(l){l.classList.remove('active');});var a=map[e.target.id];if(a)a.classList.add('active');}});
+  },{rootMargin:'-20% 0px -70% 0px'});
+  secs.forEach(function(s){obs.observe(s);});
+
+  // hero canvas — illustrative equity curves
+  var cv=document.getElementById('heroCanvas');
+  function css(v){return getComputedStyle(root).getPropertyValue(v).trim();}
+  var reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var t0=null, DUR=1600;
+  function series(n,seed,drift,volp){
+    var a=[],x=seed;for(var i=0;i<n;i++){var s=Math.sin(i*0.21+seed)*0.5+Math.sin(i*0.07+seed*2)*0.5;
+      x+= drift + s*volp; a.push(x);}return a;
+  }
+  var N=120;
+  var strat=series(N,1.2,0.9,3.2);
+  var bench=series(N,3.0,0.42,2.1);
+  function draw(prog){
+    if(prog===undefined)prog=1;
+    var dpr=Math.min(2,window.devicePixelRatio||1);
+    var w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;
+    var c=cv.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);
+    var all=strat.concat(bench),mn=Math.min.apply(0,all),mx=Math.max.apply(0,all),pad=18;
+    function X(i){return pad+(w-2*pad)*i/(N-1);}
+    function Y(v){return h-pad-(h-2*pad)*(v-mn)/(mx-mn);}
+    // risk-off shading band
+    c.fillStyle=css('--down');c.globalAlpha=0.06;c.fillRect(X(60),0,X(78)-X(60),h);c.globalAlpha=1;
+    // grid baseline
+    c.strokeStyle=css('--line');c.lineWidth=1;c.beginPath();c.moveTo(pad,Y(mn));c.lineTo(w-pad,Y(mn));c.stroke();
+    var upto=Math.max(2,Math.floor(N*prog));
+    function line(d,color,wid,fill){
+      c.beginPath();for(var i=0;i<upto;i++){var x=X(i),y=Y(d[i]);i?c.lineTo(x,y):c.moveTo(x,y);}
+      if(fill){c.lineTo(X(upto-1),Y(mn));c.lineTo(X(0),Y(mn));c.closePath();
+        var g=c.createLinearGradient(0,pad,0,h);g.addColorStop(0,color);g.addColorStop(1,'transparent');
+        c.globalAlpha=0.10;c.fillStyle=g;c.fill();c.globalAlpha=1;}
+      else{c.strokeStyle=color;c.lineWidth=wid;c.lineJoin='round';c.stroke();}
+    }
+    // bench
+    line(bench,css('--muted'),1.6,false);
+    // strat fill + line
+    line(strat,css('--accent'),0,true);
+    line(strat,css('--accent'),2.4,false);
+    // endpoint dot
+    if(prog>=1){var i=N-1;c.fillStyle=css('--accent');c.beginPath();c.arc(X(i),Y(strat[i]),4,0,7);c.fill();}
+  }
+  function anim(ts){if(!t0)t0=ts;var p=Math.min(1,(ts-t0)/DUR);var e=1-Math.pow(1-p,3);draw(e);if(p<1)requestAnimationFrame(anim);}
+  if(reduce){draw(1);}else{requestAnimationFrame(anim);}
+  window.addEventListener('resize',function(){draw(1);});
+})();
+</script>
