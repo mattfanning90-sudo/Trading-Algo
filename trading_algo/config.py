@@ -95,3 +95,22 @@ DRAWDOWN_COOLDOWN_DAYS = 21         # ~1 month flat after a breach before re-ent
 # bleeding fees. Set 0 to disable the gate.
 MIN_VIABLE_EQUITY_BASE = 500.0
 
+# ---------------------------------------------------------------------------
+# Data-quality gate (backlog F7 / foundation P0-D)
+# ---------------------------------------------------------------------------
+# Run the shared pre-signal validator (stale / gapped / outlier / impossible-move
+# detection) before compute_targets, in BOTH backtest and paper/live. Flagged
+# names are dropped from the candidate set; in paper trading a flagged name that
+# is already held is frozen (not traded on a bad price). Default on — a bad print
+# silently corrupts every downstream number. See trading_algo/data_quality.py.
+DATA_QUALITY_GATE = True
+
+# ---------------------------------------------------------------------------
+# State-file integrity (backlog F18 / foundation P0-H)
+# ---------------------------------------------------------------------------
+# Validate paper_state_{account}.json against state_schema on load/save. When
+# True a corrupted-but-parseable file makes the run FAIL SAFE (raises, never
+# resets equity or trades on a garbage file); when False the validator only
+# warns (shadow mode). Default off during rollout — see product/backlog F18.
+VALIDATE_STATE_FILES = False
+

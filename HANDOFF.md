@@ -84,6 +84,15 @@ ASX**. Decisions taken this session:
 - Can't render a dashboard screenshot in the sandbox (no headless browser); open
   it locally with `python -m trading_algo.dashboard --account full --synthetic`.
 
+> These roadmap items now live, formalised and prioritised, in the **product
+> backlog** — [`product/`](product/README.md). Each is researched, critiqued by
+> four roles (Product Owner / Data Scientist / Chief Engineer / Algo Trader), and
+> carries evidence, acceptance criteria and a rollout plan
+> ([`product/backlog/backlog.json`](product/backlog/backlog.json), validated in
+> CI by `tests/test_product_backlog.py`). E.g. real constituents files = F1,
+> monthly reports = F5, cross-border rebalancing = F4, the Decision-agent gate
+> below = F10.
+
 ## Bigger picture
 This is the "Strategy agent" sleeve of a larger multi-agent hedge-fund
 architecture: it emits target weights; a Decision agent should gate execution
