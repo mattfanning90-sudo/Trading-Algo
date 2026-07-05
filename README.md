@@ -12,7 +12,9 @@ broker routing — lives in one `Region` record.
 
 > 📖 **New here?** Read **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** for a
 > step-by-step explanation of the algorithm — the maths, the decision flow,
-> diagrams, and how a price history turns into orders.
+> diagrams, and how a price history turns into orders. It now opens with a
+> **whole-system diagram** (research judge → live trader) and a **per-account
+> breakdown** (`full`, `small`, `core`).
 >
 > 🗂️ **Use Obsidian?** The repo ships a self-contained vault in
 > **[`obsidian/`](obsidian/)** — open that folder as a vault (its `Reference`
