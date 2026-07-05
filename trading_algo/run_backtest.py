@@ -131,7 +131,7 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
               f"MaxDD {bm['MaxDrawdown']:>7.1%}")
         print(f"    Active {bs['ActiveReturn']:>+7.1%}  Alpha {bs['Alpha']:>+7.1%}  "
               f"Beta {bs['Beta']}  InfoRatio {bs['InfoRatio']}")
-    print(f"\n  Allocations: " + ", ".join(f"{k} {v:.0%}"
+    print("\n  Allocations: " + ", ".join(f"{k} {v:.0%}"
                                             for k, v in result["allocations"].items()))
     print(f"  FX rebalance cost (cum.):  {cfg.BASE_CURRENCY} "
           f"{result['fx_rebalance_cost']:,.0f}")

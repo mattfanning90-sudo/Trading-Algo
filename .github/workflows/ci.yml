@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +17,26 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - run: pip install "ruff>=0.6"
+      # Static bug-smell gate: unused imports/vars, undefined names, f-string
+      # mistakes (config in pyproject.toml [tool.ruff.lint]).
+      - run: ruff check trading_algo tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject declares requires-python >= 3.11; test the versions we claim.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - run: pytest -q --cov=trading_algo --cov-report=term-missing
       # Behavioural regression gate: the synthetic backtest must match the
       # committed baseline (catches accidental lookahead / cost / sizing drift a
       # unit test wouldn't). Update deliberately with `ci_regression --update`.

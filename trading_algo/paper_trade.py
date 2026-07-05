@@ -376,13 +376,12 @@ def run_daily(account: str, synthetic: bool) -> None:
     snap = fx_snapshot(synthetic)
     state["fx_snapshot"] = snap
 
-    # Drawdown circuit breaker: was the account halted by a prior run?
+    # Drawdown circuit breaker: was the account halted by a prior run? Stay flat
+    # while cooling off; the re-entry decision is made AFTER the report date is
+    # known (below) so the cooldown counts distinct MARKET DAYS, not runs — the
+    # engine fires up to 3x a day (one pass per regional close), and a per-run
+    # countdown would expire ~3x too fast.
     halted = state.get("risk_halted", False)
-    if halted:
-        state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
-        if state["halt_cooldown"] <= 0:
-            halted = False
-        state["risk_halted"] = halted
 
     report_date = ""
     combined = 0.0
@@ -422,20 +421,27 @@ def run_daily(account: str, synthetic: bool) -> None:
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
 
-    # Update peak and decide whether to trip the breaker for the next run. The
-    # threshold is per-book: a profile may loosen it or disable it (None) for a
-    # max-risk book.
+    # Update peak and decide whether to trip / clear the breaker for the next run.
+    # The threshold is per-book: a profile may loosen it or disable it (None) for
+    # a max-risk book.
     stop = _account_drawdown_stop(state)
     peak = max(state.get("peak_equity_base", state["initial_capital_base"]), combined)
     state["peak_equity_base"] = peak
-    if (not halted and stop is not None
-            and combined / peak - 1 <= -stop):
+    if halted:
+        # Cool down one distinct market day at a time (multiple runs on the same
+        # report_date count once), then re-arm trading on the next run.
+        if state.get("halt_last_day") != report_date:
+            state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
+            state["halt_last_day"] = report_date
+        state["risk_halted"] = state["halt_cooldown"] > 0
+    elif stop is not None and combined / peak - 1 <= -stop:
         state["risk_halted"] = True
         state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
+        state["halt_last_day"] = report_date
         print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
               f"{stop:.0%} stop — halting for "
-              f"{cfg.DRAWDOWN_COOLDOWN_DAYS} runs.")
-    elif not halted:
+              f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
+    else:
         state["risk_halted"] = False
 
     if not state["equity_history"] or state["equity_history"][-1][0] != report_date:

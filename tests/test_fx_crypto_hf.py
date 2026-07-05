@@ -4,7 +4,6 @@ This is minute-scale systematic crypto, NOT microsecond HFT — see
 docs/CRYPTO_HF.md. Everything here runs offline on synthetic minute bars, so it
 never needs `ccxt` or a network.
 """
-import pandas as pd
 
 from trading_algo.forex import crypto_data, fx_book, run_backtest
 from trading_algo.forex.agents import AgentPool

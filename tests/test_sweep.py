@@ -1,5 +1,4 @@
 """Parameter robustness sweep."""
-import pandas as pd
 
 from trading_algo import data, sweep
 from trading_algo.regions import get_region

@@ -2,7 +2,6 @@
 
 NB: this is medium-frequency, NOT high-frequency — see docs/HFT_REALITY.md.
 """
-import pytest
 
 from trading_algo.forex import fx_book
 from trading_algo.forex.agents import AgentPool

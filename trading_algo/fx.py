@@ -9,6 +9,8 @@ the pair "BASE+C=X" as "C per 1 BASE", so m = 1 / that quote.
 """
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 
@@ -33,8 +35,12 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
 
     if foreign:
         tickers = [fx_ticker(base, c) for c in foreign]
+        # Include a hash of the currency SET in the key: a different set of
+        # foreign currencies must not collide with (and read back) a file cached
+        # for another set, which would surface a missing pair as an all-NaN column.
+        set_hash = hashlib.sha1(",".join(foreign).encode()).hexdigest()[:12]
         raw = data.load_prices(tickers, start, end,
-                               cache_key=f"FX:{base}:{start}:{end}",
+                               cache_key=f"FX:{base}:{start}:{end}:{set_hash}",
                                use_cache=use_cache)
         for c in foreign:
             t = fx_ticker(base, c)
