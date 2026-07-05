@@ -11,7 +11,6 @@ Design principles (the invariants from CLAUDE.md):
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from . import data_quality, fees

@@ -3,7 +3,6 @@
 Everything here runs offline on synthetic data, so it never needs the optional
 live-feed dependencies (ccxt / oandapyV20 / alpaca-py / openbb) or a network.
 """
-import pandas as pd
 import pytest
 
 from trading_algo.forex import (alpaca_data, feeds, fx_book, oanda_data,

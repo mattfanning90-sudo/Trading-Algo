@@ -19,9 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import ensemble, ml_agent, validation
+from . import ensemble, marks, ml_agent, validation
 from .agents import AgentPool, PairContext, default_agents
-from .fx_config import ANNUALIZATION, FX_RISK_FREE, FXParams
+from .fx_config import FX_RISK_FREE, FXParams
 from .fx_data import closes
 from .nn import MLP
 from .pairs import get_pair
@@ -42,9 +42,9 @@ def strategy_returns(panel: dict[str, pd.DataFrame], signal_panel: pd.DataFrame,
     pos = sig.shift(1).fillna(0.0)                       # held over the next bar
     gross = (pos * rets).mean(axis=1)
     turn = pos.diff().abs().fillna(0.0)
-    half_spread = pd.DataFrame(                          # vectorised per-pair, per-bar
-        {s: 0.5 * get_pair(s).spread_pips * get_pair(s).pip / px[s]
-         for s in px.columns}, index=px.index)
+    half_spread = pd.DataFrame(                          # THE shared half-spread
+        {s: marks.half_spread_fraction(get_pair(s), px[s]) for s in px.columns},
+        index=px.index)
     cost = (turn * half_spread).mean(axis=1)
     return (gross - cost).iloc[1:]
 
@@ -53,9 +53,10 @@ def _annual_metrics(ret: pd.Series, n_trials: int, sr_variance: float) -> dict:
     r = ret.dropna()
     if len(r) < 20 or r.std() == 0:
         return {"Sharpe": 0.0, "CAGR": 0.0, "PSR": 0.0, "DSR": 0.0}
-    sharpe = r.mean() / r.std() * np.sqrt(ANNUALIZATION)
+    ppy = marks.periods_per_year(r.index)                # bar-aware (daily -> 252)
+    sharpe = r.mean() / r.std() * np.sqrt(ppy)
     eq = (1 + r).cumprod()
-    cagr = eq.iloc[-1] ** (ANNUALIZATION / len(r)) - 1
+    cagr = eq.iloc[-1] ** (ppy / len(r)) - 1
     return {
         "Sharpe": round(float(sharpe), 2),
         "CAGR": round(float(cagr), 4),

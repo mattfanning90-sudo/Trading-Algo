@@ -97,7 +97,10 @@ RISK_FREE = 0.035
 # Drawdown circuit breaker: if the book falls more than this from its peak,
 # liquidate to cash and sit out for a cooldown, then resume. Set None to disable.
 MAX_DRAWDOWN_STOP = 0.25            # 25% peak-to-trough
-DRAWDOWN_COOLDOWN_DAYS = 21         # ~1 month flat after a breach before re-entry
+# Cooldown length in distinct MARKET DAYS (not runs) flat after a breach before
+# re-entry. Paper trading counts unique report dates, so the engine firing
+# several times a day does not shorten it; ~21 trading days ≈ 1 month.
+DRAWDOWN_COOLDOWN_DAYS = 21
 
 # Minimum viable equity (in BASE_CURRENCY) for a sleeve to trade. Below this the
 # per-trade commission floors dominate, so the sleeve holds cash instead of

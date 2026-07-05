@@ -3,7 +3,6 @@
 The books/backtest are AUD-denominated; an AUD trader converts to the quote
 currency to hold a pair, so AUD/quote moves (esp. AUD/USD) are part of real P&L.
 """
-import numpy as np
 import pandas as pd
 import pytest
 

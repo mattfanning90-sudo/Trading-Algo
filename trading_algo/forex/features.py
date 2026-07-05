@@ -115,10 +115,6 @@ def triple_barrier_labels(close: pd.Series, atr: pd.Series, side: pd.Series,
         if i + 1 >= n or s[i] == 0 or not np.isfinite(a[i]) or a[i] <= 0:
             continue
         entry = c[i]
-        up = entry + pt_mult * a[i] * np.sign(s[i])
-        dn = entry - sl_mult * a[i] * np.sign(s[i])
-        hi = up if s[i] > 0 else dn          # profit side for the trade direction
-        lo = dn if s[i] > 0 else up
         label = 0.0
         end = min(i + max_h, n - 1)
         for j in range(i + 1, end + 1):

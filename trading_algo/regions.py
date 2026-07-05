@@ -34,6 +34,11 @@ class Region:
     universe: list[str] = field(default_factory=list)
     params: StrategyParams = DEFAULT_PARAMS
     constituents_file: str | None = None   # optional point-in-time membership (CSV/parquet)
+    # Rebalance "dust" floor in this region's LOCAL currency: a per-name trade
+    # smaller than this is skipped so the commission floor doesn't dominate.
+    # Per-region (not a shared constant) so the threshold is comparable in AUD
+    # across markets instead of applying one number to AUD/USD/GBP/CAD alike.
+    min_trade_value: float = 500.0
 
     @property
     def all_tickers(self) -> list[str]:
@@ -66,6 +71,7 @@ REGIONS: dict[str, Region] = {
         stamp_duty_bps=0.0,
         price_scale=1.0,
         universe=universes.ASX,
+        min_trade_value=500.0,         # ~A$500 dust floor
     ),
     "US": Region(
         key="US",
@@ -83,6 +89,7 @@ REGIONS: dict[str, Region] = {
         stamp_duty_bps=0.0,
         price_scale=1.0,
         universe=universes.US,
+        min_trade_value=330.0,         # ~A$500 in USD
     ),
     "FTSE": Region(
         key="FTSE",
@@ -100,6 +107,7 @@ REGIONS: dict[str, Region] = {
         stamp_duty_bps=50.0,           # UK SDRT 0.5% on share PURCHASES
         price_scale=0.01,              # pence (GBX) -> pounds (GBP)
         universe=universes.FTSE,
+        min_trade_value=260.0,         # ~A$500 in GBP
     ),
     # 4th sleeve, scaffolded but UNFUNDED: fully backtestable via
     # `run_backtest --region TSX`, but intentionally absent from
@@ -120,6 +128,7 @@ REGIONS: dict[str, Region] = {
         stamp_duty_bps=0.0,
         price_scale=1.0,
         universe=universes.TSX,
+        min_trade_value=450.0,         # ~A$500 in CAD
     ),
 }
 

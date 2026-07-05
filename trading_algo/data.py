@@ -132,8 +132,12 @@ def load_region(region: Region, start: str, end: str | None = None,
     index (including since-delisted ones), not just today's members."""
     universe = list(tickers) if tickers is not None else list(region.universe)
     download = [*dict.fromkeys([*universe, region.index_ticker])]  # dedupe, keep order
+    # Key on a hash of the actual ticker SET, not its length: editing a universe
+    # while keeping the count constant must invalidate the cache, not silently
+    # serve the stale file.
+    set_hash = hashlib.sha1(",".join(sorted(download)).encode()).hexdigest()[:12]
     df = load_prices(download, start, end,
-                     cache_key=f"{region.key}:{start}:{end}:{len(download)}",
+                     cache_key=f"{region.key}:{start}:{end}:{set_hash}",
                      use_cache=use_cache)
     index_px = df[region.index_ticker]
     prices = df[[c for c in df.columns if c != region.index_ticker]]

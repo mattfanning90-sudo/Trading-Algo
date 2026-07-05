@@ -9,14 +9,12 @@ can see *why* the system acted at that point — the whole goal being learnabili
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from . import indicators as ind
 from .agents import AgentPool
 from .fx_config import FXParams
 from .fx_strategy import min_history, target_weights_history
-from .pairs import get_pair
 
 _AGENT_LABEL = {
     "trend": "Trend (EMA fast vs slow, ADX-gated)",
