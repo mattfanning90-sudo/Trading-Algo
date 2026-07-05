@@ -1,8 +1,10 @@
 """Persistent multi-account FX paper-trading book.
 
-Each account is an isolated JSON state file (``fx_state_{account}.json``) so the
-account holder and their partner — or any number of books — run independently
-with their own capital, risk profile and history. No broker connection required.
+Each account is an isolated book — persisted as a row in a SQLite store
+(``fx_books.db``) with an ``fx_state_{account}.json`` copy dual-written as a
+fallback — so the account holder and their partner — or any number of books —
+run independently with their own capital, risk profile and history. No broker
+connection required.
 
 A *position* is a signed weight (fraction of equity); the book is marked to
 market each run from the move in each pair since the last close, accrues
@@ -28,6 +30,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from .. import storage
 from . import explain
 from . import feeds
 from . import fx_config as cfg
@@ -43,21 +46,36 @@ STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(os.path.dirname(__fil
 _DUST = 1e-4   # drop near-zero weights
 
 
+# SQLite is the source of truth (atomic, durable, lock-safe); the per-account
+# JSON file is dual-written as a fallback so dashboards / CI globs keep working.
+# See trading_algo/storage.py and BACKLOG.md.
+def _db_path() -> str:
+    return os.path.join(STATE_DIR, "fx_books.db")
+
+
 def _state_file(account: str) -> str:
     return os.path.join(STATE_DIR, f"fx_state_{account}.json")
 
 
+def account_exists(account: str) -> bool:
+    return storage.db_has(_db_path(), account) or os.path.exists(_state_file(account))
+
+
 def load_state(account: str) -> dict:
+    state = storage.db_load(_db_path(), account)
+    if state is not None:
+        return state
+    # Fallback: a book created before the DB existed still lives in JSON only.
     path = _state_file(account)
-    if not os.path.exists(path):
-        raise SystemExit(f"No FX account '{account}'. Run --init first.")
-    with open(path) as f:
-        return json.load(f)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    raise SystemExit(f"No FX account '{account}'. Run --init first.")
 
 
 def save_state(account: str, state: dict) -> None:
-    with open(_state_file(account), "w") as f:
-        json.dump(state, f, indent=2)
+    storage.db_save(_db_path(), account, state)
+    storage.atomic_write_json(_state_file(account), state)
 
 
 def ml_pool(models_dir: str | None = None) -> "AgentPool":
@@ -85,10 +103,11 @@ def _cached_ml_pool() -> "AgentPool":
 
 
 def list_accounts() -> list[str]:
-    out = []
-    for fn in os.listdir(os.path.abspath(STATE_DIR)):
-        if fn.startswith("fx_state_") and fn.endswith(".json"):
-            out.append(fn[len("fx_state_"):-len(".json")])
+    out = set(storage.db_accounts(_db_path()))
+    if os.path.isdir(os.path.abspath(STATE_DIR)):
+        for fn in os.listdir(os.path.abspath(STATE_DIR)):
+            if fn.startswith("fx_state_") and fn.endswith(".json"):
+                out.add(fn[len("fx_state_"):-len(".json")])
     return sorted(out)
 
 
@@ -125,7 +144,7 @@ def init_account(account: str, capital: float, profile_name: str,
                  symbols: list[str] | None = None,
                  currency: str = cfg.ACCOUNT_CURRENCY, source: str = "yahoo",
                  bar: str = "1d", force: bool = False) -> None:
-    if os.path.exists(_state_file(account)) and not force:
+    if account_exists(account) and not force:
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
     profile(profile_name)  # validate
@@ -370,7 +389,7 @@ def run_all(synthetic: bool = False, pool: AgentPool | None = None,
             exchange: str | None = None, use_ml: bool = False) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
-        if os.path.exists(_state_file(name)):
+        if account_exists(name):
             run_once(name, synthetic, pool=pool, interval=interval,
                      source=source, exchange=exchange, use_ml=use_ml)
 
@@ -416,7 +435,7 @@ def status(account: str) -> None:
 def compare(accounts: list[str]) -> None:
     print(f"{'Account':<12}{'Profile':<14}{'Capital':>12}{'Equity':>14}{'Return':>10}{'Trades':>8}")
     for name in accounts:
-        if not os.path.exists(_state_file(name)):
+        if not account_exists(name):
             continue
         s = load_state(name)
         print(f"{name:<12}{s['profile']:<14}{s['initial_capital']:>12,.0f}"
