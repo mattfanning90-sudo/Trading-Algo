@@ -90,13 +90,20 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
 
             order = {"region": region_key, "symbol": sym, "action": action,
                      "qty": qty, "approx_value": round(qty * px, 0),
-                     "currency": region.currency}
+                     "currency": region.currency,
+                     # arrival price at order time = the decision price for TCA (F11)
+                     "decision": round(float(px), 4)}
             if not dry_run:
                 trade = ib.placeOrder(contract, MarketOrder(action, qty))
                 # Capture the returned Trade rather than discarding it, so the
-                # caller has an order id / status to reconcile fills against.
+                # caller has an order id / status to reconcile fills against, plus
+                # the actual average fill price for execution TCA (F11 / R2).
+                status = getattr(trade, "orderStatus", None)
                 order["order_id"] = getattr(getattr(trade, "order", None), "orderId", None)
-                order["status"] = getattr(getattr(trade, "orderStatus", None), "status", None)
+                order["status"] = getattr(status, "status", None)
+                avg_fill = getattr(status, "avgFillPrice", None)
+                if avg_fill:               # 0 / None until the market order fills
+                    order["fill"] = round(float(avg_fill), 4)
             orders.append(order)
 
         return orders

@@ -36,7 +36,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
-               storage, strategy)
+               storage, strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -292,6 +292,7 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
 
         trade = {"date": today, "region": region.key, "ticker": t,
                  "side": "BUY" if delta > 0 else "SELL", "shares": abs(delta),
+                 "decision": round(float(price), 4),   # pre-slippage close (F11 TCA)
                  "fill": round(fill, 4), "commission": round(fee, 2),
                  "stamp_duty": round(duty, 2), "currency": region.currency}
         key = (region.key, t)
@@ -498,6 +499,28 @@ def compare(accounts: list[str]) -> None:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def tca_status(account: str) -> None:
+    """Print the execution-quality (implementation-shortfall) report (F11)."""
+    state = load_state(account)
+    rep = tca.tca_report(state.get("trades", []))
+    print("=" * 52)
+    print(f"  Execution TCA — account '{account}'")
+    print("=" * 52)
+    regions = [k for k in rep if k != "alerts"]
+    if not regions:
+        print("  No fills with a decision price yet.")
+    for rk in regions:
+        e = rep[rk]
+        modelled = e["modelled_slippage_bps"]
+        modelled_s = f"{modelled:.1f}" if modelled is not None else "n/a"
+        flag = "  ⚠ ALERT" if e.get("alert") else ""
+        print(f"  [{rk}] {e['n_fills']} fills | realized "
+              f"{e['realized_slippage_bps']:.1f}bps vs modelled {modelled_s}bps | "
+              f"IS {e['implementation_shortfall']:,.2f} {e['currency']}{flag}")
+    for a in rep["alerts"]:
+        print(f"  ⚠ {a}")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Multi-region momentum paper trader")
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
@@ -510,6 +533,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="(--init) open the book from a named strategy/risk preset "
                          "(e.g. ultra, experimental). See trading_algo/profiles.py.")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--tca", action="store_true",
+                    help="execution-quality report: implementation shortfall vs "
+                         "modelled slippage per region (F11)")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
@@ -523,6 +549,8 @@ def main(argv: list[str] | None = None) -> None:
                      profile=args.profile)
     elif args.status:
         status(args.account)
+    elif args.tca:
+        tca_status(args.account)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():
