@@ -180,6 +180,19 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 > **R3** (ADV ingestion) + **P0-I** (`compute_targets` capacity hook) → **F15**
 > (pre-trade ADV cap).
 
+> **Delivery in progress — Phase 4 (Live readiness & reporting).** Landed:
+> - **F3** — `attribution.py`, the live-vs-backtest tracking loop: divergence
+>   (realized − backtest-predicted return), annualised tracking error with a
+>   200bps alert (via the P0-F channel), and realized per-region cost drag
+>   measured from the trade log (reusing F11's decision price). Consumes a
+>   backtest curve over the SAME window (no hindsight refetch — invariant #1);
+>   cost stays per-region in local currency (invariant #6). `paper_trade
+>   --attribution`.
+>
+> Remaining in Phase 4: **F10** (paper→live promotion gate — needs F3+F2+F18),
+> **F4** (cross-border rebalancing), **F5** (tearsheets). F3+F10 are the sole hard
+> exit criteria for live capital.
+
 ## 5. Feature readiness at a glance
 
 From [`build_plan.json`](backlog/build_plan.json) `feature_plan`:

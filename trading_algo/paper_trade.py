@@ -35,8 +35,8 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
-               storage, strategy, tca)
+from . import (attribution, data, data_quality, fees, fx, notifications, pnl,
+               profiles, storage, strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -521,6 +521,60 @@ def tca_status(account: str) -> None:
         print(f"  ⚠ {a}")
 
 
+def attribution_status(account: str, synthetic: bool) -> None:
+    """Live-vs-backtest tracking + attribution report for a book (F3).
+
+    Builds the backtest-predicted curve over the SAME window the book traded
+    (full history for signal warm-up, then sliced to the book's dates and
+    re-based to its starting equity — no hindsight refetch), compares, and alerts
+    if tracking error blows the budget.
+    """
+    from .portfolio_backtest import run_portfolio_backtest
+
+    state = load_state(account)
+    eh = state.get("equity_history", [])
+    predicted = None
+    if len(eh) >= 2:
+        try:
+            res = run_portfolio_backtest(synthetic=synthetic, end=eh[-1][0],
+                                         allocations=state.get("allocations"))
+            eq = res["equity"]
+            window = eq[eq.index >= pd.Timestamp(eh[0][0])]
+            if len(window) >= 2:
+                predicted = window / float(window.iloc[0]) * float(state["initial_capital_base"])
+        except Exception as exc:            # real data needs network; synthetic is offline
+            print(f"  (predicted curve unavailable: {exc})")
+
+    rep = attribution.attribution_report(state, predicted)
+    print("=" * 52)
+    print(f"  Live-vs-backtest attribution — account '{account}'")
+    print("=" * 52)
+    print(f"  Realized return   {rep['realized_total_return']:+.2%}  "
+          f"({rep['n_equity_points']} points)")
+    if "predicted_total_return" in rep:
+        print(f"  Backtest return   {rep['predicted_total_return']:+.2%}")
+        print(f"  Divergence        {rep['divergence']:+.2%}")
+        te = rep["tracking_error_bps"]
+        te_s = f"{te:.0f}bps" if te is not None else "n/a"
+        flag = "  ⚠ OVER BUDGET" if rep.get("tracking_alert") else ""
+        print(f"  Tracking error    {te_s} (budget "
+              f"{int(attribution.TRACKING_ERROR_ALERT_BPS)}bps){flag}")
+    else:
+        print("  Backtest return   n/a (need a predicted curve)")
+    print("  Realized cost drag by sleeve:")
+    for rk, c in rep["cost_drag_by_region"].items():
+        print(f"    [{rk}] {c['cost_drag_bps']:.1f}bps  "
+              f"({c['cost']:,.2f} {c['currency']} on {c['notional']:,.0f} traded)")
+
+    if rep.get("tracking_alert"):
+        notifications.notify(
+            "tracking_error",
+            f"[{account}] live tracking error {rep['tracking_error_bps']:.0f}bps "
+            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget",
+            level="alert", account=account,
+            tracking_error_bps=rep["tracking_error_bps"])
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Multi-region momentum paper trader")
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
@@ -536,6 +590,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--tca", action="store_true",
                     help="execution-quality report: implementation shortfall vs "
                          "modelled slippage per region (F11)")
+    ap.add_argument("--attribution", action="store_true",
+                    help="live-vs-backtest tracking + attribution report (F3)")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
@@ -551,6 +607,8 @@ def main(argv: list[str] | None = None) -> None:
         status(args.account)
     elif args.tca:
         tca_status(args.account)
+    elif args.attribution:
+        attribution_status(args.account, args.synthetic)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():
