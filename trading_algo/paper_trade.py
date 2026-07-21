@@ -36,7 +36,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import (attribution, data, data_quality, fees, fx, notifications, pnl,
-               profiles, storage, strategy, tca)
+               profiles, promotion, storage, strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -575,6 +575,24 @@ def attribution_status(account: str, synthetic: bool) -> None:
             tracking_error_bps=rep["tracking_error_bps"])
 
 
+def promotion_status(account: str) -> None:
+    """Show the paper->live promotion checklist for a book (F10)."""
+    state = load_state(account)
+    v = promotion.promotion_check(state)
+    print("=" * 52)
+    print(f"  Promotion readiness — account '{account}'")
+    print("=" * 52)
+    print(f"  {'READY FOR LIVE ✅' if v['ready'] else 'NOT READY ❌'}   "
+          f"({v['rebalance_months']} rebalance months, equity {v['equity']:,.0f})")
+    for name, ok in v["checks"].items():
+        print(f"    [{'✓' if ok else '✗'}] {name}")
+    for r in v["reasons"]:
+        print(f"    - {r}")
+    if v["reasons"]:
+        print("  (DSR/PBO come from `sweep --purged-cv`; tracking from "
+              "`--attribution`; pass them to the gate before going live.)")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Multi-region momentum paper trader")
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
@@ -592,6 +610,8 @@ def main(argv: list[str] | None = None) -> None:
                          "modelled slippage per region (F11)")
     ap.add_argument("--attribution", action="store_true",
                     help="live-vs-backtest tracking + attribution report (F3)")
+    ap.add_argument("--promotion", action="store_true",
+                    help="paper->live promotion readiness checklist (F10)")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
@@ -609,6 +629,8 @@ def main(argv: list[str] | None = None) -> None:
         tca_status(args.account)
     elif args.attribution:
         attribution_status(args.account, args.synthetic)
+    elif args.promotion:
+        promotion_status(args.account)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():

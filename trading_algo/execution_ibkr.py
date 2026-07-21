@@ -36,9 +36,22 @@ def to_ib_symbol(yahoo_ticker: str, region: Region) -> str:
 
 
 def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
-              port: int = PAPER_PORT, client_id: int = 17) -> list[dict]:
+              port: int = PAPER_PORT, client_id: int = 17,
+              promotion_state: dict | None = None, allow_live: bool = False,
+              promotion_evidence: dict | None = None) -> list[dict]:
     """Diff target weights vs live IBKR positions for one region and
-    (optionally) place orders. Returns the order list (also as a preview)."""
+    (optionally) place orders. Returns the order list (also as a preview).
+
+    Before touching a LIVE port with real orders, the promotion gate (F10) must
+    pass for `promotion_state` (or `allow_live=True` must be an explicit, audited
+    override). This runs before connecting, so an unqualified book never reaches
+    the broker."""
+    # F10 hard gate: refuse real live orders on an un-promoted book.
+    if port == LIVE_PORT and not dry_run and cfg.PROMOTION_GATE:
+        from . import promotion
+        promotion.require_live_ok(promotion_state or {}, override=allow_live,
+                                  **(promotion_evidence or {}))
+
     from ib_insync import IB, MarketOrder, Stock
 
     region = get_region(region_key)
