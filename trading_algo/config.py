@@ -160,6 +160,16 @@ DELISTING_REPLACEMENT_RETURN: float | None = None
 DATA_FALLBACK_SOURCE: str | None = None
 
 # ---------------------------------------------------------------------------
+# Pre-trade ADV / liquidity cap (backlog F15 / foundation P0-I)
+# ---------------------------------------------------------------------------
+# Cap each position at this fraction of the name's trailing average DOLLAR volume
+# so the book never targets more than it could realistically trade. None = off
+# (no cap — a perfect no-op). The cap is applied inside strategy.compute_targets
+# so backtest and paper size identically (invariant #3). Needs volume data.
+ADV_CAP_PCT: float | None = None
+ADV_WINDOW = 20                    # trailing days for the average dollar volume
+
+# ---------------------------------------------------------------------------
 # Data-quality gate (backlog F7 / foundation P0-D)
 # ---------------------------------------------------------------------------
 # Run the shared pre-signal validator (stale / gapped / outlier / impossible-move

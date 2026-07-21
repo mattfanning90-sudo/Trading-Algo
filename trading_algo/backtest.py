@@ -25,7 +25,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  membership=None,
                  max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
                  cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS,
-                 apply_delisting: bool = False) -> dict:
+                 apply_delisting: bool = False,
+                 volume: pd.DataFrame | None = None) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
@@ -54,6 +55,15 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     if len(prices) <= min_hist:
         raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
 
+    # F15: per-name ADV dollar-volume for the pre-trade capacity cap. Sized
+    # against a fixed reference NAV (initial capital) — a coarse but causal
+    # liquidity guard. None unless volume is supplied AND the cap is enabled.
+    from .config import ADV_CAP_PCT, ADV_WINDOW
+    advd = None
+    if volume is not None and ADV_CAP_PCT:
+        from . import data as _data
+        advd = _data.adv_dollar(prices, volume, ADV_WINDOW)
+
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     dq_excluded: set[str] = set()
     for d in rebal_marks:
@@ -64,8 +74,11 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         base_elig = membership.members_asof(asof) if membership is not None else None
         eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
         dq_excluded |= dq.excluded
+        capacity = None
+        if advd is not None and asof in advd.index:
+            capacity = (ADV_CAP_PCT * advd.loc[asof] / float(initial_capital)).dropna()
         weight_schedule[asof] = strategy.compute_targets(
-            prices, index_prices, p, asof=asof, eligible=eligible)
+            prices, index_prices, p, asof=asof, eligible=eligible, capacity=capacity)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index
