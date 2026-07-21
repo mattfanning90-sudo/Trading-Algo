@@ -55,14 +55,17 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     if len(prices) <= min_hist:
         raise ValueError(f"{region.key}: not enough history ({len(prices)} rows)")
 
-    # F15: per-name ADV dollar-volume for the pre-trade capacity cap. Sized
-    # against a fixed reference NAV (initial capital) — a coarse but causal
-    # liquidity guard. None unless volume is supplied AND the cap is enabled.
-    from .config import ADV_CAP_PCT, ADV_WINDOW
+    # ADV dollar-volume drives both the F15 pre-trade cap and the F6 market-impact
+    # cost. Computed once when volume is supplied AND either feature is enabled.
+    from .config import ADV_CAP_PCT, ADV_WINDOW, IMPACT_COEF
     advd = None
-    if volume is not None and ADV_CAP_PCT:
+    vols_frame = None
+    if volume is not None and (ADV_CAP_PCT or IMPACT_COEF):
         from . import data as _data
         advd = _data.adv_dollar(prices, volume, ADV_WINDOW)
+        if IMPACT_COEF:
+            from . import signals as _sig
+            vols_frame = _sig.realised_vol(prices, p)
 
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     dq_excluded: set[str] = set()
@@ -75,15 +78,13 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
         dq_excluded |= dq.excluded
         capacity = None
-        if advd is not None and asof in advd.index:
+        if ADV_CAP_PCT and advd is not None and asof in advd.index:
             capacity = (ADV_CAP_PCT * advd.loc[asof] / float(initial_capital)).dropna()
         weight_schedule[asof] = strategy.compute_targets(
             prices, index_prices, p, asof=asof, eligible=eligible, capacity=capacity)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index
-    cost_rate = fees.round_trip_cost_rate(region)
-    stamp_rate = region.stamp_duty_bps / 1e4
 
     current_w = pd.Series(dtype=float)
     equity = [initial_capital]
@@ -113,7 +114,20 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                      - current_w.reindex(names, fill_value=0.0))
             turnover = float(delta.abs().sum())
             buy_turnover = float(delta.clip(lower=0).sum())
-            cost = turnover * cost_rate + buy_turnover * stamp_rate
+            # F6: per-name square-root market impact (fraction of NAV), added to
+            # the one shared cost entrypoint (R1). Zero unless IMPACT_COEF is set.
+            impact = 0.0
+            if IMPACT_COEF and advd is not None:
+                a = advd.loc[:today]
+                if len(a):
+                    a = a.iloc[-1]
+                    v = vols_frame.loc[:today].iloc[-1] if len(vols_frame.loc[:today]) else None
+                    nav = equity[-1]
+                    for name, dw in delta[delta.abs() > 0].items():
+                        impact += abs(dw) * fees.square_root_impact(
+                            abs(dw) * nav, a.get(name), (v.get(name) if v is not None else float("nan")),
+                            IMPACT_COEF)
+            cost = fees.turnover_cost(region, turnover, buy_turnover, impact=impact)
             turnover_log.append((today, turnover))
             cost_log.append((today, cost))
             total_cost += cost

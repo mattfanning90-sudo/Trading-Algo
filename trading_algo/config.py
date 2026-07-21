@@ -169,6 +169,12 @@ DATA_FALLBACK_SOURCE: str | None = None
 ADV_CAP_PCT: float | None = None
 ADV_WINDOW = 20                    # trailing days for the average dollar volume
 
+# Market-impact cost coefficient (backlog F6): adds an Almgren-style square-root
+# impact term (coef · vol · sqrt(order/ADV$)) to the backtest cost. None/0 = off
+# (the flat commission+slippage model, F16 baseline unchanged). Needs volume.
+# Borrow/short-financing cost is intentionally deferred until a short book exists.
+IMPACT_COEF: float | None = None
+
 # ---------------------------------------------------------------------------
 # Data-quality gate (backlog F7 / foundation P0-D)
 # ---------------------------------------------------------------------------
