@@ -81,6 +81,13 @@ ALLOCATIONS: dict[str, float] = {
 # "ME" = every month-end rebalance; "YE" = annually; None = never (let them drift).
 ALLOCATION_REBALANCE = "ME"
 
+# Paper-trading only (backlog F4): also true the paper book's sleeves back to
+# target allocation on each monthly rebalance, transferring CASH across sleeves
+# and paying FX_SPREAD_BPS on the crossing amount (like the portfolio backtest).
+# Default off — the paper sim funds each sleeve once and lets it drift (the
+# realistic treasury model); turn on to keep allocations pinned to target.
+PAPER_ALLOCATION_REBALANCE = False
+
 # Cost charged when moving cash between sleeves across currencies (FX spread).
 FX_SPREAD_BPS = 5.0
 

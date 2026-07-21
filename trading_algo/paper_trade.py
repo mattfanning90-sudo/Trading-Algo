@@ -158,6 +158,46 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
     return sleeve["cash"] + holdings
 
 
+def rebalance_allocations(sleeves: dict, snap: dict[str, float],
+                          allocations: dict[str, float],
+                          px_by_region: dict[str, pd.Series],
+                          spread_bps: float = cfg.FX_SPREAD_BPS) -> float:
+    """True paper sleeves back to target allocation by transferring CASH across
+    sleeves (backlog F4). Base value is conserved except for the FX spread charged
+    on the crossing amount. Only cash moves — positions are never sold — so the
+    true-up is bounded by donor sleeves' available cash. Returns the FX cost (base
+    currency). Keeps each sleeve in its own currency (invariant #6): the transfer
+    is the ONLY place currencies cross, and it always pays the spread (#2)."""
+    base = {k: sleeve_equity_local(sl, px_by_region[k]) * snap[sl["currency"]]
+            for k, sl in sleeves.items()}
+    total = sum(base.values())
+    tot_alloc = sum(allocations[k] for k in sleeves) or 1.0
+    if total <= 0:
+        return 0.0
+    target = {k: total * allocations[k] / tot_alloc for k in sleeves}
+
+    donors = {k: min(base[k] - target[k],                     # surplus over target
+                     sleeves[k]["cash"] * snap[sleeves[k]["currency"]])   # cap: cash only
+              for k in sleeves if base[k] > target[k]}
+    donors = {k: v for k, v in donors.items() if v > 0}
+    receivers = {k: target[k] - base[k] for k in sleeves if base[k] < target[k]}
+    pool, need = sum(donors.values()), sum(receivers.values())
+    moved = min(pool, need)
+    if moved <= 0:
+        return 0.0
+
+    for k, don in donors.items():                       # withdraw pro-rata
+        take = moved * (don / pool)
+        sleeves[k]["cash"] -= take / snap[sleeves[k]["currency"]]
+    spread = spread_bps / 1e4
+    cost = 0.0
+    for k, rec in receivers.items():                    # deposit net of spread
+        give = moved * (rec / need)
+        cost += give * spread
+        sleeves[k]["cash"] += give * (1 - spread) / snap[sleeves[k]["currency"]]
+    return cost
+
+
 def init_account(account: str, capital: float, synthetic: bool,
                  allocations: dict[str, float] | None = None,
                  profile: str | None = None) -> None:
@@ -355,10 +395,13 @@ def run_daily(account: str, synthetic: bool) -> None:
     report_date = ""
     combined = 0.0
     breakdown = {}
+    px_by_region: dict = {}
+    rebalanced_this_run = False
     for k in _account_regions(state):
         region = get_region(k)
         prices, index_px = latest_region_data(region, synthetic)
         px_today = prices.iloc[-1]
+        px_by_region[k] = px_today
         today = prices.index[-1].strftime("%Y-%m-%d")
         report_date = max(report_date, today)
         sleeve = state["sleeves"][k]
@@ -372,6 +415,7 @@ def run_daily(account: str, synthetic: bool) -> None:
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
         elif _should_rebalance(sleeve, today, this_month):
+            rebalanced_this_run = True
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
@@ -395,6 +439,19 @@ def run_daily(account: str, synthetic: bool) -> None:
         eq_base = eq_local * snap[region.currency]
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
+
+    # F4: on a monthly rebalance, optionally true sleeves back to target
+    # allocation (cash transfers, FX spread charged). Default off; needs >1 sleeve.
+    if (cfg.PAPER_ALLOCATION_REBALANCE and rebalanced_this_run and not halted
+            and len(state["sleeves"]) > 1):
+        fx_cost = rebalance_allocations(
+            state["sleeves"], snap, state.get("allocations") or cfg.ALLOCATIONS,
+            px_by_region)
+        if fx_cost:
+            state["fx_rebalance_cost"] = state.get("fx_rebalance_cost", 0.0) + fx_cost
+            print(f"  ↔ allocation true-up — FX cost {fx_cost:,.2f} {cfg.BASE_CURRENCY}")
+            combined = sum(sleeve_equity_local(state["sleeves"][k], px_by_region[k])
+                           * snap[get_region(k).currency] for k in _account_regions(state))
 
     # Update peak and decide whether to trip / clear the breaker for the next run.
     # The threshold is per-book: a profile may loosen it or disable it (None) for
