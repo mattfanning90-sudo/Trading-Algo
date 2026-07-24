@@ -49,9 +49,21 @@ def vol_target(weights: pd.Series, vols: pd.Series, p: StrategyParams) -> pd.Ser
     return w
 
 
+def _apply_capacity(w: pd.Series, capacity: pd.Series | None) -> pd.Series:
+    """Cap each name's weight magnitude at `capacity` (a per-name max weight),
+    never re-levering (backlog F15 / foundation P0-I). This is the ONE place a
+    liquidity/capacity constraint enters the weight vector, so backtest and paper
+    stay identical (invariant #3). No-op when `capacity` is None."""
+    if capacity is None or w.empty:
+        return w
+    cap = capacity.reindex(w.index).fillna(np.inf).clip(lower=0.0)
+    return np.sign(w) * np.minimum(w.abs(), cap)
+
+
 def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
                     p: StrategyParams, asof: pd.Timestamp | None = None,
-                    eligible: set[str] | None = None) -> pd.Series:
+                    eligible: set[str] | None = None,
+                    capacity: pd.Series | None = None) -> pd.Series:
     """Target weights for one rebalance date (default: the latest available).
 
     Uses only data up to and including `asof` — no lookahead. Returns a Series
@@ -61,6 +73,9 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
     `eligible`, if given, restricts the candidate set to those tickers — used
     for point-in-time backtests so a name can't be picked before it was actually
     an index member.
+
+    `capacity`, if given, is a per-name maximum weight (from a pre-trade ADV cap,
+    F15); each name is trimmed to it after vol targeting. None = no cap.
     """
     if asof is None:
         asof = prices.index[-1]
@@ -74,7 +89,7 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
     # Still routed through the single vol_target so backtest and paper agree.
     if p.long_short:
         raw = sig.select_long_short(scores, vols, p)
-        return vol_target(raw, vols, p)
+        return _apply_capacity(vol_target(raw, vols, p), capacity)
 
     trend = sig.stock_trend_ok(prices, p).loc[asof]
     risk_on = (True if not p.regime_filter else bool(
@@ -94,4 +109,4 @@ def compute_targets(prices: pd.DataFrame, index_prices: pd.Series,
                       + p.value_weight * val.rank(pct=True))
 
     raw = sig.select_portfolio(scores, trend, vols, risk_on, p, rank_score=rank_score)
-    return vol_target(raw, vols, p)
+    return _apply_capacity(vol_target(raw, vols, p), capacity)

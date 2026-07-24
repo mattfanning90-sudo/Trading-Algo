@@ -111,6 +111,7 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
 
     if sweep:
         out["sweep"] = _run_sweep(synthetic)
+        out["overfitting"] = _overfitting_gates(synthetic, point_in_time)
 
     path = _cache_path()
     with open(path, "w") as f:
@@ -152,6 +153,39 @@ def _run_sweep(synthetic: bool,
         "verdict": report.get("verdict", ""),
         "report": report,
     }
+
+
+def _overfitting_gates(synthetic: bool, point_in_time: bool,
+                       top_ns: tuple = (8, 10, 12, 15),
+                       lookbacks: tuple = (126, 189, 252)) -> dict:
+    """Per-sleeve F2 overfitting gate: purged/embargoed walk-forward CV over the
+    TOP_N × lookback grid, then Deflated Sharpe + PBO (n_trials = grid size). This
+    is the honest test of whether a sleeve's edge survives once you correct for
+    the number of configurations searched."""
+    from .. import config as _cfg
+    from .. import constituents, data, walkforward
+    from ..regions import get_region
+
+    gates: dict = {}
+    for key in _cfg.ALLOCATIONS:
+        region = get_region(key)
+        membership = None
+        if point_in_time:
+            membership = (constituents.synthetic_membership(region) if synthetic
+                          else constituents.get_membership(region))
+        try:
+            if synthetic:
+                prices, index_px = data.synthetic_region(region)
+            else:
+                pit = membership.all_tickers if membership is not None else None
+                prices, index_px = data.load_region(region, _cfg.START, tickers=pit)
+            gate = walkforward.purged_cv_report(
+                prices, index_px, region, list(top_ns), list(lookbacks),
+                membership=membership)
+        except Exception as exc:                     # never fail the cache write
+            gate = {"verdict": f"error: {exc}", "n_configs": 0}
+        gates[key] = gate
+    return gates
 
 
 def main(argv: list[str] | None = None) -> None:

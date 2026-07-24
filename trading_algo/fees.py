@@ -11,6 +11,8 @@ adjustment per side; it is not a fee here.
 """
 from __future__ import annotations
 
+import math
+
 from .regions import Region
 
 
@@ -36,3 +38,30 @@ def round_trip_cost_rate(region: Region) -> float:
     sides pay commission_bps + slippage_bps. Stamp duty is added separately on
     the buy side by the caller (it is asymmetric)."""
     return (region.commission_bps + region.slippage_bps) / 1e4
+
+
+def turnover_cost(region: Region, turnover: float, buy_turnover: float,
+                  impact: float = 0.0) -> float:
+    """The ONE backtest cost entrypoint (refactor R1): commission + slippage on
+    turnover, asymmetric stamp duty on buys, plus an optional market-impact term
+    (fraction of NAV) from F6. With impact=0 this is exactly the prior model, so
+    the F16 regression baseline is unchanged."""
+    return (turnover * round_trip_cost_rate(region)
+            + buy_turnover * region.stamp_duty_bps / 1e4
+            + impact)
+
+
+def square_root_impact(order_notional: float, adv_dollar: float, vol: float,
+                       coef: float) -> float:
+    """Almgren-style market-impact RATE for one order (fraction of the order's
+    value): coef · vol · sqrt(participation), participation = order / ADV$.
+
+    A bigger order relative to a name's average dollar volume, or a more volatile
+    name, costs more to trade — with square-root (concave) participation. Returns
+    0 when ADV is unknown/zero (can't size the impact). Backlog F6."""
+    if (adv_dollar is None or vol is None or coef is None
+            or adv_dollar != adv_dollar or vol != vol        # NaN-safe
+            or adv_dollar <= 0):
+        return 0.0
+    participation = max(float(order_notional) / float(adv_dollar), 0.0)
+    return float(coef) * float(vol) * math.sqrt(participation)

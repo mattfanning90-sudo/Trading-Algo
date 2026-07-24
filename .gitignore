@@ -19,7 +19,10 @@ equity_curve*.csv
 sweep_*.csv
 reports/
 # Run manifests + experiment ledger (F17): per-run reproducibility records.
+# Match at the repo root too (a backtest run outside CI uses the repo root as its
+# state dir, so `manifests/` and the ledger land here, not under state/).
 state/manifests/
+manifests/
 experiment_ledger.jsonl
 # Derived ML artifacts (trained models + reports) — uploaded by the FX Action.
 trading_algo/forex/models/*.json
