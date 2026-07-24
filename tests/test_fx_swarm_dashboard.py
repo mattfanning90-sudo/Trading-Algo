@@ -32,3 +32,14 @@ def test_swarm_data_empty_when_no_log(tmp_path, monkeypatch):
     monkeypatch.setattr(champions, "STATE_DIR", str(tmp_path), raising=False)
     d = dashboard._swarm_data("ghost")
     assert d["generations"] == [] and d["roster"] == []
+
+
+def test_render_includes_swarm_tab_and_canvases(tmp_path, monkeypatch):
+    _seed_swarm(tmp_path, monkeypatch)
+    payload = dashboard.build_payload("matt", synthetic=True, bars=120)
+    html = dashboard.render(payload)
+    assert 'id="swarm"' in html                        # the section exists
+    assert 'id="swarmField"' in html                   # murmuration canvas
+    assert 'id="swarmTree"' in html                    # lineage canvas
+    assert '["Swarm","swarm"]' in html                 # SECTIONS entry
+    assert 'href="#swarm"' in html                     # subnav link
