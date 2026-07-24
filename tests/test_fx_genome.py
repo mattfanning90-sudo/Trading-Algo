@@ -1,7 +1,5 @@
 import random
 
-import pytest
-
 from trading_algo.forex import genome as gm
 from trading_algo.forex.pairs import DEFAULT_UNIVERSE
 
