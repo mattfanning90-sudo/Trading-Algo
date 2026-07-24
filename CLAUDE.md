@@ -78,6 +78,8 @@ python -m trading_algo.forex.train --synthetic          # train DL models + walk
 python -m trading_algo.forex.dashboard --all --out-dir public  # candlestick dashboards + "why" callouts
 python -m trading_algo.forex.research --synthetic       # quant-research search + Deflated-Sharpe/PBO
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
+python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
+python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
 pytest -q                                           # 170 tests (80 equity + 90 FX/ML)
 ```
 
