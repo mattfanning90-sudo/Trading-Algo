@@ -20,6 +20,7 @@ def test_champion_pool_expands_roster_for_a_daily_book(tmp_path, monkeypatch):
 def test_run_once_with_champions_uses_expanded_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
     monkeypatch.setattr(champions, "STATE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(fx_book, "_CHAMPION_POOLS", {})   # no stale roster leaking in
     rng = random.Random(1)
     champions.save_roster("matt", [gm.random_genome(rng) for _ in range(1)],
                           meta={"pbo": 0.1})
