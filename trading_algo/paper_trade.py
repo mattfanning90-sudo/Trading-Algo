@@ -572,6 +572,9 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             status = "cash:fx-unavailable"
         elif _should_rebalance(sleeve, today, this_month):
             rebalanced_this_run = True
+            # Reached only when rate_ok is True (the `not rate_ok` branch above
+            # was skipped), so `rate` is a positive float, not None.
+            assert rate is not None
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * rate
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
@@ -600,6 +603,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         _record_sleeve_status(sleeve, today, status)
 
         if rate_ok:
+            assert rate is not None      # rate_ok implies a positive float rate
             eq_local = sleeve_equity_local(sleeve, px_today)
             eq_base = eq_local * rate
             breakdown[k] = (eq_local, region.currency, eq_base)
@@ -680,7 +684,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
               f"skipping history update this run.")
     elif not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])
-        sleeve_row = {"date": report_date}
+        sleeve_row: dict[str, str | float] = {"date": report_date}
         sleeve_row.update({k: round(v[2], 2) for k, v in breakdown.items()})
         state.setdefault("sleeve_history", []).append(sleeve_row)
     save_state(account, state)

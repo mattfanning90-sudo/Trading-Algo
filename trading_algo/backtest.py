@@ -126,7 +126,9 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                 a = advd.loc[:today]
                 if len(a):
                     a = a.iloc[-1]
-                    v = vols_frame.loc[:today].iloc[-1] if len(vols_frame.loc[:today]) else None
+                    v = (vols_frame.loc[:today].iloc[-1]
+                         if vols_frame is not None and len(vols_frame.loc[:today])
+                         else None)
                     nav = equity[-1]
                     for name, dw in delta[delta.abs() > 0].items():
                         impact += abs(dw) * fees.square_root_impact(

@@ -172,6 +172,7 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
         if label == "sharpe":
             y = bars["close"].pct_change(horizon, fill_method=None).shift(-horizon)
         else:  # meta
+            assert tilts is not None  # label == "meta" always populates tilts above
             side = np.sign(tilts[sym]).replace(0.0, np.nan)
             atr = ind.atr(bars["high"], bars["low"], bars["close"], p.atr_window)
             y = features.triple_barrier_labels(bars["close"], atr, side,
@@ -191,5 +192,6 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
 
     if not Xs:
         return np.empty((0, 0)), np.empty(0), np.empty(0), np.empty(0), []
+    assert cols is not None  # non-empty Xs means the first iteration set cols
     return (np.vstack(Xs), np.concatenate(ys), np.concatenate(ts),
             np.concatenate(ps), cols)

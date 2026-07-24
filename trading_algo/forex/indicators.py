@@ -48,7 +48,7 @@ def macd(s: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
     return line, ema(line, signal)
 
 
-def realized_vol(close: pd.Series, window: int, ann: int = 252) -> pd.Series:
+def realized_vol(close: pd.Series, window: int, ann: float = 252) -> pd.Series:
     """Annualised trailing realised volatility from close-to-close returns."""
     rets = close.pct_change(fill_method=None)
     return rets.rolling(window).std() * np.sqrt(ann)

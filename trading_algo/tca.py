@@ -63,6 +63,8 @@ def tca_report(trades: list[dict]) -> dict:
         if tr.get("decision") in (None, 0) or tr.get("fill") is None:
             continue
         rk = tr.get("region")
+        if rk is None:                 # a trade with no region can't be attributed
+            continue
         side = tr.get("side", "BUY")
         shares = tr.get("shares", 0)
         dec, fill = tr["decision"], tr["fill"]

@@ -14,9 +14,11 @@ break a trading run.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from . import config as cfg
 
-_CHANNELS: dict[str, "callable"] = {}
+_CHANNELS: dict[str, Callable[[dict], None]] = {}
 
 
 def register_channel(name: str, fn) -> None:
@@ -40,7 +42,8 @@ def notify(event: str, message: str, level: str = "info",
     name = channel or getattr(cfg, "NOTIFY_CHANNEL", "log") or "log"
     fn = _CHANNELS.get(name) or _CHANNELS.get("log")
     try:
-        fn(payload)
+        if fn is not None:
+            fn(payload)
     except Exception:   # pragma: no cover - telemetry must never break a run
         pass
     return payload

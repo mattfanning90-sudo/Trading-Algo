@@ -150,6 +150,7 @@ def init_account(account: str, capital: float, profile_name: str,
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
     profile(profile_name)  # validate
+    syms = list(symbols or DEFAULT_UNIVERSE)
     state = {
         "account": account,
         "currency": currency,
@@ -159,7 +160,7 @@ def init_account(account: str, capital: float, profile_name: str,
         # An explicit universe is LOCKED: run_once won't merge in the default
         # FX+crypto instruments (a stocks/bonds book must stay stocks/bonds).
         "universe_locked": symbols is not None,
-        "symbols": list(symbols or DEFAULT_UNIVERSE),
+        "symbols": syms,
         "initial_capital": float(capital),
         "equity": float(capital),
         "positions": {},
@@ -173,7 +174,7 @@ def init_account(account: str, capital: float, profile_name: str,
     }
     save_state(account, state)
     print(f"  FX account '{account}' opened: {capital:,.0f} {currency} "
-          f"[{profile_name}] over {len(state['symbols'])} instruments "
+          f"[{profile_name}] over {len(syms)} instruments "
           f"(source: {source})")
 
 
@@ -283,8 +284,8 @@ def _run_once_locked(account: str, synthetic: bool = False,
         # refreshing the per-pair reasoning snapshot.
         if not state.get("risk_halted"):
             try:
-                _, rationale = explain.decide_and_explain(panel, p, pool=pool)
-                state["decisions"] = rationale
+                _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
+                state["decisions"] = refresh_rationale
                 save_state(account, state)
             except Exception as exc:                       # never let display break a run
                 print(f"  [{account}] (decision refresh skipped: {exc!r})")
@@ -520,6 +521,7 @@ def main(argv: list[str] | None = None) -> None:
                 src = "crypto"
             # An explicit --universe wins over the source's natural set and locks
             # the book to it (init_account locks whenever symbols is not None).
+            symbols: list[str] | None
             if args.universe:
                 symbols = pairs.resolve_universe(args.universe)
             else:

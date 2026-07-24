@@ -44,14 +44,15 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
     """DataFrame of multipliers (base per 1 local) indexed by date, one column
     per currency. The base currency column is a constant 1.0."""
     foreign = sorted({c for c in currencies if c != base})
-    cols = {base: None}
+    cols: dict[str, pd.Series | float | None] = {base: None}
 
     if foreign:
         tickers = [fx_ticker(base, c) for c in foreign]
         # Include a hash of the currency SET in the key: a different set of
         # foreign currencies must not collide with (and read back) a file cached
         # for another set, which would surface a missing pair as an all-NaN column.
-        set_hash = hashlib.sha1(",".join(foreign).encode()).hexdigest()[:12]
+        set_hash = hashlib.sha1(",".join(foreign).encode(),
+                                usedforsecurity=False).hexdigest()[:12]
         raw = data.load_prices(tickers, start, end,
                                cache_key=f"FX:{base}:{start}:{end}:{set_hash}",
                                use_cache=use_cache)
@@ -59,7 +60,9 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
             t = fx_ticker(base, c)
             cols[c] = (1.0 / raw[t]) if t in raw.columns else np.nan
 
-    idx = next((s.index for s in cols.values() if s is not None), None)
+    # Take the index off a real price series only — a missing-ticker sentinel
+    # (np.nan scalar) is not None but has no .index, so filter on the type.
+    idx = next((s.index for s in cols.values() if isinstance(s, pd.Series)), None)
     out = pd.DataFrame(index=idx)
     for c in currencies:
         if c == base:
