@@ -89,3 +89,13 @@ def test_breed_final_population_is_sorted_best_first(panel, params):
     _, _, final = evolve.breed(panel, params, generations=2, pop_size=8, seed=4)
     scores = [fr.score for _, fr in final]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_breed_records_crossover_parents(panel, params):
+    log, _, _ = evolve.breed(panel, params, generations=3, pop_size=8, seed=1)
+    # at least one non-founder genome records two parents, both real registry gids
+    with_parents = [v for v in log.registry.values() if v.get("parents")]
+    assert with_parents, "no genome recorded parents — lineage is empty"
+    for v in with_parents:
+        assert len(v["parents"]) == 2
+        assert all(p in log.registry for p in v["parents"])

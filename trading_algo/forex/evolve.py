@@ -85,7 +85,7 @@ def fitness(genome: gm.Genome, panel: dict, p, *, folds: int,
     corr_pen = 0.0
     if base_returns is not None:
         joined = pd.concat([r, base_returns], axis=1, join="inner").dropna()
-        if len(joined) > 5 and joined.iloc[:, 1].std() > 0:
+        if len(joined) > 5 and joined.iloc[:, 0].std() > 0 and joined.iloc[:, 1].std() > 0:
             c = float(np.corrcoef(joined.iloc[:, 0], joined.iloc[:, 1])[0, 1])
             corr_pen = max(0.0, c)                              # only penalise positive overlap
 
@@ -172,9 +172,11 @@ def breed(panel: dict, p, *, generations: int, pop_size: int, seed: int,
         # tournament selection over the top half
         pool_ = [g for g, _ in scored[: max(2, pop_size // 2)]]
         offspring = []
+        parentage: dict[str, list[str]] = {}
         while len(offspring) < pop_size - n_elite:
             a, b = rng.choice(pool_), rng.choice(pool_)
             child = gm.mutate(gm.crossover(a, b, rng), rng)
+            parentage.setdefault(child.gid, [a.gid, b.gid])
             offspring.append(child)
         population = elite + offspring
         births = sum(1 for g in population if g.gid not in prev_gids)
@@ -183,7 +185,7 @@ def breed(panel: dict, p, *, generations: int, pop_size: int, seed: int,
                                  "median": round(med, 6), "births": births,
                                  "deaths": deaths, "best_gid": scored[0][0].gid})
         for g in population:
-            register(g, gen + 1, [])
+            register(g, gen + 1, parentage.get(g.gid, []))
         scored = _score_population(population, breed_panel, p, folds=folds, base=base,
                                    lambda_corr=lambda_corr, lambda_turn=lambda_turn)
 
