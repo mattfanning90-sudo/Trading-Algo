@@ -35,8 +35,8 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
-               storage, strategy, tca)
+from . import (attribution, data, data_quality, fees, fx, notifications, pnl,
+               profiles, promotion, storage, strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -156,6 +156,46 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
         if price is not None and price == price:  # not NaN
             holdings += sh * float(price)
     return sleeve["cash"] + holdings
+
+
+def rebalance_allocations(sleeves: dict, snap: dict[str, float],
+                          allocations: dict[str, float],
+                          px_by_region: dict[str, pd.Series],
+                          spread_bps: float = cfg.FX_SPREAD_BPS) -> float:
+    """True paper sleeves back to target allocation by transferring CASH across
+    sleeves (backlog F4). Base value is conserved except for the FX spread charged
+    on the crossing amount. Only cash moves — positions are never sold — so the
+    true-up is bounded by donor sleeves' available cash. Returns the FX cost (base
+    currency). Keeps each sleeve in its own currency (invariant #6): the transfer
+    is the ONLY place currencies cross, and it always pays the spread (#2)."""
+    base = {k: sleeve_equity_local(sl, px_by_region[k]) * snap[sl["currency"]]
+            for k, sl in sleeves.items()}
+    total = sum(base.values())
+    tot_alloc = sum(allocations[k] for k in sleeves) or 1.0
+    if total <= 0:
+        return 0.0
+    target = {k: total * allocations[k] / tot_alloc for k in sleeves}
+
+    donors = {k: min(base[k] - target[k],                     # surplus over target
+                     sleeves[k]["cash"] * snap[sleeves[k]["currency"]])   # cap: cash only
+              for k in sleeves if base[k] > target[k]}
+    donors = {k: v for k, v in donors.items() if v > 0}
+    receivers = {k: target[k] - base[k] for k in sleeves if base[k] < target[k]}
+    pool, need = sum(donors.values()), sum(receivers.values())
+    moved = min(pool, need)
+    if moved <= 0:
+        return 0.0
+
+    for k, don in donors.items():                       # withdraw pro-rata
+        take = moved * (don / pool)
+        sleeves[k]["cash"] -= take / snap[sleeves[k]["currency"]]
+    spread = spread_bps / 1e4
+    cost = 0.0
+    for k, rec in receivers.items():                    # deposit net of spread
+        give = moved * (rec / need)
+        cost += give * spread
+        sleeves[k]["cash"] += give * (1 - spread) / snap[sleeves[k]["currency"]]
+    return cost
 
 
 def init_account(account: str, capital: float, synthetic: bool,
@@ -355,10 +395,13 @@ def run_daily(account: str, synthetic: bool) -> None:
     report_date = ""
     combined = 0.0
     breakdown = {}
+    px_by_region: dict = {}
+    rebalanced_this_run = False
     for k in _account_regions(state):
         region = get_region(k)
         prices, index_px = latest_region_data(region, synthetic)
         px_today = prices.iloc[-1]
+        px_by_region[k] = px_today
         today = prices.index[-1].strftime("%Y-%m-%d")
         report_date = max(report_date, today)
         sleeve = state["sleeves"][k]
@@ -372,6 +415,7 @@ def run_daily(account: str, synthetic: bool) -> None:
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
         elif _should_rebalance(sleeve, today, this_month):
+            rebalanced_this_run = True
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
@@ -395,6 +439,19 @@ def run_daily(account: str, synthetic: bool) -> None:
         eq_base = eq_local * snap[region.currency]
         breakdown[k] = (eq_local, region.currency, eq_base)
         combined += eq_base
+
+    # F4: on a monthly rebalance, optionally true sleeves back to target
+    # allocation (cash transfers, FX spread charged). Default off; needs >1 sleeve.
+    if (cfg.PAPER_ALLOCATION_REBALANCE and rebalanced_this_run and not halted
+            and len(state["sleeves"]) > 1):
+        fx_cost = rebalance_allocations(
+            state["sleeves"], snap, state.get("allocations") or cfg.ALLOCATIONS,
+            px_by_region)
+        if fx_cost:
+            state["fx_rebalance_cost"] = state.get("fx_rebalance_cost", 0.0) + fx_cost
+            print(f"  ↔ allocation true-up — FX cost {fx_cost:,.2f} {cfg.BASE_CURRENCY}")
+            combined = sum(sleeve_equity_local(state["sleeves"][k], px_by_region[k])
+                           * snap[get_region(k).currency] for k in _account_regions(state))
 
     # Update peak and decide whether to trip / clear the breaker for the next run.
     # The threshold is per-book: a profile may loosen it or disable it (None) for
@@ -521,6 +578,78 @@ def tca_status(account: str) -> None:
         print(f"  ⚠ {a}")
 
 
+def attribution_status(account: str, synthetic: bool) -> None:
+    """Live-vs-backtest tracking + attribution report for a book (F3).
+
+    Builds the backtest-predicted curve over the SAME window the book traded
+    (full history for signal warm-up, then sliced to the book's dates and
+    re-based to its starting equity — no hindsight refetch), compares, and alerts
+    if tracking error blows the budget.
+    """
+    from .portfolio_backtest import run_portfolio_backtest
+
+    state = load_state(account)
+    eh = state.get("equity_history", [])
+    predicted = None
+    if len(eh) >= 2:
+        try:
+            res = run_portfolio_backtest(synthetic=synthetic, end=eh[-1][0],
+                                         allocations=state.get("allocations"))
+            eq = res["equity"]
+            window = eq[eq.index >= pd.Timestamp(eh[0][0])]
+            if len(window) >= 2:
+                predicted = window / float(window.iloc[0]) * float(state["initial_capital_base"])
+        except Exception as exc:            # real data needs network; synthetic is offline
+            print(f"  (predicted curve unavailable: {exc})")
+
+    rep = attribution.attribution_report(state, predicted)
+    print("=" * 52)
+    print(f"  Live-vs-backtest attribution — account '{account}'")
+    print("=" * 52)
+    print(f"  Realized return   {rep['realized_total_return']:+.2%}  "
+          f"({rep['n_equity_points']} points)")
+    if "predicted_total_return" in rep:
+        print(f"  Backtest return   {rep['predicted_total_return']:+.2%}")
+        print(f"  Divergence        {rep['divergence']:+.2%}")
+        te = rep["tracking_error_bps"]
+        te_s = f"{te:.0f}bps" if te is not None else "n/a"
+        flag = "  ⚠ OVER BUDGET" if rep.get("tracking_alert") else ""
+        print(f"  Tracking error    {te_s} (budget "
+              f"{int(attribution.TRACKING_ERROR_ALERT_BPS)}bps){flag}")
+    else:
+        print("  Backtest return   n/a (need a predicted curve)")
+    print("  Realized cost drag by sleeve:")
+    for rk, c in rep["cost_drag_by_region"].items():
+        print(f"    [{rk}] {c['cost_drag_bps']:.1f}bps  "
+              f"({c['cost']:,.2f} {c['currency']} on {c['notional']:,.0f} traded)")
+
+    if rep.get("tracking_alert"):
+        notifications.notify(
+            "tracking_error",
+            f"[{account}] live tracking error {rep['tracking_error_bps']:.0f}bps "
+            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget",
+            level="alert", account=account,
+            tracking_error_bps=rep["tracking_error_bps"])
+
+
+def promotion_status(account: str) -> None:
+    """Show the paper->live promotion checklist for a book (F10)."""
+    state = load_state(account)
+    v = promotion.promotion_check(state)
+    print("=" * 52)
+    print(f"  Promotion readiness — account '{account}'")
+    print("=" * 52)
+    print(f"  {'READY FOR LIVE ✅' if v['ready'] else 'NOT READY ❌'}   "
+          f"({v['rebalance_months']} rebalance months, equity {v['equity']:,.0f})")
+    for name, ok in v["checks"].items():
+        print(f"    [{'✓' if ok else '✗'}] {name}")
+    for r in v["reasons"]:
+        print(f"    - {r}")
+    if v["reasons"]:
+        print("  (DSR/PBO come from `sweep --purged-cv`; tracking from "
+              "`--attribution`; pass them to the gate before going live.)")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Multi-region momentum paper trader")
     ap.add_argument("--account", default="main", help="account name (separate state per name)")
@@ -536,6 +665,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--tca", action="store_true",
                     help="execution-quality report: implementation shortfall vs "
                          "modelled slippage per region (F11)")
+    ap.add_argument("--attribution", action="store_true",
+                    help="live-vs-backtest tracking + attribution report (F3)")
+    ap.add_argument("--promotion", action="store_true",
+                    help="paper->live promotion readiness checklist (F10)")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
@@ -551,6 +684,10 @@ def main(argv: list[str] | None = None) -> None:
         status(args.account)
     elif args.tca:
         tca_status(args.account)
+    elif args.attribution:
+        attribution_status(args.account, args.synthetic)
+    elif args.promotion:
+        promotion_status(args.account)
     elif args.force_rebalance:
         state = load_state(args.account)
         for s in state["sleeves"].values():

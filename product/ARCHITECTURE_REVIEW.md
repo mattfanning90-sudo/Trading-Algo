@@ -176,9 +176,31 @@ Phase 4 — Live readiness & reporting  F3  F10 F4  F5
 > when realized materially exceeds modelled. The fill-capture piece (P0-B) also
 > feeds Phase 4's F3/F10.
 >
-> Remaining in slice 2: **R1** (unify cost paths) → **F6** (market-impact model);
-> **R3** (ADV ingestion) + **P0-I** (`compute_targets` capacity hook) → **F15**
-> (pre-trade ADV cap).
+> **Slice 2 complete.** **R3** (`data.synthetic_volume`/`load_volume`/`adv_dollar`,
+> versioned cache key) + **P0-I** (`compute_targets` `capacity` param, applied in
+> one place) → **F15** (pre-trade ADV cap in `run_backtest`); **R1** (`fees.turnover_cost`,
+> the one cost entrypoint — impact=0 keeps the F16 baseline byte-identical) →
+> **F6** (`fees.square_root_impact`, Almgren coef·vol·√(order/ADV$)). All
+> default-off. Borrow cost deferred (no short book yet).
+
+> **Delivery in progress — Phase 4 (Live readiness & reporting).** Landed:
+> - **F3** — `attribution.py`, the live-vs-backtest tracking loop: divergence
+>   (realized − backtest-predicted return), annualised tracking error with a
+>   200bps alert (via the P0-F channel), and realized per-region cost drag
+>   measured from the trade log (reusing F11's decision price). Consumes a
+>   backtest curve over the SAME window (no hindsight refetch — invariant #1);
+>   cost stays per-region in local currency (invariant #6). `paper_trade
+>   --attribution`.
+>
+> **Phase 4 complete.** **F10** (`promotion.py` — the hard paper→live gate over
+> track-record + F2 DSR/PBO + F3 tracking + capacity + F18 integrity; blocks
+> `execution_ibkr` before it connects, audited override), **F4** (`rebalance_allocations`
+> — cross-sleeve cash true-up with FX spread, default off), **F5** (`tearsheet.py`
+> — dated paper-book snapshot). F3+F10 are the sole hard exit criteria for live
+> capital.
+>
+> **All 19 backlog features are now delivered** (built + tested; several
+> default-off pending real-data validation). The build plan is fully executed.
 
 ## 5. Feature readiness at a glance
 

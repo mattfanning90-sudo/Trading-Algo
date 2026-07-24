@@ -81,6 +81,13 @@ ALLOCATIONS: dict[str, float] = {
 # "ME" = every month-end rebalance; "YE" = annually; None = never (let them drift).
 ALLOCATION_REBALANCE = "ME"
 
+# Paper-trading only (backlog F4): also true the paper book's sleeves back to
+# target allocation on each monthly rebalance, transferring CASH across sleeves
+# and paying FX_SPREAD_BPS on the crossing amount (like the portfolio backtest).
+# Default off — the paper sim funds each sleeve once and lets it drift (the
+# realistic treasury model); turn on to keep allocations pinned to target.
+PAPER_ALLOCATION_REBALANCE = False
+
 # Cost charged when moving cash between sleeves across currencies (FX spread).
 FX_SPREAD_BPS = 5.0
 
@@ -106,6 +113,19 @@ DRAWDOWN_COOLDOWN_DAYS = 21
 # per-trade commission floors dominate, so the sleeve holds cash instead of
 # bleeding fees. Set 0 to disable the gate.
 MIN_VIABLE_EQUITY_BASE = 500.0
+
+# ---------------------------------------------------------------------------
+# Paper->live promotion gate (backlog F10)
+# ---------------------------------------------------------------------------
+# The hard gate before a book can trade real money (trading_algo/promotion.py):
+# a live order is refused unless every criterion below is met, or an explicit
+# human override is given (and audited). Set PROMOTION_GATE False to disable
+# (not recommended).
+PROMOTION_GATE = True
+MIN_PROMOTION_REBALANCES = 6        # distinct monthly rebalances of paper history
+PROMOTION_DSR_MIN = 0.95           # F2 Deflated-Sharpe floor
+PROMOTION_PBO_MAX = 0.5            # F2 Probability-of-Backtest-Overfitting ceiling
+PROMOTION_TRACKING_BUDGET_BPS = 200.0   # F3 live-vs-backtest tracking-error budget
 
 # Minimum days between paper-trading rebalances. The monthly rebalance fires on
 # the first run of a new calendar month; without a floor, funding a book late in
@@ -138,6 +158,22 @@ DELISTING_REPLACEMENT_RETURN: float | None = None
 # returns nothing (e.g. a 403). None = primary only. Registered in data.py via
 # data.register_fallback(); fallback data still passes the F7 quality gate.
 DATA_FALLBACK_SOURCE: str | None = None
+
+# ---------------------------------------------------------------------------
+# Pre-trade ADV / liquidity cap (backlog F15 / foundation P0-I)
+# ---------------------------------------------------------------------------
+# Cap each position at this fraction of the name's trailing average DOLLAR volume
+# so the book never targets more than it could realistically trade. None = off
+# (no cap — a perfect no-op). The cap is applied inside strategy.compute_targets
+# so backtest and paper size identically (invariant #3). Needs volume data.
+ADV_CAP_PCT: float | None = None
+ADV_WINDOW = 20                    # trailing days for the average dollar volume
+
+# Market-impact cost coefficient (backlog F6): adds an Almgren-style square-root
+# impact term (coef · vol · sqrt(order/ADV$)) to the backtest cost. None/0 = off
+# (the flat commission+slippage model, F16 baseline unchanged). Needs volume.
+# Borrow/short-financing cost is intentionally deferred until a short book exists.
+IMPACT_COEF: float | None = None
 
 # ---------------------------------------------------------------------------
 # Data-quality gate (backlog F7 / foundation P0-D)

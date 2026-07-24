@@ -175,6 +175,49 @@ def synthetic_prices(tickers: list[str], index_ticker: str,
     return df
 
 
+def synthetic_volume(tickers: list[str], index: pd.DatetimeIndex,
+                     seed: int = 7) -> pd.DataFrame:
+    """Deterministic synthetic daily SHARE volume per ticker (pipeline testing
+    only). Log-normal around a per-ticker base with mild autocorrelation."""
+    rng = np.random.default_rng(seed)
+    bases = rng.uniform(1e5, 5e6, len(tickers))       # per-name typical volume
+    noise = rng.normal(0.0, 0.4, (len(index), len(tickers)))
+    vol = bases[None, :] * np.exp(noise)
+    return pd.DataFrame(vol, index=index, columns=tickers)
+
+
+def load_volume(tickers: list[str], start: str, end: str | None = None,
+                use_cache: bool = True) -> pd.DataFrame:
+    """Daily SHARE volume (real data). Versioned cache key ('v'+schema) so a
+    Close-only cache from before volume ingestion can't be served here (R3)."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_file = _cache_path("vol:v1:" + ",".join(sorted(tickers)))
+    if use_cache and os.path.exists(cache_file):
+        df = pd.read_parquet(cache_file)
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
+
+    import yfinance as yf
+    raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                      progress=False)["Volume"]
+    if isinstance(raw, pd.Series):
+        raw = raw.to_frame(tickers[0])
+    raw = raw.reindex(columns=tickers).dropna(how="all").dropna(axis=1, how="all")
+    try:
+        raw.to_parquet(cache_file)
+    except Exception:
+        pass
+    return raw
+
+
+def adv_dollar(prices: pd.DataFrame, volume: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    """Trailing average DOLLAR volume (price x share volume) per ticker — the
+    liquidity measure the ADV cap (F15) sizes against. Causal rolling mean."""
+    dollar = prices * volume.reindex_like(prices)
+    return dollar.rolling(window, min_periods=max(2, window // 2)).mean()
+
+
 def synthetic_region(region: Region, start: str = "2012-01-01",
                      end: str = "2026-01-01", seed: int | None = None
                      ) -> tuple[pd.DataFrame, pd.Series]:
