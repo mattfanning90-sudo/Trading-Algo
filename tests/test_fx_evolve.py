@@ -99,3 +99,18 @@ def test_breed_records_crossover_parents(panel, params):
     for v in with_parents:
         assert len(v["parents"]) == 2
         assert all(p in log.registry for p in v["parents"])
+
+
+def test_cli_writes_a_valid_swarm_log(tmp_path, monkeypatch):
+    from trading_algo.forex import fx_book
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(evolve, "STATE_DIR", str(tmp_path), raising=False)
+    evolve.main(["--account", "matt", "--synthetic", "--generations", "2",
+                 "--pop", "6", "--seed", "5"])
+    log = evolve.read_log("matt")
+    assert log is not None and log.n_trials >= 6
+    assert len(log.generations) == 2
+    # finalists live OUTSIDE the registry; every registry value is a genome record
+    assert log.finalists and all(g in log.registry for g in log.finalists)
+    assert all("dna" in v for v in log.registry.values())
+    assert log.n_trials == len(log.registry)

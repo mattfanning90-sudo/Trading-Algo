@@ -16,12 +16,18 @@ models).
 """
 from __future__ import annotations
 
+import argparse
+import json
+import os
 import random
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
+from .. import storage
+from . import fx_config as cfg
+from . import fx_data
 from . import genome as gm
 from . import validation
 from .agents import AgentPool, PairContext, default_agents
@@ -196,3 +202,82 @@ def breed(panel: dict, p, *, generations: int, pop_size: int, seed: int,
     log.holdout_frac = holdout_frac
     log.n_trials = len(seen)
     return log, holdout_panel, scored
+
+
+STATE_DIR = None      # test hook; None -> defer to fx_book.STATE_DIR at call time
+
+
+def _state_dir() -> str:
+    from . import fx_book
+    return STATE_DIR or fx_book.STATE_DIR
+
+
+def swarm_log_path(account: str) -> str:
+    return os.path.join(_state_dir(), f"swarm_log_{account}.json")
+
+
+def write_log(account: str, log: "EvolutionLog") -> None:
+    storage.atomic_write_json(swarm_log_path(account), log.to_dict())
+
+
+def read_log(account: str) -> "EvolutionLog | None":
+    path = swarm_log_path(account)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return EvolutionLog.from_dict(json.load(f))
+
+
+def _panel_for(account: str, synthetic: bool):
+    """Panel for an account: its locked universe if the book exists, else the default."""
+    from . import fx_book
+    from .pairs import DEFAULT_UNIVERSE
+    try:
+        symbols = fx_book.load_state(account).get("symbols")
+    except SystemExit:                     # no book yet -> breed on the default universe
+        symbols = None
+    symbols = symbols or list(DEFAULT_UNIVERSE)
+    if synthetic:
+        return fx_data.synthetic_panel(symbols)
+    return fx_data.load_panel(symbols, cfg.START, use_cache=True)
+
+
+def run_account(account: str, *, synthetic: bool, generations: int, pop: int,
+                seed: int, profile_name: str, holdout: float) -> "EvolutionLog":
+    p = cfg.profile(profile_name)
+    panel = _panel_for(account, synthetic)
+    if not panel:
+        raise SystemExit("No FX data (offline? use --synthetic).")
+    log, _holdout, final = breed(panel, p, generations=generations, pop_size=pop,
+                                 seed=seed, holdout_frac=holdout)
+    write_log(account, log)          # breed() already recorded log.finalists + log.holdout_frac
+    print(f"[{account}] {generations} gens x {pop} pop -> N={log.n_trials} distinct "
+          f"genomes; best score {log.generations[-1]['best']:.4f}")
+    return log
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description="FX swarm breeder (offline genetic search)")
+    ap.add_argument("--account", default=None)
+    ap.add_argument("--all", action="store_true", help="breed every configured account")
+    ap.add_argument("--generations", type=int, default=12)
+    ap.add_argument("--pop", type=int, default=40)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--profile", default="balanced", choices=cfg.profile_names())
+    ap.add_argument("--holdout", type=float, default=0.25)
+    ap.add_argument("--synthetic", action="store_true")
+    args = ap.parse_args(argv)
+    if args.synthetic:
+        print("⚠ SYNTHETIC DATA — pipeline test only, not performance.")
+
+    accounts = list(cfg.ACCOUNTS) if args.all else [args.account or "matt"]
+    for i, acct in enumerate(accounts):
+        # per-account profile (from ACCOUNTS) + a distinct seed so books don't clone
+        prof = cfg.ACCOUNTS.get(acct, {}).get("profile", args.profile) if args.all else args.profile
+        run_account(acct, synthetic=args.synthetic, generations=args.generations,
+                    pop=args.pop, seed=args.seed + i, profile_name=prof,
+                    holdout=args.holdout)
+
+
+if __name__ == "__main__":
+    main()
