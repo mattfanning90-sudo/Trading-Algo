@@ -104,6 +104,25 @@ def _cached_ml_pool() -> "AgentPool":
     return _ML_POOL
 
 
+_CHAMPION_POOLS: dict[str, "AgentPool"] = {}
+
+
+def champion_pool(account: str) -> "AgentPool":
+    """Build an AgentPool with the stable core (5 hand-written agents) plus this
+    account's auto-promoted swarm champions. Lets paper trading opt into the
+    evolutionary layer, mirroring ml_pool's opt-in DL layer."""
+    from .champions import champions_agents
+    return AgentPool(champions_agents(account), max_workers=1)
+
+
+def _cached_champion_pool(account: str) -> "AgentPool":
+    """Memoized champion_pool() so run_all loads each account's roster once per
+    process (per-account, unlike the single shared ML pool)."""
+    if account not in _CHAMPION_POOLS:
+        _CHAMPION_POOLS[account] = champion_pool(account)
+    return _CHAMPION_POOLS[account]
+
+
 def list_accounts() -> list[str]:
     out = set(storage.db_accounts(_db_path()))
     if os.path.isdir(os.path.abspath(STATE_DIR)):
@@ -205,34 +224,41 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None, interval: str | None = None,
              source: str | None = None, exchange: str | None = None,
-             use_ml: bool = False) -> None:
+             use_ml: bool = False, use_champions: bool = False) -> None:
     # Hold an exclusive per-account lock across the whole load -> mutate -> save
     # cycle so a manual run and the scheduler can't interleave and clobber each
     # other's writes (SQLite makes each commit atomic but not the RMW cycle; see
     # storage.account_lock). The lock sits alongside the state it guards.
     with storage.account_lock(account, lock_dir=os.path.abspath(STATE_DIR)):
         _run_once_locked(account, synthetic, pool=pool, interval=interval,
-                         source=source, exchange=exchange, use_ml=use_ml)
+                         source=source, exchange=exchange, use_ml=use_ml,
+                         use_champions=use_champions)
 
 
 def _run_once_locked(account: str, synthetic: bool = False,
                      pool: AgentPool | None = None, interval: str | None = None,
                      source: str | None = None, exchange: str | None = None,
-                     use_ml: bool = False) -> None:
+                     use_ml: bool = False, use_champions: bool = False) -> None:
     state = load_state(account)
     p = _params(state)
-    # --- ML gate (the ONE mechanism pinning the ML pool to its training set) --
-    # The NeuralAgent is trained on DAILY bars of the default FX+crypto
-    # universe, so with use_ml=True it only ever scores daily-bar books with
-    # the unlocked default universe. Gated-out books (daytrader: 60m bars;
-    # multiasset: universe_locked) keep the CALLER's technical pool — never a
-    # fresh default when a pool was supplied, so --workers is always honored —
+    # --- ML / champions gate (the ONE mechanism pinning these pools to their
+    # training/promotion set) ------------------------------------------------
+    # Both the NeuralAgent and the swarm champion roster are scored on DAILY
+    # bars of the default FX+crypto universe, so with use_champions=True (or
+    # use_ml=True) they only ever apply to daily-bar books with the unlocked
+    # default universe. Gated-out books (daytrader: 60m bars; multiasset:
+    # universe_locked) keep the CALLER's technical pool — never a fresh
+    # default when a pool was supplied, so --workers is always honored —
     # which makes daytrader's 23:00 bar identical regardless of whether
     # fx-paper or day-paper advances it (last_bar_date dedup then makes the
-    # loser a no-op). With use_ml=False (the default) the caller's explicit
-    # pool is used unconditionally.
+    # loser a no-op). With both flags False (the default) the caller's
+    # explicit pool is used unconditionally. Champions take priority over ML
+    # when both are requested for the same book.
     technical_pool = pool          # may be None -> downstream module default
-    if (use_ml and state.get("bar", "1d") in ("1d", "B")
+    if use_champions and state.get("bar", "1d") in ("1d", "B") \
+            and not state.get("universe_locked"):
+        pool = _cached_champion_pool(account)
+    elif (use_ml and state.get("bar", "1d") in ("1d", "B")
             and not state.get("universe_locked")):
         pool = _cached_ml_pool()
     else:
@@ -420,12 +446,14 @@ def _run_once_locked(account: str, synthetic: bool = False,
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
             interval: str | None = None, source: str | None = None,
-            exchange: str | None = None, use_ml: bool = False) -> None:
+            exchange: str | None = None, use_ml: bool = False,
+            use_champions: bool = False) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if account_exists(name):
             run_once(name, synthetic, pool=pool, interval=interval,
-                     source=source, exchange=exchange, use_ml=use_ml)
+                     source=source, exchange=exchange, use_ml=use_ml,
+                     use_champions=use_champions)
 
 
 # ---------------------------------------------------------------------------

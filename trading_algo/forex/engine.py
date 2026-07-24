@@ -48,17 +48,20 @@ def fx_market_open(dt: datetime | None = None) -> bool:
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,
              bar: str | None = None, source: str | None = None,
-             exchange: str | None = None, use_ml: bool = False) -> None:
+             exchange: str | None = None, use_ml: bool = False,
+             use_champions: bool = False) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     src = source or ("crypto" if exchange else "yahoo")
     print(f"\n=== FX engine @ {stamp}  account={account or 'ALL'}  "
           f"bar={bar or 'auto'}  src={src} ===")
     if account:
         fx_book.run_once(account, synthetic, pool=pool, interval=bar,
-                         source=source, exchange=exchange, use_ml=use_ml)
+                         source=source, exchange=exchange, use_ml=use_ml,
+                         use_champions=use_champions)
     else:
         fx_book.run_all(synthetic, pool=pool, interval=bar,
-                        source=source, exchange=exchange, use_ml=use_ml)
+                        source=source, exchange=exchange, use_ml=use_ml,
+                        use_champions=use_champions)
 
 
 def _is_24_7(source: str | None, exchange: str | None) -> bool:
@@ -69,7 +72,8 @@ def _is_24_7(source: str | None, exchange: str | None) -> bool:
 async def run_loop(account: str | None, synthetic: bool, pool: AgentPool,
                    interval: float = 300.0, max_cycles: int | None = None,
                    bar: str | None = None, source: str | None = None,
-                   exchange: str | None = None, use_ml: bool = False) -> None:
+                   exchange: str | None = None, use_ml: bool = False,
+                   use_champions: bool = False) -> None:
     """Poll every `interval` seconds (`bar` = data interval); `max_cycles` bounds
     the loop (tests). Crypto trades 24/7, so the FX-week gate is skipped."""
     i = 0
@@ -77,7 +81,8 @@ async def run_loop(account: str | None, synthetic: bool, pool: AgentPool,
         if synthetic or _is_24_7(source, exchange) or fx_market_open():
             try:
                 run_once(account, synthetic, pool, bar=bar,
-                         source=source, exchange=exchange, use_ml=use_ml)
+                         source=source, exchange=exchange, use_ml=use_ml,
+                         use_champions=use_champions)
             except Exception as exc:                 # never let one bad cycle kill it
                 print(f"[engine] cycle failed: {exc!r}")
         else:
@@ -126,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--workers", type=int, default=None, help="agent-pool threads")
     ap.add_argument("--ml", action="store_true",
                     help="include the trained deep-learning agent (if a model exists)")
+    ap.add_argument("--champions", action="store_true",
+                    help="include the auto-promoted swarm champion roster")
     ap.add_argument("--benchmark", action="store_true", help="measure cycle latency")
     ap.add_argument("--synthetic", action="store_true")
     args = ap.parse_args(argv)
@@ -134,18 +141,19 @@ def main(argv: list[str] | None = None) -> None:
         benchmark(synthetic=args.synthetic, workers=args.workers)
         return
 
-    # ALWAYS the technical pool (--workers honored); --ml is passed down so
-    # fx_book.run_once's gate decides PER BOOK whether the ML pool applies
-    # (daily-bar, unlocked-default-universe books only).
+    # ALWAYS the technical pool (--workers honored); --ml/--champions are passed
+    # down so fx_book.run_once's gate decides PER BOOK whether the ML or
+    # champion pool applies (daily-bar, unlocked-default-universe books only).
     pool = AgentPool(max_workers=args.workers)
     if args.loop:
         asyncio.run(run_loop(args.account, args.synthetic, pool,
                              interval=args.interval, bar=args.bar,
                              source=args.source, exchange=args.exchange,
-                             use_ml=args.ml))
+                             use_ml=args.ml, use_champions=args.champions))
     else:
         run_once(args.account, args.synthetic, pool, bar=args.bar,
-                 source=args.source, exchange=args.exchange, use_ml=args.ml)
+                 source=args.source, exchange=args.exchange, use_ml=args.ml,
+                 use_champions=args.champions)
 
 
 if __name__ == "__main__":

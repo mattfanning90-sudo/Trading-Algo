@@ -792,6 +792,59 @@ def _news_feed(state: dict) -> list[dict]:
     return news.calendar_feed(sorted(curs), date) if curs else []
 
 
+def _swarm_data(account: str) -> dict:
+    """Assemble the SWARM-tab payload from the evolution log + champion roster."""
+    from . import champions, evolve
+    empty = {"generations": [], "lineage": {"nodes": [], "edges": []},
+             "roster": [], "pbo": None, "n_trials": 0,
+             "diversity": {"labels": [], "matrix": []}}
+    log = evolve.read_log(account)
+    if log is None:
+        return empty
+
+    generations = [{"gen": g["gen"], "best": g["best"], "median": g["median"],
+                    "births": g.get("births", 0), "deaths": g.get("deaths", 0)}
+                   for g in log.generations]
+
+    alive = set()
+    try:
+        payload_path = champions.champions_path(account)
+        import json
+        import os
+        meta = {}
+        roster = []
+        if os.path.exists(payload_path):
+            with open(payload_path) as f:
+                pf = json.load(f)
+            meta = pf.get("meta", {})
+            dsr = meta.get("dsr", {})
+            for i, d in enumerate(pf.get("roster", [])):
+                g = evolve.genome_from_dna(d)
+                alive.add(g.gid)
+                roster.append({"gid": g.gid, "label": g.describe(),
+                               "archetype": g.archetype,
+                               "dsr": dsr.get(g.gid), "weight": None})
+    except Exception:
+        meta, roster = {}, []
+
+    nodes = [{"gid": gid, "gen": v.get("born_gen", 0),
+              "archetype": v.get("dna", {}).get("archetype", "?"),
+              "alive": gid in alive}
+             for gid, v in log.registry.items()]        # registry is genome records only
+    edges = [[par, gid] for gid, v in log.registry.items()
+             for par in v.get("parents", [])]
+
+    labels = [r["archetype"] for r in roster]
+    n = len(labels)
+    matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+    return {"generations": generations,
+            "lineage": {"nodes": nodes, "edges": edges},
+            "roster": roster, "pbo": meta.get("pbo"),
+            "n_trials": meta.get("n_trials", log.n_trials),
+            "diversity": {"labels": labels, "matrix": matrix}}
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -964,6 +1017,7 @@ def build_payload(account, synthetic=False, bars=180):
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
         "books": sorted(list_accounts()),
+        "swarm": _swarm_data(account),
     }
 
 
@@ -1154,6 +1208,7 @@ table.txn th.sortable:hover{color:var(--fg)}
   <a href="#attrib"><kbd>4</kbd>Attribution</a>
   <a href="#pairs"><kbd>5</kbd>Pair explorer</a>
   <a href="#txns"><kbd>6</kbd>Transactions</a>
+  <a href="#swarm"><kbd>7</kbd>Swarm</a>
   <span class="hint"><kbd>/</kbd> jump to pair · section · book &nbsp; <kbd>&#8592;</kbd><kbd>&#8594;</kbd> pairs</span>
 </div>
 
@@ -1256,6 +1311,17 @@ table.txn th.sortable:hover{color:var(--fg)}
     <div class="legend">Every column is hover-defined. <b>P&amp;L since</b> is each trade's running
       mark-to-market contribution (Δweight × price move since × equity) — an honest marginal figure
       for a weight-based book, not lot-by-lot realised profit. Costs are always on.</div>
+  </div>
+</section>
+
+<section id="swarm">
+  <div class="band">Swarm <span class="h">evolving agent population · murmuration &amp; lineage</span></div>
+  <div class="cards">
+    <div class="card c8"><h2>Live population <span class="muted" style="font-weight:400">(style-space · migrating toward fitness)</span></h2>
+      <canvas id="swarmField" style="width:100%;height:300px;display:block"></canvas></div>
+    <div class="card c4"><h2>Champion roster</h2><div id="swarmRoster"></div></div>
+    <div class="card c12"><h2>Lineage <span class="muted" style="font-weight:400">(births glow · deaths grey)</span></h2>
+      <canvas id="swarmTree" style="width:100%;height:220px;display:block"></canvas></div>
   </div>
 </section>
 
@@ -1414,10 +1480,10 @@ document.addEventListener('keydown',e=>{
 
 (function(){
   // Command palette - the Bloomberg-style <GO> line: "/" or Ctrl/Cmd-K, type a
-  // pair, section or book, Enter to jump. Number keys 1-6 jump straight to bands.
+  // pair, section or book, Enter to jump. Number keys 1-7 jump straight to bands.
   const wrap=document.getElementById('cmdk'),inp=document.getElementById('cmdin'),list=document.getElementById('cmdlist');
   const SECTIONS=[["Today","today"],["Overview","overview"],["Risk & costs","risk"],
-    ["Attribution","attrib"],["Pair explorer","pairs"],["Transactions","txns"]];
+    ["Attribution","attrib"],["Pair explorer","pairs"],["Transactions","txns"],["Swarm","swarm"]];
   const items=[
     ...SECTIONS.map(([n,id])=>({t:'section',label:n,go:()=>{const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth'});}})),
     ...(DASH.pairs||[]).map(p=>({t:'pair',label:p,go:()=>goPair(p)})),
@@ -1443,7 +1509,7 @@ document.addEventListener('keydown',e=>{
   document.addEventListener('keydown',e=>{
     if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
     if(e.key==='/'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k')){open();e.preventDefault();}
-    else if(/^[1-6]$/.test(e.key)){const sc=SECTIONS[+e.key-1];
+    else if(/^[1-7]$/.test(e.key)){const sc=SECTIONS[+e.key-1];
       const el=sc&&document.getElementById(sc[1]);if(el)el.scrollIntoView({behavior:'smooth'});}});
   // tap-to-toggle the section explainer popovers (mobile has no hover)
   document.addEventListener('click',e=>{
@@ -1649,6 +1715,71 @@ document.addEventListener('keydown',e=>{
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download=`transactions_${DASH.account}.csv`; a.click(); URL.revokeObjectURL(a.href);};
+})();
+
+// --- SWARM roster table ---
+(function(){
+  const el=document.getElementById('swarmRoster'); if(!el) return;
+  const s=DASH.swarm||{}, rows=s.roster||[];
+  if(!rows.length){ el.innerHTML='<div class="muted">No champions promoted yet.</div>'; return; }
+  el.innerHTML='<table style="width:100%;font-size:.8rem;border-collapse:collapse">'+
+    rows.map(r=>'<tr><td style="padding:2px 0">'+r.label+'</td>'+
+      '<td style="text-align:right;color:#26a69a">'+(r.dsr!=null?('DSR '+r.dsr.toFixed(2)):'')+'</td></tr>').join('')+
+    '</table><div class="muted" style="margin-top:6px">N tried: '+(s.n_trials||0)+
+    ' · PBO '+(s.pbo!=null?s.pbo.toFixed(2):'—')+'</div>';
+})();
+
+// --- C: style-space murmuration (agents migrate toward the fitness hotspot) ---
+(function(){
+  const cv=document.getElementById('swarmField'); if(!cv) return;
+  const ctx=cv.getContext('2d'), s=DASH.swarm||{}, nodes=(s.lineage&&s.lineage.nodes)||[];
+  const dpr=window.devicePixelRatio||1;
+  const COLORS={trend:'#3fd0ff',breakout:'#ff4fd8',meanrev:'#ffb24a',momentum:'#4be07a','?':'#8fa3c8'};
+  function resize(){cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;}
+  resize(); window.addEventListener('resize',resize);
+  const P=(nodes.length?nodes:[{archetype:'trend'},{archetype:'meanrev'}]).map((n,i)=>({
+    c:COLORS[n.archetype]||COLORS['?'], x:Math.random(), y:Math.random(),
+    alive:n.alive!==false}));
+  let t=0;
+  (function frame(){ t+=0.01;
+    const w=cv.width,h=cv.height;
+    ctx.fillStyle='rgba(13,17,23,.35)'; ctx.fillRect(0,0,w,h);
+    const hx=w*(.5+.34*Math.cos(t*.9)), hy=h*(.5+.3*Math.sin(t*1.4));
+    const g=ctx.createRadialGradient(hx,hy,0,hx,hy,90*dpr);
+    g.addColorStop(0,'rgba(38,166,154,.30)'); g.addColorStop(1,'rgba(38,166,154,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(hx,hy,90*dpr,0,7); ctx.fill();
+    for(const p of P){ p.x+=((hx/w)-p.x)*0.02+(Math.random()-.5)*0.01;
+      p.y+=((hy/h)-p.y)*0.02+(Math.random()-.5)*0.01;
+      ctx.globalAlpha=p.alive?0.9:0.35;
+      ctx.beginPath(); ctx.arc(p.x*w,p.y*h,(p.alive?3.5:2)*dpr,0,7);
+      ctx.fillStyle=p.c; ctx.fill(); ctx.globalAlpha=1; }
+    requestAnimationFrame(frame);
+  })();
+})();
+
+// --- B: lineage tree (births glow at the frontier, deaths grey) ---
+(function(){
+  const cv=document.getElementById('swarmTree'); if(!cv) return;
+  const ctx=cv.getContext('2d'), s=DASH.swarm||{}, gens=s.generations||[];
+  const nodes=(s.lineage&&s.lineage.nodes)||[];
+  const dpr=window.devicePixelRatio||1;
+  function resize(){cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;}
+  resize(); window.addEventListener('resize',resize);
+  const maxGen=Math.max(1,...nodes.map(n=>n.gen||0));
+  let grow=0;
+  (function frame(){ grow=Math.min(1,grow+0.01);
+    const w=cv.width,h=cv.height;
+    ctx.fillStyle='#0d1117'; ctx.fillRect(0,0,w,h);
+    nodes.forEach(n=>{ const gx=w*((n.gen||0)+0.5)/(maxGen+1);
+      const gy=h*(0.2+0.6*((parseInt(n.gid.slice(0,4),16)||0)/65535));
+      const r=(n.alive?3.5:2)*dpr;
+      ctx.globalAlpha=grow*(n.alive?1:0.4);
+      if(n.alive){ ctx.shadowColor='#26a69a'; ctx.shadowBlur=8*dpr; ctx.fillStyle='#26a69a'; }
+      else { ctx.shadowBlur=0; ctx.fillStyle='#4a5468'; }
+      ctx.beginPath(); ctx.arc(gx,gy,r,0,7); ctx.fill(); ctx.shadowBlur=0; ctx.globalAlpha=1;
+    });
+    if(grow<1) requestAnimationFrame(frame);
+  })();
 })();
 
 function showPair(sym){
