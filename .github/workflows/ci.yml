@@ -89,9 +89,11 @@ jobs:
       # excluded via [tool.bandit] exclude_dirs in pyproject.toml).
       - name: bandit gate (fail on high/medium)
         run: bandit -r trading_algo -ll
-      # pip-audit: fail if any installed dependency has a known CVE.
+      # pip-audit: fail if any dependency in OUR declared closure has a known
+      # CVE. Scoped to requirements.txt (not the whole env) so the runner's
+      # pre-installed pip/setuptools don't fail a gate we can't pin.
       - name: pip-audit gate (fail on known-CVE dependency)
-        run: pip-audit
+        run: pip-audit -r requirements.txt
       # detect-secrets: fail on a NEW secret not already in the committed
       # baseline. Until a .secrets.baseline is committed this scans to seed one
       # and stays report-only (there is nothing to diff against yet).
