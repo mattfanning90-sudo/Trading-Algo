@@ -29,3 +29,10 @@ def test_align_fx_foreign_positive():
 
 def test_fx_ticker_format():
     assert fx.fx_ticker("AUD", "USD") == "AUDUSD=X"
+
+
+def test_load_fx_base_only_returns_identity_for_requested_dates():
+    """An AUD-only portfolio still needs a usable, date-indexed FX multiplier."""
+    tbl = fx.load_fx(["AUD"], "2020-01-01", "2020-01-03")
+    assert tbl.index.equals(pd.bdate_range("2020-01-01", "2020-01-03"))
+    assert (tbl["AUD"] == 1.0).all()

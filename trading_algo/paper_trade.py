@@ -44,6 +44,7 @@ from .regions import REGIONS, get_region
 # State location: env override (used by CI to persist to a tracked dir), else repo root.
 STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
 MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
+_STORAGE_REVISION = "_storage_revision"
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ def account_exists(account: str) -> bool:
 
 
 def load_state(account: str) -> dict:
-    state = storage.db_load(_db_path(), account)
+    state, revision = storage.db_load_with_revision(_db_path(), account)
     if state is None:
         # Fallback: a book created before the DB existed still lives in JSON only.
         path = _state_file(account)
@@ -73,6 +74,8 @@ def load_state(account: str) -> dict:
             raise SystemExit(f"No account '{account}'. Run --init --capital <amt> first.")
         with open(path) as f:
             state = json.load(f)
+    else:
+        state[_STORAGE_REVISION] = revision
     # Upgrade older books additively (never destructive), then validate. With the
     # gate on, an invalid book fails safe — we raise rather than trade on / reset
     # a corrupted book. With it off, we only warn (shadow mode). See config F18.
@@ -98,8 +101,11 @@ def save_state(account: str, state: dict) -> None:
                 + "\n  - ".join(errors))
     # SQLite is the source of truth (atomic, durable, lock-safe); the per-account
     # JSON file is dual-written as a fallback so dashboards / CI globs keep working.
-    storage.db_save(_db_path(), account, state)
-    storage.atomic_write_json(_state_file(account), state)
+    persisted = {k: v for k, v in state.items() if k != _STORAGE_REVISION}
+    revision = storage.db_save(_db_path(), account, persisted,
+                               expected_revision=state.get(_STORAGE_REVISION))
+    storage.atomic_write_json(_state_file(account), persisted)
+    state[_STORAGE_REVISION] = revision
 
 
 # ---------------------------------------------------------------------------

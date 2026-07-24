@@ -47,6 +47,8 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
             cols[c] = (1.0 / raw[t]) if t in raw.columns else np.nan
 
     idx = next((s.index for s in cols.values() if s is not None), None)
+    if idx is None:
+        idx = pd.bdate_range(start, end or pd.Timestamp.today().normalize())
     out = pd.DataFrame(index=idx)
     for c in currencies:
         if c == base:

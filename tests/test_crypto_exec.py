@@ -30,6 +30,17 @@ def test_spot_is_long_only_shorts_clamped():
     assert allowed and allowed[0]["side"] == "sell"
 
 
+def test_live_short_mode_is_rejected_until_derivatives_execution_exists():
+    """No live spot call may turn a negative strategy weight into a short sale."""
+    with pytest.raises(ValueError, match="short execution is not supported"):
+        crypto_exec.rebalance(pd.Series({"BTCUSD": -0.5}), spot=False, dry_run=False)
+
+
+def test_cli_rejects_live_short_mode_before_loading_an_account():
+    with pytest.raises(SystemExit, match="short execution is not supported"):
+        crypto_exec.main(["--account", "missing", "--live", "--allow-short"])
+
+
 def test_dust_below_min_notional_skipped():
     tw = pd.Series({"SOLUSD": 0.0005})         # 0.0005 * 10k = $5 < $10 min
     assert crypto_exec.plan_orders(tw, PRICES, 10_000.0, {}) == []

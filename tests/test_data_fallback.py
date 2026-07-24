@@ -1,4 +1,7 @@
 """Backlog F14: market-data provider fallback."""
+import sys
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -66,3 +69,21 @@ def test_primary_success_skips_fallback(monkeypatch):
     monkeypatch.setattr(cfg, "DATA_FALLBACK_SOURCE", "fake")
     data.load_prices(["ONLY"], "2020-01-01", use_cache=False)
     assert called["fb"] is False, "fallback must not run when the primary succeeds"
+
+
+def test_volume_cache_is_scoped_to_the_requested_date_range(tmp_path, monkeypatch):
+    """A short cached download must not truncate a later, longer ADV history."""
+    calls = []
+
+    def download(tickers, start, end, **_kwargs):
+        calls.append((tuple(tickers), start, end))
+        idx = pd.bdate_range(start, end)
+        return pd.DataFrame({("Volume", "AAA"): range(1, len(idx) + 1)}, index=idx)
+
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=download))
+    data.load_volume(["AAA"], "2020-01-02", "2020-01-03")
+    longer = data.load_volume(["AAA"], "2020-01-01", "2020-01-06")
+
+    assert len(calls) == 2
+    assert longer.index.equals(pd.bdate_range("2020-01-01", "2020-01-06"))

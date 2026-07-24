@@ -27,6 +27,19 @@ def test_db_upsert_overwrites(tmp_path):
     assert storage.db_accounts(db) == ["a"]             # one row, not two
 
 
+def test_db_rejects_a_stale_revision_without_overwriting_newer_state(tmp_path):
+    """A process that read an old book cannot clobber a newer completed run."""
+    db = str(tmp_path / "books.db")
+    storage.db_save(db, "a", {"v": 1})
+    _state, revision = storage.db_load_with_revision(db, "a")
+    storage.db_save(db, "a", {"v": 2}, expected_revision=revision)
+
+    with pytest.raises(RuntimeError, match="stale"):
+        storage.db_save(db, "a", {"v": 3}, expected_revision=revision)
+
+    assert storage.db_load(db, "a") == {"v": 2}
+
+
 def test_db_accounts_and_has(tmp_path):
     db = str(tmp_path / "books.db")
     assert storage.db_accounts(db) == []                # missing DB → empty
@@ -81,6 +94,21 @@ def test_paper_load_prefers_db_over_stale_json(tmp_path, monkeypatch):
     assert pt.load_state("test")["tag"] == "fresh"
 
 
+def test_paper_save_rejects_a_stale_loaded_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.save_state("test", {"tag": "initial"})
+    first = pt.load_state("test")
+    stale = pt.load_state("test")
+    first["tag"] = "newer"
+    pt.save_state("test", first)
+    stale["tag"] = "older"
+
+    with pytest.raises(RuntimeError, match="stale"):
+        pt.save_state("test", stale)
+
+    assert pt.load_state("test")["tag"] == "newer"
+
+
 def test_paper_missing_account_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
     with pytest.raises(SystemExit):
@@ -104,3 +132,18 @@ def test_fx_dual_write_and_fallback(tmp_path, monkeypatch):
     assert os.path.exists(fx_book._state_file("partner"))
     assert fx_book.load_state("partner")["profile"] == "aggressive"
     assert fx_book.account_exists("partner")
+
+
+def test_fx_save_rejects_a_stale_loaded_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    fx_book.save_state("test", {"profile": "balanced"})
+    first = fx_book.load_state("test")
+    stale = fx_book.load_state("test")
+    first["profile"] = "aggressive"
+    fx_book.save_state("test", first)
+    stale["profile"] = "conservative"
+
+    with pytest.raises(RuntimeError, match="stale"):
+        fx_book.save_state("test", stale)
+
+    assert fx_book.load_state("test")["profile"] == "aggressive"

@@ -131,6 +131,9 @@ def rebalance(target_weights: pd.Series, *, exchange: str = "binance",
               min_notional: float = DEFAULT_MIN_NOTIONAL,
               max_order_notional: float | None = None) -> list[dict]:
     """Connect, diff target vs live holdings, and (only if not dry_run) place orders."""
+    if not spot and not dry_run:
+        raise ValueError("live short execution is not supported; use dry-run until a "
+                         "derivatives executor is available")
     ex = private_exchange(exchange)
     ex.load_markets()
     symbols = list(target_weights.index)
@@ -184,6 +187,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--synthetic", action="store_true",
                     help="offline dry-run: synthetic prices, flat book (forces dry-run)")
     args = ap.parse_args(argv)
+    if args.live and args.allow_short:
+        raise SystemExit("live short execution is not supported; use dry-run until a "
+                         "derivatives executor is available")
 
     state = fx_book.load_state(args.account)
     symbols = list(state.get("symbols") or crypto_data.CRYPTO_UNIVERSE)

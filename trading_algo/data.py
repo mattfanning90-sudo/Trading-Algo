@@ -191,7 +191,7 @@ def load_volume(tickers: list[str], start: str, end: str | None = None,
     """Daily SHARE volume (real data). Versioned cache key ('v'+schema) so a
     Close-only cache from before volume ingestion can't be served here (R3)."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_file = _cache_path("vol:v1:" + ",".join(sorted(tickers)))
+    cache_file = _cache_path(f"vol:v2:{start}:{end}:" + ",".join(sorted(tickers)))
     if use_cache and os.path.exists(cache_file):
         df = pd.read_parquet(cache_file)
         have = [t for t in tickers if t in df.columns]

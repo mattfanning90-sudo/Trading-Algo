@@ -12,8 +12,8 @@ single SQLite file per state directory. SQLite gives us:
 
 * **Atomic, durable writes** — a commit either lands whole or not at all, so a
   crash can no longer truncate a book.
-* **Locking** — concurrent writers (the scheduler + a manual run) serialise
-  instead of clobbering each other (WAL mode; a short busy-timeout).
+* **Concurrent-write protection** — WAL plus optimistic revisions reject a
+  stale scheduler/manual run instead of letting it clobber newer book state.
 * **One queryable file** per state dir instead of a directory of loose blobs.
 
 The legacy JSON files are still written alongside the DB (see
@@ -31,6 +31,10 @@ import sqlite3
 _BUSY_TIMEOUT_MS = 5_000
 
 
+class ConcurrentStateError(RuntimeError):
+    """Raised when a stale process tries to overwrite a newer account state."""
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     """Open ``db_path`` (creating its directory and the ``books`` table if
     needed) with WAL journalling and a busy-timeout so concurrent runs wait
@@ -45,36 +49,67 @@ def _connect(db_path: str) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS books ("
         "  account    TEXT PRIMARY KEY,"
         "  state      TEXT NOT NULL,"
+        "  revision   INTEGER NOT NULL DEFAULT 1,"
         "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))"
         ")"
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(books)")}
+    if "revision" not in columns:
+        conn.execute("ALTER TABLE books ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
     return conn
 
 
 def db_load(db_path: str, account: str) -> dict | None:
     """Return the stored book for ``account``, or ``None`` if the DB or row is
     absent (so the caller can fall back to a legacy JSON file)."""
+    state, _revision = db_load_with_revision(db_path, account)
+    return state
+
+
+def db_load_with_revision(db_path: str, account: str) -> tuple[dict | None, int | None]:
+    """Return a book and its optimistic-concurrency revision, if present."""
     if not os.path.exists(db_path):
-        return None
+        return None, None
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT state FROM books WHERE account = ?", (account,)
+            "SELECT state, revision FROM books WHERE account = ?", (account,)
         ).fetchone()
-    return json.loads(row[0]) if row else None
+    return (json.loads(row[0]), int(row[1])) if row else (None, None)
 
 
-def db_save(db_path: str, account: str, state: dict) -> None:
-    """Upsert ``account``'s book as one atomic, durable transaction."""
+def db_save(db_path: str, account: str, state: dict,
+            expected_revision: int | None = None) -> int:
+    """Save a book and return its revision.
+
+    When ``expected_revision`` is supplied, reject a stale writer instead of
+    overwriting a state saved since it was loaded.
+    """
     payload = json.dumps(state, indent=2)
     with _connect(db_path) as conn:
-        conn.execute(
-            "INSERT INTO books (account, state, updated_at) "
-            "VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(account) DO UPDATE SET "
-            "  state = excluded.state, updated_at = excluded.updated_at",
-            (account, payload),
-        )
+        if expected_revision is None:
+            conn.execute(
+                "INSERT INTO books (account, state, revision, updated_at) "
+                "VALUES (?, ?, 1, datetime('now')) "
+                "ON CONFLICT(account) DO UPDATE SET "
+                "  state = excluded.state, revision = books.revision + 1, "
+                "  updated_at = excluded.updated_at",
+                (account, payload),
+            )
+            revision = conn.execute(
+                "SELECT revision FROM books WHERE account = ?", (account,)
+            ).fetchone()[0]
+        else:
+            cur = conn.execute(
+                "UPDATE books SET state = ?, revision = revision + 1, "
+                "updated_at = datetime('now') WHERE account = ? AND revision = ?",
+                (payload, account, expected_revision),
+            )
+            if cur.rowcount != 1:
+                raise ConcurrentStateError(
+                    f"stale state for account '{account}'; reload before saving")
+            revision = expected_revision + 1
         conn.commit()
+    return int(revision)
 
 
 def db_accounts(db_path: str) -> list[str]:
