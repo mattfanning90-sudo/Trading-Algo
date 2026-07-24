@@ -128,3 +128,22 @@ def promote(account: str, *, synthetic: bool, profile_name: str,
     print(f"[{account}] gate: {len(passed)} passed DSR≥{dsr_min}, PBO={pbo:.2f} "
           f"-> roster of {len(new_roster)} (core 5 + {len(new_roster)} champions)")
     return meta
+
+
+def main(argv=None):
+    import argparse
+    from . import fx_config as cfg
+    ap = argparse.ArgumentParser(description="Promote bred swarm champions through the OOS gate")
+    ap.add_argument("--account", default=None)
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--profile", default="balanced", choices=cfg.profile_names())
+    ap.add_argument("--synthetic", action="store_true")
+    args = ap.parse_args(argv)
+    accts = list(cfg.ACCOUNTS) if args.all else [args.account or "matt"]
+    for a in accts:
+        prof = cfg.ACCOUNTS.get(a, {}).get("profile", args.profile) if args.all else args.profile
+        promote(a, synthetic=args.synthetic, profile_name=prof)
+
+
+if __name__ == "__main__":
+    main()

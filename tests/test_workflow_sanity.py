@@ -8,8 +8,8 @@ the text that encodes the agreed publishing scheme instead:
 * ONE rebase-safe push block in every workflow that pushes state — abort any
   in-progress rebase before every retry, no merge-commit `git pull`, no
   swallowed failures;
-* ONE `github-pages` concurrency group across exactly the two audited Pages
-  publishers (day-paper + fx-paper);
+* ONE `github-pages` concurrency group across exactly the three audited Pages
+  publishers (day-paper + fx-paper + fx-swarm);
 * day-paper's cron never fires at hour 23 (fx-paper's nightly owns it);
 * ONE shared site builder (scripts/build_site.sh) with defensive env defaults,
   no `dashboard --all` (its build_index output was being clobbered), and a
@@ -24,10 +24,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WF_DIR = ROOT / ".github" / "workflows"
 BUILD_SITE = ROOT / "scripts" / "build_site.sh"
 
-# The two Pages publishers (audited as the COMPLETE set — backtest.yml and
-# fx-train.yml have no deploy-pages jobs) and the three state committers.
-SITE_WORKFLOWS = ("day-paper.yml", "fx-paper.yml")
-STATE_WORKFLOWS = ("day-paper.yml", "fx-paper.yml", "paper-trade.yml")
+# The three Pages publishers (audited as the COMPLETE set — backtest.yml and
+# fx-train.yml have no deploy-pages jobs) and the four state committers.
+SITE_WORKFLOWS = ("day-paper.yml", "fx-paper.yml", "fx-swarm.yml")
+STATE_WORKFLOWS = ("day-paper.yml", "fx-paper.yml", "paper-trade.yml", "fx-swarm.yml")
 
 
 def _wf(name: str) -> str:
