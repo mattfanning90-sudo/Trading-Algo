@@ -1,7 +1,7 @@
 # Paper/live parity execution architecture
 
 **Date:** 2026-07-25  
-**Status:** Proposed design approved in conversation; written review pending  
+**Status:** Approved
 **Canonical acceptance criteria:** `docs/specs/paper-live-parity.md`
 
 ## Objective

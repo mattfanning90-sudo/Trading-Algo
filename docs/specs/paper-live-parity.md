@@ -1,7 +1,7 @@
 ---
 title: Paper and live execution parity
 slug: paper-live-parity
-status: draft
+status: agreed
 created: 2026-07-25
 last-updated: 2026-07-25
 owner: matt
@@ -97,7 +97,8 @@ pytest -q tests/adapters/test_adapter_contract.py
 pytest -q tests/test_execution_efficiency.py tests/test_execution_live_gate.py
 pytest -q
 ruff check trading_algo tests
-python -m trading_algo.execution_replay --scenario tests/fixtures/execution/golden.json
+python -m trading_algo.execution_replay \
+  --scenario tests/fixtures/execution/equity_partial_fill.json
 ```
 
 Broker-sandbox checks run only when their credentials are explicitly present:
