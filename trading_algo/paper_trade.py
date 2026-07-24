@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
+from . import signals as sig
 from . import (data, data_quality, fees, fx, notifications, pnl, profiles,
                storage, strategy, tca)
 from . import state_schema
@@ -131,13 +132,37 @@ def _account_drawdown_stop(state: dict):
     return state.get("max_drawdown_stop", cfg.MAX_DRAWDOWN_STOP)
 
 
-def fx_snapshot(synthetic: bool) -> dict[str, float]:
+def fx_snapshot(synthetic: bool,
+                prev: dict[str, float] | None = None) -> dict[str, float]:
+    """Latest base-per-local multiplier for every funded currency.
+
+    A single failed pair fetch (e.g. AUDUSD=X 403s while AUDGBP=X succeeds)
+    comes back as an all-NaN column that ffill can't repair, so its `.iloc[-1]`
+    is NaN. Left alone that NaN flows straight into `eq_base = eq_local · rate`
+    and poisons the whole book's equity (this is what NaN'd the `full` book's US
+    sleeve and headline AUM). FX rates are persistent, so the correct fallback is
+    the last known-good rate from `prev` — never a NaN.
+    """
     currencies = [get_region(k).currency for k in _regions()]
     if synthetic:
         tbl = fx.synthetic_fx(currencies, base=cfg.BASE_CURRENCY)
     else:
         tbl = fx.load_fx(currencies, cfg.START, base=cfg.BASE_CURRENCY, use_cache=False)
-    return {c: float(tbl[c].iloc[-1]) for c in currencies}
+    prev = prev or {}
+    snap = {}
+    for c in currencies:
+        rate = float(tbl[c].iloc[-1])
+        if not (rate == rate) or rate <= 0.0:            # NaN or non-positive → failed pair
+            fallback = prev.get(c)
+            if fallback is not None and fallback == fallback and fallback > 0.0:
+                print(f"  ⚠ FX rate for {c} unavailable this run — "
+                      f"carrying forward last good {fallback:.4f}")
+                rate = float(fallback)
+            else:
+                print(f"  ⚠ FX rate for {c} unavailable and no prior rate to "
+                      f"fall back on — {c} sleeve valuation will be skipped this run")
+        snap[c] = rate
+    return snap
 
 
 def latest_region_data(region, synthetic: bool):
@@ -149,6 +174,48 @@ def latest_region_data(region, synthetic: bool):
 # ---------------------------------------------------------------------------
 # Accounting
 # ---------------------------------------------------------------------------
+def _empty_target_reason(prices: pd.DataFrame, index_px: pd.Series,
+                         p, eligible: set[str] | None) -> str:
+    """Diagnose WHY `compute_targets` returned an all-cash book, so an idle
+    sleeve is explainable instead of silent.
+
+      regime-off        the index is below its trend MA — de-risking as DESIGNED
+      no-eligible-names regime is on but nothing cleared the momentum/trend gate
+      data-quality      every candidate was frozen as untrustworthy
+      insufficient-names a long/short book couldn't form both legs
+
+    Read-only — it does NOT build weights (invariant #3 keeps the one weight path
+    in strategy.compute_targets); it only re-reads the regime for reporting.
+    """
+    if eligible is not None and len(eligible) == 0:
+        return "data-quality"
+    if getattr(p, "long_short", False):
+        return "insufficient-names"
+    if p.regime_filter:
+        asof = prices.index[-1]
+        risk_on = bool(sig.index_risk_on(index_px, p)
+                       .reindex(prices.index).ffill().loc[asof])
+        if not risk_on:
+            return "regime-off"
+    return "no-eligible-names"
+
+
+def _record_sleeve_status(sleeve: dict, today: str, status: str) -> None:
+    """Persist a one-line, machine-readable reason for the sleeve's state this
+    run (see `_empty_target_reason`). `flat_since` tracks how long a sleeve has
+    been in cash so a sleeve that sits idle for weeks is visible, not silent."""
+    prev = sleeve.get("last_status") or {}
+    flat = status.startswith("cash")
+    was_flat = str(prev.get("status", "")).startswith("cash")
+    sleeve["last_status"] = {
+        "date": today,
+        "status": status,
+        "positions": len(sleeve["positions"]),
+        "flat_since": (prev.get("flat_since", today) if (flat and was_flat) else
+                       today if flat else None),
+    }
+
+
 def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
     holdings = 0.0
     for t, sh in sleeve["positions"].items():
@@ -341,7 +408,9 @@ def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
 
 def run_daily(account: str, synthetic: bool) -> None:
     state = load_state(account)
-    snap = fx_snapshot(synthetic)
+    # Carry forward the last known-good rates so a transient single-pair fetch
+    # failure can't NaN the book's equity (see fx_snapshot).
+    snap = fx_snapshot(synthetic, prev=state.get("fx_snapshot"))
     state["fx_snapshot"] = snap
 
     # Drawdown circuit breaker: was the account halted by a prior run? Stay flat
@@ -364,6 +433,8 @@ def run_daily(account: str, synthetic: bool) -> None:
         sleeve = state["sleeves"][k]
         this_month = today[:7]
 
+        params = _account_params(state, region)
+        status = None                       # why the sleeve ended this run as it did
         if halted:
             if sleeve["positions"]:
                 print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
@@ -371,25 +442,34 @@ def run_daily(account: str, synthetic: bool) -> None:
                                  px_today, today, state["trades"])
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
+            status = "cash:halted"
         elif _should_rebalance(sleeve, today, this_month):
             eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
+                status = "cash:below-min"
             else:
                 elig, dq = data_quality.eligible(prices, region, prices.index[-1])
                 if dq.excluded:
                     print(f"  [{k}] data-quality: freezing "
                           + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
-                targets = strategy.compute_targets(prices, index_px,
-                                                   _account_params(state, region),
+                targets = strategy.compute_targets(prices, index_px, params,
                                                    eligible=elig)
                 if targets.empty:
-                    print(f"  [{k}] regime RISK-OFF — moving/holding cash.")
+                    reason = _empty_target_reason(prices, index_px, params, elig)
+                    print(f"  [{k}] flat — {reason} (holding cash).")
+                    status = f"cash:{reason}"
+                else:
+                    status = "rebalanced"
                 rebalance_sleeve(region, sleeve, targets, px_today, today,
                                  state["trades"], frozen=dq.excluded)
                 sleeve["last_rebalance_date"] = today
             sleeve["last_rebalance_month"] = this_month
+        else:
+            status = "held" if sleeve["positions"] else "cash:idle"
+
+        _record_sleeve_status(sleeve, today, status)
 
         eq_local = sleeve_equity_local(sleeve, px_today)
         eq_base = eq_local * snap[region.currency]
@@ -430,7 +510,14 @@ def run_daily(account: str, synthetic: bool) -> None:
             level="alert", account=account, transition=transition,
             equity=round(combined, 2), drawdown=round(float(dd), 4))
 
-    if not state["equity_history"] or state["equity_history"][-1][0] != report_date:
+    # Never persist a NaN into the equity/sleeve history — a residual NaN here
+    # means a currency failed to fetch AND had no prior rate to carry forward
+    # (fx_snapshot already handles the common case). Skip the row rather than
+    # corrupt the series the dashboard and metrics read.
+    if combined != combined:
+        print(f"  ⚠ combined equity is NaN for {report_date} (FX data gap) — "
+              f"skipping history update this run.")
+    elif not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])
         sleeve_row = {"date": report_date}
         sleeve_row.update({k: round(v[2], 2) for k, v in breakdown.items()})
