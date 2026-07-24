@@ -27,6 +27,7 @@ See docs/CRYPTO_HF.md and docs/DATA_FEEDS.md.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 
 import pandas as pd
@@ -124,6 +125,8 @@ def plan_orders(target_weights: pd.Series, prices: dict[str, float],
         if not price or price != price or price <= 0:
             continue
         w = float(target_weights.get(sym, 0.0))
+        if not math.isfinite(w):                  # NaN/inf weight can't be sized —
+            continue                              # drop the leg, never emit a NaN order
         if spot:
             w = max(w, 0.0)                       # can't short / lever a spot balance
         target_value = w * equity
