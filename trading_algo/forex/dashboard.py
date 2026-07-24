@@ -792,6 +792,59 @@ def _news_feed(state: dict) -> list[dict]:
     return news.calendar_feed(sorted(curs), date) if curs else []
 
 
+def _swarm_data(account: str) -> dict:
+    """Assemble the SWARM-tab payload from the evolution log + champion roster."""
+    from . import champions, evolve
+    empty = {"generations": [], "lineage": {"nodes": [], "edges": []},
+             "roster": [], "pbo": None, "n_trials": 0,
+             "diversity": {"labels": [], "matrix": []}}
+    log = evolve.read_log(account)
+    if log is None:
+        return empty
+
+    generations = [{"gen": g["gen"], "best": g["best"], "median": g["median"],
+                    "births": g.get("births", 0), "deaths": g.get("deaths", 0)}
+                   for g in log.generations]
+
+    alive = set()
+    try:
+        payload_path = champions.champions_path(account)
+        import json
+        import os
+        meta = {}
+        roster = []
+        if os.path.exists(payload_path):
+            with open(payload_path) as f:
+                pf = json.load(f)
+            meta = pf.get("meta", {})
+            dsr = meta.get("dsr", {})
+            for i, d in enumerate(pf.get("roster", [])):
+                g = evolve.genome_from_dna(d)
+                alive.add(g.gid)
+                roster.append({"gid": g.gid, "label": g.describe(),
+                               "archetype": g.archetype,
+                               "dsr": dsr.get(g.gid), "weight": None})
+    except Exception:
+        meta, roster = {}, []
+
+    nodes = [{"gid": gid, "gen": v.get("born_gen", 0),
+              "archetype": v.get("dna", {}).get("archetype", "?"),
+              "alive": gid in alive}
+             for gid, v in log.registry.items()]        # registry is genome records only
+    edges = [[par, gid] for gid, v in log.registry.items()
+             for par in v.get("parents", [])]
+
+    labels = [r["archetype"] for r in roster]
+    n = len(labels)
+    matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+    return {"generations": generations,
+            "lineage": {"nodes": nodes, "edges": edges},
+            "roster": roster, "pbo": meta.get("pbo"),
+            "n_trials": meta.get("n_trials", log.n_trials),
+            "diversity": {"labels": labels, "matrix": matrix}}
+
+
 def build_payload(account, synthetic=False, bars=180):
     state = load_state(account)
     symbols = state.get("symbols", [])
@@ -964,6 +1017,7 @@ def build_payload(account, synthetic=False, bars=180):
         "glossary": GLOSSARY, "agent_roles": _AGENT_ROLES,
         "pairs": pairs, "data": data,
         "books": sorted(list_accounts()),
+        "swarm": _swarm_data(account),
     }
 
 
