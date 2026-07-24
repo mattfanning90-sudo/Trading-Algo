@@ -1,0 +1,1049 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The machine, end to end — Multi-Region Momentum + FX</title>
+</head>
+<body>
+<style>
+/* ============================================================
+   "The machine, end to end" — animated walkthrough of a
+   multi-region momentum + FX trading system.
+   Self-contained: no external fonts, scripts or styles.
+   ============================================================ */
+
+:root{
+  /* light theme (default) */
+  --bg:#EEF2F1; --bg2:#E3E9E7; --panel:#FBFDFC; --panel2:#F1F5F3;
+  --ink:#141D27; --ink-dim:#455563; --muted:#7B8A95; --line:#D6DFDC; --line2:#C3CFCB;
+  --us:#1C79DC; --asx:#B0771A; --ftse:#C23E7F; --aud:#0E9E76;
+  --on:#0E9E76; --off:#D53B2A; --cash:#8A97A1;
+  --glow:0; --scan:0;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#080B10; --bg2:#0C1118; --panel:#0F151D; --panel2:#131C25;
+    --ink:#D6DEE6; --ink-dim:#8A98A5; --muted:#5C6A77; --line:#1A2430; --line2:#25323E;
+    --us:#4CA9FF; --asx:#F0B32A; --ftse:#EC77AD; --aud:#33E0AE;
+    --on:#33E0AE; --off:#FF5F52; --cash:#5C6A77;
+    --glow:1; --scan:1;
+    color-scheme:dark;
+  }
+}
+/* explicit toggle overrides the media query in both directions */
+:root[data-theme="light"]{
+  --bg:#EEF2F1; --bg2:#E3E9E7; --panel:#FBFDFC; --panel2:#F1F5F3;
+  --ink:#141D27; --ink-dim:#455563; --muted:#7B8A95; --line:#D6DFDC; --line2:#C3CFCB;
+  --us:#1C79DC; --asx:#B0771A; --ftse:#C23E7F; --aud:#0E9E76;
+  --on:#0E9E76; --off:#D53B2A; --cash:#8A97A1;
+  --glow:0; --scan:0; color-scheme:light;
+}
+:root[data-theme="dark"]{
+  --bg:#080B10; --bg2:#0C1118; --panel:#0F151D; --panel2:#131C25;
+  --ink:#D6DEE6; --ink-dim:#8A98A5; --muted:#5C6A77; --line:#1A2430; --line2:#25323E;
+  --us:#4CA9FF; --asx:#F0B32A; --ftse:#EC77AD; --aud:#33E0AE;
+  --on:#33E0AE; --off:#FF5F52; --cash:#5C6A77;
+  --glow:1; --scan:1; color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+:root{
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,"Liberation Mono",monospace;
+}
+
+#app{
+  position:fixed; inset:0;
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+  background:
+    radial-gradient(120% 90% at 50% -10%, var(--bg2), var(--bg) 60%);
+}
+
+/* ---------- top chrome ---------- */
+.top{
+  display:flex; align-items:center; gap:16px;
+  padding:14px 22px 10px;
+  border-bottom:1px solid var(--line);
+  min-height:56px;
+}
+.brand{display:flex; flex-direction:column; gap:3px; min-width:0}
+.brand .t{
+  font-family:var(--mono); font-weight:600; font-size:14px; letter-spacing:.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.brand .s{ font-size:11px; color:var(--muted); letter-spacing:.06em; text-transform:uppercase }
+.caption{
+  flex:1 1 auto; min-width:0;
+  display:flex; flex-direction:column; gap:2px; align-items:flex-end;
+  text-align:right;
+}
+.caption .ct{ font-family:var(--mono); font-size:13px; color:var(--ink); font-weight:600 }
+.caption .cs{ font-size:12px; color:var(--ink-dim); max-width:52ch; line-height:1.35 }
+
+.chips{ display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end }
+.chip{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;
+  padding:3px 8px; border:1px solid var(--line2); border-radius:999px;
+  color:var(--ink-dim); white-space:nowrap; background:var(--panel);
+}
+.chip.on{ color:var(--on); border-color:color-mix(in srgb, var(--on) 45%, var(--line2)) }
+.chip.warn{ color:var(--asx); border-color:color-mix(in srgb, var(--asx) 45%, var(--line2)) }
+.chip b{ color:var(--muted); font-weight:600 }
+
+/* ---------- stage ---------- */
+.stage{ position:relative; overflow:hidden }
+canvas{ position:absolute; inset:0; width:100%; height:100%; display:block }
+
+/* ---------- transport ---------- */
+.transport{
+  display:flex; align-items:center; gap:14px;
+  padding:12px 22px 16px;
+  border-top:1px solid var(--line);
+}
+.tbtn{
+  appearance:none; cursor:pointer;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line2); border-radius:8px;
+  height:34px; min-width:34px; padding:0 9px;
+  font-family:var(--mono); font-size:13px; line-height:1;
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  transition:border-color .15s, background .15s, color .15s;
+}
+.tbtn:hover{ border-color:color-mix(in srgb, var(--aud) 55%, var(--line2)); color:var(--ink) }
+.tbtn:focus-visible{ outline:2px solid var(--aud); outline-offset:2px }
+.tbtn.primary{ background:color-mix(in srgb, var(--aud) 16%, var(--panel)); border-color:color-mix(in srgb, var(--aud) 50%, var(--line2)) }
+.tbtn.wide{ min-width:46px }
+
+.timeline{
+  position:relative; flex:1 1 auto; height:34px; cursor:pointer;
+  display:flex; align-items:center; touch-action:none;
+}
+.timeline:focus-visible{ outline:2px solid var(--aud); outline-offset:3px; border-radius:6px }
+.tl-track{
+  position:absolute; left:0; right:0; height:6px; border-radius:999px;
+  background:var(--line); overflow:hidden;
+}
+.tl-fill{
+  position:absolute; left:0; top:0; bottom:0; width:0%;
+  background:linear-gradient(90deg, color-mix(in srgb,var(--aud) 60%, var(--us)), var(--aud));
+  border-radius:999px;
+}
+.tl-marks{ position:absolute; inset:0 }
+.tl-mark{
+  position:absolute; top:50%; transform:translate(-50%,-50%);
+  width:2px; height:14px; background:var(--line2); border-radius:2px;
+}
+.tl-mark.done{ background:color-mix(in srgb, var(--aud) 55%, var(--line2)) }
+.tl-mark .lbl{
+  position:absolute; top:-22px; left:50%; transform:translateX(-50%);
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.05em;
+  color:var(--muted); text-transform:uppercase; white-space:nowrap;
+  opacity:0; transition:opacity .15s; pointer-events:none;
+}
+.tl-mark.active .lbl, .timeline:hover .tl-mark:hover .lbl{ opacity:1 }
+.tl-mark.active{ background:var(--aud) }
+.tl-mark.hit{
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:22px; height:26px; background:transparent; border:0; padding:0; cursor:pointer;
+}
+.tl-head{
+  position:absolute; top:50%; transform:translate(-50%,-50%);
+  width:13px; height:13px; border-radius:50%;
+  background:var(--aud); box-shadow:0 0 0 3px color-mix(in srgb,var(--aud) 25%, transparent);
+  pointer-events:none;
+}
+.clock{
+  font-family:var(--mono); font-size:12px; color:var(--ink-dim);
+  font-variant-numeric:tabular-nums; white-space:nowrap; min-width:96px; text-align:right;
+}
+
+/* light-theme figure legibility for chips border */
+:root[data-theme="light"] .chip, :root:not([data-theme]) .chip{ box-shadow:none }
+
+@media (max-width:760px){
+  .caption .cs{ display:none }
+  .brand .s{ display:none }
+  .tl-mark .lbl{ display:none }
+  .transport{ gap:9px; padding:10px 12px 14px }
+  .top{ padding:10px 14px 8px }
+}
+@media (prefers-reduced-motion: reduce){
+  .tl-fill, .tl-head{ transition:none }
+}
+</style>
+
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <div class="t">THE MACHINE, END&nbsp;TO&nbsp;END</div>
+      <div class="s">Multi-region momentum &middot; parallel FX engine</div>
+    </div>
+    <div class="caption">
+      <div class="ct" id="capTitle">Press play</div>
+      <div class="cs" id="capText">A 12&#8209;1 cross&#8209;sectional momentum system across three regional sleeves, combined in AUD &mdash; plus an independent FX book.</div>
+      <div class="chips" id="chips">
+        <span class="chip"><b>synthetic</b> pipeline illustration</span>
+        <span class="chip on">no lookahead</span>
+        <span class="chip on">costs always on</span>
+        <span class="chip on">walk&#8209;forward</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="stage">
+    <canvas id="c"></canvas>
+  </main>
+
+  <footer class="transport">
+    <button class="tbtn primary" id="play" aria-label="Play or pause">&#9654;</button>
+    <button class="tbtn" id="back" aria-label="Previous stage">&#9664;&#9664;</button>
+    <button class="tbtn" id="fwd" aria-label="Next stage">&#9654;&#9654;</button>
+    <div class="timeline" id="timeline" role="slider" tabindex="0"
+         aria-label="Timeline" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="tl-track"><div class="tl-fill" id="tlFill"></div></div>
+      <div class="tl-marks" id="tlMarks"></div>
+      <div class="tl-head" id="tlHead"></div>
+    </div>
+    <button class="tbtn" id="replay" aria-label="Replay from start">&#8635;</button>
+    <button class="tbtn wide" id="speed" aria-label="Playback speed">1&times;</button>
+    <div class="clock" id="clock">00:00 / 00:00</div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+(function(){
+  // ---------------------------------------------------------------
+  // 0. Setup
+  // ---------------------------------------------------------------
+  var cvs = document.getElementById('c');
+  var ctx = cvs.getContext('2d');
+  var DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+  var W = 0, H = 0;                       // CSS pixels of the stage
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // palette read from CSS custom properties (single source of truth)
+  var PAL = {};
+  function readPalette(){
+    var cs = getComputedStyle(document.documentElement);
+    ['bg','bg2','panel','panel2','ink','ink-dim','muted','line','line2',
+     'us','asx','ftse','aud','on','off','cash'].forEach(function(k){
+      PAL[k] = cs.getPropertyValue('--'+k).trim() || '#888';
+    });
+    PAL.glow = parseFloat(cs.getPropertyValue('--glow')) || 0;
+  }
+  readPalette();
+
+  // seeded RNG (deterministic → reproducible jitter, no Math.random surprises)
+  function mulberry32(a){ return function(){
+    a|=0; a=a+0x6D2B79F5|0;
+    var t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+    return ((t^t>>>14)>>>0)/4294967296;
+  };}
+
+  // ---------------------------------------------------------------
+  // 1. Curated dataset  (real tickers / params, illustrative numbers)
+  // ---------------------------------------------------------------
+  var REGIONS = [
+    {key:'US',   ccy:'USD', idx:'S&P 500',  col:'us',   regimeOn:true },
+    {key:'ASX',  ccy:'AUD', idx:'ASX 200',  col:'asx',  regimeOn:false}, // RISK-OFF (11 Jun 2026)
+    {key:'FTSE', ccy:'GBP', idx:'FTSE 100', col:'ftse', regimeOn:true }
+  ];
+  // per region: ticker, momentum (12-1), realised vol, trend filter pass
+  var RAW = {
+    US:  [['NVDA',.42,.34,1],['MSFT',.28,.22,1],['AAPL',.21,.24,1],
+          ['AMZN',.17,.30,1],['GOOGL',.12,.26,0],['TSLA',-.05,.55,0]],
+    ASX: [['FMG',.24,.40,1],['BHP',.19,.28,1],['CBA',.16,.20,1],
+          ['CSL',.11,.26,1],['NAB',.08,.22,1],['WES',.06,.24,1]],
+    FTSE:[['SHEL',.22,.24,1],['AZN',.18,.21,1],['HSBA',.15,.23,1],
+          ['RIO',.13,.30,1],['BP',.04,.27,0],['ULVR',-.02,.18,0]]
+  };
+  var TOP_N = 4, CAP = 0.15, VOL_TARGET = 0.12;
+
+  var seed = mulberry32(20260724);
+  var tokens = [];
+  REGIONS.forEach(function(R, ri){
+    var rows = RAW[R.key];
+    // rank within region by momentum (desc)
+    var order = rows.map(function(r,i){return i;})
+                    .sort(function(a,b){return rows[b][1]-rows[a][1];});
+    var rankOf = {}; order.forEach(function(idx,pos){ rankOf[idx]=pos; });
+    rows.forEach(function(row, i){
+      var mom=row[1], vol=row[2], trend=row[3]===1;
+      var eligible = (mom>0) && trend && R.regimeOn;
+      tokens.push({
+        tk:row[0], reg:ri, regKey:R.key, col:R.col,
+        mom:mom, vol:vol, trend:trend, regimeOn:R.regimeOn,
+        rank:rankOf[i], eligible:eligible, selected:false, weight:0,
+        jx:(seed()-.5), jy:(seed()-.5)   // stable jitter
+      });
+    });
+  });
+  // selection: top-N eligible by momentum per region; inverse-vol weights
+  REGIONS.forEach(function(R, ri){
+    var elig = tokens.filter(function(t){return t.reg===ri && t.eligible;})
+                     .sort(function(a,b){return b.mom-a.mom;});
+    var sel = elig.slice(0, TOP_N);
+    var inv = sel.map(function(t){return 1/t.vol;});
+    var s = inv.reduce(function(a,b){return a+b;},0) || 1;
+    sel.forEach(function(t,i){
+      t.selected=true;
+      t.weight=Math.min(CAP*4, inv[i]/s); // normalised inverse-vol (illustrative)
+    });
+    // normalise weights within sleeve for bar display
+    var ws = sel.reduce(function(a,t){return a+t.weight;},0)||1;
+    sel.forEach(function(t){ t.wdisp=t.weight/ws; });
+  });
+
+  // curated AUD equity curve (monthly points, illustrative, upward with wobble)
+  var EQ = [100,101.4,103.1,102.2,104.8,107.6,106.1,109.4,112.7,111.0,
+            114.9,118.6,117.2,121.8,126.4,124.1,129.7,134.9,133.0,139.8,146.2];
+  // small local-currency sleeve sparklines
+  var SPARK = {
+    US:  [100,102,101,104,107,106,110,114,113,118,123],
+    ASX: [100,100,100,100,100,100,100,100,100,100,100], // cash (risk-off)
+    FTSE:[100,101,103,102,105,107,106,109,112,111,115]
+  };
+
+  // FX subsystem
+  var FX_AGENTS = ['Trend','Breakout','MeanRev','Carry','Momentum'];
+  var FX_PAIRS = [
+    {p:'EURUSD', pos:+1, w:.34},
+    {p:'GBPUSD', pos:+1, w:.22},
+    {p:'USDJPY', pos:-1, w:.28},
+    {p:'AUDUSD', pos:-1, w:.16}
+  ];
+
+  // ---------------------------------------------------------------
+  // 2. Timeline
+  // ---------------------------------------------------------------
+  var BEATS = [
+    {key:'title',    name:'Open',     dur:4.2,
+      cap:'The machine, end to end',
+      txt:'A monthly 12‑1 momentum system — three regional sleeves, an independent FX book, combined and reported in AUD.'},
+    {key:'universe', name:'Universe', dur:6.4,
+      cap:'1 · Universe',
+      txt:'Every day, load adjusted closes for each region — FTSE, US, ASX — each priced in its own local currency.'},
+    {key:'rank',     name:'Rank',     dur:7.0,
+      cap:'2 · Rank by momentum',
+      txt:'Score each name by 12‑1 momentum: return over the last year, skipping the most recent month. Strongest rise to the top.'},
+    {key:'filter',   name:'Filter',   dur:8.2,
+      cap:'3 · Trend & regime gates',
+      txt:'Drop anything below its 200‑day average. If a region’s index is below its own 200‑day MA, that whole sleeve goes to cash — here, ASX is RISK‑OFF.'},
+    {key:'size',     name:'Size',     dur:7.6,
+      cap:'4 · Size the book',
+      txt:'Keep the top 4 survivors. Weight by inverse volatility, cap each at 15%, then scale the book toward 12% target vol — all via strategy.compute_targets.'},
+    {key:'sleeves',  name:'Sleeves',  dur:6.2,
+      cap:'5 · Three sleeves',
+      txt:'US, ASX and FTSE run independently, each holding positions in its own currency. ASX sits in cash this month.'},
+    {key:'combine',  name:'Combine',  dur:9.4,
+      cap:'6 · Combine in AUD',
+      txt:'Allocate an equal third to each sleeve, convert through FX into the AUD base currency, and report one combined equity curve. Meanwhile, the FX engine runs its own book.'}
+  ];
+  var T = 0, STARTS = [];
+  BEATS.forEach(function(b){ STARTS.push(T); T += b.dur; });
+
+  function beatAt(t){
+    for(var i=BEATS.length-1;i>=0;i--){ if(t>=STARTS[i]) return i; }
+    return 0;
+  }
+
+  var clock = 0, playing = false, speed = 1, lastTs = null;
+  var SPEEDS = [1, 1.5, 2, 0.5];
+  var speedIdx = 0;
+  var curBeat = -1;
+
+  // ---------------------------------------------------------------
+  // 3. Math helpers
+  // ---------------------------------------------------------------
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function easeIO(t){ return t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2; }
+  function easeOut(t){ return 1-Math.pow(1-t,3); }
+  function mix(hexOrVar){ return hexOrVar; }
+  // hex -> rgba string with alpha
+  function rgba(hex, a){
+    hex = hex.replace('#','');
+    if(hex.length===3){ hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2]; }
+    var n = parseInt(hex,16);
+    return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';
+  }
+  function regCol(t){ return PAL[t.col]; }
+
+  // ---------------------------------------------------------------
+  // 4. Layout metrics (recomputed each frame; responsive)
+  // ---------------------------------------------------------------
+  var M; // metrics
+  function metrics(){
+    var ml=W*0.045, mr=W*0.035, mt=H*0.10, mb=H*0.06;
+    var innerW = W-ml-mr;
+    var eqTop = mt, eqH = (H-mt-mb)*0.66;
+    var fxTop = eqTop+eqH+ (H-mt-mb)*0.05, fxH = (H-mt-mb)*0.29;
+    // six station x-centres across the equity area
+    var fx = [0.055,0.235,0.415,0.590,0.770,0.945];
+    var stX = fx.map(function(f){ return ml + innerW*f; });
+    var bandH = eqH/3;
+    function bandTop(r){ return eqTop + bandH*r; }
+    function bandY(r){ return eqTop + bandH*(r+0.5); }
+    var R = clamp(Math.min(W,H)*0.0135, 8, 15);
+    return {ml:ml,mr:mr,mt:mt,mb:mb,innerW:innerW,
+            eqTop:eqTop,eqH:eqH,fxTop:fxTop,fxH:fxH,
+            stX:stX,bandH:bandH,bandTop:bandTop,bandY:bandY,R:R,
+            cashY:eqTop+eqH-R*1.4};
+  }
+
+  // layout state of a token at settled layout index j (0..6)
+  function layoutFor(t, j){
+    var R=M.R, band=t.reg;
+    var slotH = M.bandH/6.4;
+    var out={x:M.stX[0], y:M.bandY(band), r:R, a:0, bar:0, barType:'none', dim:false};
+    if(j===0){ // hidden pre-roll
+      out.x=M.stX[0]; out.y=M.bandY(band)+ t.jy*R*3; out.a=0; return out;
+    }
+    if(j===1){ // universe: loose 3x2 grid in band
+      var idx = t.rank; // any stable index; use rank to spread
+      var localIdx = tokens.filter(function(x){return x.reg===band;}).indexOf(t);
+      var gx = localIdx%3, gy=Math.floor(localIdx/3);
+      out.x = M.stX[0] + (gx-1)*R*3.6 + t.jx*R*0.5;
+      out.y = M.bandY(band) + (gy-0.5)*R*3.4 + t.jy*R*0.4;
+      out.a = 1; out.barType='none'; return out;
+    }
+    if(j===2){ // rank: sorted stack by momentum
+      out.x = M.stX[1];
+      out.y = M.bandTop(band) + (t.rank+0.7)*slotH + slotH*0.2;
+      out.a = 1; out.barType='mom'; out.bar=t.mom; return out;
+    }
+    if(j===3){ // filter: kept hold rank y; dropped fall to cash strip
+      if(t.eligible){
+        out.x=M.stX[2];
+        out.y=M.bandTop(band)+(t.rank+0.7)*slotH+slotH*0.2;
+        out.a=1; out.barType='none';
+      } else {
+        var dl = tokens.filter(function(x){return !x.eligible;}).indexOf(t);
+        var n = tokens.filter(function(x){return !x.eligible;}).length;
+        out.x = M.stX[1] + ( (dl+0.5)/n - 0.5 )*M.innerW*0.34;
+        out.y = M.cashY;
+        out.a=0.20; out.dim=true; out.r=R*0.8; out.barType='none';
+      }
+      return out;
+    }
+    if(j>=4){
+      if(!t.selected){ // eligible-not-picked fade out, dropped stay gone
+        out.a=0; out.x=M.stX[3]; out.y=M.bandY(band); return out;
+      }
+      // ordered by weight within sleeve
+      var sel = tokens.filter(function(x){return x.reg===band && x.selected;})
+                      .sort(function(a,b){return b.wdisp-a.wdisp;});
+      var pos = sel.indexOf(t), k=sel.length;
+      var stackH = M.bandH*0.66, top=M.bandTop(band)+M.bandH*0.17;
+      var y = top + (pos+0.5)*(stackH/k);
+      if(j===4){ out.x=M.stX[3]; }
+      else if(j===5){ out.x=M.stX[4]; }
+      else { // combine: converge to curve origin and dissolve
+        out.x=M.stX[5]-M.innerW*0.02; out.y=M.eqTop+M.eqH*0.5;
+        out.a=0.10; out.r=R*0.5; out.barType='none'; return out;
+      }
+      out.y=y; out.a=1; out.barType='weight'; out.bar=t.wdisp; return out;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------
+  // 5. Drawing
+  // ---------------------------------------------------------------
+  function setFont(px, weight){ ctx.font=(weight||400)+' '+px+'px ui-monospace,"SF Mono",Menlo,Consolas,monospace'; }
+
+  function drawBackground(){
+    ctx.clearRect(0,0,W,H);
+    // faint grid
+    ctx.save();
+    ctx.strokeStyle=rgba(PAL.line.replace('#',''), 1);
+    ctx.globalAlpha=0.5;
+    ctx.lineWidth=1;
+    var step=Math.max(46, W/26);
+    ctx.beginPath();
+    for(var x=M.ml;x<=W-M.mr;x+=step){ ctx.moveTo(x,M.eqTop-6); ctx.lineTo(x,M.fxTop+M.fxH); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawStations(activeKey){
+    var labels=['UNIVERSE','RANK','FILTER','SIZE','SLEEVES','COMBINE'];
+    var keys  =['universe','rank','filter','size','sleeves','combine'];
+    setFont(11,600);
+    ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    for(var i=0;i<6;i++){
+      var active = keys[i]===activeKey;
+      ctx.fillStyle = active ? PAL.aud : PAL.muted;
+      ctx.globalAlpha = active?1:0.55;
+      ctx.fillText(labels[i], M.stX[i], M.eqTop-14);
+      // tick under label
+      ctx.globalAlpha = active?0.9:0.3;
+      ctx.strokeStyle= active?PAL.aud:PAL.line2; ctx.lineWidth= active?2:1;
+      ctx.beginPath(); ctx.moveTo(M.stX[i]-16,M.eqTop-8); ctx.lineTo(M.stX[i]+16,M.eqTop-8); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  function drawBandLabels(alpha){
+    ctx.save(); ctx.globalAlpha=alpha;
+    setFont(11,600); ctx.textAlign='left'; ctx.textBaseline='middle';
+    REGIONS.forEach(function(R,ri){
+      ctx.fillStyle=PAL[R.col];
+      ctx.fillText(R.key, M.ml-2, M.bandTop(ri)+12);
+      ctx.globalAlpha=alpha*0.6; setFont(9.5,400);
+      ctx.fillStyle=PAL.muted;
+      ctx.fillText(R.idx+' · '+R.ccy, M.ml-2, M.bandTop(ri)+26);
+      ctx.globalAlpha=alpha; setFont(11,600);
+    });
+    ctx.restore();
+  }
+
+  function drawToken(s, t, activeKey){
+    if(s.a<=0.01) return;
+    var c = s.dim ? PAL.cash : regCol(t);
+    ctx.save();
+    ctx.globalAlpha = s.a;
+    // weight / momentum bar behind
+    if(s.barType==='weight'){
+      var maxLen=M.innerW*0.085;
+      var len=Math.max(4, s.bar*maxLen* (1/0.35));
+      ctx.fillStyle=rgba(c.replace('#',''),0.30*s.a);
+      roundRect(s.x+s.r+4, s.y-s.r*0.55, len, s.r*1.1, 3); ctx.fill();
+      ctx.fillStyle=rgba(c.replace('#',''),0.95*s.a);
+      roundRect(s.x+s.r+4, s.y-s.r*0.55, len, s.r*1.1, 3); ctx.fill();
+      setFont(9.5,600); ctx.fillStyle=PAL.ink; ctx.globalAlpha=s.a;
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText((s.bar*100).toFixed(0)+'%', s.x+s.r+8+len, s.y);
+    } else if(s.barType==='mom'){
+      var mlen=M.innerW*0.10;
+      var bl=t.mom*mlen*2.4;
+      var pos=t.mom>=0;
+      ctx.fillStyle=rgba((pos?c:PAL.off).replace('#',''), 0.55*s.a);
+      var bx = s.x+s.r+5;
+      roundRect(bx, s.y-3, Math.max(3,Math.abs(bl)), 6, 2); ctx.fill();
+      setFont(9,400); ctx.fillStyle=PAL.ink_dim||PAL['ink-dim']; ctx.globalAlpha=s.a*0.8;
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText((t.mom>=0?'+':'')+(t.mom*100).toFixed(0)+'%', bx+Math.max(3,Math.abs(bl))+6, s.y);
+    }
+    ctx.globalAlpha=s.a;
+    // node
+    if(PAL.glow && !s.dim){ ctx.shadowColor=rgba(c.replace('#',''),0.9); ctx.shadowBlur=10; }
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+    ctx.fillStyle=rgba(c.replace('#',''), s.dim?0.5:0.9); ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.lineWidth=1.4; ctx.strokeStyle=rgba(c.replace('#',''),1); ctx.stroke();
+    // ticker label — above in the universe grid, beside the node everywhere else
+    if(s.r>=8 && s.a>0.35){
+      ctx.globalAlpha=s.a; ctx.fillStyle=PAL.ink;
+      if(activeKey==='universe'){
+        setFont(8.5,600); ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(t.tk, s.x, s.y - s.r - 7);
+      } else {
+        setFont(9,700); ctx.textAlign='right'; ctx.textBaseline='middle';
+        ctx.fillText(t.tk, s.x - s.r - 5, s.y);
+      }
+    }
+    ctx.restore();
+  }
+
+  function roundRect(x,y,w,h,r){
+    if(w<0){ x+=w; w=-w; }
+    r=Math.min(r,h/2,w/2);
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  // --- per-beat overlays ---
+  function overlayRank(p){
+    var a=easeOut(clamp(p*1.3,0,1));
+    var cx=(M.stX[3]+M.stX[5])/2, cy=M.eqTop+M.eqH*0.40;
+    ctx.save(); ctx.globalAlpha=a; ctx.textAlign='center'; ctx.textBaseline='middle';
+    setFont(clamp(W*0.016,13,20),700); ctx.fillStyle=PAL.aud;
+    ctx.fillText('score(t) = P(t−21) / P(t−252) − 1', cx, cy);
+    setFont(11,400); ctx.fillStyle=PAL.muted;
+    ctx.fillText('12‑1 momentum — last 12 months, skipping the most recent', cx, cy+24);
+    ctx.fillText('strongest names rise to the top of each region', cx, cy+40);
+    ctx.restore();
+  }
+
+  function overlayFilter(p){
+    var a=easeOut(clamp(p*1.3,0,1));
+    // regime badges per region
+    REGIONS.forEach(function(R,ri){
+      var on=R.regimeOn;
+      var x=M.stX[2]+M.R*3.4, y=M.bandTop(ri)+14;
+      ctx.save(); ctx.globalAlpha=a;
+      var col = on?PAL.on:PAL.off;
+      ctx.fillStyle=rgba(col.replace('#',''),0.14);
+      roundRect(x, y-11, 96, 22, 6); ctx.fill();
+      ctx.strokeStyle=rgba(col.replace('#',''),0.7); ctx.lineWidth=1; roundRect(x,y-11,96,22,6); ctx.stroke();
+      setFont(10.5,700); ctx.fillStyle=col; ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText(on?'RISK‑ON':'RISK‑OFF', x+9, y);
+      ctx.restore();
+    });
+    // cash strip label
+    ctx.save(); ctx.globalAlpha=a*0.8; setFont(10,600);
+    ctx.fillStyle=PAL.cash; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('── dropped → held as cash ──', W*0.5, M.cashY+M.R*2.1);
+    ctx.restore();
+    // ASX callout
+    ctx.save(); ctx.globalAlpha=a; setFont(10.5,600);
+    ctx.fillStyle=PAL.off; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText('index < 200d MA → 100% cash', M.stX[2]+M.R*3.4, M.bandTop(1)+34);
+    ctx.restore();
+  }
+
+  function overlaySize(p){
+    var a=easeOut(clamp(p*1.3,0,1));
+    var cx=(M.stX[4]+M.stX[5])/2, cy=M.eqTop+M.eqH*0.30;
+    ctx.save(); ctx.globalAlpha=a; ctx.textAlign='center'; ctx.textBaseline='middle';
+    setFont(clamp(W*0.014,12,17),700); ctx.fillStyle=PAL.aud;
+    ctx.fillText('inverse‑vol weights', cx, cy);
+    setFont(11,400); ctx.fillStyle=PAL.muted;
+    ctx.fillText('cap 15% per name · scale to 12% target vol', cx, cy+22);
+    ctx.fillText('one code path — strategy.compute_targets', cx, cy+38);
+    ctx.restore();
+  }
+
+  function overlaySleeves(p){
+    var a=easeOut(clamp(p*1.3,0,1));
+    REGIONS.forEach(function(R,ri){
+      var x0=M.stX[4]-M.innerW*0.05, x1=M.stX[4]+M.innerW*0.075;
+      var yT=M.bandTop(ri)+6, yB=M.bandTop(ri)+M.bandH-8;
+      ctx.save(); ctx.globalAlpha=a;
+      ctx.strokeStyle=rgba(PAL[R.col].replace('#',''),0.45); ctx.lineWidth=1;
+      roundRect(x0, yT, (x1-x0), (yB-yT), 8); ctx.stroke();
+      setFont(10,700); ctx.fillStyle=PAL[R.col]; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+      // sparkline
+      var sp=SPARK[R.key]; var spx=x0+8, spw=(x1-x0)-16, spy=yB-6, sph=(yB-yT)*0.20;
+      var lo=Math.min.apply(null,sp), hi=Math.max.apply(null,sp), rng=(hi-lo)||1;
+      ctx.beginPath();
+      sp.forEach(function(v,i){
+        var px=spx+spw*(i/(sp.length-1)), py=spy-((v-lo)/rng)*sph;
+        if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+      });
+      var cash = R.regimeOn ? PAL[R.col] : PAL.cash;
+      ctx.strokeStyle=cash; ctx.lineWidth=1.5; ctx.stroke();
+      if(!R.regimeOn){
+        setFont(10,700); ctx.fillStyle=PAL.cash; ctx.textAlign='center';
+        ctx.fillText('100% CASH', (x0+x1)/2, (yT+yB)/2+4);
+      }
+      ctx.restore();
+    });
+  }
+
+  function overlayCombine(p){
+    // draw AUD equity curve progressively
+    var x0=M.stX[4]+M.innerW*0.02, x1=W-M.mr;
+    var yTop=M.eqTop+M.eqH*0.08, yBot=M.eqTop+M.eqH*0.92;
+    var lo=Math.min.apply(null,EQ), hi=Math.max.apply(null,EQ), rng=(hi-lo)||1;
+    var draw=easeIO(clamp(p*1.05,0,1));
+    var n=EQ.length, prog=draw*(n-1);
+    function pt(i){
+      var px=x0+(x1-x0)*(i/(n-1));
+      var py=yBot-((EQ[i]-lo)/rng)*(yBot-yTop);
+      return [px,py];
+    }
+    // FX prism (three sleeves merge → curve start)
+    var a=easeOut(clamp(p*1.6,0,1));
+    ctx.save(); ctx.globalAlpha=a*0.9;
+    REGIONS.forEach(function(R,ri){
+      var s=[M.stX[4]-M.innerW*0.01, M.bandY(ri)];
+      ctx.strokeStyle=rgba(PAL[R.col].replace('#',''),0.5); ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(s[0],s[1]);
+      ctx.quadraticCurveTo(x0-M.innerW*0.02, (s[1]+pt(0)[1])/2, x0, pt(0)[1]); ctx.stroke();
+    });
+    setFont(10,700); ctx.fillStyle=PAL.aud; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.globalAlpha=a;
+    ctx.fillText('FX → AUD', x0-M.innerW*0.02, M.eqTop+M.eqH*0.5-14);
+    ctx.font='400 9.5px '+'ui-monospace,Menlo,monospace'; ctx.fillStyle=PAL.muted;
+    ctx.fillText('equal 1/3 each', x0-M.innerW*0.02, M.eqTop+M.eqH*0.5+2);
+    ctx.restore();
+
+    // area + line
+    ctx.save();
+    var maxI=Math.floor(prog);
+    ctx.beginPath();
+    var p0=pt(0); ctx.moveTo(p0[0],p0[1]);
+    for(var i=1;i<=maxI;i++){ var q=pt(i); ctx.lineTo(q[0],q[1]); }
+    // partial segment
+    var headX,headY;
+    if(maxI<n-1){
+      var f=prog-maxI, A=pt(maxI), B=pt(maxI+1);
+      headX=lerp(A[0],B[0],f); headY=lerp(A[1],B[1],f);
+      ctx.lineTo(headX,headY);
+    } else { var L=pt(n-1); headX=L[0]; headY=L[1]; }
+    // area fill
+    ctx.save();
+    ctx.lineTo(headX,yBot); ctx.lineTo(p0[0],yBot); ctx.closePath();
+    var grad=ctx.createLinearGradient(0,yTop,0,yBot);
+    grad.addColorStop(0,rgba(PAL.aud.replace('#',''),0.28));
+    grad.addColorStop(1,rgba(PAL.aud.replace('#',''),0.0));
+    ctx.fillStyle=grad; ctx.fill();
+    ctx.restore();
+    // stroke line
+    ctx.beginPath(); ctx.moveTo(p0[0],p0[1]);
+    for(var j=1;j<=maxI;j++){ var r=pt(j); ctx.lineTo(r[0],r[1]); }
+    ctx.lineTo(headX,headY);
+    if(PAL.glow){ ctx.shadowColor=rgba(PAL.aud.replace('#',''),0.8); ctx.shadowBlur=12; }
+    ctx.strokeStyle=PAL.aud; ctx.lineWidth=2.2; ctx.lineJoin='round'; ctx.stroke();
+    ctx.shadowBlur=0;
+    // endpoint dot
+    ctx.beginPath(); ctx.arc(headX,headY,3.2,0,Math.PI*2); ctx.fillStyle=PAL.aud; ctx.fill();
+    // label
+    setFont(11,700); ctx.fillStyle=PAL.aud; ctx.textAlign='right'; ctx.textBaseline='alphabetic';
+    ctx.fillText('COMBINED AUD', x1, yTop-8);
+    if(draw>0.6){
+      setFont(10,400); ctx.fillStyle=PAL.muted;
+      ctx.fillText('+'+((EQ[n-1]/EQ[0]-1)*100).toFixed(0)+'% (illustrative)', x1, yBot+16);
+    }
+    ctx.restore();
+  }
+
+  // --- FX parallel track (active over size/sleeves/combine) ---
+  function drawFXtrack(clockT){
+    var start=STARTS[4]; // size
+    var fp=clamp((clockT-start)/(T-start),0,1);
+    var appear=easeOut(clamp((clockT-start)/1.2,0,1));
+    if(appear<=0.01) { drawFXframe(0); return; }
+    drawFXframe(appear, fp);
+  }
+  function drawFXframe(alpha, fp){
+    fp=fp||0;
+    var y0=M.fxTop, hgt=M.fxH, x0=M.ml, x1=W-M.mr;
+    ctx.save();
+    // divider + label
+    ctx.globalAlpha=0.6*Math.max(alpha,0.25);
+    ctx.strokeStyle=PAL.line2; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0,y0-8); ctx.lineTo(x1,y0-8); ctx.stroke();
+    setFont(10.5,700); ctx.fillStyle=alpha>0.2?PAL.ink:PAL.muted; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.globalAlpha=Math.max(alpha,0.35);
+    ctx.fillText('FX ENGINE', x0, y0+4);
+    setFont(9,400); ctx.fillStyle=PAL.muted;
+    ctx.fillText('independent · long/short book', x0, y0+18);
+    ctx.restore();
+    if(alpha<=0.02) return;
+
+    ctx.save(); ctx.globalAlpha=alpha;
+    var midY=y0+hgt*0.55;
+    // agents (left)
+    var ax=x0+M.innerW*0.205;
+    var ensX=x0+M.innerW*0.46;
+    var bookX=x0+M.innerW*0.68;
+    var aTop=y0+hgt*0.18, aStep=(hgt*0.72)/(FX_AGENTS.length-1);
+    var vote=easeOut(clamp(fp*3,0,1));       // votes travel in during size
+    var ens=easeOut(clamp((fp-0.33)*3,0,1)); // ensemble forms during sleeves
+    var book=easeOut(clamp((fp-0.62)*3,0,1));// book during combine
+
+    // wires agents -> ensemble
+    FX_AGENTS.forEach(function(nm,i){
+      var ay=aTop+aStep*i;
+      ctx.strokeStyle=rgba(PAL.us.replace('#',''),0.20+0.25*vote);
+      ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(ax+6,ay);
+      ctx.quadraticCurveTo((ax+ensX)/2, midY, ensX-12, midY); ctx.stroke();
+      // moving vote dot
+      if(vote>0 && vote<1){
+        var tt=(vote+ i*0.06)%1;
+        var mx=lerp(ax+6,ensX-12,tt), my=lerp(ay,midY,tt);
+        ctx.beginPath(); ctx.arc(mx,my,2.2,0,Math.PI*2); ctx.fillStyle=PAL.us; ctx.fill();
+      }
+      // agent node
+      ctx.beginPath(); ctx.arc(ax,ay,4.5,0,Math.PI*2);
+      ctx.fillStyle=rgba(PAL.us.replace('#',''),0.85); ctx.fill();
+      setFont(9.5,600); ctx.fillStyle=PAL.ink_dim||PAL['ink-dim']; ctx.textAlign='right'; ctx.textBaseline='middle';
+      ctx.fillText(nm, ax-9, ay);
+    });
+    setFont(9,400); ctx.fillStyle=PAL.muted; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    ctx.fillText('agents', ax, y0+hgt*0.10);
+
+    // ensemble node (dial)
+    ctx.save();
+    if(PAL.glow){ ctx.shadowColor=rgba(PAL.aud.replace('#',''),0.7); ctx.shadowBlur=10*ens; }
+    ctx.beginPath(); ctx.arc(ensX,midY,13,0,Math.PI*2);
+    ctx.fillStyle=rgba(PAL.aud.replace('#',''),0.14+0.10*ens);
+    ctx.fill();
+    ctx.strokeStyle=rgba(PAL.aud.replace('#',''),0.5+0.4*ens); ctx.lineWidth=1.5; ctx.stroke();
+    // dial arc
+    ctx.beginPath(); ctx.arc(ensX,midY,13,-Math.PI/2, -Math.PI/2+Math.PI*2*ens*0.8);
+    ctx.strokeStyle=PAL.aud; ctx.lineWidth=2.4; ctx.stroke();
+    ctx.restore();
+    setFont(9,400); ctx.fillStyle=PAL.muted; ctx.textAlign='center';
+    ctx.fillText('perf‑weighted', ensX, y0+hgt*0.10);
+    ctx.fillText('ensemble', ensX, y0+hgt*0.10+11);
+
+    // wire ensemble -> book
+    ctx.strokeStyle=rgba(PAL.aud.replace('#',''),0.2+0.4*book); ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(ensX+13,midY); ctx.lineTo(bookX-M.innerW*0.02,midY); ctx.stroke();
+
+    // long/short book (right)
+    var bx=bookX, bw=M.innerW*0.15, colw=bw/FX_PAIRS.length;
+    var zero=midY;
+    FX_PAIRS.forEach(function(pr,i){
+      var cx=bx+colw*(i+0.5);
+      var h=(hgt*0.26)*pr.w/0.34 * book;
+      var up=pr.pos>0;
+      var col=up?PAL.on:PAL.off;
+      ctx.fillStyle=rgba(col.replace('#',''),0.85);
+      var by = up? zero-h : zero;
+      roundRect(cx-colw*0.30, by, colw*0.60, h, 2); ctx.fill();
+      setFont(7.5,600); ctx.fillStyle=PAL.muted; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+      ctx.fillText(pr.p, cx, y0+hgt*0.97);   // labels below the bars, clear of shorts
+    });
+    // zero line
+    ctx.strokeStyle=rgba(PAL.muted.replace('#',''),0.5); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(bx-4,zero); ctx.lineTo(bx+bw+4,zero); ctx.stroke();
+    setFont(9,400); ctx.fillStyle=PAL.muted; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    ctx.fillText('long / short book', bx+bw/2, y0+hgt*0.10);
+
+    // accounts (far right)
+    if(book>0.3){
+      var accs=['matt','partner']; var axx=x1-M.innerW*0.005;
+      ctx.textAlign='right'; ctx.textBaseline='middle';
+      accs.forEach(function(nm,i){
+        var yy=midY-8+i*18;
+        ctx.globalAlpha=alpha*clamp((book-0.3)/0.5,0,1);
+        ctx.fillStyle=rgba(PAL.aud.replace('#',''),0.12);
+        var tw=nm.length*6.5+22;
+        roundRect(axx-tw, yy-8, tw, 16, 5); ctx.fill();
+        setFont(9.5,600); ctx.fillStyle=PAL.ink;
+        ctx.fillText('● '+nm, axx-8, yy);
+      });
+      ctx.globalAlpha=alpha;
+      setFont(9,400); ctx.fillStyle=PAL.muted; ctx.textAlign='right'; ctx.textBaseline='alphabetic';
+      ctx.fillText('isolated paper books', x1, y0+hgt*0.10);
+    }
+    ctx.restore();
+  }
+
+  function drawTitle(p){
+    var a=easeOut(clamp(p*1.4,0,1))*(1-clamp((p-0.85)/0.15,0,1));
+    ctx.save(); ctx.globalAlpha=a;
+    ctx.textAlign='center';
+    setFont(Math.max(20,Math.min(40,W*0.032)),700); ctx.fillStyle=PAL.ink; ctx.textBaseline='alphabetic';
+    if(PAL.glow){ ctx.shadowColor=rgba(PAL.aud.replace('#',''),0.35); ctx.shadowBlur=16; }
+    ctx.fillText('THE MACHINE, END TO END', W/2, H*0.42);
+    ctx.shadowBlur=0;
+    setFont(Math.max(11,Math.min(15,W*0.012)),400); ctx.fillStyle=PAL.ink_dim||PAL['ink-dim'];
+    ctx.fillText('multi‑region momentum  ·  parallel FX engine  ·  combined in AUD', W/2, H*0.42+30);
+    // three region dots
+    ctx.globalAlpha=a;
+    var cx=W/2 - 70;
+    REGIONS.forEach(function(R,ri){
+      ctx.beginPath(); ctx.arc(cx+ri*70, H*0.42+62, 5,0,Math.PI*2);
+      ctx.fillStyle=PAL[R.col]; ctx.fill();
+      setFont(10,600); ctx.fillStyle=PAL.muted; ctx.textAlign='center';
+      ctx.fillText(R.key, cx+ri*70, H*0.42+82);
+    });
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------
+  // 6. Master render — pure function of `clock`
+  // ---------------------------------------------------------------
+  function render(){
+    M = metrics();
+    drawBackground();
+    var bi = beatAt(clock);
+    var p = clamp((clock-STARTS[bi])/BEATS[bi].dur, 0, 1);
+    var key = BEATS[bi].key;
+
+    if(key!=='title') drawStations(key);
+
+    // band labels visible once universe begins
+    var blAlpha = clamp((clock-STARTS[1]+0.2)/1.2,0,1) * (1-clamp((clock-STARTS[6]-1)/1.5,0,1)*0.35);
+    if(key!=='title') drawBandLabels(blAlpha);
+
+    // tokens: interpolate L(bi-1) -> L(bi)
+    var fromJ = bi===0?0:bi-1, toJ=bi;
+    var pe = easeIO(p);
+    for(var i=0;i<tokens.length;i++){
+      var t=tokens[i];
+      var A=layoutFor(t,fromJ), B=layoutFor(t,toJ);
+      var s={
+        x:lerp(A.x,B.x,pe), y:lerp(A.y,B.y,pe),
+        r:lerp(A.r,B.r,pe), a:lerp(A.a,B.a,pe),
+        bar:lerp(A.bar||0,B.bar||0,pe),
+        barType:(pe<0.5?A.barType:B.barType),
+        dim:B.dim||A.dim
+      };
+      drawToken(s,t,key);
+    }
+
+    // overlays
+    if(key==='title') drawTitle(p);
+    if(key==='rank') overlayRank(p);
+    if(key==='filter') overlayFilter(p);
+    if(key==='size') overlaySize(p);
+    if(key==='sleeves') overlaySleeves(p);
+    if(key==='combine') overlayCombine(p);
+
+    // FX track present from 'size' onward
+    if(clock>=STARTS[4]-0.4) drawFXtrack(clock);
+    else drawFXframe(0);
+
+    updateChrome(bi);
+  }
+
+  // ---------------------------------------------------------------
+  // 7. Chrome / transport sync
+  // ---------------------------------------------------------------
+  var capTitle=document.getElementById('capTitle'),
+      capText=document.getElementById('capText'),
+      tlFill=document.getElementById('tlFill'),
+      tlHead=document.getElementById('tlHead'),
+      clockEl=document.getElementById('clock'),
+      playBtn=document.getElementById('play'),
+      timelineEl=document.getElementById('timeline');
+  var marks=[];
+
+  function fmt(t){ var m=Math.floor(t/60), s=Math.floor(t%60);
+    return (m<10?'0':'')+m+':'+(s<10?'0':'')+s; }
+
+  function buildMarks(){
+    var wrap=document.getElementById('tlMarks'); wrap.innerHTML='';
+    marks=[];
+    BEATS.forEach(function(b,i){
+      var pc=STARTS[i]/T*100;
+      var m=document.createElement('div'); m.className='tl-mark'; m.style.left=pc+'%';
+      var lbl=document.createElement('div'); lbl.className='lbl'; lbl.textContent=b.name; m.appendChild(lbl);
+      var hit=document.createElement('button'); hit.className='tl-mark hit'; hit.setAttribute('aria-label','Jump to '+b.name);
+      hit.style.left=pc+'%';
+      hit.addEventListener('click',function(ev){ ev.stopPropagation(); seek(STARTS[i]+0.001); });
+      wrap.appendChild(m); wrap.appendChild(hit);
+      marks.push(m);
+    });
+  }
+
+  function updateChrome(bi){
+    capTitle.textContent=BEATS[bi].cap;
+    capText.innerHTML=BEATS[bi].txt;
+    var pct=clock/T*100;
+    tlFill.style.width=pct+'%';
+    tlHead.style.left=pct+'%';
+    clockEl.textContent=fmt(clock)+' / '+fmt(T);
+    timelineEl.setAttribute('aria-valuenow', Math.round(pct));
+    timelineEl.setAttribute('aria-valuetext', BEATS[bi].name);
+    for(var i=0;i<marks.length;i++){
+      marks[i].classList.toggle('active', i===bi);
+      marks[i].classList.toggle('done', STARTS[i]<=clock);
+    }
+    playBtn.innerHTML = playing ? '&#10073;&#10073;' : '&#9654;';
+    playBtn.setAttribute('aria-label', playing?'Pause':'Play');
+  }
+
+  // ---------------------------------------------------------------
+  // 8. Playback control
+  // ---------------------------------------------------------------
+  var rafOn=false;
+  function seek(t){ clock=clamp(t,0,T-0.001); render(); }
+  function setPlaying(v){
+    playing=v;
+    if(playing && !rafOn){ rafOn=true; lastTs=null; requestAnimationFrame(tick); }
+    updateChrome(beatAt(clock));
+  }
+  function tick(ts){
+    if(!playing){ rafOn=false; return; }
+    if(lastTs==null) lastTs=ts;
+    var dt=Math.min(0.05,(ts-lastTs)/1000); lastTs=ts;
+    clock+=dt*speed;
+    if(clock>=T){ clock=0; } // loop
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  playBtn.addEventListener('click',function(){ setPlaying(!playing); });
+  document.getElementById('replay').addEventListener('click',function(){ seek(0); if(!reduced) setPlaying(true); });
+  document.getElementById('back').addEventListener('click',function(){
+    var bi=beatAt(clock);
+    if(clock-STARTS[bi]<0.6 && bi>0) bi--; // step to previous if near a boundary
+    seek(STARTS[bi]+0.001);
+  });
+  document.getElementById('fwd').addEventListener('click',function(){
+    var bi=beatAt(clock); if(bi<BEATS.length-1) seek(STARTS[bi+1]+0.001); else seek(T-0.001);
+  });
+  var speedBtn=document.getElementById('speed');
+  speedBtn.addEventListener('click',function(){
+    speedIdx=(speedIdx+1)%SPEEDS.length; speed=SPEEDS[speedIdx];
+    speedBtn.innerHTML=speed+'&times;';
+  });
+
+  // scrub on timeline
+  var dragging=false;
+  function posToTime(clientX){
+    var r=timelineEl.getBoundingClientRect();
+    return clamp((clientX-r.left)/r.width,0,1)*T;
+  }
+  timelineEl.addEventListener('pointerdown',function(e){
+    dragging=true; timelineEl.setPointerCapture(e.pointerId);
+    seek(posToTime(e.clientX));
+  });
+  timelineEl.addEventListener('pointermove',function(e){ if(dragging) seek(posToTime(e.clientX)); });
+  timelineEl.addEventListener('pointerup',function(e){ dragging=false; });
+  timelineEl.addEventListener('keydown',function(e){
+    var bi=beatAt(clock);
+    if(e.key==='ArrowRight'){ e.preventDefault(); if(bi<BEATS.length-1) seek(STARTS[bi+1]+0.001); }
+    else if(e.key==='ArrowLeft'){ e.preventDefault();
+      if(clock-STARTS[bi]<0.6 && bi>0) bi--; seek(STARTS[bi]+0.001); }
+  });
+
+  // global keyboard
+  window.addEventListener('keydown',function(e){
+    if(e.target.tagName==='BUTTON' && e.key===' ') return;
+    if(e.key===' '){ e.preventDefault(); setPlaying(!playing); }
+  });
+
+  // ---------------------------------------------------------------
+  // 9. Resize / theme
+  // ---------------------------------------------------------------
+  function resize(){
+    var stage=cvs.parentNode.getBoundingClientRect();
+    W=stage.width; H=stage.height;
+    cvs.width=Math.round(W*DPR); cvs.height=Math.round(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    render();
+  }
+  window.addEventListener('resize',resize);
+  var mo=new MutationObserver(function(){ readPalette(); render(); });
+  mo.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(){ readPalette(); render(); });
+
+  // ---------------------------------------------------------------
+  // 10. Boot
+  // ---------------------------------------------------------------
+  // deep-link support: #beat=combine or #t=42 seeks and pauses on that frame
+  function parseHash(){
+    var h=(location.hash||'').replace('#','');
+    if(!h) return null;
+    var mB=h.match(/beat=([a-z]+)/i);
+    if(mB){ for(var i=0;i<BEATS.length;i++){ if(BEATS[i].key===mB[1].toLowerCase()) return STARTS[i]+0.05; } }
+    var mT=h.match(/t=([0-9.]+)/);
+    if(mT){ return clamp(parseFloat(mT[1]),0,T-0.001); }
+    return null;
+  }
+  buildMarks();
+  resize();
+  var hp=parseHash();
+  if(hp!=null){
+    seek(hp);                 // land paused on the requested stage
+  } else if(reduced){
+    seek(0); capTitle.textContent='Press play';
+  } else {
+    setPlaying(true);
+  }
+  window.addEventListener('hashchange',function(){ var t=parseHash(); if(t!=null){ setPlaying(false); seek(t); } });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+# Design — "How the machine works" animation
+
+**Date:** 2026-07-24
+**Status:** Approved, building
+**Author:** Matt + Claude
+
+## Goal
+
+A polished, self-contained animation that shows the *whole* trading system in
+motion at a high level — both the equity momentum sleeves and the FX subsystem
+— as a single flowing pipeline. Primary purpose: a **show-off / demo piece** for
+friends, potential collaborators, or a talk. Real mechanics, real parameters,
+but curated illustrative data so it always tells a clean, correct story.
+
+Decisions locked in brainstorming:
+
+- **Subject:** everything, high-level (equity sleeves + FX subsystem).
+- **Audience:** showing it off — polished but honest.
+- **Playback:** auto-plays like a trailer, but grabbable (scrub / pause / step / replay).
+- **Data:** representative / curated — real tickers, regions and parameters;
+  hand-tuned illustrative price paths and weights. Carries a `SYNTHETIC`
+  chip (invariant #5).
+- **Visual direction:** *Pipeline flow* — data physically moves left→right
+  through the machine; the FX engine runs as a parallel track below.
+
+## Storyboard (~50s, 8 beats)
+
+0. **Title** — "The machine, end to end." Guardrail chips fade in:
+   `no lookahead · costs always on · walk-forward`.
+1. **Universe** — ticker tokens stream in, colour-coded by region (FTSE·US·ASX),
+   each priced in its local currency.
+2. **Rank** — tokens sort by 12-1 momentum; formula `P(t−21)/P(t−252) − 1`
+   ghosts in; strongest rise.
+3. **Filter** — two gates. Trend gate: names below their 200-day MA fall away.
+   Regime gate: a `RISK-ON / RISK-OFF` switch; ASX flips RISK-OFF → 100% cash
+   while US & FTSE stay on (the real 11-Jun-2026 example).
+4. **Select + Size** — top-N survivors get inverse-vol weight bars, capped at
+   15%, then the book scales toward 12% vol. Tag: `strategy.compute_targets`.
+5. **Three sleeves** — US / ASX / FTSE side by side, each in its own currency.
+6. **Combine (FX)** — sleeves pass through an FX prism into AUD; equal-third
+   allocation; a combined AUD equity curve draws itself.
+7. **FX track** (runs under beats 4–6) — parallel technical agents vote →
+   performance-weighted ensemble → vol-targeted long/short book → isolated paper
+   accounts (you + partner).
+8. **Loop** — settle on the finished frame, then replay.
+
+## Look & feel
+
+Dark-first terminal/dashboard aesthetic matching the existing dashboard:
+monospace labels, thin rules, one accent hue per region + a neutral base, soft
+glow on the active stage. Theme-aware (light + dark). Controls: play/pause,
+scrubber with clickable beat-markers, step ◀ ▶, replay, speed. Pausing on a beat
+reveals that stage's detail annotations.
+
+## Tech
+
+- **One self-contained HTML file.** Vanilla JS + CSS; Canvas for the flowing
+  tokens/curves, DOM overlay for labels/formulas/controls. No external libraries
+  (so it is trivially shareable and CSP-safe as an Artifact).
+- **Deterministic timeline.** Everything renders as a pure function of
+  `currentTime`; the scrubber just sets the clock. Auto-play and manual scrub
+  use the exact same render path, so nothing drifts.
+- **Curated dataset baked in.** Real tickers/regions/params (12-1, 200d MA, 12%
+  vol, equal-third, top-N); seeded jitter for reproducibility; a persistent
+  `SYNTHETIC — pipeline illustration` chip per invariant #5.
+
+## Delivery
+
+Two outputs from one build:
+
+- **Repo file:** standalone `docs/explainer/how-it-works.html`, committed
+  (opens by double-click, sits beside the existing `index.html`).
+- **Artifact:** a published, privately-shareable link (the show-off use case).
+
+## Non-goals
+
+- Not a live/real backtest render (data is curated, offline).
+- Not deep per-step maths — this is the high-altitude overview, not a lesson.
+- Not a replacement for `docs/HOW_IT_WORKS.md` (the prose deep-dive) or the
+  existing `docs/explainer/index.html`.
