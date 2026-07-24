@@ -56,3 +56,36 @@ def test_decorrelation_penalty_lowers_score_for_a_clone(panel, params):
     free = evolve.fitness(g, panel, params, folds=4, base_returns=noise,
                           lambda_corr=2.0, lambda_turn=0.0)
     assert penalised.score < free.score
+
+
+def test_breed_is_deterministic_and_counts_every_trial(panel, params):
+    log1, hold1, final1 = evolve.breed(panel, params, generations=3, pop_size=8, seed=1)
+    log2, hold2, final2 = evolve.breed(panel, params, generations=3, pop_size=8, seed=1)
+    assert [g.gid for g, _ in final1] == [g.gid for g, _ in final2]      # reproducible
+    assert log1.n_trials == log2.n_trials
+    assert log1.n_trials == len(log1.registry)                          # N = distinct genomes
+    assert log1.n_trials >= 8                                            # at least the first gen
+
+
+def test_breed_log_records_per_generation_stats(panel, params):
+    log, _, _ = evolve.breed(panel, params, generations=3, pop_size=8, seed=2)
+    assert len(log.generations) == 3
+    g0 = log.generations[0]
+    assert set(g0) >= {"gen", "best", "median", "deaths", "births", "best_gid"}
+    assert g0["best"] >= g0["median"]
+
+
+def test_breed_log_round_trips(panel, params):
+    log, _, _ = evolve.breed(panel, params, generations=2, pop_size=6, seed=3)
+    back = evolve.EvolutionLog.from_dict(log.to_dict())
+    assert back.n_trials == log.n_trials
+    assert back.generations == log.generations
+    assert set(back.registry) == set(log.registry)
+    assert back.finalists == log.finalists
+    assert back.holdout_frac == log.holdout_frac
+
+
+def test_breed_final_population_is_sorted_best_first(panel, params):
+    _, _, final = evolve.breed(panel, params, generations=2, pop_size=8, seed=4)
+    scores = [fr.score for _, fr in final]
+    assert scores == sorted(scores, reverse=True)
