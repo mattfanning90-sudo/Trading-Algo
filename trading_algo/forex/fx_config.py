@@ -94,10 +94,17 @@ _PROFILES: dict[str, FXParams] = {
     "conservative": FXParams(
         target_vol=0.06, max_gross=2.0, max_vol_scale=2.0,
         per_pair_cap=0.20, max_drawdown_stop=0.12, drawdown_cooldown_days=15,
-        crypto_gross_cap=0.15,
+        # Phase-0 crypto bleed-stop (2026-07): the FX technical agents have
+        # NEGATIVE directional edge on crypto (measured hit-rate < 50% on
+        # BTC/ETH/SOL), so directional crypto here is expected-loss. Cap it
+        # hard until the market-neutral funding cash-and-carry book replaces it
+        # (see docs/backlog/crypto-subsystem.md). Reduces, does NOT eliminate.
+        crypto_gross_cap=0.05,
         class_gross_caps=(("equity", 0.60), ("bond", 0.40)),
     ),
-    "balanced": FXParams(),  # the defaults above (equity 0.75 / bond 0.50)
+    # balanced is the default profile except its crypto budget is cut for the
+    # same Phase-0 reason as conservative (was the 0.25 default).
+    "balanced": FXParams(crypto_gross_cap=0.10),
     "aggressive": FXParams(
         target_vol=0.18, max_gross=5.0, max_vol_scale=5.0,
         per_pair_cap=0.35, max_drawdown_stop=0.30, drawdown_cooldown_days=7,
