@@ -5,7 +5,15 @@ pyarrow>=24.0.0
 # Live IBKR execution is OPTIONAL and lazily imported (see execution_ibkr.py).
 # Install it with the packaged extra when you actually route orders:
 #   pip install -e .[ibkr]
+# --- Security-pinned transitive constraints (pip-audit) --------------------
+# These are pulled in indirectly (e.g. urllib3/idna via requests->yfinance),
+# not imported directly here, but carry known CVEs at older versions. Pin a
+# patched floor so a fresh install can't resolve to a vulnerable release.
+urllib3>=2.7.0
+tornado>=6.5.7
+pyasn1>=0.6.4
 # dev / test
 pytest>=9.1.1
+hypothesis>=6
 pytest-cov>=7.1.0
 ruff>=0.15.20

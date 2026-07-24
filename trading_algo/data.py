@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,7 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 # register a loader(tickers, start, end) -> DataFrame[Close] here; the active one
 # is selected by config.DATA_FALLBACK_SOURCE. Kept as a registry so a source can
 # be added (or injected in tests) without touching load_prices.
-_FALLBACK_LOADERS: dict[str, "callable"] = {}
+_FALLBACK_LOADERS: dict[str, Callable] = {}
 
 
 def register_fallback(name: str, loader) -> None:
@@ -49,7 +50,7 @@ def _try_fallback(tickers: list[str], start: str, end: str | None):
 
 
 def _cache_path(cache_key: str) -> str:
-    safe = hashlib.sha1(cache_key.encode()).hexdigest()[:16]
+    safe = hashlib.sha1(cache_key.encode(), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
 
 
@@ -135,7 +136,7 @@ def load_region(region: Region, start: str, end: str | None = None,
     # Key on a hash of the actual ticker SET, not its length: editing a universe
     # while keeping the count constant must invalidate the cache, not silently
     # serve the stale file.
-    set_hash = hashlib.sha1(",".join(sorted(download)).encode()).hexdigest()[:12]
+    set_hash = hashlib.sha1(",".join(sorted(download)).encode(), usedforsecurity=False).hexdigest()[:12]
     df = load_prices(download, start, end,
                      cache_key=f"{region.key}:{start}:{end}:{set_hash}",
                      use_cache=use_cache)

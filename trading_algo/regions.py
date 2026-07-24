@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import time
 
 from . import universes
-from .config import DEFAULT_PARAMS, StrategyParams
+from .config import DEFAULT_PARAMS, StrategyParams, lookup_registry
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,15 @@ class Region:
     # Per-region (not a shared constant) so the threshold is comparable in AUD
     # across markets instead of applying one number to AUD/USD/GBP/CAD alike.
     min_trade_value: float = 500.0
+    # Data-quality "impossible move" threshold: |1-day return| above this is
+    # flagged as a likely unadjusted split/spike (data_quality.assess). Lives on
+    # the record so "add a region = one entry" holds — no currency side-table.
+    # 0.50 default (US/ASX/CAD); GBP/FTSE is tighter (0.30, pence-quoted names).
+    jump_threshold: float = 0.50
+    # Synthetic-only FX anchor: base-currency (AUD) units per 1 unit of this
+    # region's currency, used solely by fx.synthetic_fx for offline pipeline
+    # tests (invariant #5 — never real performance). None => not anchored here.
+    synthetic_fx_anchor: float | None = None
 
     @property
     def all_tickers(self) -> list[str]:
@@ -72,6 +81,7 @@ REGIONS: dict[str, Region] = {
         price_scale=1.0,
         universe=universes.ASX,
         min_trade_value=500.0,         # ~A$500 dust floor
+        synthetic_fx_anchor=1.0,       # AUD is the base currency (identity)
     ),
     "US": Region(
         key="US",
@@ -90,6 +100,7 @@ REGIONS: dict[str, Region] = {
         price_scale=1.0,
         universe=universes.US,
         min_trade_value=330.0,         # ~A$500 in USD
+        synthetic_fx_anchor=1.52,      # ~1.52 AUD per USD (AUDUSD ≈ 0.66)
     ),
     "FTSE": Region(
         key="FTSE",
@@ -108,6 +119,8 @@ REGIONS: dict[str, Region] = {
         price_scale=0.01,              # pence (GBX) -> pounds (GBP)
         universe=universes.FTSE,
         min_trade_value=260.0,         # ~A$500 in GBP
+        jump_threshold=0.30,           # tighter for GBP names (pence-quoted)
+        synthetic_fx_anchor=1.92,      # ~1.92 AUD per GBP (AUDGBP ≈ 0.52)
     ),
     # 4th sleeve, scaffolded but UNFUNDED: fully backtestable via
     # `run_backtest --region TSX`, but intentionally absent from
@@ -129,15 +142,15 @@ REGIONS: dict[str, Region] = {
         price_scale=1.0,
         universe=universes.TSX,
         min_trade_value=450.0,         # ~A$500 in CAD
+        synthetic_fx_anchor=1.11,      # ~1.11 AUD per CAD (AUDCAD ≈ 0.90)
     ),
 }
 
 
 def get_region(key: str) -> Region:
-    try:
-        return REGIONS[key]
-    except KeyError:
-        raise KeyError(f"Unknown region {key!r}. Known: {list(REGIONS)}") from None
+    # Shared registry accessor (R1), same one-pattern lookup the profile
+    # registries use; libraries expect a KeyError on a bad key.
+    return lookup_registry(REGIONS, key, kind="region")
 
 
 def all_region_keys() -> list[str]:

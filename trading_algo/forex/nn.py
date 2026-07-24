@@ -78,6 +78,8 @@ class StandardScaler:
         return self.fit(X).transform(X)
 
     def to_dict(self) -> dict:
+        if self.mean_ is None or self.std_ is None:
+            raise ValueError("StandardScaler must be fit before serialising")
         return {"mean": self.mean_.tolist(), "std": self.std_.tolist()}
 
     @classmethod

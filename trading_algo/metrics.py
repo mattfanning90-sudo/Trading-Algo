@@ -18,11 +18,18 @@ def compute_metrics(rets: pd.Series, equity: pd.Series,
 
     n = len(rets)
     ann_ret = (equity.iloc[-1] / equity.iloc[0]) ** (252 / n) - 1
-    ann_vol = rets.std() * np.sqrt(252)
+    # ddof=1 stats need >1 observation; a single point has no sample dispersion.
+    ann_vol = float(rets.std() * np.sqrt(252)) if n > 1 else 0.0
     excess = rets.mean() * 252 - risk_free
     sharpe = excess / max(ann_vol, 1e-9)
-    downside = rets[rets < 0].std() * np.sqrt(252)
-    sortino = excess / max(downside, 1e-9)
+    losers = rets[rets < 0]
+    downside = float(losers.std() * np.sqrt(252)) if len(losers) > 1 else 0.0
+    # No (or too few) losing days -> downside deviation is 0/undefined. Fall
+    # back to total volatility so Sortino stays finite instead of a silent nan
+    # from the max(nan, 1e-9) idiom.
+    if not (downside > 0):
+        downside = ann_vol
+    sortino = excess / downside if downside > 0 else float("nan")
     dd = equity / equity.cummax() - 1.0
     max_dd = float(dd.min())
     calmar = ann_ret / abs(max_dd) if max_dd < 0 else float("nan")
@@ -50,8 +57,11 @@ def benchmark_stats(strat_rets: pd.Series, bench_rets: pd.Series,
 
     bench_cagr = (1 + b).prod() ** (252 / len(b)) - 1
     strat_cagr = (1 + s).prod() ** (252 / len(s)) - 1
+    # Covariance and variance must share one ddof, else beta is biased by
+    # (N-1)/N. np.cov(..., ddof=1) and Series.var() (pandas default ddof=1)
+    # both normalise by N-1.
     var_b = float(b.var())
-    beta = float(((s - s.mean()) * (b - b.mean())).mean() / var_b) if var_b > 0 else float("nan")
+    beta = float(np.cov(s, b, ddof=1)[0, 1] / var_b) if var_b > 0 else float("nan")
     alpha = (s.mean() * 252 - risk_free) - beta * (b.mean() * 252 - risk_free)
     active = s - b
     te = float(active.std() * np.sqrt(252))

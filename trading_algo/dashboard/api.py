@@ -130,9 +130,14 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         raise FileNotFoundError(f"no account '{account}'")
 
     state = paper_trade.load_state(account)
-    snap_fx = paper_trade.fx_snapshot(synthetic)
-    # Iterate the account's OWN regions (a small account may trade only one).
+    # Iterate the account's OWN regions (a small account may trade only one),
+    # and size the FX snapshot off THAT set — an account on a registered-but-
+    # unfunded region (e.g. TSX/CAD) trades a currency ALLOCATIONS never lists.
     regions = list(state.get("allocations") or cfg.ALLOCATIONS)
+    # Carry forward the last known-good rates (prev): a single failed pair must
+    # never surface as a NaN rate, NaN sleeve equity or NaN headline AUM.
+    snap_fx = paper_trade.fx_snapshot(synthetic, prev=state.get("fx_snapshot"),
+                                      regions=regions)
 
     # Realised P&L and open-position cost basis are both derived from the fills
     # ledger (the single source of truth), so the OVERVIEW tiles and the
@@ -157,7 +162,12 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         px_prev = prices.iloc[-2] if len(prices) > 1 else px  # for day-change
         as_of = max(as_of, prices.index[-1].strftime("%Y-%m-%d"))
         sleeve = state["sleeves"][k]
-        m = snap_fx[region.currency]
+        # Guard the per-currency rate: a failed pair with no prior to carry is
+        # OMITTED from the snapshot, so treat a missing/non-finite rate as
+        # unvaluable (0) rather than let a NaN poison this sleeve's base equity
+        # and the headline AUM. The sleeve still shows its local holdings.
+        raw_m = snap_fx.get(region.currency)
+        m = float(raw_m) if (raw_m is not None and raw_m == raw_m and raw_m > 0.0) else 0.0
         regime = ("RISK_ON"
                   if bool(signals.index_risk_on(index_px, region.params).iloc[-1])
                   else "RISK_OFF")

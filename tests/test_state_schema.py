@@ -36,6 +36,13 @@ def _good_state() -> dict:
     }
 
 
+# --- fail-safe default (B1) ------------------------------------------------
+def test_validate_state_files_defaults_to_fail_safe():
+    """B1: before real capital, state validation defaults ON. A corrupted-but-
+    parseable file must HALT the run, not fail open and silently reset a book."""
+    assert cfg.VALIDATE_STATE_FILES is True
+
+
 # --- validate_state --------------------------------------------------------
 def test_valid_state_passes():
     assert validate_state(_good_state()) == []

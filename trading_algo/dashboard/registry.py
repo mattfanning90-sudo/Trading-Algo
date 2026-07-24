@@ -16,6 +16,7 @@ from .. import paper_trade
 from .. import profiles
 from ..forex import fx_book
 from ..forex import fx_config as fxcfg
+from ..forex import pairs
 
 # Display keys/labels the terminal uses where the derived form isn't right.
 # Everything else (bar cadence, profile, asset mix) is derived from the state
@@ -95,12 +96,21 @@ def _equity_entry(account: str, state: dict) -> dict:
     }
 
 
-_FX6 = ("EUR", "GBP", "USD", "AUD", "NZD", "CAD", "CHF", "JPY",
-        "BTC", "ETH", "SOL", "XRP", "ADA", "DOGE")
+def _pair_prefixes() -> set[str]:
+    """The 3-letter currency / crypto codes that begin a 6-char pair symbol —
+    derived from the pair registry (base + quote of every FX and crypto pair)
+    instead of a hardcoded literal, so a new pair never has to be mirrored here.
+    Equity/bond pseudo-pairs (base = a ticker, not a currency) are excluded."""
+    codes: set[str] = set()
+    for p in pairs.ALL_PAIRS.values():
+        if p.asset_class in ("fx", "crypto"):
+            codes.add(p.base)
+            codes.add(p.quote)
+    return codes
 
 
 def _is_pairlike(symbol: str) -> bool:
-    return len(symbol) == 6 and symbol[:3] in _FX6
+    return len(symbol) == 6 and symbol[:3] in _pair_prefixes()
 
 
 def _fx_entry(account: str, state: dict) -> dict:

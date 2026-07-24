@@ -42,3 +42,116 @@ jobs:
       # unit test wouldn't). Update deliberately with `ci_regression --update`.
       - name: Backtest regression gate
         run: python -m trading_algo.ci_regression --check
+
+  # --- Gold-standard durable gates (all BLOCKING unless marked otherwise) ---
+
+  mypy:
+    # Static type gate, scoped to the MONEY-PATH modules only ("start
+    # money-path-only, expand later"). Must report 0 errors.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: mypy money-path gate (0 errors)
+        run: >-
+          python3 -m mypy
+          trading_algo/strategy.py
+          trading_algo/signals.py
+          trading_algo/paper_trade.py
+          trading_algo/backtest.py
+          trading_algo/metrics.py
+          trading_algo/forex/risk.py
+          trading_algo/forex/indicators.py
+          trading_algo/forex/ensemble.py
+          trading_algo/forex/fx_book.py
+          trading_algo/forex/marks.py
+          trading_algo/execution_ibkr.py
+          trading_algo/forex/crypto_exec.py
+          trading_algo/forex/explain.py
+          trading_algo/fx.py
+          --ignore-missing-imports
+
+  security:
+    # Static application-security + dependency-CVE + secret-scanning gates.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      # bandit: fail on any High/Medium severity finding (asserts in tests are
+      # excluded via [tool.bandit] exclude_dirs in pyproject.toml).
+      - name: bandit gate (fail on high/medium)
+        run: bandit -r trading_algo -ll
+      # pip-audit: fail if any dependency in OUR declared closure has a known
+      # CVE. Scoped to requirements.txt (not the whole env) so the runner's
+      # pre-installed pip/setuptools don't fail a gate we can't pin.
+      - name: pip-audit gate (fail on known-CVE dependency)
+        run: pip-audit -r requirements.txt
+      # detect-secrets: fail on a NEW secret not already in the committed
+      # baseline. Until a .secrets.baseline is committed this scans to seed one
+      # and stays report-only (there is nothing to diff against yet).
+      - name: detect-secrets gate (fail on a NEW secret not in the baseline)
+        run: |
+          if [ -f .secrets.baseline ]; then
+            git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
+          else
+            echo "No .secrets.baseline committed yet — scanning to establish one."
+            detect-secrets scan > .secrets.baseline
+            echo "TODO: commit .secrets.baseline so this gate becomes blocking."
+          fi
+
+  coverage:
+    # Branch-coverage gate (BLOCKING). Measured TOTAL branch coverage = 78%
+    # (money-path core: backtest 98%, marks/ensemble 100%, risk/indicators 96%,
+    # metrics 95%, strategy 94%, execution_ibkr 91%; paper_trade 65% CLI drag).
+    # Floor set to 75 (3pt headroom) to catch regressions; raise toward 85 as
+    # paper_trade CLI/dashboard coverage improves.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - name: coverage gate (branch, blocking; floor from measured 78%)
+        run: >-
+          pytest --cov=trading_algo --cov-branch
+          --cov-report=term-missing
+          --cov-fail-under=75
+
+  mutation:
+    # Mutation-testing gate. report-only until baseline established: the
+    # orchestrator sets the threshold once a baseline mutation score is known.
+    # Non-blocking (|| true) for now so a missing threshold can't fail the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      # report-only until baseline established
+      # TODO: orchestrator sets --paths threshold; make this step blocking (drop
+      # the `|| true`) once a baseline mutation score exists.
+      # mutmut 3.6 is config-driven: it reads paths_to_mutate from
+      # [tool.mutmut] in pyproject.toml (money-path core). Report-only:
+      # a measured kill-rate baseline could not be established locally
+      # (mutmut 3.6 stats-runner incompatibility), so DO NOT flip this to
+      # blocking until the first green CI run reports a baseline score and
+      # a threshold is chosen from it. Nightly/on-money-path-change is the
+      # intended cadence, not every push (a full run is minutes-to-hours).
+      - name: mutmut money-path mutation run (report-only — see note)
+        run: mutmut run || true
+      - name: mutmut results (report-only)
+        run: mutmut results || true

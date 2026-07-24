@@ -73,7 +73,10 @@ def test_trade_mark_matches_legacy():
 def test_fx_book_routes_through_marks_only():
     """Source pin: marks is the ONE formula site on the book side — the inline
     half-spread and mark formulas must not reappear in run_once."""
-    src = inspect.getsource(fx_book.run_once)
+    # run_once is now a thin storage.account_lock wrapper delegating to
+    # _run_once_locked; the mark/cost formulas live in the locked body, so the
+    # source pin must inspect both (the negative asserts still scan the real body).
+    src = inspect.getsource(fx_book.run_once) + inspect.getsource(fx_book._run_once_locked)
     assert "marks.cost_fraction" in src
     assert "marks.position_contribution" in src
     assert "0.5 * get_pair(s).spread_fraction" not in src

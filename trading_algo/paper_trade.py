@@ -29,7 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -133,17 +134,28 @@ def _account_drawdown_stop(state: dict):
 
 
 def fx_snapshot(synthetic: bool,
-                prev: dict[str, float] | None = None) -> dict[str, float]:
-    """Latest base-per-local multiplier for every funded currency.
+               prev: dict[str, float] | None = None,
+               regions: list[str] | None = None) -> dict[str, float]:
+    """Latest base-per-local multiplier for every currency THIS account trades.
+
+    `regions` is the account's own region keys (from `state['allocations']` /
+    the `--regions` selection). It must NOT default to the global
+    `cfg.ALLOCATIONS`: an account funded on a registered-but-UNFUNDED region
+    (e.g. TSX/CAD, the documented register→backtest→fund flow) trades a currency
+    that ALLOCATIONS never lists, and keying off the global set would omit its
+    rate and KeyError on valuation. Absent, falls back to the funded set.
 
     A single failed pair fetch (e.g. AUDUSD=X 403s while AUDGBP=X succeeds)
     comes back as an all-NaN column that ffill can't repair, so its `.iloc[-1]`
     is NaN. Left alone that NaN flows straight into `eq_base = eq_local · rate`
     and poisons the whole book's equity (this is what NaN'd the `full` book's US
     sleeve and headline AUM). FX rates are persistent, so the correct fallback is
-    the last known-good rate from `prev` — never a NaN.
+    the last known-good rate from `prev`. When there is NO prior good rate either
+    the currency is OMITTED from the snapshot — never emitted as NaN — so a
+    failed pair can never persist a NaN or be multiplied into an equity.
     """
-    currencies = [get_region(k).currency for k in _regions()]
+    keys = list(regions) if regions is not None else _regions()
+    currencies = [get_region(k).currency for k in keys]
     if synthetic:
         tbl = fx.synthetic_fx(currencies, base=cfg.BASE_CURRENCY)
     else:
@@ -159,8 +171,11 @@ def fx_snapshot(synthetic: bool,
                       f"carrying forward last good {fallback:.4f}")
                 rate = float(fallback)
             else:
+                # No usable rate — skip rather than persist a NaN (which would
+                # both corrupt state and slip past a `NaN < threshold` gate).
                 print(f"  ⚠ FX rate for {c} unavailable and no prior rate to "
                       f"fall back on — {c} sleeve valuation will be skipped this run")
+                continue
         snap[c] = rate
     return snap
 
@@ -169,6 +184,28 @@ def latest_region_data(region, synthetic: bool):
     if synthetic:
         return data.synthetic_region(region)
     return data.load_region(region, cfg.START, use_cache=False)
+
+
+# Max business-day age of the latest bar before we refuse to trade/mark a sleeve.
+# A daily-bar, monthly-rebalanced sleeve should see a bar at most one trading day
+# old; the slack absorbs a long weekend + a public holiday or two (holidays are
+# not modelled in calendars.py) so a normal Fri→Mon gap never false-positives.
+STALE_BAR_MAX_BDAYS = 4
+
+
+def _is_stale(region, last_bar, now: datetime | None = None) -> bool:
+    """True if `last_bar` (the latest available session) is too old for the
+    region's daily cadence to trust — measured in BUSINESS days so weekends and
+    (with the slack above) holidays never trip it. `now` defaults to the current
+    time in the region's timezone."""
+    tz = ZoneInfo(region.timezone)
+    now = now.astimezone(tz) if now is not None else datetime.now(tz)
+    last_date = pd.Timestamp(last_bar).date()
+    now_date = now.date()
+    if now_date <= last_date:                 # bar is same-day or (clock skew) ahead
+        return False
+    bdays = int(np.busday_count(last_date, now_date))
+    return bdays > STALE_BAR_MAX_BDAYS
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +324,7 @@ def init_account(account: str, capital: float, synthetic: bool,
     if unknown:
         raise SystemExit(f"Unknown region(s) {unknown}. Known: {list(REGIONS)}")
 
-    snap = fx_snapshot(synthetic)
+    snap = fx_snapshot(synthetic, regions=regions)
     total = sum(alloc_src[k] for k in regions)
     norm = {k: alloc_src[k] / total for k in regions}
     sleeves = {}
@@ -447,11 +484,27 @@ def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
 
 
 def run_daily(account: str, synthetic: bool) -> None:
+    """Run one daily paper cycle for `account`.
+
+    The whole load→mutate→save cycle is serialised under a per-account advisory
+    lock so a manual run and the background scheduler can't interleave and
+    clobber each other's writes: SQLite makes each individual commit atomic but
+    does NOT stop a read-modify-write race across two processes (see
+    trading_algo.storage). The lock sits alongside the state it guards.
+    """
+    with storage.account_lock(account, lock_dir=os.path.abspath(STATE_DIR)):
+        _run_daily_locked(account, synthetic)
+
+
+def _run_daily_locked(account: str, synthetic: bool) -> None:
     state = load_state(account)
     # Carry forward the last known-good rates so a transient single-pair fetch
-    # failure can't NaN the book's equity (see fx_snapshot).
-    snap = fx_snapshot(synthetic, prev=state.get("fx_snapshot"))
-    state["fx_snapshot"] = snap
+    # failure can't NaN the book's equity (see fx_snapshot). Merge rather than
+    # replace: a currency with no rate THIS run keeps its prior key untouched,
+    # and a failed pair (omitted by fx_snapshot) can never overwrite a good rate.
+    snap = fx_snapshot(synthetic, prev=state.get("fx_snapshot"),
+                       regions=_account_regions(state))
+    state["fx_snapshot"] = {**(state.get("fx_snapshot") or {}), **snap}
 
     # Drawdown circuit breaker: was the account halted by a prior run? Stay flat
     # while cooling off; the re-entry decision is made AFTER the report date is
@@ -466,15 +519,33 @@ def run_daily(account: str, synthetic: bool) -> None:
     breakdown = {}
     px_by_region: dict = {}
     rebalanced_this_run = False
+    all_valued = True            # every sleeve had a fresh bar AND a usable FX rate
     for k in _account_regions(state):
         region = get_region(k)
         prices, index_px = latest_region_data(region, synthetic)
         px_today = prices.iloc[-1]
-        px_by_region[k] = px_today
         today = prices.index[-1].strftime("%Y-%m-%d")
-        report_date = max(report_date, today)
         sleeve = state["sleeves"][k]
         this_month = today[:7]
+
+        # Wall-clock freshness gate: never trade or mark on a stale bar (a feed
+        # that stopped updating). Synthetic data is a fixed offline fixture, so
+        # the gate only applies to real runs; weekends/holidays don't trip it.
+        if not synthetic and _is_stale(region, prices.index[-1]):
+            print(f"  [{k}] ⚠ latest bar {today} is stale — skipping trade & mark.")
+            notifications.notify(
+                "stale_data",
+                f"[{account}] {k} latest bar {today} is stale — skipping trade & "
+                f"mark this run (data feed may be down)",
+                level="alert", account=account, region=k, last_bar=today)
+            _record_sleeve_status(sleeve, today, "cash:stale-data")
+            all_valued = False
+            continue
+
+        px_by_region[k] = px_today
+        report_date = max(report_date, today)
+        rate = snap.get(region.currency)
+        rate_ok = rate is not None and rate == rate and rate > 0.0
 
         params = _account_params(state, region)
         status = None                       # why the sleeve ended this run as it did
@@ -484,11 +555,27 @@ def run_daily(account: str, synthetic: bool) -> None:
                 rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
                                  px_today, today, state["trades"])
                 sleeve["last_rebalance_date"] = today
-            sleeve["last_rebalance_month"] = this_month
+            # Do NOT stamp last_rebalance_month while halted: that would calendar-
+            # pin the sleeve flat until the next month even after the cooldown
+            # clears. Re-entry is cooldown-driven (month/date cleared on resume).
             status = "cash:halted"
+        elif not rate_ok:
+            # No base-currency rate → the min-viable gate and the mark can't be
+            # sized. Hold cash rather than let `NaN < MIN_VIABLE` (False) fall
+            # through and trade on an unvaluable book.
+            print(f"  [{k}] ⚠ no valuation rate for {region.currency} — holding cash.")
+            notifications.notify(
+                "fx_unavailable",
+                f"[{account}] {k} valuation rate for {region.currency} unavailable "
+                f"— holding cash this run",
+                level="alert", account=account, region=k, currency=region.currency)
+            status = "cash:fx-unavailable"
         elif _should_rebalance(sleeve, today, this_month):
             rebalanced_this_run = True
-            eq_base_pre = sleeve_equity_local(sleeve, px_today) * snap[region.currency]
+            # Reached only when rate_ok is True (the `not rate_ok` branch above
+            # was skipped), so `rate` is a positive float, not None.
+            assert rate is not None
+            eq_base_pre = sleeve_equity_local(sleeve, px_today) * rate
             if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
                 print(f"  [{k}] below min viable size "
                       f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
@@ -515,15 +602,20 @@ def run_daily(account: str, synthetic: bool) -> None:
 
         _record_sleeve_status(sleeve, today, status)
 
-        eq_local = sleeve_equity_local(sleeve, px_today)
-        eq_base = eq_local * snap[region.currency]
-        breakdown[k] = (eq_local, region.currency, eq_base)
-        combined += eq_base
+        if rate_ok:
+            assert rate is not None      # rate_ok implies a positive float rate
+            eq_local = sleeve_equity_local(sleeve, px_today)
+            eq_base = eq_local * rate
+            breakdown[k] = (eq_local, region.currency, eq_base)
+            combined += eq_base
+        else:
+            all_valued = False       # unvaluable sleeve → don't fabricate a total
 
     # F4: on a monthly rebalance, optionally true sleeves back to target
-    # allocation (cash transfers, FX spread charged). Default off; needs >1 sleeve.
+    # allocation (cash transfers, FX spread charged). Default off; needs >1 sleeve
+    # AND a complete valuation (every sleeve fresh & priced) so the cross is sound.
     if (cfg.PAPER_ALLOCATION_REBALANCE and rebalanced_this_run and not halted
-            and len(state["sleeves"]) > 1):
+            and all_valued and len(state["sleeves"]) > 1):
         fx_cost = rebalance_allocations(
             state["sleeves"], snap, state.get("allocations") or cfg.ALLOCATIONS,
             px_by_region)
@@ -535,31 +627,44 @@ def run_daily(account: str, synthetic: bool) -> None:
 
     # Update peak and decide whether to trip / clear the breaker for the next run.
     # The threshold is per-book: a profile may loosen it or disable it (None) for
-    # a max-risk book.
+    # a max-risk book. Only act on a COMPLETE valuation — never trip or resume the
+    # breaker (nor move the peak) off a partial book (a stale bar / failed pair).
     stop = _account_drawdown_stop(state)
-    peak = max(state.get("peak_equity_base", state["initial_capital_base"]), combined)
-    state["peak_equity_base"] = peak
-    if halted:
-        # Cool down one distinct market day at a time (multiple runs on the same
-        # report_date count once), then re-arm trading on the next run.
-        if state.get("halt_last_day") != report_date:
-            state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
-            state["halt_last_day"] = report_date
-        state["risk_halted"] = state["halt_cooldown"] > 0
-    elif stop is not None and combined / peak - 1 <= -stop:
-        state["risk_halted"] = True
-        state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
-        state["halt_last_day"] = report_date
-        print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
-              f"{stop:.0%} stop — halting for "
-              f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
+    peak = float(state.get("peak_equity_base") or state["initial_capital_base"])
+    if not all_valued:
+        print("  ⚠ incomplete valuation this run — breaker & history untouched.")
     else:
-        state["risk_halted"] = False
+        peak = max(peak, combined)
+        state["peak_equity_base"] = peak
+        if halted:
+            # Cool down one distinct market day at a time (multiple runs on the
+            # same report_date count once), then re-arm trading on the next run.
+            if state.get("halt_last_day") != report_date:
+                state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
+                state["halt_last_day"] = report_date
+            state["risk_halted"] = state["halt_cooldown"] > 0
+        elif stop is not None and combined / peak - 1 <= -stop:
+            state["risk_halted"] = True
+            state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
+            state["halt_last_day"] = report_date
+            print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
+                  f"{stop:.0%} stop — halting for "
+                  f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
+        else:
+            state["risk_halted"] = False
 
     # F12: alert exactly once on a halt/resume transition (not every halted day).
-    transition = notifications.breaker_transition(was_halted, state["risk_halted"])
+    transition = notifications.breaker_transition(
+        was_halted, state.get("risk_halted", was_halted))
+    if transition == "resume":
+        # Cooldown cleared: let every sleeve re-enter on the NEXT run per the
+        # cooldown, not the calendar — clear the month/date pins so a book halted
+        # mid-month isn't stuck flat until the 1st.
+        for sl in state["sleeves"].values():
+            sl["last_rebalance_month"] = None
+            sl["last_rebalance_date"] = None
     if transition:
-        dd = combined / peak - 1
+        dd = combined / peak - 1 if peak else 0.0
         notifications.notify(
             f"breaker_{transition}",
             f"[{account}] drawdown breaker {transition.upper()} on {report_date} — "
@@ -567,16 +672,19 @@ def run_daily(account: str, synthetic: bool) -> None:
             level="alert", account=account, transition=transition,
             equity=round(combined, 2), drawdown=round(float(dd), 4))
 
-    # Never persist a NaN into the equity/sleeve history — a residual NaN here
-    # means a currency failed to fetch AND had no prior rate to carry forward
-    # (fx_snapshot already handles the common case). Skip the row rather than
-    # corrupt the series the dashboard and metrics read.
-    if combined != combined:
+    # Never persist a NaN/partial total into the equity/sleeve history — a
+    # residual gap here means a currency failed to fetch AND had no prior rate, or
+    # a bar was stale. Skip the row rather than corrupt the series the dashboard
+    # and metrics read.
+    if not all_valued:
+        print(f"  ⚠ incomplete valuation for {report_date or 'this run'} — "
+              f"skipping history update this run.")
+    elif combined != combined:
         print(f"  ⚠ combined equity is NaN for {report_date} (FX data gap) — "
               f"skipping history update this run.")
     elif not state["equity_history"] or state["equity_history"][-1][0] != report_date:
         state["equity_history"].append([report_date, round(combined, 2)])
-        sleeve_row = {"date": report_date}
+        sleeve_row: dict[str, str | float] = {"date": report_date}
         sleeve_row.update({k: round(v[2], 2) for k, v in breakdown.items()})
         state.setdefault("sleeve_history", []).append(sleeve_row)
     save_state(account, state)

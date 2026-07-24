@@ -27,6 +27,7 @@ See docs/CRYPTO_HF.md and docs/DATA_FEEDS.md.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 
 import pandas as pd
@@ -36,6 +37,48 @@ from .fx_config import profile
 from .fx_strategy import compute_targets
 
 DEFAULT_MIN_NOTIONAL = 10.0   # quote ccy (USDT): skip dust + below most exchange mins
+# When going live without an explicit per-order cap, fall back to this fraction of
+# equity so an uncapped fat-finger order can never leave the machine.
+DEFAULT_MAX_NOTIONAL_FRACTION = 0.25
+
+
+def _live_guards(target_weights: pd.Series, equity: float, *, dry_run: bool,
+                 max_order_notional: float | None, risk_halted: bool,
+                 quote: str) -> tuple[pd.Series, float | None]:
+    """Pre-trade safety rails shared by rebalance() and the CLI.
+
+    * A drawdown-halted book is flattened to cash (all target weights -> 0): it
+      may only *reduce* risk, never open or rebalance into a risk-on book.
+    * A live run with no per-order cap gets a default fraction-of-equity cap so we
+      never send an uncapped order.
+
+    Returns the (possibly zeroed) weights and the effective per-order cap.
+    """
+    if risk_halted:
+        print("⛔ RISK-HALTED — drawdown breaker tripped; flatten-only, "
+              "no opening/rebalancing orders.")
+        target_weights = pd.Series(0.0, index=target_weights.index)
+    if not dry_run and max_order_notional is None:
+        max_order_notional = DEFAULT_MAX_NOTIONAL_FRACTION * float(equity)
+        print(f"⚠ no per-order cap set for a LIVE run — applying a default "
+              f"fat-finger cap ≈ {max_order_notional:,.2f} {quote} "
+              f"({DEFAULT_MAX_NOTIONAL_FRACTION:.0%} of equity). "
+              f"Pass --max-notional to override.")
+    return target_weights, max_order_notional
+
+
+def _finalize_order(o: dict, ex, max_order_notional: float | None) -> None:
+    """Round to exchange precision, then RE-VALIDATE the notional against the cap
+    (rounding can nudge an order back over the cap) and refresh the reported
+    notional so it reflects the amount that will actually trade."""
+    try:
+        o["amount"] = float(ex.amount_to_precision(o["market"], o["amount"]))
+    except Exception:
+        pass
+    if max_order_notional is not None and o["price"] > 0:
+        if o["amount"] * o["price"] > max_order_notional:
+            o["amount"] = max_order_notional / o["price"]
+    o["notional"] = round(o["amount"] * o["price"], 2)
 
 
 def _env(exchange: str, suffix: str) -> str | None:
@@ -82,6 +125,8 @@ def plan_orders(target_weights: pd.Series, prices: dict[str, float],
         if not price or price != price or price <= 0:
             continue
         w = float(target_weights.get(sym, 0.0))
+        if not math.isfinite(w):                  # NaN/inf weight can't be sized —
+            continue                              # drop the leg, never emit a NaN order
         if spot:
             w = max(w, 0.0)                       # can't short / lever a spot balance
         target_value = w * equity
@@ -129,20 +174,25 @@ def _exchange_state(ex, symbols: list[str], quote: str
 def rebalance(target_weights: pd.Series, *, exchange: str = "binance",
               quote: str = "USDT", spot: bool = True, dry_run: bool = True,
               min_notional: float = DEFAULT_MIN_NOTIONAL,
-              max_order_notional: float | None = None) -> list[dict]:
-    """Connect, diff target vs live holdings, and (only if not dry_run) place orders."""
+              max_order_notional: float | None = None,
+              risk_halted: bool = False) -> list[dict]:
+    """Connect, diff target vs live holdings, and (only if not dry_run) place orders.
+
+    A drawdown-halted book (`risk_halted=True`) is flattened, never re-risked; a
+    live run always carries a per-order notional cap (an explicit `max_order_notional`
+    or a default fraction of equity)."""
     ex = private_exchange(exchange)
     ex.load_markets()
     symbols = list(target_weights.index)
     equity, current, prices = _exchange_state(ex, symbols, quote)
+    target_weights, max_order_notional = _live_guards(
+        target_weights, equity, dry_run=dry_run,
+        max_order_notional=max_order_notional, risk_halted=risk_halted, quote=quote)
     orders = plan_orders(target_weights, prices, equity, current, spot=spot,
                          min_notional=min_notional,
                          max_order_notional=max_order_notional)
     for o in orders:
-        try:
-            o["amount"] = float(ex.amount_to_precision(o["market"], o["amount"]))
-        except Exception:
-            pass
+        _finalize_order(o, ex, max_order_notional)
         if not dry_run:
             ex.create_order(o["market"], "market", o["side"], o["amount"])
             o["status"] = "SENT"
@@ -194,12 +244,17 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("no crypto market data (offline? add --synthetic).")
     targets = compute_targets(panel, p)
     spot = not args.allow_short
+    # Drawdown circuit-breaker: honour the persisted halt owned by the paper engine.
+    risk_halted = bool(state.get("risk_halted", False))
 
     if args.synthetic:
         # Fully offline: size off the book's equity, assume a flat starting book.
         px = fx_data.closes(panel).iloc[-1]
         prices = {s: float(px[s]) for s in symbols if px.get(s) == px.get(s)}
         equity = float(args.equity if args.equity is not None else state.get("equity", 0.0))
+        targets, _ = _live_guards(targets, equity, dry_run=True,
+                                  max_order_notional=args.max_notional,
+                                  risk_halted=risk_halted, quote=args.quote)
         orders = plan_orders(targets, prices, equity, {}, spot=spot,
                              min_notional=args.min_notional,
                              max_order_notional=args.max_notional)
@@ -211,14 +266,14 @@ def main(argv: list[str] | None = None) -> None:
     ex = private_exchange(args.exchange)
     ex.load_markets()
     equity, current, prices = _exchange_state(ex, symbols, args.quote)
+    targets, max_notional = _live_guards(targets, equity, dry_run=not args.live,
+                                         max_order_notional=args.max_notional,
+                                         risk_halted=risk_halted, quote=args.quote)
     orders = plan_orders(targets, prices, equity, current, spot=spot,
                          min_notional=args.min_notional,
-                         max_order_notional=args.max_notional)
+                         max_order_notional=max_notional)
     for o in orders:
-        try:
-            o["amount"] = float(ex.amount_to_precision(o["market"], o["amount"]))
-        except Exception:
-            pass
+        _finalize_order(o, ex, max_notional)
         if args.live:
             ex.create_order(o["market"], "market", o["side"], o["amount"])
             o["status"] = "SENT"

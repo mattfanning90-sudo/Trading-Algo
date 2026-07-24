@@ -25,7 +25,7 @@ _FIELDS = ["open", "high", "low", "close"]
 
 
 def _cache_path(key: str) -> str:
-    safe = hashlib.sha1(key.encode()).hexdigest()[:16]
+    safe = hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(CACHE_DIR, f"fx_{safe}.parquet")
 
 

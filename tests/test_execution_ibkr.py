@@ -10,6 +10,7 @@ import sys
 import types
 
 import pandas as pd
+import pytest
 
 from trading_algo import execution_ibkr as ex
 
@@ -156,3 +157,51 @@ def test_nav_floor_holds_cash(monkeypatch):
     _install_fake(monkeypatch, ib)
     orders = ex.rebalance("US", pd.Series({"AAPL": 0.5}), dry_run=True)
     assert orders == []
+
+
+def test_nan_weight_rejected_before_any_order(monkeypatch):
+    # A NaN target weight must be rejected UP FRONT, before connecting/placing —
+    # not raise mid-loop after earlier orders have already gone to the broker.
+    ib = _FakeIB(nav=100_000, positions=[], prices={"AAPL": 200.0, "MSFT": 300.0})
+    _install_fake(monkeypatch, ib)
+    tw = pd.Series({"AAPL": 0.2, "MSFT": float("nan")})
+    with pytest.raises(ValueError):
+        ex.rebalance("US", tw, dry_run=False)
+    assert ib.placed == []                      # no partial order run
+
+
+def test_excess_gross_leverage_rejected(monkeypatch):
+    ib = _FakeIB(nav=100_000, positions=[], prices={"AAPL": 200.0, "MSFT": 300.0})
+    _install_fake(monkeypatch, ib)
+    tw = pd.Series({"AAPL": 1.2, "MSFT": 1.2})  # Σ|w| = 2.4 >> cap
+    with pytest.raises(ValueError):
+        ex.rebalance("US", tw, dry_run=False)
+    assert ib.placed == []
+
+
+def test_oversized_single_order_clamped_to_nav_cap(monkeypatch):
+    # A single name asking for ~90% of NAV is clamped to the per-order NAV cap.
+    ib = _FakeIB(nav=100_000, positions=[], prices={"AAPL": 200.0})
+    _install_fake(monkeypatch, ib)
+    orders = ex.rebalance("US", pd.Series({"AAPL": 0.9}), dry_run=False,
+                          max_order_nav_frac=0.20)
+    assert len(orders) == 1
+    cap = 0.20 * 100_000
+    assert orders[0]["approx_value"] <= cap + 200      # within one share of cap
+    assert ib.placed[0][0] == "AAPL"
+    assert ib.placed[0][2] * 200.0 <= cap + 200
+
+
+def test_halted_book_flattens_and_opens_nothing(monkeypatch):
+    # A persisted drawdown halt => flatten-only: sell the held name, open no new
+    # risk, even though the target book is risk-on.
+    ib = _FakeIB(nav=100_000,
+                 positions=[_Pos("AAPL", "USD", 100, 150.0)],
+                 prices={"AAPL": 200.0, "MSFT": 300.0})
+    _install_fake(monkeypatch, ib)
+    tw = pd.Series({"AAPL": 0.3, "MSFT": 0.3})  # risk-on target
+    orders = ex.rebalance("US", tw, dry_run=False, risk_halted=True)
+    actions = {o["symbol"]: o["action"] for o in orders}
+    assert actions == {"AAPL": "SELL"}          # flatten AAPL, no MSFT buy
+    assert all(o["action"] == "SELL" for o in orders)
+    assert not any(a == "BUY" for _, a, _ in ib.placed)

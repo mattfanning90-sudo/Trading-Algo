@@ -12,6 +12,7 @@ from __future__ import annotations
 import pandas as pd
 
 from . import indicators as ind
+from . import marks
 from .agents import AgentPool
 from .fx_config import FXParams
 from .fx_strategy import min_history, target_weights_history
@@ -39,7 +40,10 @@ def _pair_indicators(bars: pd.DataFrame, p: FXParams) -> dict:
         "bb_z": float(ind.bollinger_z(close, p.bb_window).iloc[-1]),
         "donchian_hi": float(upper.iloc[-1]) if upper.notna().iloc[-1] else None,
         "donchian_lo": float(lower.iloc[-1]) if lower.notna().iloc[-1] else None,
-        "ann_vol": float(ind.realized_vol(close, p.vol_lookback).iloc[-1]),
+        # Bar-frequency-aware annualisation (matches risk.pair_vols) so the
+        # "why" callout reports the same realised vol the sizer actually used.
+        "ann_vol": float(ind.realized_vol(
+            close, p.vol_lookback, ann=marks.periods_per_year(close.index)).iloc[-1]),
     }
 
 

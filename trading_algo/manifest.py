@@ -56,7 +56,7 @@ def params_to_dict(params) -> dict:
 def params_fingerprint(params) -> str:
     """Stable short hash of the strategy parameters — same knobs, same id."""
     payload = json.dumps(params_to_dict(params), sort_keys=True, default=str)
-    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+    return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def build_manifest(kind: str, *, params, regions: list[str], metrics: dict,

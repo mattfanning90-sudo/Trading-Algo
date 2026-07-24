@@ -35,8 +35,11 @@ from . import config as cfg
 STALE_DAYS = 5          # this many identical consecutive closes -> stale
 GAP_WINDOW = 20         # trailing rows examined for gaps
 MAX_GAP_DAYS = 3        # more than this many missing prints in the window -> drop
-JUMP_DEFAULT = 0.50     # |1-day return| above this is "impossible" (US / ASX)
-JUMP_GBP = 0.30         # tighter for GBP names (FTSE)
+# Fallback "impossible move" threshold for a region record that does not carry
+# its own `jump_threshold` (e.g. a duck-typed object in a test). The real per-
+# region values now live on the Region record (regions.py): 0.50 default,
+# 0.30 for GBP/FTSE.
+JUMP_DEFAULT = 0.50     # |1-day return| above this is "impossible"
 
 
 @dataclass
@@ -53,7 +56,10 @@ class QualityReport:
 
 
 def _jump_threshold(region) -> float:
-    return JUMP_GBP if getattr(region, "currency", None) == "GBP" else JUMP_DEFAULT
+    # Read the per-region/per-currency threshold straight off the Region record
+    # (folded in by refactor R3); fall back to the default for a record that
+    # predates the field.
+    return getattr(region, "jump_threshold", JUMP_DEFAULT)
 
 
 def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:

@@ -148,8 +148,9 @@ def migrate_state(state: dict) -> tuple[dict, list[str]]:
             n = len(state["sleeves"]) or 1
             state["allocations"] = {k: 1.0 / n for k in state["sleeves"]}
             applied.append("add allocations from sleeve set")
-        for key, default in (("trades", []), ("equity_history", []),
-                             ("sleeve_history", [])):
+        list_defaults: tuple[tuple[str, list], ...] = (
+            ("trades", []), ("equity_history", []), ("sleeve_history", []))
+        for key, default in list_defaults:
             if key not in state:
                 state[key] = default
                 applied.append(f"add {key}")

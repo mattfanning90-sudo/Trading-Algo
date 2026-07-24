@@ -47,6 +47,44 @@ select = ["E", "F", "W"]
 # and the codebase's dense-but-readable lines are a deliberate choice.
 ignore = ["E731", "E741", "E702", "E501"]
 
+[tool.mypy]
+# Gold-standard type gate. Scoped to the MONEY-PATH modules first ("start
+# money-path-only, expand later") — the CI mypy step passes exactly these files
+# explicitly, and this `files` list keeps a bare `mypy` invocation in sync.
+# Third-party libs without stubs (pandas/numpy/yfinance/ib_insync/ccxt/...) are
+# not our correctness surface, so missing imports are ignored globally.
+python_version = "3.11"
+ignore_missing_imports = true
+files = [
+    "trading_algo/strategy.py",
+    "trading_algo/signals.py",
+    "trading_algo/paper_trade.py",
+    "trading_algo/backtest.py",
+    "trading_algo/metrics.py",
+    "trading_algo/forex/risk.py",
+    "trading_algo/forex/indicators.py",
+    "trading_algo/forex/ensemble.py",
+    "trading_algo/forex/fx_book.py",
+    "trading_algo/forex/marks.py",
+    "trading_algo/execution_ibkr.py",
+    "trading_algo/forex/crypto_exec.py",
+    "trading_algo/forex/explain.py",
+    "trading_algo/fx.py",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["trading_algo"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.bandit]
+# The security gate runs `bandit -r trading_algo -ll` (report only High/Medium
+# severity). Test files legitimately use `assert`, so exclude the test tree from
+# the recursive scan rather than blanket-skipping B101 across production code.
+exclude_dirs = ["tests"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Put the repo root on sys.path so `trading_algo` imports under the bare
@@ -56,4 +94,16 @@ addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::FutureWarning",
+]
+
+[tool.mutmut]
+# Money-path modules to mutate. Mutation is a test-of-tests: a surviving
+# mutant = a defect the suite cannot see. Run in CI (report-only until a
+# green baseline sets the kill-rate threshold — see ci.yml mutation job).
+paths_to_mutate = [
+    "trading_algo/strategy.py", "trading_algo/signals.py",
+    "trading_algo/backtest.py", "trading_algo/metrics.py",
+    "trading_algo/paper_trade.py", "trading_algo/forex/risk.py",
+    "trading_algo/forex/marks.py", "trading_algo/forex/crypto_exec.py",
+    "trading_algo/execution_ibkr.py",
 ]

@@ -80,11 +80,7 @@ TSX = [
     "FSV.TO", "SAP.TO", "X.TO",
 ]
 
-
-# Convenience map (region key -> universe). Mirrors regions.REGIONS keys.
-UNIVERSES: dict[str, list[str]] = {
-    "ASX": ASX,
-    "US": US,
-    "FTSE": FTSE,
-    "TSX": TSX,
-}
+# NB: the per-region lists above are consumed directly by regions.REGIONS
+# (regions.py). There is intentionally no region-key -> universe convenience map
+# here — it had no consumer (the sole source of truth is the Region record), so
+# it was removed in refactor R3 to avoid a second place to keep in sync.

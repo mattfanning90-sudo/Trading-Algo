@@ -12,15 +12,28 @@ account holder a balanced profile and their partner a conservative one.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+
+from ..config import (
+    COOLDOWN_BARS,
+    Cooldown,
+    RiskParams,
+    lookup_registry,
+)
 
 # Daily FX bars: ~252 trading days a year (matches the equity metrics module).
 ANNUALIZATION = 252
 
 
 @dataclass(frozen=True)
-class FXParams:
-    """All knobs for the multi-agent FX strategy."""
+class FXParams(RiskParams):
+    """All knobs for the multi-agent FX strategy.
+
+    Subclasses the shared `RiskParams` (trading_algo/config.py): the vol-targeting
+    knobs (`target_vol`, `vol_lookback`, `avg_correlation`, `max_gross`,
+    `max_vol_scale`) live there, re-declared below with the FX book's own
+    (looser) defaults. `with_overrides` is inherited.
+    """
 
     # --- Indicator windows -------------------------------------------------
     ema_fast: int = 20
@@ -47,7 +60,7 @@ class FXParams:
     hedge_eta: float = 1.0             # Hedge learning rate (small = more shrinkage)
     per_pair_cap: float = 0.25         # max |net weight| per pair (frac of equity)
 
-    # --- Risk / position sizing --------------------------------------------
+    # --- Risk / position sizing (overrides the RiskParams base defaults) ----
     target_vol: float = 0.10           # annualised portfolio vol target
     vol_lookback: int = 30             # bars for realised-vol estimate
     avg_correlation: float = 0.30      # cross-pair correlation assumption
@@ -80,11 +93,15 @@ class FXParams:
     # --- Drawdown circuit breaker ------------------------------------------
     max_drawdown_stop: float = 0.20    # flatten + cool off past this peak-to-trough
     # decremented once per bar — scale to the profile's bar (10 for daily,
-    # 240 for 60m; see hf_crypto's 240-for-1m convention).
+    # 240 for 60m; see hf_crypto's 240-for-1m convention). Kept as a bare int so
+    # existing callers (fx_book / fx_backtest) read it unchanged; the unit is
+    # exposed explicitly via the `cooldown` property below (R2).
     drawdown_cooldown_days: int = 10
 
-    def with_overrides(self, **kwargs) -> "FXParams":
-        return replace(self, **kwargs)
+    @property
+    def cooldown(self) -> Cooldown:
+        """This book's drawdown cooldown, tagged with its unit (BARS for FX)."""
+        return Cooldown(self.drawdown_cooldown_days, COOLDOWN_BARS)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +138,10 @@ _PROFILES: dict[str, FXParams] = {
         # cooldown decrements once per NEW BAR: 240 hourly bars = 10 trading
         # days x 24 bars (mirrors hf_crypto's explicit 240-for-1m convention).
         max_drawdown_stop=0.20, drawdown_cooldown_days=240,
+        # The daytrader book runs this profile over DEFAULT_UNIVERSE (FX +
+        # BTC/ETH/SOL), so it carries the SAME Phase-0 defensive crypto cap as
+        # 'balanced' (0.10) — never the loose 0.25 default (B2).
+        crypto_gross_cap=0.10,
         # class_gross_caps: inherits the balanced defaults (equity .75 / bond .50).
     ),
     # High-frequency-CAPABLE crypto (minute scale; NOT microsecond HFT — see
@@ -140,10 +161,8 @@ _PROFILES: dict[str, FXParams] = {
 
 
 def profile(name: str) -> FXParams:
-    try:
-        return _PROFILES[name]
-    except KeyError:
-        raise KeyError(f"Unknown profile {name!r}. Known: {list(_PROFILES)}") from None
+    # Shared registry accessor (R1); libraries expect a KeyError on a bad name.
+    return lookup_registry(_PROFILES, name, kind="profile")
 
 
 def profile_names() -> list[str]:

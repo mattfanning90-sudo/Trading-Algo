@@ -30,11 +30,13 @@ import os
 import numpy as np
 import pandas as pd
 
+from .. import notifications
 from .. import storage
 from . import explain
 from . import feeds
 from . import fx_config as cfg
 from . import fx_data
+from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
@@ -148,6 +150,7 @@ def init_account(account: str, capital: float, profile_name: str,
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
     profile(profile_name)  # validate
+    syms = list(symbols or DEFAULT_UNIVERSE)
     state = {
         "account": account,
         "currency": currency,
@@ -157,7 +160,7 @@ def init_account(account: str, capital: float, profile_name: str,
         # An explicit universe is LOCKED: run_once won't merge in the default
         # FX+crypto instruments (a stocks/bonds book must stay stocks/bonds).
         "universe_locked": symbols is not None,
-        "symbols": list(symbols or DEFAULT_UNIVERSE),
+        "symbols": syms,
         "initial_capital": float(capital),
         "equity": float(capital),
         "positions": {},
@@ -171,7 +174,7 @@ def init_account(account: str, capital: float, profile_name: str,
     }
     save_state(account, state)
     print(f"  FX account '{account}' opened: {capital:,.0f} {currency} "
-          f"[{profile_name}] over {len(state['symbols'])} instruments "
+          f"[{profile_name}] over {len(syms)} instruments "
           f"(source: {source})")
 
 
@@ -203,6 +206,19 @@ def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None, interval: str | None = None,
              source: str | None = None, exchange: str | None = None,
              use_ml: bool = False) -> None:
+    # Hold an exclusive per-account lock across the whole load -> mutate -> save
+    # cycle so a manual run and the scheduler can't interleave and clobber each
+    # other's writes (SQLite makes each commit atomic but not the RMW cycle; see
+    # storage.account_lock). The lock sits alongside the state it guards.
+    with storage.account_lock(account, lock_dir=os.path.abspath(STATE_DIR)):
+        _run_once_locked(account, synthetic, pool=pool, interval=interval,
+                         source=source, exchange=exchange, use_ml=use_ml)
+
+
+def _run_once_locked(account: str, synthetic: bool = False,
+                     pool: AgentPool | None = None, interval: str | None = None,
+                     source: str | None = None, exchange: str | None = None,
+                     use_ml: bool = False) -> None:
     state = load_state(account)
     p = _params(state)
     # --- ML gate (the ONE mechanism pinning the ML pool to its training set) --
@@ -246,13 +262,30 @@ def run_once(account: str, synthetic: bool = False,
     bar_date = _bar_key(px.index[-1], interval)
     px_last = px.iloc[-1]
 
+    # --- data-quality gate (BEFORE compute_targets) -----------------------
+    # fx_data._align outer-joins + forward-fills, so a delisted/frozen pair has
+    # its last close carried forward indefinitely. Trim such names from the
+    # candidate universe so the single weight function never scores them and they
+    # never sit in the target book at a stale mark (invariant #3: trims the set,
+    # never re-weights). Conservative thresholds keep a quiet FX weekend clean.
+    dq = fx_data_quality.assess(px)
+    if dq.excluded:
+        detail = ", ".join(f"{s} ({dq.reasons[s]})" for s in sorted(dq.excluded))
+        print(f"  [{account}] data-quality: freezing {detail}")
+        notifications.notify(
+            "fx_data_quality",
+            f"[{account}] excluding stale/dead pairs from target book: {detail}",
+            level="warning", account=account,
+            excluded=sorted(dq.excluded), reasons=dq.reasons)
+        panel = {s: df for s, df in panel.items() if s not in dq.excluded}
+
     if state["last_bar_date"] == bar_date:
         # No new bar to trade, but keep the dashboard's "today's read" current by
         # refreshing the per-pair reasoning snapshot.
         if not state.get("risk_halted"):
             try:
-                _, rationale = explain.decide_and_explain(panel, p, pool=pool)
-                state["decisions"] = rationale
+                _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
+                state["decisions"] = refresh_rationale
                 save_state(account, state)
             except Exception as exc:                       # never let display break a run
                 print(f"  [{account}] (decision refresh skipped: {exc!r})")
@@ -352,7 +385,8 @@ def run_once(account: str, synthetic: bool = False,
     state["equity"] = float(equity)
     state["positions"] = {k: round(v, 5) for k, v in new_positions.items()}
     state["last_close"] = {s: float(px_last[s]) for s in symbols
-                           if s in px_last.index and px_last[s] == px_last[s]}
+                           if s in px_last.index and px_last[s] == px_last[s]
+                           and s not in dq.excluded}
     state["last_bar_date"] = bar_date
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
@@ -487,6 +521,7 @@ def main(argv: list[str] | None = None) -> None:
                 src = "crypto"
             # An explicit --universe wins over the source's natural set and locks
             # the book to it (init_account locks whenever symbols is not None).
+            symbols: list[str] | None
             if args.universe:
                 symbols = pairs.resolve_universe(args.universe)
             else:

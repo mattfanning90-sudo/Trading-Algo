@@ -14,11 +14,24 @@ import hashlib
 import numpy as np
 import pandas as pd
 
-from . import data
+from . import data, regions
 
-# Plausible synthetic anchor levels (base units per 1 local unit), AUD base.
-_SYNTH_LEVEL = {"AUD": 1.0, "USD": 1.52, "GBP": 1.92, "EUR": 1.63, "JPY": 0.0098,
-                "CAD": 1.11}   # AUDCAD ~0.90 (CAD per AUD) -> ~1.11 AUD per CAD
+# Synthetic anchor levels (base units per 1 local unit, AUD base) for currencies
+# that have NO regional sleeve — sourced from the Region records otherwise (see
+# `synth_level`). Offline/synthetic path only (invariant #5).
+_EXTRA_SYNTH_LEVEL = {"EUR": 1.63, "JPY": 0.0098}
+
+
+def synth_level(ccy: str) -> float:
+    """Synthetic FX anchor for `ccy` (base=AUD units per 1 ccy), for offline
+    tests only (invariant #5). Region currencies read their anchor straight off
+    the Region record (folded in by refactor R3), so adding a region needs no
+    edit here; a handful of non-sleeve currencies come from a small residual.
+    Unknown -> 1.0."""
+    for r in regions.REGIONS.values():
+        if r.currency == ccy and r.synthetic_fx_anchor is not None:
+            return r.synthetic_fx_anchor
+    return _EXTRA_SYNTH_LEVEL.get(ccy, 1.0)
 
 
 def fx_ticker(base: str, ccy: str) -> str:
@@ -31,14 +44,15 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
     """DataFrame of multipliers (base per 1 local) indexed by date, one column
     per currency. The base currency column is a constant 1.0."""
     foreign = sorted({c for c in currencies if c != base})
-    cols = {base: None}
+    cols: dict[str, pd.Series | float | None] = {base: None}
 
     if foreign:
         tickers = [fx_ticker(base, c) for c in foreign]
         # Include a hash of the currency SET in the key: a different set of
         # foreign currencies must not collide with (and read back) a file cached
         # for another set, which would surface a missing pair as an all-NaN column.
-        set_hash = hashlib.sha1(",".join(foreign).encode()).hexdigest()[:12]
+        set_hash = hashlib.sha1(",".join(foreign).encode(),
+                                usedforsecurity=False).hexdigest()[:12]
         raw = data.load_prices(tickers, start, end,
                                cache_key=f"FX:{base}:{start}:{end}:{set_hash}",
                                use_cache=use_cache)
@@ -46,7 +60,9 @@ def load_fx(currencies: list[str], start: str, end: str | None = None,
             t = fx_ticker(base, c)
             cols[c] = (1.0 / raw[t]) if t in raw.columns else np.nan
 
-    idx = next((s.index for s in cols.values() if s is not None), None)
+    # Take the index off a real price series only — a missing-ticker sentinel
+    # (np.nan scalar) is not None but has no .index, so filter on the type.
+    idx = next((s.index for s in cols.values() if isinstance(s, pd.Series)), None)
     out = pd.DataFrame(index=idx)
     for c in currencies:
         if c == base:
@@ -67,7 +83,7 @@ def synthetic_fx(currencies: list[str], start: str = "2012-01-01",
         if c == base:
             out[c] = 1.0
             continue
-        level = _SYNTH_LEVEL.get(c, 1.0)
+        level = synth_level(c)
         steps = rng.normal(0.0, 0.005, len(dates))
         out[c] = level * np.exp(np.cumsum(steps))
     return out

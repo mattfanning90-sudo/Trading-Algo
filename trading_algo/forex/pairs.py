@@ -174,7 +174,12 @@ def resolve_universe(spec: str | None) -> list[str]:
         get_pair(s)
     # de-dup, preserving order (an explicit list may repeat a symbol)
     seen: set[str] = set()
-    return [s for s in symbols if not (s in seen or seen.add(s))]
+    out: list[str] = []
+    for s in symbols:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def get_pair(symbol: str) -> Pair:
