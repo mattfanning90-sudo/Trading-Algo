@@ -58,6 +58,12 @@ done
 python -c "from trading_algo.forex.dashboard import build_how_page; build_how_page(\"public\")" \
   || echo "skip how page"
 
+# --- Animated walkthrough (the cinematic "how the machine works", real data) -----
+# Self-contained HTML (docs/explainer/how-it-works.html) baked from the real
+# 2012-2026 backtest + current books; just copy it into the published site.
+cp docs/explainer/how-it-works.html public/walkthrough.html \
+  || echo "skip walkthrough"
+
 # --- The landing page IS the terminal ------------------------------------------
 # One static page baking every book + the ALL-ACCOUNTS overview, switcher live.
 python -m trading_algo.dashboard.export --site $SYNTH -o public/index.html \
@@ -74,6 +80,7 @@ python -m trading_algo.dashboard.export --site $SYNTH -o public/index.html \
   echo 'a.card:hover{border-color:#2a4a2c;background:#111111}.n{font-size:.95rem;font-weight:600;color:#7ee787;letter-spacing:.06em}.d{color:#61805f;font-size:.75rem;margin-top:.2rem}</style>'
   echo "<h1>■ <b>MOMENTUM/3R</b> — PAPER BOOKS</h1><p class=s>updated $(date -u '+%Y-%m-%d %H:%M UTC') · reported in AUD</p>"
   echo '<a class=card href="index.html" style="border-color:#2a4a2c"><div class=n>THE TERMINAL — ALL ACCOUNTS</div><div class=d>every paper book behind one account switcher · overview / positions / backtest / method</div></a>'
+  echo '<a class=card href="walkthrough.html" style="border-color:#2a4a2c"><div class=n>▶ ANIMATED WALKTHROUGH</div><div class=d>the whole machine in motion — universe → momentum → filter → size → combine, plus the FX engine · real data</div></a>'
   echo '<a class=card href="how.html"><div class=n>HOW IT WORKS</div><div class=d>a plain-English flow diagram of what the system does and why</div></a>'
   echo '<h2>SINGLE-BOOK TERMINAL PAGES</h2>'
   for f in public/eq_*.html; do [ -e "$f" ] || continue; b=$(basename "$f" .html); n=${b#eq_}
