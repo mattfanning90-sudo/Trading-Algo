@@ -69,7 +69,7 @@ def test_vol_targeting_scales_down_high_vol():
 def test_crypto_gross_cap_enforced():
     """Total crypto gross (Σ|w| over BTC/ETH/SOL) is capped as one correlated bet;
     FX legs are untouched by the crypto scaling; None disables the cap."""
-    p = profile("balanced")            # crypto_gross_cap = 0.25
+    p = profile("balanced")            # crypto_gross_cap = 0.10 (Phase-0 bleed-stop)
     idx = pd.bdate_range("2020-01-01", periods=30)
     cols = DEFAULT_UNIVERSE
     tilts = pd.DataFrame(0.0, index=idx, columns=cols)
@@ -92,6 +92,24 @@ def test_hf_crypto_profile_uncapped():
     """The crypto-ONLY profile must not be strangled by the asset-class cap."""
     p = profile("hf_crypto")
     assert p.crypto_gross_cap is None
+
+
+def test_phase0_directional_crypto_bleed_stop():
+    """Phase-0 bleed-stop: the two directionally-crypto books (matt=balanced,
+    partner=conservative) hard-cap crypto gross at a defensive level, because the
+    FX technical agents have negative directional edge on crypto. Screaming-long
+    crypto must be scaled to the defensive cap, not the old 0.25/0.15."""
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    cols = DEFAULT_UNIVERSE
+    tilts = pd.DataFrame(0.0, index=idx, columns=cols)
+    tilts[["BTCUSD", "ETHUSD", "SOLUSD"]] = 0.9          # crypto screaming long
+    vols = pd.DataFrame(0.10, index=idx, columns=cols)
+    for name, defensive in (("balanced", 0.10), ("conservative", 0.05)):
+        p = profile(name)
+        assert p.crypto_gross_cap == pytest.approx(defensive), name
+        w = risk.size_book(tilts, vols, p)
+        crypto_gross = w[["BTCUSD", "ETHUSD", "SOLUSD"]].abs().sum(axis=1).max()
+        assert crypto_gross <= defensive + 1e-9, name
 
 
 # ---------------------------------------------------------------------------

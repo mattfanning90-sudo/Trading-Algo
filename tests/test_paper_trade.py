@@ -169,3 +169,88 @@ def test_micro_account_does_not_crash(account):
     pt.run_daily(account, synthetic=True)
     state = pt.load_state(account)
     assert state["equity_history"][-1][1] >= 0
+
+
+_KNOWN_STATUSES = {
+    "rebalanced", "held", "cash:idle", "cash:halted", "cash:below-min",
+    "cash:regime-off", "cash:no-eligible-names", "cash:data-quality",
+    "cash:insufficient-names",
+}
+
+
+def test_every_sleeve_records_a_status(account):
+    """Each run stamps every sleeve with a machine-readable reason for its state,
+    so an idle sleeve (e.g. ASX sitting in cash) is diagnosable, not silent."""
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    for k, s in state["sleeves"].items():
+        st = s.get("last_status")
+        assert st is not None, f"{k} has no last_status"
+        assert st["status"] in _KNOWN_STATUSES, f"{k}: unknown status {st['status']}"
+        assert st["date"] == state["equity_history"][-1][0]
+        # a sleeve in cash must record since-when; a working sleeve must not
+        if st["status"].startswith("cash"):
+            assert st["flat_since"], f"{k} flat but no flat_since"
+        else:
+            assert st["flat_since"] is None
+
+
+def test_empty_target_reason_distinguishes_regime_off():
+    """A risk-off index yields 'regime-off'; a risk-on index with no qualifying
+    name yields 'no-eligible-names' — the distinction the old blanket
+    'regime RISK-OFF' print could not make."""
+    from trading_algo.regions import get_region
+    p = get_region("ASX").params
+    idx = pd.Series(range(200, 100, -1),
+                    index=pd.bdate_range("2025-01-01", periods=100))  # falling → risk-off
+    prices = pd.DataFrame({"AAA": range(100)}, index=idx.index)
+    assert pt._empty_target_reason(prices, idx, p, eligible=None) == "regime-off"
+    # everything frozen by data quality → 'data-quality', regardless of regime
+    assert pt._empty_target_reason(prices, idx, p, eligible=set()) == "data-quality"
+
+
+def _break_one_pair(monkeypatch, currency="USD"):
+    """Simulate a transient single-pair FX download failure: the given
+    currency's column comes back all-NaN (as when its Yahoo pair 403s while the
+    others succeed), which is exactly what poisoned the US sleeve's equity."""
+    real = pt.fx.synthetic_fx
+
+    def broken(currencies, *a, **k):
+        tbl = real(currencies, *a, **k)
+        tbl[currency] = float("nan")
+        return tbl
+
+    monkeypatch.setattr(pt.fx, "synthetic_fx", broken)
+
+
+def test_fx_snapshot_carries_forward_a_failed_rate(monkeypatch):
+    """A NaN FX rate (failed pair fetch) must not surface as NaN — the last
+    known-good rate is carried forward instead."""
+    _break_one_pair(monkeypatch, "USD")
+    prev = {"AUD": 1.0, "USD": 1.50, "GBP": 1.90}
+    snap = pt.fx_snapshot(synthetic=True, prev=prev)
+    assert snap["USD"] == pytest.approx(1.50)     # carried forward, not NaN
+    assert snap["AUD"] == 1.0
+    assert snap["GBP"] == snap["GBP"]             # the healthy pair is unaffected
+
+
+def test_failed_fx_rate_never_poisons_equity(account, monkeypatch):
+    """End-to-end: a transient USD-pair failure must never write a NaN FX rate
+    or NaN equity into state — the regression behind the `full` book's NaN AUM."""
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)                 # establishes a good snapshot
+    good_usd = pt.load_state(account)["fx_snapshot"]["USD"]
+    assert good_usd == good_usd                            # sanity: not NaN
+
+    _break_one_pair(monkeypatch, "USD")
+    pt.run_daily(account, synthetic=True)                  # USD pair now fails
+    state = pt.load_state(account)
+
+    # The snapshot (overwritten every run) must never contain a NaN rate.
+    for ccy, rate in state["fx_snapshot"].items():
+        assert rate == rate, f"NaN FX rate persisted for {ccy}"
+    assert state["fx_snapshot"]["USD"] == pytest.approx(good_usd)
+    # No NaN ever enters the persisted equity/sleeve history.
+    for date, eq in state["equity_history"]:
+        assert eq == eq, f"NaN equity persisted on {date}"
