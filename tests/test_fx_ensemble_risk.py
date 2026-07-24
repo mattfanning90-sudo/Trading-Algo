@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trading_algo.forex import ensemble, risk
+from trading_algo.forex import ensemble, indicators as ind, marks, risk
 from trading_algo.forex.agents import AgentPool, PairContext
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import closes, synthetic_panel
@@ -66,6 +66,52 @@ def test_vol_targeting_scales_down_high_vol():
     assert w_hi <= w_lo + 1e-9
 
 
+def test_pair_vols_uses_bar_frequency_annualization():
+    """pair_vols must annualise realised vol at the BAR frequency
+    (marks.periods_per_year ~ 8766 for hourly bars), not a hardcoded 252.
+    A 252 annualisation understates sub-daily vol ~6x, which saturates the
+    vol-target scale and effectively turns vol targeting OFF on exactly the
+    intraday/hf books that route real orders."""
+    p = profile("intraday")                       # bar="60m"
+    panel = synthetic_panel(DEFAULT_UNIVERSE, start="2023-01-01",
+                            end="2023-04-01", freq="60m")
+    vols = risk.pair_vols(panel, p)
+    for s, df in panel.items():
+        ppy = marks.periods_per_year(df.index)
+        assert ppy > 8000, "hourly bars annualise ~8766, not 252"
+        expected = ind.realized_vol(df["close"], p.vol_lookback, ann=ppy)
+        pd.testing.assert_series_equal(vols[s], expected, check_names=False)
+    # ...and this is materially different from the (buggy) 252 annualisation.
+    naive252 = ind.realized_vol(panel["EURUSD"]["close"], p.vol_lookback, ann=252)
+    assert not np.allclose(vols["EURUSD"].dropna(), naive252.dropna())
+
+
+def test_vol_target_engages_on_60m_bars():
+    """On 60m bars the vol-target scale must BIND below max_vol_scale under
+    normal vol (vol targeting actually engages), whereas the old hardcoded 252
+    understated vol enough that the scale saturated at max_vol_scale — pinning
+    the book near 3x its intended risk."""
+    p = profile("intraday")                       # target_vol=0.10, max_vol_scale=3.0
+    panel = synthetic_panel(DEFAULT_UNIVERSE, start="2023-01-01",
+                            end="2023-04-01", freq="60m")
+    vols = risk.pair_vols(panel, p)
+    idx = vols.index
+    tilts = pd.DataFrame(0.0, index=idx, columns=vols.columns)
+    tilts["AUDUSD"] = 0.15                         # a concentrated single-pair book
+
+    w = risk.size_book(tilts, vols, p)
+    # Reference book with saturation forced: a vanishing vol pins scale at the
+    # max_vol_scale ceiling, so this is what a saturated (targeting-OFF) book
+    # looks like.
+    w_sat = risk.size_book(tilts, vols * 1e-3, p)
+    aud, aud_sat = w["AUDUSD"].iloc[-1], w_sat["AUDUSD"].iloc[-1]
+    # vol targeting engaged: the sized book is scaled BELOW the saturated ceiling
+    assert aud < aud_sat - 1e-9
+    # ...and lands strictly inside the per-pair cap (it is NOT the capped max the
+    # old 252 annualisation would have driven it to).
+    assert aud < p.per_pair_cap - 1e-6
+
+
 def test_crypto_gross_cap_enforced():
     """Total crypto gross (Σ|w| over BTC/ETH/SOL) is capped as one correlated bet;
     FX legs are untouched by the crypto scaling; None disables the cap."""
@@ -92,6 +138,21 @@ def test_hf_crypto_profile_uncapped():
     """The crypto-ONLY profile must not be strangled by the asset-class cap."""
     p = profile("hf_crypto")
     assert p.crypto_gross_cap is None
+
+
+def test_intraday_carries_defensive_crypto_cap():
+    """B2: the daytrader book runs the 'intraday' profile over DEFAULT_UNIVERSE
+    (FX + BTC/ETH/SOL). It must carry an EXPLICIT defensive crypto cap (0.10,
+    matching 'balanced'), not silently inherit the loose 0.25 FXParams default —
+    the FX technical agents have negative directional edge on crypto."""
+    from trading_algo.forex.fx_config import FXParams, profile_names
+    assert profile("intraday").crypto_gross_cap == pytest.approx(0.10)
+    loose = FXParams().crypto_gross_cap                 # the loose default (0.25)
+    for name in profile_names():
+        cap = profile(name).crypto_gross_cap
+        # crypto-ONLY books (hf_crypto) intentionally run uncapped (None); every
+        # crypto-INCLUSIVE profile must set its own cap, never the loose default.
+        assert cap != loose, f"{name} inherits the loose default crypto cap"
 
 
 def test_phase0_directional_crypto_bleed_stop():

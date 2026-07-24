@@ -104,8 +104,5 @@ PROFILES: dict[str, BookProfile] = {
 
 
 def get_profile(key: str) -> BookProfile:
-    try:
-        return PROFILES[key]
-    except KeyError:
-        raise SystemExit(
-            f"Unknown profile {key!r}. Known: {list(PROFILES)}") from None
+    # Shared registry accessor (R1); CLI-friendly SystemExit on a bad name.
+    return cfg.lookup_registry(PROFILES, key, kind="profile", on_missing=SystemExit)

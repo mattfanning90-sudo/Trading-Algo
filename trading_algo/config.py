@@ -11,9 +11,101 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 
+# ---------------------------------------------------------------------------
+# Shared risk/params base (foundation refactor R1)
+# ---------------------------------------------------------------------------
+# The equity `StrategyParams` and the FX `FXParams` both size a book the same
+# way — scale a raw signal to a target vol subject to a gross-leverage cap — so
+# those five knobs mean the SAME thing on both sides. Defining them once, here,
+# makes that shared vocabulary explicit; each subclass overrides the defaults
+# it wants and adds its own instrument-specific knobs. `FXParams` (in
+# trading_algo/forex/fx_config.py) subclasses this too.
 @dataclass(frozen=True)
-class StrategyParams:
-    """All knobs for the 12-1 cross-sectional momentum strategy."""
+class RiskParams:
+    """Vol-targeting / leverage knobs shared by every parameter set."""
+
+    target_vol: float = 0.12        # annualised portfolio vol target
+    vol_lookback: int = 63          # bars/days for the realised-vol estimate
+    avg_correlation: float = 0.6    # diversification assumption for vol targeting
+    max_gross: float = 1.0          # gross-leverage cap (Σ|w|); 1.0 = no leverage
+    max_vol_scale: float = 1.5      # cap on vol-target leverage of the raw book
+
+    def with_overrides(self, **kwargs):
+        """Return a copy with the given fields replaced (for per-region tuning).
+
+        Preserves the concrete subclass (`dataclasses.replace` keeps `type(self)`).
+        """
+        return replace(self, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Drawdown-cooldown: a length WITH AN EXPLICIT UNIT (foundation refactor R2)
+# ---------------------------------------------------------------------------
+# The equity breaker counts distinct MARKET DAYS; the FX breaker counts decision
+# BARS (10 for daily, 240 for 60m/1m). Historically both were called
+# "…cooldown_days", which read as the same unit but was not. Tagging the unit
+# onto the value removes the ambiguity and lets one shared helper interpret it.
+COOLDOWN_MARKET_DAYS = "market_days"
+COOLDOWN_BARS = "bars"
+
+
+@dataclass(frozen=True)
+class Cooldown:
+    """A drawdown-breaker cooldown length together with the unit it is counted in.
+
+    `length` is the number of decrement steps the breaker sits out; `unit` names
+    what one step is (a distinct market day, or one decision bar) so nothing has
+    to guess. The raw integer both sides already store IS the step count for
+    their own loop, so this is a pure disambiguation — no length changes.
+    """
+
+    length: int
+    unit: str = COOLDOWN_MARKET_DAYS
+
+    def __post_init__(self) -> None:
+        if self.unit not in (COOLDOWN_MARKET_DAYS, COOLDOWN_BARS):
+            raise ValueError(
+                f"Unknown cooldown unit {self.unit!r}; "
+                f"expected {COOLDOWN_MARKET_DAYS!r} or {COOLDOWN_BARS!r}")
+
+    @property
+    def steps(self) -> int:
+        """Number of decrement steps to count down (unit-agnostic count)."""
+        return int(self.length)
+
+
+def cooldown_steps(cd: Cooldown) -> int:
+    """Shared interpreter: how many decrement steps a Cooldown means, whatever
+    its unit. Both the equity and FX breakers decrement once per step."""
+    return cd.steps
+
+
+# ---------------------------------------------------------------------------
+# Shared named-registry lookup (foundation refactor R1)
+# ---------------------------------------------------------------------------
+def lookup_registry(registry: dict, name: str, *, kind: str,
+                    on_missing: type[BaseException] = KeyError):
+    """Return `registry[name]` or raise `on_missing` with a 'Known: […]' message.
+
+    Centralises the identical accessor the region, equity-profile and FX-profile
+    registries each hand-rolled. The caller chooses the exception type so each
+    keeps its own contract (CLI tools want a clean `SystemExit`; libraries want a
+    `KeyError`)."""
+    try:
+        return registry[name]
+    except KeyError:
+        raise on_missing(
+            f"Unknown {kind} {name!r}. Known: {list(registry)}") from None
+
+
+@dataclass(frozen=True)
+class StrategyParams(RiskParams):
+    """All knobs for the 12-1 cross-sectional momentum strategy.
+
+    Subclasses `RiskParams`: the vol-targeting knobs (`target_vol`,
+    `vol_lookback`, `avg_correlation`, `max_gross`, `max_vol_scale`) are inherited
+    from there — the defaults below are the long-only equity book's values.
+    """
 
     # --- Signal -------------------------------------------------------------
     lookback_days: int = 252        # 12-month momentum window
@@ -28,13 +120,10 @@ class StrategyParams:
     value_weight: float = 0.5
 
     # --- Portfolio construction --------------------------------------------
+    # (vol targeting: target_vol / vol_lookback / max_gross / avg_correlation /
+    #  max_vol_scale are inherited from RiskParams with the equity defaults.)
     top_n: int = 10                 # hold top N momentum names
     max_weight: float = 0.15        # single-name cap
-    target_vol: float = 0.12        # annualised portfolio vol target
-    vol_lookback: int = 63          # days for realised vol estimate
-    max_gross: float = 1.0          # no leverage
-    avg_correlation: float = 0.6    # diversification assumption for vol targeting
-    max_vol_scale: float = 1.5      # cap on vol-target leverage of the raw book
 
     # --- Long/short (market-neutral) mode ----------------------------------
     # Off by default → the classic long-only book (unchanged). When on,
@@ -53,10 +142,6 @@ class StrategyParams:
 
     # --- Rebalancing --------------------------------------------------------
     rebalance: str = "ME"            # pandas offset alias: month-end
-
-    def with_overrides(self, **kwargs) -> "StrategyParams":
-        """Return a copy with the given fields replaced (for per-region tuning)."""
-        return replace(self, **kwargs)
 
 
 # Shared default used by every sleeve unless a region overrides it.
@@ -104,10 +189,14 @@ RISK_FREE = 0.035
 # Drawdown circuit breaker: if the book falls more than this from its peak,
 # liquidate to cash and sit out for a cooldown, then resume. Set None to disable.
 MAX_DRAWDOWN_STOP = 0.25            # 25% peak-to-trough
-# Cooldown length in distinct MARKET DAYS (not runs) flat after a breach before
-# re-entry. Paper trading counts unique report dates, so the engine firing
-# several times a day does not shorten it; ~21 trading days ≈ 1 month.
-DRAWDOWN_COOLDOWN_DAYS = 21
+# Cooldown flat after a breach before re-entry, counted in distinct MARKET DAYS
+# (not runs): paper trading counts unique report dates, so the engine firing
+# several times a day does not shorten it; ~21 trading days ≈ 1 month. The unit
+# is carried explicitly on the Cooldown (R2) so a shared helper reads it without
+# guessing; DRAWDOWN_COOLDOWN_DAYS stays as the bare-int alias existing callers
+# (backtest.py / paper_trade.py) read.
+DRAWDOWN_COOLDOWN = Cooldown(21, COOLDOWN_MARKET_DAYS)
+DRAWDOWN_COOLDOWN_DAYS = DRAWDOWN_COOLDOWN.length
 
 # Minimum viable equity (in BASE_CURRENCY) for a sleeve to trade. Below this the
 # per-trade commission floors dominate, so the sleeve holds cash instead of
@@ -191,6 +280,7 @@ DATA_QUALITY_GATE = True
 # Validate paper_state_{account}.json against state_schema on load/save. When
 # True a corrupted-but-parseable file makes the run FAIL SAFE (raises, never
 # resets equity or trades on a garbage file); when False the validator only
-# warns (shadow mode). Default off during rollout — see product/backlog F18.
-VALIDATE_STATE_FILES = False
+# warns (shadow mode). Default ON: fail-safe before real capital — a book must
+# halt on a garbage file, never silently reset. See product/backlog F18.
+VALIDATE_STATE_FILES = True
 

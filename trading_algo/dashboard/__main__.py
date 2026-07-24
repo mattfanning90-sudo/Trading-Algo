@@ -11,7 +11,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--account", default="main")
     ap.add_argument("--synthetic", action="store_true",
                     help="mark positions against synthetic prices (offline)")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default 127.0.0.1, localhost-only). The "
+                         "dashboard is read-only but UNAUTHENTICATED; a "
+                         "non-loopback host exposes positions/equity/P&L to the "
+                         "network and prints a warning.")
     ap.add_argument("--port", type=int, default=8787)
     args = ap.parse_args(argv)
     server.serve(args.account, args.synthetic, args.host, args.port)

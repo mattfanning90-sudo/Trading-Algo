@@ -18,6 +18,8 @@ is a NAV floor so a de-funded account cannot fire dust orders.
 """
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from . import config as cfg
@@ -25,6 +27,12 @@ from .regions import Region, get_region
 
 PAPER_PORT = 7497
 LIVE_PORT = 7496
+
+# Sanity rails applied before any order reaches the broker (fat-finger / runaway
+# leverage guards). These are deliberately generous — real books run well inside
+# them — so they only ever bite on a bug or a typo, not a normal rebalance.
+MAX_GROSS_WEIGHT = 1.5          # reject if Σ|target weight| exceeds this
+MAX_ORDER_NAV_FRACTION = 0.20   # clamp any single order above this fraction of NAV
 
 
 def to_ib_symbol(yahoo_ticker: str, region: Region) -> str:
@@ -38,14 +46,47 @@ def to_ib_symbol(yahoo_ticker: str, region: Region) -> str:
 def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
               port: int = PAPER_PORT, client_id: int = 17,
               promotion_state: dict | None = None, allow_live: bool = False,
-              promotion_evidence: dict | None = None) -> list[dict]:
+              promotion_evidence: dict | None = None, *,
+              account: str | None = None, risk_halted: bool | None = None,
+              max_gross: float = MAX_GROSS_WEIGHT,
+              max_order_nav_frac: float = MAX_ORDER_NAV_FRACTION) -> list[dict]:
     """Diff target weights vs live IBKR positions for one region and
     (optionally) place orders. Returns the order list (also as a preview).
 
     Before touching a LIVE port with real orders, the promotion gate (F10) must
     pass for `promotion_state` (or `allow_live=True` must be an explicit, audited
     override). This runs before connecting, so an unqualified book never reaches
-    the broker."""
+    the broker.
+
+    Two more pre-trade rails, both evaluated BEFORE we connect so a bad book never
+    reaches the broker and no partial order run is possible:
+      * every target weight must be finite (a NaN would otherwise blow up
+        mid-loop, after earlier orders may already have been placed);
+      * gross leverage Σ|w| must not exceed `max_gross`.
+    A persisted drawdown halt (`risk_halted`, or read from the paper book named by
+    `account`) forces flatten-only — the halted book may reduce risk but never
+    open or rebalance into a risk-on target. Each surviving order is clamped to
+    `max_order_nav_frac` of NAV."""
+    # Up-front sanity: reject a non-finite / over-leveraged book before we connect
+    # or place ANYTHING (never a partial run).
+    bad = [str(k) for k, v in target_weights.items() if not math.isfinite(float(v))]
+    if bad:
+        raise ValueError(f"non-finite target weight(s) for {region_key}: "
+                         f"{', '.join(bad)} — refusing to trade.")
+    gross = float(target_weights.abs().sum()) if len(target_weights) else 0.0
+    if gross > max_gross:
+        raise ValueError(f"gross leverage {gross:.2f} for {region_key} exceeds cap "
+                         f"{max_gross:.2f} — refusing to trade.")
+
+    # Drawdown circuit-breaker: honour the persisted halt owned by the paper engine.
+    if risk_halted is None and account is not None:
+        from . import paper_trade
+        risk_halted = bool(paper_trade.load_state(account).get("risk_halted", False))
+    if risk_halted:
+        print(f"⛔ [{region_key}] RISK-HALTED — drawdown breaker tripped; "
+              f"flatten-only, no opening/rebalancing orders.")
+        target_weights = pd.Series(0.0, index=target_weights.index)
+
     # F10 hard gate: refuse real live orders on an un-promoted book.
     if port == LIVE_PORT and not dry_run and cfg.PROMOTION_GATE:
         from . import promotion
@@ -93,7 +134,11 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
                 continue
 
             if delta_val > 0:
-                action, qty = "BUY", int(delta_val / px)
+                # Per-order fat-finger cap: never let a single BUY exceed a
+                # fraction of NAV (a bad weight can't deploy the whole book into
+                # one name). Sells only ever *reduce* risk, so they aren't capped.
+                buy_val = min(delta_val, max_order_nav_frac * nav)
+                action, qty = "BUY", int(buy_val / px)
             else:
                 # Sell from held shares; never oversell into a short.
                 action = "SELL"

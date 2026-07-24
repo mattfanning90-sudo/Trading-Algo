@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from trading_algo import config as cfg
 from trading_algo import storage
 from trading_algo import paper_trade as pt
 from trading_algo.forex import fx_book
@@ -52,8 +53,11 @@ def test_atomic_write_overwrites_prior_content(tmp_path):
 
 
 # --- paper_trade wiring -----------------------------------------------------
+# These exercise the DB/JSON dual-write PLUMBING with sentinel states, not schema
+# validation, so they run with the state-file gate off (B1 made it default ON).
 def test_paper_dual_writes_db_and_json(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "VALIDATE_STATE_FILES", False)
     pt.save_state("test", {"base_currency": "AUD", "equity_history": []})
     # source of truth is the DB...
     assert storage.db_has(pt._db_path(), "test")
@@ -64,6 +68,7 @@ def test_paper_dual_writes_db_and_json(tmp_path, monkeypatch):
 
 def test_paper_reads_legacy_json_when_db_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "VALIDATE_STATE_FILES", False)
     # a book that predates the DB: JSON only, no DB row
     with open(pt._state_file("old"), "w") as f:
         json.dump({"base_currency": "AUD"}, f)
@@ -74,6 +79,7 @@ def test_paper_reads_legacy_json_when_db_absent(tmp_path, monkeypatch):
 
 def test_paper_load_prefers_db_over_stale_json(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "VALIDATE_STATE_FILES", False)
     pt.save_state("test", {"tag": "fresh"})
     # simulate a stale JSON left behind; DB must win
     with open(pt._state_file("test"), "w") as f:

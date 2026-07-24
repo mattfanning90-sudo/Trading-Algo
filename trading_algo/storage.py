@@ -12,8 +12,12 @@ single SQLite file per state directory. SQLite gives us:
 
 * **Atomic, durable writes** — a commit either lands whole or not at all, so a
   crash can no longer truncate a book.
-* **Locking** — concurrent writers (the scheduler + a manual run) serialise
-  instead of clobbering each other (WAL mode; a short busy-timeout).
+* **Per-write serialisation** — WAL mode plus a short busy-timeout make each
+  individual commit atomic and ordered, so two writers never interleave inside a
+  single ``db_save``. This does NOT make a whole *load -> modify -> save* cycle
+  safe: the scheduler and a manual run can each load the same book, both save,
+  and the later save silently clobbers the earlier one's changes (a lost update).
+  Wrap the whole cycle in ``account_lock(name)`` to make it mutually exclusive.
 * **One queryable file** per state dir instead of a directory of loose blobs.
 
 The legacy JSON files are still written alongside the DB (see
@@ -24,11 +28,49 @@ the *sole* source of truth is tracked in ``BACKLOG.md``.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
+import tempfile
 
 _BUSY_TIMEOUT_MS = 5_000
+
+# Default directory for per-account lockfiles when a caller does not supply one.
+# Callers that keep state in a specific directory (paper_trade / fx_book) should
+# pass their own STATE_DIR so the lock sits alongside the data it guards.
+_LOCK_DIR_DEFAULT = os.path.join(tempfile.gettempdir(), "trading_algo_locks")
+
+
+@contextlib.contextmanager
+def account_lock(name: str, lock_dir: str | None = None):
+    """Hold an exclusive OS advisory lock for ONE account across its whole
+    ``load -> modify -> save`` cycle, so a manual run and the scheduler cannot
+    interleave and clobber each other's writes.
+
+    SQLite makes each individual commit atomic but does not stop a read-modify-
+    write race across two processes (see the module docstring); this closes that
+    gap by wrapping the cycle in an ``fcntl.flock`` on a per-account lockfile.
+
+    Acquisition blocks until the lock is free. The lock directory is created if
+    missing, and the lock is ALWAYS released on exit — including when the body
+    raises. Importing ``storage`` never requires ``fcntl`` (imported lazily), so
+    the module still loads on platforms without it.
+    """
+    import fcntl                       # lazy: keep `storage` importable on Windows
+
+    directory = lock_dir or _LOCK_DIR_DEFAULT
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f"{name}.lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def _connect(db_path: str) -> sqlite3.Connection:

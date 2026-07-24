@@ -220,6 +220,49 @@ def test_server_routes(books):
 
 
 # ---------------------------------------------------------------------------
+# security: 500 must not leak internal exception detail to the client
+# ---------------------------------------------------------------------------
+def test_server_500_hides_exception_detail(books, monkeypatch, capsys):
+    secret = "SECRET_INTERNAL_/etc/passwd_path_detail"
+
+    def boom(*a, **k):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(overview, "build_overview", boom)
+    handler = server.make_handler("full", synthetic=True)
+    resp = _get(handler, "/api/overview")
+
+    assert resp["code"] == 500
+    body = resp["body"].decode()
+    # the client gets a generic message, never the raw exception repr/internals
+    assert secret not in body
+    assert "RuntimeError" not in body
+    data = json.loads(body)
+    assert data.get("error")                 # a generic error message is present
+    # ...but the real detail is logged server-side for the operator
+    err = capsys.readouterr().err
+    assert secret in err
+
+
+# ---------------------------------------------------------------------------
+# security: warn when binding the unauthenticated dashboard to a public iface
+# ---------------------------------------------------------------------------
+def test_public_bind_warns(capsys):
+    for host in ("0.0.0.0", "192.168.1.50", "::"):
+        msg = server.warn_if_public_bind(host)
+        assert msg is not None, host
+        err = capsys.readouterr().err
+        assert host in err
+        assert "unauthenticated" in err.lower()
+
+
+def test_loopback_bind_is_silent(capsys):
+    for host in ("127.0.0.1", "localhost", "::1"):
+        assert server.warn_if_public_bind(host) is None, host
+    assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
 # export
 # ---------------------------------------------------------------------------
 def test_export_fx_account(books, tmp_path):

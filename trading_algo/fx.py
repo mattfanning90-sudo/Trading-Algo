@@ -14,11 +14,24 @@ import hashlib
 import numpy as np
 import pandas as pd
 
-from . import data
+from . import data, regions
 
-# Plausible synthetic anchor levels (base units per 1 local unit), AUD base.
-_SYNTH_LEVEL = {"AUD": 1.0, "USD": 1.52, "GBP": 1.92, "EUR": 1.63, "JPY": 0.0098,
-                "CAD": 1.11}   # AUDCAD ~0.90 (CAD per AUD) -> ~1.11 AUD per CAD
+# Synthetic anchor levels (base units per 1 local unit, AUD base) for currencies
+# that have NO regional sleeve — sourced from the Region records otherwise (see
+# `synth_level`). Offline/synthetic path only (invariant #5).
+_EXTRA_SYNTH_LEVEL = {"EUR": 1.63, "JPY": 0.0098}
+
+
+def synth_level(ccy: str) -> float:
+    """Synthetic FX anchor for `ccy` (base=AUD units per 1 ccy), for offline
+    tests only (invariant #5). Region currencies read their anchor straight off
+    the Region record (folded in by refactor R3), so adding a region needs no
+    edit here; a handful of non-sleeve currencies come from a small residual.
+    Unknown -> 1.0."""
+    for r in regions.REGIONS.values():
+        if r.currency == ccy and r.synthetic_fx_anchor is not None:
+            return r.synthetic_fx_anchor
+    return _EXTRA_SYNTH_LEVEL.get(ccy, 1.0)
 
 
 def fx_ticker(base: str, ccy: str) -> str:
@@ -67,7 +80,7 @@ def synthetic_fx(currencies: list[str], start: str = "2012-01-01",
         if c == base:
             out[c] = 1.0
             continue
-        level = _SYNTH_LEVEL.get(c, 1.0)
+        level = synth_level(c)
         steps = rng.normal(0.0, 0.005, len(dates))
         out[c] = level * np.exp(np.cumsum(steps))
     return out

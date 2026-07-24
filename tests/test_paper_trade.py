@@ -254,3 +254,89 @@ def test_failed_fx_rate_never_poisons_equity(account, monkeypatch):
     # No NaN ever enters the persisted equity/sleeve history.
     for date, eq in state["equity_history"]:
         assert eq == eq, f"NaN equity persisted on {date}"
+
+
+def test_unfunded_region_paper_init_succeeds(account):
+    """An account funded on a registered-but-UNFUNDED region (TSX/CAD — absent
+    from cfg.ALLOCATIONS by design) must open cleanly. fx_snapshot has to size
+    its currency set off THIS account's regions, not the global ALLOCATIONS,
+    or the CAD sleeve KeyErrors on funding."""
+    pt.init_account(account, capital=50_000, synthetic=True, allocations={"TSX": 1.0})
+    state = pt.load_state(account)
+    assert list(state["sleeves"]) == ["TSX"]
+    assert state["sleeves"]["TSX"]["currency"] == "CAD"
+    assert state["sleeves"]["TSX"]["cash"] > 0             # funded in local CAD
+    assert "CAD" in state["fx_snapshot"]                   # its rate was snapshotted
+    pt.run_daily(account, synthetic=True)                 # a full daily cycle runs
+    state = pt.load_state(account)
+    assert state["equity_history"][-1][1] > 0
+
+
+def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatch):
+    """A failed pair with NO prior good rate must not (a) persist a NaN FX rate,
+    nor (b) bypass the hold-cash path via `NaN < MIN_VIABLE` — the sleeve cannot
+    be valued, so it holds cash and never trades on a NaN mark."""
+    # US-only book so the failing pair IS the book's whole valuation currency.
+    pt.init_account(account, capital=100_000, synthetic=True, allocations={"US": 1.0})
+    # Simulate a book that has NEVER resolved a USD rate (no prior to carry).
+    state = pt.load_state(account)
+    state["fx_snapshot"] = {}
+    pt.save_state(account, state)
+
+    _break_one_pair(monkeypatch, "USD")                   # USD 403s, nothing to carry
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+
+    # (a) no NaN rate is ever persisted
+    for ccy, rate in state["fx_snapshot"].items():
+        assert rate == rate, f"NaN FX rate persisted for {ccy}"
+    # (b) an unvaluable sleeve holds cash — it must NOT fall through the
+    # min-viable gate and trade on a NaN valuation
+    assert not state["sleeves"]["US"]["positions"], "traded on an unvaluable sleeve"
+    assert len(state["trades"]) == 0
+    # (c) no NaN in the persisted equity history
+    for d, eq in state["equity_history"]:
+        assert eq == eq, f"NaN equity persisted on {d}"
+
+
+def test_post_halt_re_entry_follows_cooldown_not_calendar(account):
+    """When the drawdown cooldown clears, the sleeve must be able to re-enter on
+    the next run — NOT be stuck flat until the next calendar month. The halted
+    branch must not stamp last_rebalance_month=this_month (which would calendar-
+    block re-entry for the rest of the month)."""
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    month = state["equity_history"][-1][0][:7]
+
+    # Force a halt that will clear on the very next run (cooldown 1, fresh day).
+    state["risk_halted"] = True
+    state["halt_cooldown"] = 1
+    state.pop("halt_last_day", None)
+    pt.save_state(account, state)
+
+    pt.run_daily(account, synthetic=True)                 # halted run -> resume
+    state = pt.load_state(account)
+    assert state["risk_halted"] is False                  # cooldown cleared
+    # After a halt->resume the sleeve must not be calendar-pinned to this month:
+    # re-entry is governed by the cooldown, so the month stamp is cleared.
+    for k, s in state["sleeves"].items():
+        assert s.get("last_rebalance_month") != month, (
+            f"{k} still calendar-blocked at {month} after the halt lifted")
+
+
+def test_staleness_gate_flags_old_bars_but_not_weekends():
+    """The wall-clock freshness gate refuses to act on a bar that is too old for
+    the region's daily cadence, but a normal Fri->Mon (or long-weekend) gap must
+    never false-positive."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    region = get_region("US")
+    tz = ZoneInfo(region.timezone)
+    # Friday close, evaluated the following Monday -> fresh (weekend gap only).
+    fri = pd.Timestamp("2026-07-17")                      # Friday
+    mon = datetime(2026, 7, 20, 18, 0, tzinfo=tz)         # Monday evening
+    assert pt._is_stale(region, fri, now=mon) is False
+    # A bar two full weeks old is unambiguously stale.
+    old = pd.Timestamp("2026-07-06")
+    assert pt._is_stale(region, old, now=mon) is True

@@ -24,14 +24,23 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
+from . import marks
 from .fx_config import FXParams
 from .pairs import ALL_PAIRS
 
 
 def pair_vols(panel: dict[str, pd.DataFrame], p: FXParams) -> pd.DataFrame:
-    """Annualised realised vol per pair (time x symbol)."""
+    """Annualised realised vol per pair (time x symbol).
+
+    Annualises at the *bar frequency* (``marks.periods_per_year`` — ~8766 for
+    hourly bars, 252 for daily), the one convention the rest of the book uses.
+    A hardcoded 252 would understate sub-daily vol ~6x, saturating the
+    vol-target scale and effectively disabling vol targeting on the intraday /
+    hf books that route real orders.
+    """
     return pd.DataFrame({
-        sym: ind.realized_vol(df["close"], p.vol_lookback)
+        sym: ind.realized_vol(df["close"], p.vol_lookback,
+                              ann=marks.periods_per_year(df.index))
         for sym, df in panel.items()
     })
 

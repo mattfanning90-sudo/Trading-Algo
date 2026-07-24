@@ -20,6 +20,7 @@ up: ["[[Multi-Region Momentum]]"]
 | ASX | ^AXJO | AUD | ASX | 10:00–16:00 | 8 bps | 5 | 10 bps | – |
 | US | ^GSPC | USD | SMART | 09:30–16:00 | 2 bps | 1 | 5 bps | – |
 | FTSE | ^FTSE | GBP | LSE | 08:00–16:30 | 5 bps | 1 | 8 bps | **50 bps (buys)** |
+| TSX | ^GSPTSE | CAD | TSE | 09:30–16:00 | 3 bps | 1 | 8 bps | – |
 
 > [!info] LSE pence → pounds
 > LSE shares quote in pence; the FTSE sleeve scales prices by `0.01` so it's

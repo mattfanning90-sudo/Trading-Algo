@@ -1,9 +1,13 @@
 """Per-sleeve walk-forward backtest (one region, local currency).
 
 Design principles (the invariants from CLAUDE.md):
-- No lookahead: weights are decided at month-end t using data ≤ t, and applied
-  from the next trading day t+1. Targets come from the shared
-  `strategy.compute_targets` — the same function paper trading uses.
+- No lookahead, true t+1: weights are decided at month-end D_k using data ≤ D_k,
+  staged, and first affect the book (and therefore returns) on the very next
+  trading bar D_{k+1} — never on or before D_k. A target is staged on the same
+  bar it is decided (keyed off `today`), so it drives returns exactly one bar
+  later, matching the drawdown-breaker branch and the same-day paper engine.
+  Targets come from the shared `strategy.compute_targets` — the same function
+  paper trading uses.
 - Costs always on: commission + slippage charged on turnover every rebalance,
   plus UK stamp duty on the buy side (asymmetric).
 - Returns are fractional, so the series is currency-agnostic; the portfolio
@@ -104,9 +108,10 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     CASH = pd.Series(dtype=float)
 
     for i in range(1, len(dates)):
-        today, yday = dates[i], dates[i - 1]
+        today = dates[i]
 
-        # Apply yesterday's signal at today's prices (t+1 execution).
+        # Apply the target staged on the prior bar at today's prices (t+1
+        # execution): a signal decided as-of D_{k} moves the book on D_{k+1}.
         cost = 0.0
         if pending is not None:
             names = current_w.index.union(pending.index)
@@ -154,8 +159,12 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
         if halted:
             pending = CASH                       # liquidate / stay flat next day
-        elif yday in weight_schedule:
-            pending = weight_schedule[yday]
+        elif today in weight_schedule:
+            # True t+1: a target decided as-of `today` (D_k) is staged now and
+            # first affects the book — and thus returns — on the NEXT bar D_{k+1}.
+            # Keying off `today` (not `yday`) matches the halted branch above and
+            # the same-day paper engine; keying off `yday` delayed it to D_{k+2}.
+            pending = weight_schedule[today]
 
         # Drift held weights with the day's returns.
         if not current_w.empty:

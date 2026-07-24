@@ -12,13 +12,48 @@ Routes
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import sys
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import api, backtest_store, fx_api, meta, overview, registry
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+def _debug_enabled() -> bool:
+    """Debug-only opt-in that echoes real exception detail back to the client.
+    Off by default so 500s never leak internals over the wire."""
+    return os.environ.get("DASHBOARD_DEBUG", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _is_loopback(host: str) -> bool:
+    """True if `host` only reaches this machine (localhost / 127.0.0.0/8 / ::1)."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def warn_if_public_bind(host: str) -> str | None:
+    """The dashboard is read-only but UNAUTHENTICATED (it exposes positions,
+    equity and P&L). It is intended for localhost only. If asked to bind to a
+    non-loopback interface, print a clear warning to stderr and return it (so
+    callers/tests can see it); return None for a loopback bind."""
+    if _is_loopback(host):
+        return None
+    msg = (f"WARNING: binding to non-loopback host '{host}'. The read-only "
+           f"dashboard (positions, equity and P&L) will be exposed "
+           f"UNAUTHENTICATED to anyone who can reach this address. It is "
+           f"intended for localhost (127.0.0.1) only.")
+    print(msg, file=sys.stderr)
+    return msg
 _CTYPES = {".html": "text/html", ".css": "text/css",
            ".js": "application/javascript", ".json": "application/json",
            ".svg": "image/svg+xml", ".ico": "image/x-icon",
@@ -83,7 +118,15 @@ def make_handler(account: str, synthetic: bool):
                 self._json(404, {"error": f"no account '{requested}'. "
                                           f"Run paper_trade --init first."})
             except Exception as exc:  # surface, don't crash the server
-                self._json(500, {"error": repr(exc)})
+                # Log the real detail server-side; return a generic message so
+                # internal exception text never leaks to the client.
+                print(f"[dashboard] error handling {path!r}: {exc!r}",
+                      file=sys.stderr)
+                traceback.print_exc()
+                body = {"error": "internal server error"}
+                if _debug_enabled():
+                    body["detail"] = repr(exc)
+                self._json(500, body)
 
         def _equity(self, acct: str) -> dict:
             snapshot = api.build_snapshot(acct, synthetic)
@@ -132,6 +175,7 @@ def create_server(account: str = "main", synthetic: bool = False,
 
 def serve(account: str = "main", synthetic: bool = False,
           host: str = "127.0.0.1", port: int = 8787) -> None:
+    warn_if_public_bind(host)
     httpd = create_server(account, synthetic, host, port)
     mode = "synthetic" if synthetic else "live"
     print(f"📊 Dashboard for account '{account}' ({mode}) → http://{host}:{port}")
