@@ -18,7 +18,12 @@ import hashlib
 import random
 from dataclasses import dataclass
 
-from .pairs import DEFAULT_UNIVERSE
+import numpy as np
+import pandas as pd
+
+from . import indicators as ind
+from .agents import Agent, PairContext, _clip_signal
+from .pairs import DEFAULT_UNIVERSE, get_pair
 
 ARCHETYPES: tuple[str, ...] = ("trend", "breakout", "meanrev", "momentum")
 
@@ -140,12 +145,6 @@ def crossover(a: Genome, b: Genome, rng: random.Random) -> Genome:
 
 
 # --- Phenotype: genome -> Agent -------------------------------------------
-import numpy as np
-import pandas as pd
-
-from . import indicators as ind
-from .agents import Agent, PairContext, _clip_signal
-from .pairs import get_pair
 
 
 class ChampionAgent(Agent):
