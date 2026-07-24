@@ -45,6 +45,19 @@ def test_rotation_cap_and_stable_core(panel, params):
     assert len(new) <= 6
 
 
+def test_rotation_admits_higher_dsr_newcomers_when_full():
+    """A full roster must not freeze out strictly-better newcomers (bounded churn)."""
+    prev = _pop(6, seed=10)                 # full roster (top_k == 6)
+    better = _pop(2, seed=11)               # 2 fresh, higher-ranked candidates
+    passed = better + prev                  # `passed` is best-first: newcomers rank above survivors
+    new = champions.apply_rotation(prev, passed, rotation_cap=2, top_k=6)
+    prev_gids = {g.gid for g in prev}
+    admitted = [g for g in new if g.gid not in prev_gids]
+    assert admitted, "higher-DSR newcomers frozen out despite rotation_cap headroom"
+    assert len(admitted) <= 2                # rotation cap respected
+    assert len(new) <= 6                     # top_k respected
+
+
 def test_champions_agents_prepends_the_stable_core(tmp_path, monkeypatch, panel, params):
     monkeypatch.setattr(champions, "STATE_DIR", str(tmp_path), raising=False)
     from trading_algo.forex import fx_book

@@ -82,19 +82,22 @@ def gate(finalists: list[gm.Genome], holdout_panel: dict, p, n_trials: int, *,
 
 def apply_rotation(prev: list[gm.Genome], passed: list[gm.Genome], *,
                    rotation_cap: int, top_k: int) -> list[gm.Genome]:
+    order = {g.gid: i for i, g in enumerate(passed)}       # DSR rank (passed is best-first)
     prev_gids = {g.gid for g in prev}
-    newcomers = [g for g in passed if g.gid not in prev_gids][:rotation_cap]
-    # keep existing champions that still passed this cycle, then add newcomers
     passed_gids = {g.gid for g in passed}
-    survivors = [g for g in prev if g.gid in passed_gids]
+    newcomers = [g for g in passed if g.gid not in prev_gids][:rotation_cap]
+    survivors = [g for g in prev if g.gid in passed_gids]  # prior champions that still pass
+    pool = survivors + newcomers
+    pool.sort(key=lambda g: order.get(g.gid, 10 ** 9))     # rank survivors + capped newcomers by DSR
+    stale = [g for g in prev if g.gid not in passed_gids]  # prior champions that didn't pass -> stability tail
     roster, seen = [], set()
-    for g in survivors + newcomers + prev:                     # prev tail = stability if nothing passed
+    for g in pool + stale:
         if g.gid not in seen:
             roster.append(g)
             seen.add(g.gid)
         if len(roster) >= top_k:
             break
-    return roster[:top_k]
+    return roster[:top_k] if roster else prev[:top_k]
 
 
 def promote(account: str, *, synthetic: bool, profile_name: str,
