@@ -59,9 +59,12 @@ python -c "from trading_algo.forex.dashboard import build_how_page; build_how_pa
   || echo "skip how page"
 
 # --- Animated walkthrough (the cinematic "how the machine works", real data) -----
-# Self-contained HTML (docs/explainer/how-it-works.html) baked from the real
-# 2012-2026 backtest + current books; just copy it into the published site.
-cp docs/explainer/how-it-works.html public/walkthrough.html \
+# Refresh the animation's embedded DATA from live state (backtest curve/metrics,
+# the FX book, and a bounded live momentum run) and publish it. Each section is
+# individually tolerant; on a hard failure we fall back to the committed
+# snapshot so the deploy never breaks.
+python scripts/build_walkthrough.py public/walkthrough.html \
+  || cp docs/explainer/how-it-works.html public/walkthrough.html \
   || echo "skip walkthrough"
 
 # --- The landing page IS the terminal ------------------------------------------

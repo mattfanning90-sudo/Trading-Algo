@@ -190,9 +190,9 @@ canvas{ position:absolute; inset:0; width:100%; height:100%; display:block }
     </div>
     <div class="caption">
       <div class="ct" id="capTitle">Press play</div>
-      <div class="cs" id="capText">Real signals &amp; books as of 24 Jul 2026 &mdash; a 12&#8209;1 momentum system across three regional sleeves, combined in AUD, plus an independent FX book.</div>
+      <div class="cs" id="capText">Real signals &amp; real books &mdash; a 12&#8209;1 momentum system across three regional sleeves, combined in AUD, plus an independent FX book.</div>
       <div class="chips" id="chips">
-        <span class="chip"><b>real</b> as of 24 Jul 2026</span>
+        <span class="chip" id="asofChip"><b>real</b></span>
         <span class="chip on">no lookahead</span>
         <span class="chip on">net of costs</span>
         <span class="chip on">walk&#8209;forward</span>
@@ -298,25 +298,25 @@ canvas{ position:absolute; inset:0; width:100%; height:100%; display:block }
   var BEATS = [
     {key:'title',    name:'Open',     dur:4.2,
       cap:'The machine, end to end',
-      txt:'Real signals & real books as of 24 Jul 2026 — a monthly 12‑1 momentum system across three regional sleeves, plus an independent FX book, combined in AUD.'},
+      txt:'Real signals and real books — a monthly 12‑1 momentum system across three regional sleeves, plus an independent FX book, combined in AUD.'},
     {key:'universe', name:'Universe', dur:6.4,
       cap:'1 · Universe',
-      txt:'Load adjusted closes for each region — US (125 names), FTSE (67), ASX (56) — each priced in its own local currency.'},
+      txt:'Load adjusted closes for every name in each region’s universe — US, FTSE and ASX — each priced in its own local currency.'},
     {key:'rank',     name:'Rank',     dur:7.0,
       cap:'2 · Rank by momentum',
-      txt:'Score every name by real 12‑1 momentum (return over the last year, skipping the most recent month). US semis lead — SOXX +149%, SMH +117%; ASX miners run hot too.'},
+      txt:'Score every name by real 12‑1 momentum — the return over the last year, skipping the most recent month. The strongest names rise to the top of each region.'},
     {key:'filter',   name:'Filter',   dur:8.2,
       cap:'3 · Trend & regime gates',
-      txt:'Drop anything below its 200‑day average. The ASX 200 is below its own 200‑day MA today, so the whole ASX sleeve is RISK‑OFF — MIN, LYC, RIO all go to cash despite strong momentum.'},
+      txt:'Drop anything below its 200‑day average. When a region’s index is below its own 200‑day MA the whole sleeve goes to cash — the crash‑protection gate, overriding even strong momentum.'},
     {key:'size',     name:'Size',     dur:7.6,
       cap:'4 · Size the book',
-      txt:'Weight the survivors by inverse volatility, then vol‑target the book via strategy.compute_targets. The lowest‑vol names (SDR, BEZ) earn the biggest slots; whole‑share rounding leaves real cash on the side.'},
+      txt:'Weight the survivors by inverse volatility, then vol‑target the book via strategy.compute_targets — the lowest‑vol names earn the biggest slots, and whole‑share rounding leaves real cash on the side.'},
     {key:'sleeves',  name:'Sleeves',  dur:6.2,
       cap:'5 · Three sleeves',
-      txt:'US, ASX and FTSE run independently in their own currency. Real standalone returns since 2012: US the workhorse (CAGR +7.1%), FTSE the laggard (−0.19 Sharpe), ASX in cash today.'},
+      txt:'US, ASX and FTSE run independently in their own currency, each with its own real track record since 2012 — shown here with the live book and this month’s regime.'},
     {key:'combine',  name:'Combine',  dur:9.4,
       cap:'6 · Combine in AUD',
-      txt:'Equal third per sleeve, converted through FX into AUD. The real backtest: +128% over 2012–2026, CAGR 5.7% at 8.6% vol — max drawdown just −11% vs the benchmark’s −30%.'}
+      txt:'Equal third per sleeve, converted through FX into AUD, reported as one real backtest since 2012 — strong risk‑adjusted returns at a far shallower drawdown than the benchmark (dashed).'}
   ];
   var T = 0, STARTS = [];
   BEATS.forEach(function(b){ STARTS.push(T); T += b.dur; });
@@ -1016,6 +1016,16 @@ canvas{ position:absolute; inset:0; width:100%; height:100%; display:block }
     if(mT){ return clamp(parseFloat(mT[1]),0,T-0.001); }
     return null;
   }
+  // stamp the "real · as of <date>" chip from the embedded data (kept in sync
+  // by scripts/build_walkthrough.py, which refreshes DATA at deploy time)
+  (function(){
+    var chip=document.getElementById('asofChip');
+    var d=(typeof DATA==='object' && (DATA.asof || (DATA.fx && DATA.fx.asof))) || '';
+    var MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var mm=/^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+    var label = mm ? ('as of '+(+mm[3])+' '+MO[+mm[2]-1]+' '+mm[1]) : 'live';
+    if(chip) chip.innerHTML='<b>real</b> '+label;
+  })();
   buildMarks();
   resize();
   var hp=parseHash();
