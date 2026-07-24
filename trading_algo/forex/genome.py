@@ -137,3 +137,71 @@ def crossover(a: Genome, b: Genome, rng: random.Random) -> Genome:
         symbols=pick(a.symbols, b.symbols),
     )
     return dataclasses.replace(child, slow=max(child.slow, child.fast + 5))
+
+
+# --- Phenotype: genome -> Agent -------------------------------------------
+import numpy as np
+import pandas as pd
+
+from . import indicators as ind
+from .agents import Agent, PairContext, _clip_signal
+from .pairs import get_pair
+
+
+class ChampionAgent(Agent):
+    """A bred agent. Reads its windows/thresholds from its genome (NOT from `p`,
+    so each champion is independent of the profile's indicator knobs — like
+    CarryAgent, it ignores `p`). Emits a causal [-1,1] signal."""
+
+    def __init__(self, genome: "Genome"):
+        self.genome = genome
+        self.name = f"champ:{genome.gid}"
+
+    def generate(self, bars, ctx, p):
+        g = self.genome
+        if g.symbols and ctx.pair.symbol not in g.symbols:
+            return pd.Series(0.0, index=bars.index)          # outside its universe
+        close, high, low = bars["close"], bars["high"], bars["low"]
+
+        if g.archetype == "trend":
+            atr = ind.atr(high, low, close, g.atr_window).replace(0.0, np.nan)
+            sig = np.tanh((ind.ema(close, g.fast) - ind.ema(close, g.slow)) / (atr * 3.0))
+        elif g.archetype == "breakout":
+            upper, lower = ind.donchian(high, low, g.window)
+            event = pd.Series(np.nan, index=close.index)
+            event[close > upper] = 1.0
+            event[close < lower] = -1.0
+            sig = event.ffill(limit=2 * g.window)
+        elif g.archetype == "meanrev":
+            z = ind.bollinger_z(close, g.window)
+            sig = -np.tanh(z / g.z)
+        else:  # momentum
+            r = ind.roc(close, g.window)
+            scale = r.rolling(g.fast).std().replace(0.0, np.nan)
+            sig = np.tanh(r / (scale * g.z))
+
+        if g.adx_gate:
+            adxv = ind.adx(high, low, close, g.atr_window)
+            trend_side = g.archetype in ("trend", "breakout", "momentum")
+            gate = (adxv >= g.adx_min) if trend_side else (adxv < g.adx_min)
+            sig = pd.Series(sig, index=close.index) * gate.astype(float)
+
+        return _clip_signal(pd.Series(sig, index=close.index))
+
+
+def _to_agent(self: "Genome") -> ChampionAgent:
+    return ChampionAgent(self)
+
+
+Genome.to_agent = _to_agent          # attach as a method
+
+
+def signal_panel(genome: Genome, panel: dict, p) -> pd.DataFrame:
+    """One genome's [-1,1] signal for every symbol -> DataFrame(time x symbol).
+
+    Identical output to AgentPool.evaluate(...)[sym][agent.name] — the breeder and
+    the live pool share this exact phenotype (invariant #3)."""
+    agent = genome.to_agent()
+    cols = {sym: agent.generate(bars, PairContext(get_pair(sym)), p)
+            for sym, bars in panel.items()}
+    return pd.DataFrame(cols)
