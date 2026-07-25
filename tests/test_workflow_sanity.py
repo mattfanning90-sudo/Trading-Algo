@@ -162,3 +162,38 @@ def test_parquet_cache_persisted_in_both_site_workflows():
         assert "trading_algo/forex/.cache" in text, name
         assert "restore-keys" in text, name
         assert "fx-parquet-" in text, name
+
+
+# ---------------------------------------------------------------------------
+# The three state committers must SERIALISE — they share one binary book file
+# ---------------------------------------------------------------------------
+# state/fx_books.db is a single SQLite file holding all four FX accounts, and all
+# three workflows run `git add -A state/` and commit. Run two at once and the
+# binary cannot merge; the push-retry's `git rebase -X theirs` then takes one whole
+# side and silently discards the other run's book writes, while the per-account
+# JSON mirrors merge cleanly and drift AHEAD of the DB that load_state treats as
+# authoritative. A shared top-level concurrency group is what prevents it.
+def test_state_workflows_share_one_concurrency_group():
+    for name in STATE_WORKFLOWS:
+        assert "group: trading-state" in _wf(name), (
+            f"{name} must sit in the shared 'trading-state' concurrency group; "
+            "a separate group lets it race another state committer over "
+            "state/fx_books.db")
+
+
+def test_state_workflows_never_cancel_each_other():
+    """cancel-in-progress would kill a run MID-COMMIT, which is worse than the
+    race: a half-written book plus a held lock file."""
+    for name in STATE_WORKFLOWS:
+        text = _wf(name)
+        head = text[:text.index("jobs:")]          # the workflow-level block only
+        assert "cancel-in-progress: false" in head, name
+
+
+def test_binary_books_refuse_auto_merge():
+    """Backstop for the case the concurrency group is ever split: git must never
+    silently pick a side of a binary book."""
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^state/\*\.db\s+binary\s+-merge\s*$", attrs, re.M), (
+        "state/*.db must be marked `binary -merge` so a concurrent write is a hard "
+        "conflict rather than a silently discarded book update")

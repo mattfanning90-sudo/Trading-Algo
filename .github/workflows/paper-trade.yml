@@ -29,7 +29,16 @@ permissions:
   # equity state + exports dashboards.
 
 concurrency:
-  group: paper-trade
+  # ONE group across all three state-committing workflows (paper-trade, day-paper,
+  # fx-paper). They are not independent: every one of them runs `git add -A state/`
+  # and commits, and `state/fx_books.db` is a SINGLE binary SQLite file holding all
+  # four FX accounts. Two of them running at once means a binary merge conflict,
+  # which the push-retry resolves with `git rebase -X theirs` — taking one whole
+  # side and silently discarding the other run's book writes, while the per-account
+  # JSON mirrors merge cleanly and drift AHEAD of the DB that load_state treats as
+  # authoritative. Serialising them removes the race entirely.
+  # Do NOT split this group without also splitting the state they share.
+  group: trading-state
   cancel-in-progress: false
 
 jobs:

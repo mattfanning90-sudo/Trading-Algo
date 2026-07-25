@@ -1,0 +1,13 @@
+# The paper books are binary SQLite files holding live trading state, committed by
+# the three scheduled state workflows. Marking them `binary -merge` means git will
+# NEVER attempt a content merge and NEVER let a strategy like `-X theirs` silently
+# pick one side: a concurrent write becomes a hard conflict that has to be resolved
+# deliberately, instead of one run's book updates vanishing without a trace.
+#
+# The primary defence is the shared `trading-state` concurrency group in the three
+# workflows, which stops the overlap happening at all. This is the backstop for the
+# case that group is ever split, or a book is committed from outside CI.
+state/*.db binary -merge
+
+# Per-account JSON mirrors are line-based and genuinely mergeable (one file per
+# account, so concurrent runs touch different files) — left to git's default.

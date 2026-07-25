@@ -51,6 +51,16 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     index_by_region: dict[str, tuple] = {}
     currencies = [get_region(r).currency for r in regions]
 
+    # Report the ACHIEVED universe, never the requested flag. `--point-in-time` asks
+    # for point-in-time membership; it does not guarantee it, because a region only
+    # has it if `constituents_file` is set and the file exists (none is, today). The
+    # single-sleeve path has always reported the achieved state (backtest.py sets
+    # `membership is not None`); this path reported the flag, so the documented
+    # command printed "survivorship-bias corrected" and stamped the run manifest PIT
+    # while every sleeve ran the static universe. Turns False if ANY sleeve falls
+    # back — a portfolio is only survivorship-corrected if all of it is.
+    pit_achieved = bool(point_in_time)
+
     if synthetic:
         fx_tbl = fx.synthetic_fx(currencies, start=start, end=syn_end,
                                  base=cfg.BASE_CURRENCY)
@@ -65,6 +75,13 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         if point_in_time:
             membership = (constituents.synthetic_membership(region, start, syn_end)
                           if synthetic else constituents.get_membership(region))
+            if membership is None:
+                # No region ships a constituents_file, so on real data this is the
+                # NORMAL outcome — warn as loudly as run_single does rather than
+                # silently returning a survivorship-biased run under a PIT label.
+                print(f"  ⚠ no constituents file for {region.key}; "
+                      f"falling back to current universe.")
+                pit_achieved = False
         pit_tickers = membership.all_tickers if membership is not None else None
 
         if synthetic:
@@ -128,7 +145,9 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         "sleeves": sleeves,
         "allocations": alloc,
         "fx_rebalance_cost": fx_cost_total,
-        "point_in_time": point_in_time,
+        # ACHIEVED, not requested — see `pit_achieved` above.
+        "point_in_time": pit_achieved,
+        "point_in_time_requested": bool(point_in_time),
         "benchmark": bench_equity,
         "benchmark_metrics": compute_metrics(bench_ret, bench_equity, currency=cfg.BASE_CURRENCY),
         "benchmark_stats": benchmark_stats(returns, bench_ret),

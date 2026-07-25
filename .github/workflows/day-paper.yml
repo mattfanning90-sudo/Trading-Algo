@@ -24,7 +24,9 @@ permissions:
   id-token: write      # required by deploy-pages
 
 concurrency:
-  group: day-paper
+  # Shared with paper-trade.yml and fx-paper.yml — see the rationale there. This
+  # workflow is the hourly one, so it is the most likely to overlap another.
+  group: trading-state
   cancel-in-progress: false
 
 jobs:

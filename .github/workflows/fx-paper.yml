@@ -38,7 +38,10 @@ permissions:
   id-token: write      # required by deploy-pages
 
 concurrency:
-  group: fx-paper
+  # Shared with paper-trade.yml and day-paper.yml — see the rationale there. This
+  # workflow writes matt/partner/multiasset into the same fx_books.db that
+  # day-paper.yml writes daytrader into.
+  group: trading-state
   cancel-in-progress: false
 
 jobs:
