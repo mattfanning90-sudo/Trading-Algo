@@ -17,6 +17,8 @@ import json
 import os
 from datetime import datetime, timezone
 
+from ..metrics import metric as _metric   # fx_backtest builds these dicts with
+                                          # metrics.compute_metrics — one reader
 from . import feeds
 from . import fx_book
 from . import fx_config as cfg
@@ -41,12 +43,6 @@ def _print_result(name: str, res: dict) -> None:
     print("  P&L attribution by pair:")
     for pair, pnl in res["attribution"].items():
         print(f"    {pair:<8} {pnl:+.2%}")
-
-
-def _metric(metrics: dict, prefix: str):
-    """compute_metrics labels carry their parameters ("Sharpe (vs 4.0%)"), so
-    look them up by prefix — the same convention dashboard/backtest_store uses."""
-    return next((v for k, v in metrics.items() if k.startswith(prefix)), None)
 
 
 def _curve(eq, bar: str) -> list[list]:

@@ -387,6 +387,21 @@ function errPanel(key) {
   <span class="hint">Equity books mark positions to the latest market data; without network access start the server with --synthetic for an offline pipeline test, or re-run once data is reachable. FX books and the accounts overview read state files and stay live.</span></div>`;
 }
 
+/* A tripped drawdown breaker is the loudest fact about a book: it is sitting in
+   cash and will not trade until the cooldown runs out. The FX screens get a RISK
+   HALT tile; the equity screens carried it only as one small chip in the tape, so
+   a halted book read as an idle one — 0 POSITIONS, 0% GROSS and no reason given. */
+function haltBannerHTML(page) {
+  if (!page || !page.risk_halted) return '';
+  const cd = page.halt_cooldown;
+  return `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 18px;background:rgba(255,123,114,.07);border-bottom:1px solid #4a2a28;font-size:10px;color:${R}">
+      <span style="font-weight:600">⚠ RISK HALTED — DRAWDOWN BREAKER TRIPPED @ −${num((page.breaker || 0) * 100, 0)}%</span>
+      <span style="color:#a8635e">THE BOOK WAS LIQUIDATED TO CASH AND HOLDS NO POSITIONS${cd ? ` · ${cd} TRADING DAY${cd === 1 ? '' : 'S'} OF COOLDOWN LEFT` : ''} · IT WILL NOT REBALANCE UNTIL THE COOLDOWN EXPIRES.</span>
+      <span style="color:#a8635e">0 POSITIONS HERE MEANS STOPPED, NOT IDLE.</span>
+    </div>`;
+}
+
 /* ========================= equity view-model =========================== */
 function prepEquity(page) {
   const rows = [];
@@ -397,7 +412,12 @@ function prepEquity(page) {
     }
   }
   rows.sort((a, b) => b.weight - a.weight);
-  const maxW = rows.length ? Math.max(...rows.map(r => r.weight)) : 1;
+  /* Scale the weight bars off the biggest ABSOLUTE weight. A long/short book has
+     negative weights, and `weight / max(weight)` there went negative — an invalid
+     CSS width, which the browser drops, leaving the inner block to fill its track.
+     Every short (and a 0.0% leftover) rendered as a MAXED-OUT bar in the long
+     colour. Bars now carry length = |weight| and take their colour from the sign. */
+  const maxW = rows.length ? Math.max(...rows.map(r => Math.abs(r.weight)), 1e-9) : 1;
 
   const blotter = page.blotter || [];
   const lastDate = blotter.length ? blotter[blotter.length - 1].date : null;
@@ -645,7 +665,7 @@ function equityOverviewHTML(page) {
     const crowdLine = !cw ? '' : `
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:9px;color:#3d543f;letter-spacing:.06em">
           <span>CROWDING ${cw.n_names} NAMES</span>
-          <span>ρ̄ <span style="color:${cw.avg_correlation != null && cw.avg_correlation > 0.7 ? AMB : DIM}">${cwStat(cw.avg_correlation, v => num(v, 2))}</span></span>
+          <span>AVG CORR <span style="color:${cw.avg_correlation != null && cw.avg_correlation > 0.7 ? AMB : DIM}">${cwStat(cw.avg_correlation, v => num(v, 2))}</span></span>
           <span>DISP <span style="color:${DIM}">${cwStat(cw.dispersion, v => num(v * 100, 1) + '%')}</span></span>
           <span>VOL <span style="color:${cw.vol_ratio != null && cw.vol_ratio > 2 ? AMB : DIM}">${cwStat(cw.vol_ratio, v => num(v, 2) + '×')}</span></span>
           <span>VS ${bookParams(page).index_trend_ma ?? 200}D <span style="color:${cw.below_200dma != null && cw.below_200dma < 0 ? AMB : DIM}">${cwStat(cw.below_200dma, v => sgnPct(v, 1))}</span></span>
@@ -664,7 +684,7 @@ function equityOverviewHTML(page) {
   const bookRows = M.rows.map(p => `
     <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#61805f">${esc(p.region)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span>
-      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
       <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>
     </div>`).join('');
 
@@ -683,13 +703,14 @@ function equityOverviewHTML(page) {
 
   return `
   <div data-screen="overview">
+    ${haltBannerHTML(page)}
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d">
         <div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div>
         <div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div>
         <svg viewBox="0 0 120 24" preserveAspectRatio="none" style="width:100%;height:24px;margin-top:4px;display:block"><polyline points="${eqSpark}" fill="none" stroke="#7ee787" stroke-width="1.2"></polyline></svg>
       </div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(sinceDate)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sinceDate ? 'SINCE ' + esc(sinceDate) : 'NO MARKS YET'}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">GROSS EXPOSURE</div><div style="font-size:20px;font-weight:600;color:${k.gross_exposure > 1.001 ? R : '#e3b341'};margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${k.net_exposure != null ? 'NET ' + sgnPct(k.net_exposure, 0) + ' · ' : ''}VOL-TGT ${pct0(k.target_vol)}</div></div>
@@ -701,9 +722,10 @@ function equityOverviewHTML(page) {
       <div style="border-right:1px solid #262626">
         <div style="padding:12px 18px 0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#7ee787">— THIS BOOK</span>${hasBench ? '<span style="color:#61805f">— EQUAL-WEIGHT INDEX BUY &amp; HOLD</span>' : ''}<span style="color:#61805f">MIN ${vals.length ? num(Math.min(...vals), 2) : '—'}</span><span style="color:#61805f">MAX ${vals.length ? num(Math.max(...vals), 2) : '—'}</span></div>
-            <div style="display:flex;gap:2px;font-size:9px">${rangeChips()}</div>
+            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#7ee787">— THIS BOOK</span>${hasBench ? '<span style="color:#61805f">— EQUAL-WEIGHT INDEX BUY &amp; HOLD</span>' : ''}${vals.length ? `<span style="color:#61805f">MIN ${num(Math.min(...vals), 2)}</span><span style="color:#61805f">MAX ${num(Math.max(...vals), 2)}</span>` : ''}</div>
+            <div style="display:flex;gap:2px;font-size:9px">${vals.length ? rangeChips() : ''}</div>
           </div>
+          ${!vals.length ? `<div style="padding:26px 0 30px;font-size:10.5px;color:#61805f;line-height:1.8">— NO EQUITY HISTORY YET. THIS BOOK IS FUNDED BUT HAS NOT BEEN MARKED: THE CURVE AND THE DRAWDOWN TRACK BELOW DRAW THEMSELVES FROM THE FIRST RUN ONWARDS.<br><span style="color:#3d543f">AN EMPTY CHART IS NOT A FLAT ONE — NOTHING HAS BEEN MEASURED, SO NOTHING IS PLOTTED.</span></div>` : `
           <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
             <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
             <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
@@ -711,9 +733,10 @@ function equityOverviewHTML(page) {
             <polygon points="${eqArea140}" fill="rgba(126,231,135,0.08)"></polygon>
             ${hasBench ? `<polyline points="${benchPts}" fill="none" stroke="#61805f" stroke-width="1.2"></polyline>` : ''}
             <polyline points="${eqPts140}" fill="none" stroke="#7ee787" stroke-width="1.6" stroke-linejoin="round"></polyline>
-            ${vals.length ? `<circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>` : ''}
-          </svg>
+            <circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>
+          </svg>`}
         </div>
+        ${!vals.length ? '' : `
         <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
           <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:6px 0">DRAWDOWN FROM PEAK</div>
           <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
@@ -722,7 +745,7 @@ function equityOverviewHTML(page) {
             <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
           </svg>
           <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
-        </div>
+        </div>`}
       </div>
       <div style="display:grid;grid-template-rows:repeat(${(page.sleeves || []).length || 1},1fr)">${sleeveCards}</div>
     </div>
@@ -735,13 +758,13 @@ function equityOverviewHTML(page) {
       </div>
       <div style="display:flex;flex-direction:column">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${mdy(M.lastDate)} REBALANCE` : ''}</div>
-        <div>${feedRows}</div>
+        <div>${feedRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. THE FEED LISTS THE MOST RECENT REBALANCE ONCE THIS BOOK HAS TRADED.</div>'}</div>
         <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #262626;background:#0d0d0d">
           <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">TOTAL FINANCIAL POSITION · ${esc(page.base_currency)}</div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">INVESTED</span><span style="color:#c9e8cc">${num(k.invested_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">CASH</span><span style="color:#c9e8cc">${num(k.cash_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">OPEN P&amp;L</span><span style="color:${cSign(k.unrealized_base)}">${sgnNum(k.unrealized_base, 0)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:#ff7b72">−${num(k.fees_base, 0)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:${k.fees_base ? R : DIM}">${k.fees_base ? '−' + num(k.fees_base, 0) : '0'}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${num(k.total_equity, 2)}</span></div>
         </div>
       </div>
@@ -957,7 +980,7 @@ function equityPositionsHTML(page) {
         rows.map(p => `
         <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
           <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
-          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
           <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
         </div>`).join('') + '</div>';
     return `
@@ -996,18 +1019,19 @@ function equityPositionsHTML(page) {
 
   return `
   <div data-screen="positions">
+    ${haltBannerHTML(page)}
     ${sleeveBlocks}
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ALL ${(page.blotter || []).length} FILLS</span>
       <span style="font-size:9px;color:#61805f">COMMISSIONS + UK STAMP DUTY (50BPS ON FTSE BUYS) ITEMISED</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
-    ${blotterRows}</div>
+    ${blotterRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. EVERY EXECUTION THIS BOOK MAKES IS ITEMISED HERE, COMMISSION BY COMMISSION.</div>'}</div>
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)</span>
       ${regionNetHtml}
-      <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
-      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="font-size:10px;color:#61805f">NET <span style="color:${closed.count ? cSign(closed.net_base) : DIM}">${closed.count ? sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2)) : '—'}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">INCLUDES COMMISSIONS + UK STAMP DUTY · FILLS ALREADY CARRY MODELLED SPREAD/SLIPPAGE</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
@@ -1247,11 +1271,12 @@ function methodHTML(page) {
   const risk = (S.meta && S.meta.risk) || {};
   const regions = (S.meta && S.meta.regions) || [];
   const tests = S.meta && S.meta.tests_total;
-  /* meta.params publishes only some of the knobs, so for the rest the screen
-     CANNOT say whether this book overrides the house value — those cells say
-     exactly that instead of guessing. Separately, three knobs change the
-     STRATEGY DESCRIPTION rather than a number (no regime filter, shorting,
-     leverage) and are always worth flagging on their own terms. */
+  /* meta.params and page.params are built from the SAME knob tuple
+     (dashboard/meta.BOOK_KNOBS), so every cell can be compared with its house
+     default; the "NOT PUBLISHED" branch below is only a guard for an older
+     payload. Separately, three knobs change the STRATEGY DESCRIPTION rather
+     than a number (no regime filter, shorting, leverage) and are always worth
+     flagging on their own terms. */
   const notable = k => (k === 'regime_filter' && p[k] === false)
     || (k === 'long_short' && p[k] === true) || (k === 'max_gross' && p[k] > 1);
   const over = Object.keys(p).filter(k => (k in house && p[k] !== house[k]) || notable(k));
@@ -1368,7 +1393,11 @@ function methodHTML(page) {
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK CONTROLS · CONFIG.PY</div>
         ${breaker == null
           ? `<div style="padding:12px 18px;border-bottom:1px solid #121212;background:rgba(227,179,65,.06);border-left:2px solid ${AMB}"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:${AMB};font-weight:600">⚠ DISABLED</span></div><div style="font-size:10px;color:#8a7433;line-height:1.7;margin-top:4px">THIS BOOK RUNS WITH <span style="color:${AMB}">NO DRAWDOWN STOP</span> — ITS PROFILE SETS MAX_DRAWDOWN_STOP = NONE DELIBERATELY, SO NO FALL FROM PEAK WILL LIQUIDATE IT TO CASH. THE HOUSE DEFAULT (−${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}%) DOES NOT APPLY HERE.</div></div>`
-          : `<div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num(breaker * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num(breaker * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>`}
+          : page.risk_halted
+            /* the rule AND its current state: describing the breaker in the
+               abstract while it is actually firing hid the live fact. */
+            ? `<div style="padding:12px 18px;border-bottom:1px solid #121212;background:rgba(255,123,114,.07);border-left:2px solid ${R}"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:${R};font-weight:600">⚠ TRIPPED @ −${num(breaker * 100, 0)}%</span></div><div style="font-size:10px;color:#a8635e;line-height:1.7;margin-top:4px">IT HAS FIRED: THIS BOOK FELL MORE THAN ${num(breaker * 100, 0)}% FROM ITS PEAK, WAS LIQUIDATED TO CASH AND IS SITTING OUT${page.halt_cooldown ? ` — ${page.halt_cooldown} TRADING DAY${page.halt_cooldown === 1 ? '' : 'S'} LEFT` : ''}. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>`
+            : `<div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num(breaker * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num(breaker * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>`}
         <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE-SIZE GATE</span><span style="color:#e3b341">A$${num(risk.min_viable_equity_base ?? 500, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SLEEVE BELOW THIS HOLDS CASH INSTEAD OF BLEEDING COMMISSION FLOORS — THE LESSON THE $1K ACCOUNT TAUGHT.</div></div>
         <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">POSITION CAPS</span><span style="color:${(p.max_gross ?? 1) > 1 ? AMB : G}">${pct0(p.max_weight ?? 0.15)} / ${pct0(p.max_gross ?? 1)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">SINGLE-NAME CAP ${pct0(p.max_weight ?? 0.15)}; GROSS EXPOSURE ≤ ${pct0(p.max_gross ?? 1)} — ${(p.max_gross ?? 1) > 1 ? `<span style="color:${AMB}">LEVERED UP TO ${num(p.max_gross, 1)}× GROSS</span>` : 'NEVER LEVERED'}. ENFORCED INSIDE COMPUTE_TARGETS().</div></div>
       </div>
@@ -1401,7 +1430,7 @@ function allAccountsHTML() {
     const up = c.spark.length > 1 ? c.spark[c.spark.length - 1] >= c.spark[0] : true;
     return `
     <div class="hv-acct" data-act="acct" data-arg="${esc(c.key)}" style="padding:16px 18px;border-right:1px solid #262626;display:flex;flex-direction:column;gap:10px;cursor:pointer">
-      <div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)}">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
+      <div style="min-height:46px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)};flex:none;text-align:right">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
       <div style="font-size:21px;font-weight:600;color:#eaffec;letter-spacing:-.01em">A$${num(c.equity, 2)}</div>
       <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${cSign(c.day)}">${sgnPct(c.day, 2)} DAY</span></div>
       <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px;display:block"><polyline points="${spark}" fill="none" stroke="${up ? G : R}" stroke-width="1.3"></polyline></svg>
@@ -1703,16 +1732,13 @@ function agentCurveAttrHTML(page) {
   const upCurve = vals.length > 1 ? vals[vals.length - 1] >= vals[0] : true;
   const stroke = upCurve ? G : R;
   const p = toPts(vals, 600, 140, 10);
-  const eqStart = dates.length ? dates[0] : '';
-  const eqEnd = dates.length ? dates[dates.length - 1] : '';
   const rangeTxt = vals.length
     ? `MIN ${num(Math.min(...vals), 2)} · MAX ${num(Math.max(...vals), 2)}${page.bar === '60m' ? ' · HOURLY MARKS' : ''}` : '';
 
-  /* drawdown-from-peak, same panel the equity screens carry (peak over the
-     whole book so a zoomed range still reads against the real high-water mark) */
-  const ddAll = (page.drawdown || []).length
-    ? page.drawdown.map(d => ({ date: String(d.date), v: d.dd }))
-    : M.curve.map((c, i, a) => ({ date: c.date, v: ddSeries(a.map(x => x.v))[i] }));
+  /* drawdown-from-peak, same panel the equity screens carry. fx_api computes it
+     over the WHOLE book, so a zoomed range still reads against the real
+     high-water mark rather than the range's own local peak. */
+  const ddAll = (page.drawdown || []).map(d => ({ date: String(d.date), v: d.dd }));
   const from = dates.length ? String(dates[0]).slice(0, 10) : '';
   const dd = ddAll.filter(d => d.date.slice(0, 10) >= from).map(d => d.v);
   const ddMin = Math.min(...dd, -1e-9);
@@ -1863,10 +1889,13 @@ function fxBookHTML(page) {
         ${line('REALIZED P&amp;L', sgnCcy(p.realized || 0, sym, 2), cSign(p.realized || 0))}
         ${line('OPEN P&amp;L', sgnCcy(p.open || 0, sym, 2), cSign(p.open || 0))}
         ${carryLine}
-        ${line('SPREAD PAID', '−' + sym + num(p.costs || 0, 2), R)}
         ${residLine}
         <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">NET P&amp;L</span><span style="color:${cSign(p.net_pnl || 0)};font-weight:600">${sgnCcy(p.net_pnl || 0, sym, 2)}</span></div>
         <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${sym}${num(page.equity, 2)}</span></div>
+        <!-- Memo, NOT a term of the sum above: the spread is already inside
+             REALIZED (both legs) and OPEN (the entry leg). Listing it as a
+             sibling made the column read as summable when it is not. -->
+        <div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0 0;margin-top:5px;border-top:1px solid #1a1a1a"><span style="color:#3d543f">OF WHICH SPREAD PAID</span><span style="color:#8a7433">−${sym}${num(p.costs || 0, 2)}</span></div>
         ${notes.length ? `<div style="font-size:8.5px;color:#3d543f;line-height:1.6;margin-top:8px;border-top:1px solid #1a1a1a;padding-top:7px">${notes.map(n => esc(n)).join('<br>')}</div>` : ''}
       </div>
     </div>
@@ -2154,9 +2183,11 @@ function chartSectionHTML(page) {
   }).join('');
   const readsHTML = `
     <div style="border-top:1px solid #1a1a1a;padding:9px 0 10px">
-      <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;font-size:8.5px;letter-spacing:.1em;margin-bottom:${Object.keys(ind).length ? '7px' : '0'}">
+      <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;font-size:8.5px;letter-spacing:.1em;margin-bottom:6px">
         <span style="color:#eaffec;letter-spacing:.14em">■ LIVE INDICATOR READINGS · ${esc(selPair)}</span>
-        <span style="color:#61805f">WHAT THE AGENTS ACTUALLY VOTED ON${page.last_bar_date ? ' · BAR ' + esc(page.last_bar_date) : ''}</span>
+        <span style="color:#61805f">${Object.keys(ind).length
+          ? `WHAT THE AGENTS ACTUALLY VOTED ON${page.last_bar_date ? ' · BAR ' + esc(page.last_bar_date) : ''}`
+          : 'NOT AVAILABLE FOR THIS LEG'}</span>
       </div>
       ${Object.keys(ind).length
         ? `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:10.5px">${reads}</div>
@@ -2491,10 +2522,11 @@ function agentPositionsHTML(page) {
     </div>`;
   }).join('');
 
+  const unit = page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOL' : 'PAIR';
   return `
   <div data-screen="agent-positions">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS'} · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A PAIR FOR THE ENSEMBLE'S REASONING</span></div>
-    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${unit}S · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A ${unit} FOR THE ENSEMBLE'S REASONING</span></div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${unit}</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
     ${rows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO DECISIONS RECORDED YET. RUN THE FX ENGINE ONCE.</div>'}</div>
   </div>`;
 }
@@ -2648,7 +2680,7 @@ function fxLedgerHTML(page) {
       <span style="font-size:10px;color:#61805f">GROSS <span style="color:${cSign(closed.gross)}">${sgnCcy(closed.gross, sym, 2)}</span></span>
       <span style="font-size:10px;color:#61805f">SPREAD <span style="color:#ff7b72">−${sym}${num(closed.costs, 2)}</span></span>
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net)}">${sgnCcy(closed.net, sym, 2)}</span></span>
-      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">EACH ROW IS A WEIGHT SLICE CLOSED OLDEST-FIRST · NET IS AFTER THE SPREAD ON BOTH LEGS</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.85fr .8fr .55fr .55fr 1.1fr .45fr .75fr .7fr .65fr .8fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>ENTRY → EXIT</span><span>HELD</span><span>NOTIONAL</span><span>GROSS</span><span>SPREAD</span><span>NET</span><span>RETURN</span></div>
@@ -2765,10 +2797,20 @@ function agentBacktestHTML(page) {
     fp(m.hit_rate, 0), m.payoff == null ? '—' : num(m.payoff, 2) + '×',
     m.turnover == null ? '—' : '~' + num(m.turnover, 0) + '× / YR',
   ] : abd ? abd.k : ['—', '—', '—', '—', '—', '—'];
-  const period = real ? `${String(bt.start || '').slice(0, 7)} → ${String(bt.end || '').slice(0, 7)}` : 'NET · 2023 → 2026';
+  /* a --synthetic run is a pipeline test: its CAGR is amber, not green, and the
+     word rides the biggest number on the tab (invariant #5) */
+  const synth = !!(real && bt.synthetic);
+  const period = real
+    ? `${synth ? 'SYNTHETIC · ' : ''}${String(bt.start || '').slice(0, 7)} → ${String(bt.end || '').slice(0, 7)}`
+    : 'ILLUSTRATIVE · 2023 → 2026';
+  const btBar = (real ? bt.bar : page.bar) === '60m' ? '60M BARS' : 'DAILY BARS';
+  /* An invented number must not wear the colour of a measured one. The seeded
+     placeholder curve is no more real than a --synthetic run, so its headline
+     CAGR is amber like one — green here read as "this book earns 18.4%". */
+  const notMeasured = synth || !real;
   const abKpis = [
-    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : G, period),
-    kpiCell('SHARPE', kVals[1], kVals[1] === '—' ? DIM : PALE, page.bar === '60m' ? '60M BARS' : 'DAILY BARS'),
+    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : notMeasured ? AMB : G, period),
+    kpiCell('SHARPE', kVals[1], kVals[1] === '—' ? DIM : PALE, btBar),
     kpiCell('MAX DRAWDOWN', kVals[2], kVals[2] === '—' ? DIM : R, 'PEAK TO TROUGH'),
     kpiCell('HIT RATE', kVals[3], kVals[3] === '—' ? DIM : PALE, 'PROFITABLE BARS'),
     kpiCell('AVG WIN / LOSS', kVals[4], kVals[4] === '—' ? DIM : PALE, 'PAYOFF RATIO'),
@@ -2784,8 +2826,11 @@ function agentBacktestHTML(page) {
     const Y = v => 12 + (1 - (Math.log(v) - Math.log(lo)) / ((Math.log(hi) - Math.log(lo)) || 1)) * 196;
     abPts = sv.map((v, i) => ((i / (sv.length - 1)) * 1200).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
     abBench = bv.length > 1 ? bv.map((v, i) => ((i / (bv.length - 1)) * 1200).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ') : '';
+    /* a real cache can be months, not years (the intraday book runs 60m bars
+       over one quarter) — the design's 2023→2026 tick labels would be a lie */
     const years = [...new Set(bt.curve.map(r => String(r[0]).slice(0, 4)))];
-    if (years.length > 1) xLabels = years;
+    xLabels = years.length > 1 ? years
+      : [0, 0.33, 0.66, 1].map(f => mmdd(bt.curve[Math.round(f * (bt.curve.length - 1))][0]));
   } else if (abd) {
     const arnd = mix32(page.key.charCodeAt(0) * 7 + 13);
     const abN = 160;
@@ -2800,6 +2845,11 @@ function agentBacktestHTML(page) {
     abBench = abB.map((v, i) => ((i / abN) * 1200).toFixed(1) + ',' + abY(v).toFixed(1)).join(' ');
   }
 
+  /* No `weights` on a real cache: the ensemble's per-agent weights are re-blended
+     per pair per bar inside ensemble._hedge_pair_tilt and never returned by the
+     backtest, so there is no single set to show. Six empty bars would read as
+     "all agents at zero" — the panel says why instead. */
+  const noWeights = real && !bt.weights;
   const wSrc = real && bt.weights ? AGENT_NAMES.map(n => +bt.weights[n.toLowerCase()] || 0)
     : abd ? abd.w : AGENT_NAMES.map(() => 0);
   const wMax = Math.max(...wSrc, 0.25);
@@ -2810,21 +2860,74 @@ function agentBacktestHTML(page) {
       <span style="color:#61805f;width:34px;text-align:right">${wSrc[i] ? (wSrc[i] * 100).toFixed(0) + '%' : '—'}</span>
     </div>`).join('');
 
-  const foldRows = (real && Array.isArray(bt.folds) ? bt.folds.map(f => ({
+  const foldList = (real && Array.isArray(bt.folds) ? bt.folds.map(f => ({
     fold: f.fold, train: f.train, test: f.test,
     sharpe: f.sharpe == null ? '—' : num(+f.sharpe, 2),
     hit: f.hit_rate == null ? (f.hit || '—') : num(+f.hit_rate * 100, 0) + '%',
     dd: f.max_drawdown == null ? (f.dd || '—') : sgnPct(+f.max_drawdown, 1),
-  })) : abd ? ABD_FOLDS : []).map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
+  })) : abd ? ABD_FOLDS : []);
+  const foldRows = foldList.map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
     || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO WALK-FORWARD FOLDS RECORDED.</div>';
 
+  /* the placeholder curves are indexed to 1.0, so the design's A$10,000 label
+     only ever described the illustrative case — a real cache knows its capital */
+  const growthOf = real
+    ? (SYM[bt.currency] || bt.currency || 'A$') + num(bt.initial_capital || 0, 0)
+    : 'A$10,000';
+  const src = `state/fx_backtest_${esc(page.account)}.json${bt && bt.generated_at ? ' · ' + esc(String(bt.generated_at).slice(0, 10)) : ''}`;
+  /* A --synthetic cache is a pipeline test on made-up prices (invariant #5) and
+     must never wear a performance banner. And nothing here is walk-forward:
+     this engine fits no parameters, so the cache is one continuous run — the
+     old wording claimed a validation the file does not contain. */
   const banner = real
-    ? `<span style="font-weight:600">WALK-FORWARD VALIDATION · CACHED RESULTS</span><span style="color:#8a7433">state/fx_backtest_${esc(page.account)}.json${bt.generated_at ? ' · ' + esc(String(bt.generated_at).slice(0, 10)) : ''}</span>`
+    ? bt.synthetic
+      ? `<span style="font-weight:600">⚠ SYNTHETIC DATA — PIPELINE TEST, NOT PERFORMANCE</span><span style="color:#8a7433">${src} · RUN WITH --synthetic ON GENERATED PRICES: EVERY FIGURE BELOW MEASURES THE PLUMBING, NOT AN EDGE.</span>`
+      : `<span style="font-weight:600">CACHED BACKTEST · ${esc(String(bt.profile || '').toUpperCase())} PROFILE · ${btBar} · ${(bt.universe || []).length} INSTRUMENTS</span><span style="color:#8a7433">${src}</span>`
     : bt && bt._error
       ? `<span style="font-weight:600">⚠ BACKTEST ENDPOINT UNREACHABLE</span><span style="color:#8a7433">WILL RETRY WHEN YOU REVISIT THIS TAB.</span>`
       : abd
         ? `<span style="font-weight:600">⚠ WALK-FORWARD VALIDATION · ILLUSTRATIVE NUMBERS</span><span style="color:#8a7433">POPULATE state/fx_backtest_${esc(page.account)}.json (python -m trading_algo.forex.run_backtest / walkforward) — THE LAYOUT IS WIRED, THE FIGURES ARE PLACEHOLDERS.</span>`
         : `<span style="font-weight:600">⚠ NO BACKTEST DATA FOR THIS BOOK</span><span style="color:#8a7433">POPULATE state/fx_backtest_${esc(page.account)}.json (python -m trading_algo.forex.run_backtest / walkforward) TO WIRE THIS TAB.</span>`;
+
+  /* Where the run's P&L came from and what it cost to get — only a real cache
+     carries these, and only the money-terms figures the exporter measured. */
+  const attr = real ? Object.entries(bt.attribution || {})
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])) : [];
+  const maxA = Math.max(...attr.map(a => Math.abs(a[1])), 1e-9);
+  const attrBars = attr.map(([symb, v]) => {
+    const col = v > 1e-9 ? G : (v < -1e-9 ? R : FAINT);
+    const w = Math.min(Math.abs(v) / maxA, 1) * 50;
+    return `
+    <div style="display:flex;align-items:center;gap:9px;padding:4px 0;font-size:10px">
+      <span style="color:#c9e8cc;width:70px">${esc(symb)}</span>
+      <span style="position:relative;flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${v >= 0 ? '50%' : (50 - w) + '%'};width:${w}%;background:${col}"></span></span>
+      <span style="color:${col};width:58px;text-align:right">${sgnPct(v, 1)}</span>
+    </div>`;
+  }).join('');
+  const rLine = (label, val, color) => `
+    <div style="display:flex;justify-content:space-between;font-size:10.5px;padding:3px 0"><span style="color:#61805f">${label}</span><span style="color:${color}">${val}</span></div>`;
+  const halts = bt && bt.drawdown_halts;
+  const realityRow = !real ? '' : `
+    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="display:flex;justify-content:space-between;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CONTRIBUTION BY INSTRUMENT</span><span style="font-size:9px;color:#61805f">CUMULATIVE P&amp;L OVER THE RUN, AS A FRACTION OF EQUITY · SIGNED</span></div>
+        <div style="padding:8px 18px 12px">${attrBars || '<div style="font-size:10.5px;color:#61805f">— NO PER-INSTRUMENT ATTRIBUTION IN THIS CACHE.</div>'}</div>
+      </div>
+      <div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST · LEVERAGE · HALTS</div>
+        <div style="padding:10px 18px 14px">
+          ${rLine('AVG GROSS LEVERAGE', bt.avg_gross_leverage == null ? '—' : num(bt.avg_gross_leverage, 2) + '×', bt.avg_gross_leverage > 1 ? AMB : TXT)}
+          ${rLine('SPREAD PAID · CUM', bt.total_cost_fraction == null ? '—' : num(bt.total_cost_fraction * 100, 2) + '% OF EQUITY', R)}
+          ${rLine('CARRY · CUM', bt.total_carry_fraction == null ? '—' : sgnPct(bt.total_carry_fraction, 2), cSign(bt.total_carry_fraction || 0))}
+          ${rLine('TURNOVER', m.turnover == null ? '—' : num(m.turnover, 1) + '× / YR', TXT)}
+          ${rLine('ANN VOL', m.ann_vol == null ? '—' : num(m.ann_vol * 100, 1) + '%', TXT)}
+          ${rLine('SORTINO / CALMAR', `${m.sortino == null ? '—' : num(m.sortino, 2)} / ${m.calmar == null ? '—' : num(m.calmar, 2)}`, TXT)}
+          ${rLine('DRAWDOWN HALTS', halts ? `${halts} · ${bt.drawdown_halt_days} DAY${bt.drawdown_halt_days === 1 ? '' : 'S'} FLAT` : 'NONE — BREAKER NEVER FIRED', halts ? R : TXT)}
+          ${rLine('UNIVERSE', `${(bt.universe || []).length} · ${esc(String(bt.source || 'unknown').toUpperCase())}`, TXT)}
+          <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:9px">SPREAD AND CARRY ARE SUMS OF PER-BAR FRACTIONS OVER THE WHOLE RUN, NOT ANNUALISED. CONTRIBUTIONS ARE SIGNED AND DO NOT NET TO THE CURVE'S RETURN — COSTS AND CARRY SIT OUTSIDE THEM.</div>
+        </div>
+      </div>
+    </div>`;
 
   return `
   <div data-screen="agent-backtest">
@@ -2835,7 +2938,7 @@ function agentBacktestHTML(page) {
     <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${abKpis}</div>
     <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626">
-        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF A$10,000 · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span><span style="color:#61805f">— BUY &amp; HOLD BASKET</span></div>
+        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF ${esc(growthOf)} · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span>${abBench ? '<span style="color:#61805f">— BUY &amp; HOLD BASKET</span>' : '<span style="color:#3d543f">NO BENCHMARK: A LONG-ONLY BASKET OF THESE PAIRS IS NOT A MARKET ANYONE HOLDS</span>'}</div>
         <svg viewBox="0 0 1200 220" preserveAspectRatio="none" style="width:100%;height:230px;display:block">
           <line x1="0" y1="55" x2="1200" y2="55" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="110" x2="1200" y2="110" stroke="#1a1a1a" stroke-width="1"></line>
@@ -2847,14 +2950,19 @@ function agentBacktestHTML(page) {
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${xLabels.map(y => `<span>${esc(y)}</span>`).join('')}</div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS</div>
-        <div style="padding:10px 18px 6px">${weights}</div>
-        <div style="padding:4px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS PERFORMANCE-WEIGHTED (AGENTS.PY): AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN — RE-SCORED EVERY BAR.</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${noWeights ? DIM : PALE};letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS${noWeights ? ' · NOT RECORDED' : ''}</div>
+        ${noWeights
+          ? `<div style="padding:12px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS RE-SCORED PER PAIR PER BAR INSIDE THE ENSEMBLE AND THE BACKTEST DOES NOT RETURN A FINAL SET, SO THERE IS NO ONE WEIGHTING TO SHOW FOR THIS RUN — SIX EMPTY BARS WOULD READ AS "EVERY AGENT AT ZERO", WHICH IS NOT WHAT HAPPENED.<br><br>AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN (AGENTS.PY). THE LIVE BOOK'S CURRENT VOTES ARE ON THE POSITIONS TAB.</div>`
+          : `<div style="padding:10px 18px 6px">${weights}</div>
+             <div style="padding:4px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS PERFORMANCE-WEIGHTED (AGENTS.PY): AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN — RE-SCORED EVERY BAR.</div>`}
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
-    ${foldRows}
-    <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">WALK-FORWARD: TRAIN ON A WINDOW, TEST ON THE UNSEEN NEXT SLICE, ROLL FORWARD. IF THE EDGE ONLY EXISTS IN-SAMPLE, IT DIES HERE — THE FOLDS ABOVE ARE THE HONEST TEST.</div>
+    ${realityRow}
+    ${foldList.length ? `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
+    ${foldRows}` : ''}
+    <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">${real
+      ? 'NO FOLDS, AND THERE NEVER WILL BE FOR THIS ENGINE: THE ENSEMBLE FITS NO PARAMETERS — IT RE-SCORES THE AGENTS EVERY BAR FROM DATA ≤ T — SO THERE IS NO TRAIN/TEST SPLIT TO REPORT, AND CHOPPING ONE CONTINUOUS RUN INTO WINDOWS WOULD NOT BE WALK-FORWARD. THE RUN ABOVE IS SINGLE-PASS, COSTS AND CARRY ON, SIGNALS AT T TRADED AT T+1.'
+      : 'WALK-FORWARD: TRAIN ON A WINDOW, TEST ON THE UNSEEN NEXT SLICE, ROLL FORWARD. IF THE EDGE ONLY EXISTS IN-SAMPLE, IT DIES HERE — THE FOLDS ABOVE ARE THE HONEST TEST.'}</div>
   </div>`;
 }
 
@@ -2864,10 +2972,13 @@ function agentMethodHTML(page) {
   const cap = pct0(fp.per_pair_cap || page.per_pair_cap || 0.25);
   const brk = num((fp.max_drawdown_stop || page.breaker || 0.2) * 100, 0);
   const books = accounts().filter(a => a.kind === 'fx').map(a => a.account.toUpperCase()).join(', ');
+  /* the windows are per-profile: the intraday book votes on EMA10/40 and a
+     24-BAR ROC, so the house EMA20/EMA100/60-DAY text was simply wrong there */
+  const bw = page.bar === '60m' ? 'BAR' : 'DAY';
   const amAgents = [
-    { name: 'TREND', f: 'EMA20 vs EMA100 · ADX GATE', d: 'Is there a persistent up/down trend? Votes with it, scaled by trend strength.' },
+    { name: 'TREND', f: `EMA${fp.ema_fast || 20} vs EMA${fp.ema_slow || 100} · ADX GATE`, d: 'Is there a persistent up/down trend? Votes with it, scaled by trend strength.' },
     { name: 'BREAKOUT', f: 'DONCHIAN CHANNEL BREAKS', d: 'Did price punch through the recent high/low band? Fires a full ±1 on a break.' },
-    { name: 'MOMENTUM', f: '60-DAY RATE OF CHANGE', d: 'Is price higher than 60 days ago? Winners tend to keep winning.' },
+    { name: 'MOMENTUM', f: `${fp.roc_window || 60}-${bw} RATE OF CHANGE`, d: `Is price higher than ${fp.roc_window || 60} ${bw.toLowerCase()}s ago? Winners tend to keep winning.` },
     { name: 'MEANREV', f: 'BOLLINGER Z-SCORE', d: 'In quiet ranges, fades stretches beyond ±2σ back toward the average.' },
     { name: 'CARRY', f: 'RATE DIFFERENTIAL', d: 'Earns the interest-rate gap by holding the higher-yielding currency.' },
     { name: 'NEURAL', f: 'MLP ON INDICATOR FEATURES', d: 'A small neural net trained on the same indicators; votes −1…+1 (nn.py).' },
@@ -2944,6 +3055,7 @@ function smallOverviewHTML(page) {
 
   return `
   <div data-screen="small-overview">
+    ${haltBannerHTML(page)}
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">INITIAL ${num(k.initial_capital, 2)} · ${(page.sleeves || []).map(s => s.key).join(' / ')} SLEEVE ONLY</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(M.curve.length ? M.curve[0].date : '')}</div></div>
@@ -3028,6 +3140,7 @@ function smallPositionsHTML(page) {
 
   return `
   <div data-screen="small-positions">
+    ${haltBannerHTML(page)}
     <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.08em">${esc(sleeve.key || '')} · 100% ALLOCATION</span>
       <span style="font-size:10px;color:#61805f">EQUITY <span style="color:#c9e8cc">${eqTxt}</span></span>
@@ -3037,11 +3150,11 @@ function smallPositionsHTML(page) {
     ${posBody}
     <div style="padding:10px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${(page.blotter || []).length} FILLS</div>
     <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span></div>
-    ${blotterRows}
+    ${blotterRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. EVERY EXECUTION THIS BOOK MAKES IS ITEMISED HERE, COMMISSION BY COMMISSION.</div>'}
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L</span>
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${lastClosed ? `${sgn(lastClosed.net, sym + num(Math.abs(lastClosed.net), 2))} → ` : ''}${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
-      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">FEE DRAG ON A MICRO BOOK, ITEMISED — THE LESSON THIS ACCOUNT TEACHES</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>

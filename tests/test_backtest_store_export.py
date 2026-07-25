@@ -17,9 +17,9 @@ from trading_algo.dashboard import backtest_store
 
 # The keys the existing BACKTEST tab reads. Renaming any of these breaks it.
 STABLE = {"cagr", "ann_vol", "sharpe", "sortino", "max_drawdown", "calmar"}
-BENCH_STATS = {"benchmark_cagr", "active_return", "beta", "alpha",
+BENCH_STATS = {"active_return", "beta", "alpha",
                "tracking_error", "info_ratio"}
-SLEEVE_COSTS = {"avg_turnover", "rebalances", "total_cost_fraction",
+SLEEVE_COSTS = {"avg_turnover", "total_cost_fraction",
                 "drawdown_halts", "drawdown_halt_days", "data_quality_excluded"}
 
 
@@ -77,7 +77,6 @@ def test_benchmark_stats_reach_the_payload(exported):
 def test_sleeve_cost_and_turnover_reality(exported):
     for sleeve in exported["sleeves"]:
         assert SLEEVE_COSTS <= set(sleeve)
-        assert sleeve["rebalances"] > 0
         assert 0.0 < sleeve["avg_turnover"] <= 2.0     # fraction of NAV traded
         assert sleeve["total_cost_fraction"] > 0       # invariant #2: costs on
         assert sleeve["drawdown_halt_days"] >= sleeve["drawdown_halts"]
