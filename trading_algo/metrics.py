@@ -7,6 +7,16 @@ import pandas as pd
 from .config import RISK_FREE
 
 
+def metric(metrics: dict, prefix: str):
+    """Read one figure out of a `compute_metrics` dict by PREFIX.
+
+    Two labels below carry their parameters — "Sharpe (vs 4.0%)" and
+    "FinalEquity (AUD)" — so an exact-key lookup silently misses them. The
+    reader lives next to the writer so callers don't each have to rediscover
+    that; every consumer of these dicts routes through here."""
+    return next((v for k, v in metrics.items() if k.startswith(prefix)), None)
+
+
 def compute_metrics(rets: pd.Series, equity: pd.Series,
                     risk_free: float = RISK_FREE,
                     currency: str = "AUD") -> dict:

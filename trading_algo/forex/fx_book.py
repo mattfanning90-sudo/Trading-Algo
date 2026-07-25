@@ -40,6 +40,7 @@ from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
+from . import sessions
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -158,6 +159,56 @@ def _sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
 
+def _accrue_cumulative(state: dict, bar_date: str, prev_equity: float,
+                       marked: float, pnl_by_pair: dict[str, float],
+                       carry_by_pair: dict[str, float],
+                       cost_by_pair: dict[str, float]) -> None:
+    """Accumulate this bar's P&L in the ACCOUNT CURRENCY into ``state["cumulative"]``.
+
+    The book marks multiplicatively in *fractions of equity*, so the only place
+    the money amounts exist is here, one bar at a time::
+
+        equity_final = prev + prev*pnl_frac + prev*carry_frac - marked*cost_frac
+
+    Summing those three terms bar by bar gives an EXACT decomposition of the
+    book's P&L into price (incl. FX translation), carry/financing and spread —
+    total and per instrument. Nothing else can produce it: carry accrues on
+    whatever was held per bar and is unrecoverable from the trades log, which is
+    why ``fx_pnl``'s weight-lot ledger reports carry from this accumulator
+    instead of reconstructing it.
+
+    ``from``/``start_equity`` mark where accumulation began. For a book opened
+    after this shipped that is inception, so
+    ``equity - start_equity == price_pnl + carry - cost`` holds over the book's
+    whole life; a book that predates it simply reports "tracked since" that bar.
+    Full float precision is kept on purpose — rounding every bar would drift.
+    """
+    cum = state.get("cumulative")
+    if not isinstance(cum, dict) or "from" not in cum:
+        cum = {"from": bar_date, "start_equity": float(prev_equity),
+               "price_pnl": 0.0, "carry": 0.0, "cost": 0.0, "by_pair": {}}
+    by_pair = cum.setdefault("by_pair", {})
+
+    def leg(sym: str) -> dict:
+        return by_pair.setdefault(sym, {"pnl": 0.0, "carry": 0.0, "cost": 0.0})
+
+    for sym, frac in pnl_by_pair.items():
+        v = frac * prev_equity
+        cum["price_pnl"] += v
+        leg(sym)["pnl"] += v
+    for sym, frac in carry_by_pair.items():
+        v = frac * prev_equity
+        cum["carry"] += v
+        leg(sym)["carry"] += v
+    for sym, frac in cost_by_pair.items():
+        v = frac * marked
+        cum["cost"] += v
+        leg(sym)["cost"] += v
+    cum["to"] = bar_date
+    cum["bars"] = int(cum.get("bars", 0)) + 1
+    state["cumulative"] = cum
+
+
 # ---------------------------------------------------------------------------
 # Account lifecycle
 # ---------------------------------------------------------------------------
@@ -210,12 +261,23 @@ def init_defaults(synthetic: bool, force: bool = False) -> None:
 # Daily run
 # ---------------------------------------------------------------------------
 def _apply_band(positions: dict[str, float], target: pd.Series,
-                p: FXParams) -> dict[str, float]:
-    """No-churn band: keep current weight unless the target moves by >= min_delta."""
+                p: FXParams, frozen: set[str] | None = None) -> dict[str, float]:
+    """No-churn band: keep current weight unless the target moves by >= min_delta.
+
+    `frozen` names are held at their CURRENT weight regardless of target. They are
+    absent from `target` (trimmed from the candidate universe upstream), and
+    without this they would read as target 0.0 and be flattened — i.e. the book
+    would "sell" on a venue that is closed. Holding through the shut session is
+    what actually happens to a real position.
+    """
+    frozen = frozen or set()
     new: dict[str, float] = {}
     keys = set(positions) | set(target.index)
     for k in keys:
         cur = positions.get(k, 0.0)
+        if k in frozen:
+            new[k] = cur
+            continue
         tgt = float(target.get(k, 0.0))
         new[k] = cur if abs(tgt - cur) < p.rebalance_min_delta else tgt
     return {k: v for k, v in new.items() if abs(v) > _DUST}
@@ -304,6 +366,33 @@ def _run_once_locked(account: str, synthetic: bool = False,
             level="warning", account=account,
             excluded=sorted(dq.excluded), reasons=dq.reasons)
         panel = {s: df for s, df in panel.items() if s not in dq.excluded}
+    # Persist the verdict every bar, including the empty case — "checked, all
+    # clear" is information, and a book silently trading a reduced universe must
+    # be visible on the dashboard, not only in this process's stdout.
+    state["data_quality"] = {"excluded": sorted(dq.excluded),
+                             "reasons": dict(dq.reasons), "date": bar_date}
+
+    # --- market-hours gate (BEFORE compute_targets) -----------------------
+    # A shut venue keeps serving its last close through _align's forward-fill, so
+    # without this the book re-weights FX majors and equities at a dead price all
+    # weekend, paying spread for exposure that cannot capture a move. Per SYMBOL,
+    # not per run: a mixed book must keep trading crypto while its FX legs freeze.
+    #
+    # Frozen, never flattened. These names are dropped from the candidate universe
+    # (so compute_targets never scores them — invariant #3: trims the set, never
+    # re-weights) AND their existing weights are carried through untouched below,
+    # because you cannot liquidate on a venue that is closed.
+    #
+    # `interval` is passed because a DAILY bar is stamped at midnight and names a
+    # whole trading day. Judging a cash equity's intraday session against that
+    # stamp would freeze the (daily) multiasset book's equities and bonds on every
+    # ordinary weekday — the gate would quietly park the book forever.
+    bar_ts = px.index[-1].to_pydatetime()
+    shut = sessions.closed_symbols(symbols, bar_ts, interval)
+    if shut:
+        print(f"  [{account}] market hours: freezing "
+              f"{sessions.session_report(symbols, bar_ts, interval)}")
+        panel = {s: df for s, df in panel.items() if s not in shut}
 
     if state["last_bar_date"] == bar_date:
         # No new bar to trade, but keep the dashboard's "today's read" current by
@@ -312,9 +401,9 @@ def _run_once_locked(account: str, synthetic: bool = False,
             try:
                 _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
                 state["decisions"] = refresh_rationale
-                save_state(account, state)
             except Exception as exc:                       # never let display break a run
                 print(f"  [{account}] (decision refresh skipped: {exc!r})")
+        save_state(account, state)      # today's read + the data-quality verdict
         print(f"  [{account}] no new bar ({bar_date}) — equity "
               f"{state['equity']:,.2f} {state['currency']}")
         return
@@ -327,6 +416,9 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # --- mark to market over the move since the last close ----------------
     pnl_frac = 0.0
     day_contribs: list[dict] = []          # per-pair P&L attribution for the daily summary
+    # Unrounded per-instrument fractions, kept alongside the (rounded) display
+    # contribs so the cumulative money accumulator stays exact.
+    pnl_by_pair: dict[str, float] = {}
     for s, w in positions.items():
         lc = last_close.get(s)
         nc = px_last.get(s)
@@ -338,6 +430,7 @@ def _run_once_locked(account: str, synthetic: bool = False,
             fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
             contrib = marks.position_contribution(w, lc, nc, fxf)
             pnl_frac += contrib
+            pnl_by_pair[s] = pnl_by_pair.get(s, 0.0) + contrib
             day_contribs.append({"pair": s, "weight": round(w, 4),
                                  "move": round(nc / lc - 1.0, 6),     # the pair's own move
                                  "fx": round(fxf - 1.0, 6),           # AUD/quote translation
@@ -351,12 +444,16 @@ def _run_once_locked(account: str, synthetic: bool = False,
         secs = (pd.Timestamp(bar_date) - pd.Timestamp(state["last_bar_date"])).total_seconds()
         elapsed = float(np.clip(secs / 86400.0, 0.0, 7.0))
     carry_frac = 0.0
+    carry_by_pair: dict[str, float] = {}
     if p.include_carry:
         for s, w in positions.items():
             if w:
-                carry_frac += abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
+                c = abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
+                carry_frac += c
+                carry_by_pair[s] = carry_by_pair.get(s, 0.0) + c
 
     equity = state["equity"] * (1.0 + pnl_frac + carry_frac)
+    marked = equity              # equity after the mark, BEFORE today's spread
 
     # --- drawdown breaker --------------------------------------------------
     peak = max(state.get("peak_equity", equity), equity)
@@ -377,17 +474,28 @@ def _run_once_locked(account: str, synthetic: bool = False,
         target = pd.Series(dtype=float)
     else:
         target, rationale = explain.decide_and_explain(panel, p, pool=pool)
-    new_positions = {} if halted else _apply_band(positions, target, p)
+    if halted:
+        # Even the drawdown breaker cannot sell on a venue that is shut: flatten
+        # everything tradable now, and hold the rest until its session reopens
+        # (the next run flattens them, since the breaker stays on through the
+        # cooldown). Without this the book books an impossible flattening fill.
+        new_positions = {s: w for s, w in positions.items()
+                         if s in shut and abs(w) > _DUST}
+    else:
+        new_positions = _apply_band(positions, target, p, frozen=shut)
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0
+    cost_by_pair: dict[str, float] = {}
     trades = []
     for s in sorted(set(positions) | set(new_positions)):
         delta = new_positions.get(s, 0.0) - positions.get(s, 0.0)
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        cost_frac += marks.cost_fraction(delta, get_pair(s), price)
+        c = marks.cost_fraction(delta, get_pair(s), price)
+        cost_frac += c
+        cost_by_pair[s] = cost_by_pair.get(s, 0.0) + c
         why = rationale.get(s, {})
         # Execution-time AUD/quote factor, stamped at the trade bar's CLOSE (the
         # same px_last marks the book itself uses — an execution-time
@@ -406,6 +514,13 @@ def _run_once_locked(account: str, synthetic: bool = False,
                        "agents": why.get("agents"),
                        "indicators": why.get("indicators")})
     equity *= (1.0 - cost_frac)
+
+    # --- cumulative money P&L (price / carry / spread, total and per leg) ---
+    # The ONE place the book's fraction-of-equity marks become AUD amounts; the
+    # dashboard reads it back rather than re-deriving (carry is unrecoverable
+    # from the trades log). See _accrue_cumulative for the exact identity.
+    _accrue_cumulative(state, bar_date, prev_equity, marked,
+                       pnl_by_pair, carry_by_pair, cost_by_pair)
 
     # --- persist -----------------------------------------------------------
     state["equity"] = float(equity)

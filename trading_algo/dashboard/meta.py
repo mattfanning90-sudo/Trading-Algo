@@ -18,6 +18,17 @@ from ..forex import fx_config as fxcfg
 from ..regions import REGIONS
 from . import registry
 
+# The knobs the METHOD tab shows for a book. api.build_snapshot emits THIS book's
+# value for each; build_meta emits the house default for the same set, and the
+# screen marks a cell amber when the two differ. Both sides must read the same
+# tuple: a knob published by one and not the other cannot be compared, so a real
+# override (ultra's abs_momentum_floor = -1 vs the house 0.0) renders as though
+# it matched the default.
+BOOK_KNOBS = ("lookback_days", "skip_days", "top_n", "max_weight", "target_vol",
+              "vol_lookback", "max_gross", "max_vol_scale", "stock_trend_ma",
+              "index_trend_ma", "regime_filter", "abs_momentum_floor",
+              "long_short", "short_n", "rebalance")
+
 
 @functools.lru_cache(maxsize=1)
 def _tests_total() -> int | None:
@@ -78,18 +89,7 @@ def build_meta() -> dict:
         "base_currency": cfg.BASE_CURRENCY,
         "accounts": [{k: e[k] for k in ("account", "key", "kind", "micro", "label", "sub")}
                      for e in registry.discover_accounts()],
-        "params": {
-            "lookback_days": p.lookback_days,
-            "skip_days": p.skip_days,
-            "top_n": p.top_n,
-            "max_weight": p.max_weight,
-            "target_vol": p.target_vol,
-            "vol_lookback": p.vol_lookback,
-            "max_gross": p.max_gross,
-            "stock_trend_ma": p.stock_trend_ma,
-            "index_trend_ma": p.index_trend_ma,
-            "rebalance": p.rebalance,
-        },
+        "params": {k: getattr(p, k) for k in BOOK_KNOBS},
         "risk": {
             "max_drawdown_stop": cfg.MAX_DRAWDOWN_STOP,
             "drawdown_cooldown_days": cfg.DRAWDOWN_COOLDOWN_DAYS,

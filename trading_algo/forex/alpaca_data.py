@@ -21,10 +21,6 @@ import os
 import pandas as pd
 
 from . import fx_data
-from .pairs import EQUITY_UNIVERSE
-
-# A liquid US-equity default universe (tickers double as the canonical id).
-ALPACA_UNIVERSE = list(EQUITY_UNIVERSE)
 
 _FIELDS = ["open", "high", "low", "close"]
 

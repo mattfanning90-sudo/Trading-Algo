@@ -26,6 +26,10 @@ book and reported in **AUD**.
 ## Reference
 - [[Reference]] — region settings, costs, commands (generated from code)
 
+## Infrastructure (research, not yet built)
+- [[24-7 Trading]] — what can actually trade continuously (and what can't)
+- [[Railway Deployment]] — hosting the books off GitHub Actions
+
 > [!tip] Syncing this vault
 > This folder is an Obsidian vault committed inside the `Trading-Algo` repo. To
 > keep it current: `git pull` in the repo (notes update on disk), or install the

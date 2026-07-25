@@ -8,11 +8,27 @@ on:
 permissions:
   contents: read
 
+# Only the newest commit on a ref is worth checking: when you push again, the
+# superseded run is cancelled instead of sitting in the queue behind the one you
+# actually care about. Each job here is ~7 minutes across 7 jobs, so a few rapid
+# pushes used to stack up dozens of queued jobs and starve everything else in the
+# account (including main).
+#
+# `github.ref` deliberately keeps the push run and the pull_request run in
+# SEPARATE groups (refs/heads/x vs refs/pull/N/merge), so this never drops a
+# check you rely on — it only collapses repeats of the same check on the same ref.
+#
+# main is exempt from cancellation: two merges landing close together must each
+# get a complete signal, or you lose the CI result for the first commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -30,7 +46,7 @@ jobs:
         # pyproject declares requires-python >= 3.11; test the versions we claim.
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
@@ -50,7 +66,7 @@ jobs:
     # money-path-only, expand later"). Must report 0 errors.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -79,7 +95,7 @@ jobs:
     # Static application-security + dependency-CVE + secret-scanning gates.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -115,7 +131,7 @@ jobs:
     # paper_trade CLI/dashboard coverage improves.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -134,7 +150,7 @@ jobs:
     # Non-blocking (|| true) for now so a missing threshold can't fail the build.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"

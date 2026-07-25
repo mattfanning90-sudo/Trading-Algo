@@ -91,6 +91,14 @@ const pairPrice = (pair, v) => {
 const px2 = (sym, v) => sym + num(v, 2);
 const pxFill = (sym, v) => sym + num(v, v < 3 ? 4 : 2);
 const money0 = (sym, v) => sym + num(v, 0);
+/* signed money in a book's own base currency, e.g. '−A$12.40' */
+const sgnCcy = (v, sym, dp = 2) => sgn(v, sym + num(Math.abs(v || 0), dp));
+
+/* The knobs THIS book actually runs — api.py resolves the account's profile
+   overrides onto the defaults. S.meta.params is the HOUSE default set and is
+   simply wrong for a profiled book (ultra, experimental), so every screen that
+   describes a book reads here instead. */
+const bookParams = page => (page && page.params) || (S.meta && S.meta.params) || {};
 
 /* ====================== seeded synthetic generators ==================== */
 /* one xorshift-style mixer for every deterministic synthetic series */
@@ -313,13 +321,19 @@ function equityTapeHTML(page) {
   if (fx.USD) items.push(`<span style="color:#61805f">USD/AUD <span style="color:#c9e8cc">${num(fx.USD, 4)}</span></span>`);
   items.push(`<span style="color:#2e2e2e">│</span>`);
   for (const ix of page.index_state || []) {
-    items.push(`<span style="color:#61805f">${esc(ix.symbol)} <span style="color:${ix.risk_on ? G : R}">${ix.risk_on ? 'ABOVE' : 'BELOW'} ${(S.meta ? S.meta.params.index_trend_ma : 200)}D</span></span>`);
+    items.push(`<span style="color:#61805f">${esc(ix.symbol)} <span style="color:${ix.risk_on ? G : R}">${ix.risk_on ? 'ABOVE' : 'BELOW'} ${bookParams(page).index_trend_ma ?? 200}D</span></span>`);
   }
   items.push(`<span style="color:#2e2e2e">│</span>`);
   items.push(`<span style="color:#61805f">PEAK <span style="color:#c9e8cc">A$${num(page.peak_equity, 2)}</span> · OFF-PEAK <span style="color:${page.off_peak < 0 ? AMB : TXT}">${sgnPct(page.off_peak, 2)}</span></span>`);
-  items.push(page.risk_halted
-    ? `<span style="color:#61805f">BREAKER <span style="color:${R}">TRIPPED</span> @ −${num(page.breaker * 100, 0)}%</span>`
-    : `<span style="color:#61805f">BREAKER <span style="color:${G}">ARMED</span> @ −${num(page.breaker * 100, 0)}%</span>`);
+  /* breaker == null means this book has NO drawdown stop (the `ultra` profile
+     sets max_drawdown_stop = None). Saying "ARMED @ −25%" there — the global —
+     is a false statement about risk, so the disabled case gets its own loud
+     chip and never borrows meta.risk. */
+  items.push(page.breaker == null
+    ? `<span style="color:${AMB};border:1px solid #4a3a1a;background:rgba(227,179,65,.10);padding:2px 8px;border-radius:2px">⚠ BREAKER OFF · NO DRAWDOWN STOP</span>`
+    : page.risk_halted
+      ? `<span style="color:#61805f">BREAKER <span style="color:${R}">TRIPPED</span> @ −${num(page.breaker * 100, 0)}%</span>`
+      : `<span style="color:#61805f">BREAKER <span style="color:${G}">ARMED</span> @ −${num(page.breaker * 100, 0)}%</span>`);
   const sched = (S.meta && S.meta.schedule) || [];
   const closes = sched.map(s => `${REGION_SHORT[s.region] || s.region} ${s.close_hhmm}`).join(' · ');
   items.push(`<span style="margin-left:auto;color:#61805f">NEXT REBAL <span style="color:#c9e8cc">${esc(page.next_rebalance || '')}</span>${closes ? ` · <span style="color:#c9e8cc">${esc(closes)} UTC</span>` : ''}</span>`);
@@ -341,10 +355,27 @@ function statusBarHTML(page) {
   let mark = '';
   if (page) mark = page.as_of || page.last_bar_date || '';
   const tests = S.meta && S.meta.tests_total;
+  /* FX only: the per-bar data-quality gate drops stale/gappy symbols from the
+     target book. A book quietly trading one leg fewer must not be invisible, so
+     the verdict rides the status bar on every tab. `null` (state written before
+     the engine persisted it) is NOT the same claim as an empty list (measured,
+     nothing flagged) — reasons hang off the title so a long list cannot push
+     the rest of the bar out of this nowrap row. */
+  const dq = page && page.kind === 'fx' ? page.data_quality : undefined;
+  let dqCell = '';
+  if (dq === null) {
+    dqCell = '<span style="color:#3d543f">DATA QUALITY NOT MEASURED — STATE PREDATES THE GATE</span>';
+  } else if (dq && dq.excluded.length) {
+    const why = dq.excluded.map(s => s + ': ' + (dq.reasons[s] || 'no reason recorded')).join('\n');
+    dqCell = `<span title="${esc(why)}" style="color:${AMB}">⚠ DATA QUALITY ${dq.excluded.length} EXCLUDED FROM THE TARGET BOOK — ${dq.excluded.map(esc).join(' · ')} (HOVER FOR WHY)</span>`;
+  } else if (dq) {
+    dqCell = `<span>DATA QUALITY CHECKED ${esc(dq.date)} · NONE EXCLUDED</span>`;
+  }
   return `
   <div class="mq-tape" style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0d0d0d;border-top:1px solid #262626;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
     <span><span style="color:#7ee787">●</span> ENGINE IDLE — ${esc(wake)}</span>
     ${mark ? `<span>LAST MARK ${esc(mark)}</span>` : ''}
+    ${dqCell}
     ${tests ? `<span>${tests} TESTS</span>` : ''}
     ${S.exportAll ? '<span style="margin-left:auto"><a href="books.html" style="color:#61805f;text-decoration:none" class="hv-dim">ALL PAGES →</a></span><span>' : '<span style="margin-left:auto">'}SIGNALS ≤ T · EXECUTION T+1 · NO LOOKAHEAD</span>
   </div>`;
@@ -354,6 +385,21 @@ function errPanel(key) {
   const err = S.errors[key] || 'unknown error';
   return `<div class="err-panel">⚠ DATA UNAVAILABLE — ${esc(err)}<br>
   <span class="hint">Equity books mark positions to the latest market data; without network access start the server with --synthetic for an offline pipeline test, or re-run once data is reachable. FX books and the accounts overview read state files and stay live.</span></div>`;
+}
+
+/* A tripped drawdown breaker is the loudest fact about a book: it is sitting in
+   cash and will not trade until the cooldown runs out. The FX screens get a RISK
+   HALT tile; the equity screens carried it only as one small chip in the tape, so
+   a halted book read as an idle one — 0 POSITIONS, 0% GROSS and no reason given. */
+function haltBannerHTML(page) {
+  if (!page || !page.risk_halted) return '';
+  const cd = page.halt_cooldown;
+  return `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 18px;background:rgba(255,123,114,.07);border-bottom:1px solid #4a2a28;font-size:10px;color:${R}">
+      <span style="font-weight:600">⚠ RISK HALTED — DRAWDOWN BREAKER TRIPPED @ −${num((page.breaker || 0) * 100, 0)}%</span>
+      <span style="color:#a8635e">THE BOOK WAS LIQUIDATED TO CASH AND HOLDS NO POSITIONS${cd ? ` · ${cd} TRADING DAY${cd === 1 ? '' : 'S'} OF COOLDOWN LEFT` : ''} · IT WILL NOT REBALANCE UNTIL THE COOLDOWN EXPIRES.</span>
+      <span style="color:#a8635e">0 POSITIONS HERE MEANS STOPPED, NOT IDLE.</span>
+    </div>`;
 }
 
 /* ========================= equity view-model =========================== */
@@ -366,7 +412,12 @@ function prepEquity(page) {
     }
   }
   rows.sort((a, b) => b.weight - a.weight);
-  const maxW = rows.length ? Math.max(...rows.map(r => r.weight)) : 1;
+  /* Scale the weight bars off the biggest ABSOLUTE weight. A long/short book has
+     negative weights, and `weight / max(weight)` there went negative — an invalid
+     CSS width, which the browser drops, leaving the inner block to fill its track.
+     Every short (and a 0.0% leftover) rendered as a MAXED-OUT bar in the long
+     colour. Bars now carry length = |weight| and take their colour from the sign. */
+  const maxW = rows.length ? Math.max(...rows.map(r => Math.abs(r.weight)), 1e-9) : 1;
 
   const blotter = page.blotter || [];
   const lastDate = blotter.length ? blotter[blotter.length - 1].date : null;
@@ -376,17 +427,26 @@ function prepEquity(page) {
   const lastBuy = {};
   for (const t of blotter) if (t.side === 'BUY') lastBuy[t.ticker] = t.date;
 
-  const curve = (page.equity_curve || []).map(p => ({ date: p.date, v: p.equity }));
+  /* A mark the book could not be valued on is DROPPED, not plotted: a failed FX
+     pair leaves NaN in equity_history, which reaches the browser as null, and
+     null charted as zero invented a −100% drawdown and a 0.00 minimum. Number.
+     isFinite (not the global) is deliberate — isFinite(null) is true. */
+  const curve = (page.equity_curve || [])
+    .filter(p => Number.isFinite(p.equity))
+    .map(p => ({ date: p.date, v: p.equity }));
   return { rows, maxW, feed, lastDate, lastBuy, curve };
 }
 
+/* Range chips over a [{date, v}] curve. Dates may be bar keys with a time
+   ('2026-07-25 00:00' on the hourly FX book), so slice to the day part before
+   parsing — the ISO prefix keeps the string compare correct either way. */
 function rangeFilter(curve) {
   if (!curve.length) return curve;
   const days = S.range === '1M' ? 31 : S.range === '3M' ? 93 : null;
   if (!days) return curve;
-  const end = new Date(curve[curve.length - 1].date);
+  const end = new Date(String(curve[curve.length - 1].date).slice(0, 10));
   const cut = new Date(end.getTime() - days * 86400e3).toISOString().slice(0, 10);
-  const out = curve.filter(p => p.date >= cut);
+  const out = curve.filter(p => String(p.date).slice(0, 10) >= cut);
   return out.length > 1 ? out : curve;
 }
 
@@ -400,6 +460,127 @@ function axisDates(dates, n) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(mmdd(dates[Math.round(i * (dates.length - 1) / (n - 1))]));
   return out;
+}
+
+/* ============ calendar views over a [{date, v}] curve ================== */
+/* Both prepEquity and prepFx produce that shape, so these two panels work
+   unchanged on an equity book or an FX book. Pure functions of the curve —
+   no new numbers, just the periods the equity line hides. */
+
+/* Month-end marks -> monthly % change. The FIRST month is measured from the
+   book's inception mark, so it is a PARTIAL month; the caption says so rather
+   than letting a stub month read as a full one.
+   keyLen 10 buckets by DAY instead (session-close marks) — the honest period
+   for a book whose whole history is a few weeks. */
+function monthlyReturns(curve, keyLen = 7) {
+  const lastOf = new Map();
+  for (const p of curve) lastOf.set(String(p.date).slice(0, keyLen), p.v);
+  const out = [];
+  let prev = curve.length ? curve[0].v : 0;
+  for (const m of [...lastOf.keys()].sort()) {
+    const v = lastOf.get(m);
+    out.push({ m, r: prev ? v / prev - 1 : null });
+    prev = v;
+  }
+  return out;
+}
+
+const MONTHS3 = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+/* `daily` swaps the period from month-end to session-close marks. A monthly
+   grid needs years to say anything: every FX paper book is weeks old, so its
+   month row is one partial cell — and on the hourly book a month is 500 bars
+   lumped into one number. Rows then become months, columns days-of-month; the
+   colouring, the compounding column and the caption are the same panel. */
+function monthlyHeatmapHTML(curve, daily) {
+  curve = curve.filter(p => Number.isFinite(p.v));   // an unvaluable mark is not a zero
+  const nCols = daily ? 31 : 12;
+  const colLab = daily ? Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0')) : MONTHS3;
+  const w0 = daily ? 56 : 44;
+  const head = `<div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ${daily ? 'DAILY' : 'MONTHLY'} RETURNS</span><span style="font-size:9px;color:#61805f">${daily ? 'WHICH SESSIONS MADE THE MONTH?' : 'IS THE RUN BROAD, OR A FEW LUCKY MONTHS?'}</span></div>`;
+  const months = monthlyReturns(curve, daily ? 10 : 7).filter(x => x.r != null);
+  if (!months.length) {
+    return head + `<div style="padding:18px;font-size:10.5px;color:#61805f">— NOT ENOUGH HISTORY FOR A ${daily ? 'DAILY' : 'MONTHLY'} GRID YET.</div>`;
+  }
+  const byYear = new Map();
+  for (const x of months) {
+    const y = daily ? x.m.slice(0, 7) : x.m.slice(0, 4);
+    if (!byYear.has(y)) byYear.set(y, new Array(nCols).fill(null));
+    byYear.get(y)[(daily ? +x.m.slice(8, 10) : +x.m.slice(5, 7)) - 1] = x.r;
+  }
+  const mx = Math.max(...months.map(x => Math.abs(x.r)), 1e-9);
+  const cell = r => {
+    if (r == null) return `<span style="display:grid;place-items:center;padding:6px 0;color:${FAINT};font-size:9px">·</span>`;
+    const t = Math.min(Math.abs(r) / mx, 1);
+    const a = (0.07 + t * 0.40).toFixed(2);
+    return `<span style="display:grid;place-items:center;padding:6px 0;font-size:10px;background:${r >= 0 ? `rgba(126,231,135,${a})` : `rgba(255,123,114,${a})`};color:${t > 0.55 ? PALE : (r >= 0 ? '#9db5a0' : '#e0a3a0')}">${sgnPct(r, 1)}</span>`;
+  };
+  const rows = [...byYear.keys()].sort().map(y => {
+    const arr = byYear.get(y);
+    const yr = arr.filter(v => v != null).reduce((a, v) => a * (1 + v), 1) - 1;
+    const lab = daily ? MONTHS3[+y.slice(5, 7) - 1] + " '" + y.slice(2, 4) : y;
+    return `<span style="display:grid;place-items:center;padding:6px 0;color:#61805f;font-size:9px;letter-spacing:.08em">${lab}</span>${arr.map(cell).join('')}<span style="display:grid;place-items:center;padding:6px 0;font-size:10px;font-weight:600;border-left:1px solid #262626;color:${cSign(yr)}">${sgnPct(yr, 1)}</span>`;
+  }).join('');
+  return head + `
+    <div style="padding:12px 18px">
+      <div style="display:grid;grid-template-columns:${w0}px repeat(${nCols},1fr) 58px;gap:2px">
+        <span></span>${colLab.map(m => `<span style="text-align:center;font-size:8px;color:#61805f;letter-spacing:.08em">${m}</span>`).join('')}<span style="text-align:center;font-size:8px;color:#61805f;letter-spacing:.08em;border-left:1px solid #262626">${daily ? 'MONTH' : 'YEAR'}</span>
+        ${rows}
+      </div>
+      <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:9px">${daily ? "LAST MARK OF EACH SESSION FROM THIS BOOK'S OWN EQUITY CURVE · THE FIRST DAY RUNS FROM INCEPTION, SO IT IS PARTIAL · MONTH COMPOUNDS THE DAYS SHOWN." : "MONTH-END MARKS FROM THIS BOOK'S OWN EQUITY CURVE · THE FIRST MONTH RUNS FROM INCEPTION, SO IT IS PARTIAL · YEAR COMPOUNDS THE MONTHS SHOWN."}</div>
+    </div>`;
+}
+
+/* Peak → trough → recovery episodes. The curve already draws the depth; what
+   it hides is the RECOVERY time, which is the number that actually hurts. */
+function ddEpisodes(curve, hourly) {
+  const eps = [];
+  let peak = -Infinity, peakDate = '', cur = null;
+  for (const p of curve) {
+    if (p.v >= peak) {
+      if (cur) { cur.recovered = p.date; eps.push(cur); cur = null; }
+      peak = p.v; peakDate = p.date;
+    } else if (!cur) {
+      cur = { peak: peakDate, trough: p.date, depth: p.v / peak - 1, recovered: null };
+    } else if (p.v / peak - 1 < cur.depth) {
+      cur.depth = p.v / peak - 1; cur.trough = p.date;
+    }
+  }
+  if (cur) { cur.open = true; eps.push(cur); }
+  /* Bar keys carry a time on an hourly book ('2026-07-25 13:00'), where every
+     episode would otherwise round to 0 DAYS underwater — so count HOURS there
+     and let the panel label the unit. */
+  const t = k => new Date(String(k).slice(0, 10) + 'T' + (String(k).slice(11, 16) || '00:00') + 'Z');
+  const end = curve.length ? curve[curve.length - 1].date : '';
+  for (const e of eps) {
+    const a = t(e.peak), b = t(e.recovered || end);
+    e.days = isNaN(a) || isNaN(b) ? null
+      : Math.round((b - a) / (hourly ? 3600e3 : 86400e3));
+  }
+  return eps.sort((a, b) => a.depth - b.depth).slice(0, 5);
+}
+
+function ddEpisodesHTML(curve, hourly) {
+  const head = `<div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DRAWDOWN EPISODES · DEEPEST 5</span><span style="font-size:9px;color:#61805f">TIME UNDERWATER, NOT JUST DEPTH</span></div>`;
+  const eps = ddEpisodes(curve.filter(p => Number.isFinite(p.v)), hourly);
+  if (!eps.length) {
+    return head + `<div style="padding:18px;font-size:10.5px;color:#61805f">— NO DRAWDOWN YET: THE BOOK HAS NEVER TRADED BELOW A PRIOR PEAK.</div>`;
+  }
+  /* an hourly book needs the hour: two episodes can share a calendar day */
+  const stamp = k => mdy(k) + (hourly ? ' ' + String(k).slice(11, 16) : '');
+  const rows = eps.map(e => `
+    <div class="hv-row" style="display:grid;grid-template-columns:.8fr .8fr .7fr .95fr .7fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#9db5a0">${stamp(e.peak)}</span>
+      <span style="color:#9db5a0">${stamp(e.trough)}</span>
+      <span style="color:#ff7b72">${sgnPct(e.depth, 1)}</span>
+      <span style="color:${e.open ? AMB : TXT}">${e.open ? 'OPEN — NOT RECOVERED' : stamp(e.recovered)}</span>
+      <span style="color:#61805f">${e.days == null ? '—' : e.days + (hourly ? 'H' : 'D')}</span>
+    </div>`).join('');
+  return head + `
+    <div style="display:grid;grid-template-columns:.8fr .8fr .7fr .95fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PEAK</span><span>TROUGH</span><span>DEPTH</span><span>RECOVERED</span><span>${hourly ? 'HRS' : 'DAYS'} U/W</span></div>
+    ${rows}
+    <div style="padding:10px 18px;font-size:9px;color:#3d543f;line-height:1.7">${hourly ? 'HOURS' : 'DAYS'} UNDERWATER RUNS PEAK → RECOVERY; AN OPEN EPISODE COUNTS TO THE LAST MARK.</div>`;
 }
 
 const rangeChips = () => ['1M', '3M', 'ALL'].map(k => {
@@ -426,10 +607,21 @@ function equityOverviewHTML(page) {
   const filt = rangeFilter(M.curve);
   const vals = filt.map(p => p.v);
   const dates = filt.map(p => p.date);
-  const p140 = toPts(vals, 600, 140, 10);
-  const eqPts140 = p140.join(' ');
+  /* The benchmark arrives sampled on the equity-curve dates (equal-weight
+     buy-and-hold of the sleeve indices, in the base currency), so both lines
+     must share ONE vertical scale — toPts fits each series to its own min/max,
+     which would make the comparison meaningless. [] = could not be built. */
+  const bMap = new Map((page.benchmark_curve || []).map(b => [b.date, b.value]));
+  const bVals = dates.map(d => bMap.get(d));
+  const hasBench = vals.length > 1 && bVals.every(v => Number.isFinite(v));
+  const lo = Math.min(...vals, ...(hasBench ? bVals : []));
+  const hi = Math.max(...vals, ...(hasBench ? bVals : []));
+  const eqX = i => ((i / Math.max(vals.length - 1, 1)) * 600).toFixed(1);
+  const eqY = v => (10 + (1 - (v - lo) / ((hi - lo) || 1)) * 120).toFixed(1);
+  const eqPts140 = vals.map((v, i) => eqX(i) + ',' + eqY(v)).join(' ');
+  const benchPts = hasBench ? bVals.map((v, i) => eqX(i) + ',' + eqY(v)).join(' ') : '';
   const eqArea140 = vals.length ? '0,140 ' + eqPts140 + ' 600,140' : '';
-  const eqLastY = p140.length ? p140[p140.length - 1].split(',')[1] : 70;
+  const eqLastY = vals.length ? eqY(vals[vals.length - 1]) : 70;
   const eqSpark = toPts(vals, 120, 24, 2).join(' ');
   const dd = ddSeries(vals);
   const ddMin = Math.min(...dd, -1e-9);
@@ -464,11 +656,27 @@ function equityOverviewHTML(page) {
       ? `<span style="font-size:9px;color:#ff7b72;border:1px solid #4a2a28;background:rgba(255,123,114,.06);padding:2px 7px">RISK_OFF → CASH</span>`
       : `<span style="font-size:9px;color:#7ee787;border:1px solid #2a4a2c;background:rgba(126,231,135,.06);padding:2px 7px">RISK_ON</span>`;
     const barColor = nPos === 0 ? G : stroke;
+    /* crowding = momentum-crash early warning for this sleeve's candidate book
+       (crowding.py). Each stat is independently nullable on a short history —
+       show an em-dash, never a zero. `elevated` is the only badge worth having;
+       `reasons` is already human-readable. */
+    const cw = s.crowding;
+    const cwStat = (v, f) => v == null ? '—' : f(v);
+    const crowdLine = !cw ? '' : `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:9px;color:#3d543f;letter-spacing:.06em">
+          <span>CROWDING ${cw.n_names} NAMES</span>
+          <span>AVG CORR <span style="color:${cw.avg_correlation != null && cw.avg_correlation > 0.7 ? AMB : DIM}">${cwStat(cw.avg_correlation, v => num(v, 2))}</span></span>
+          <span>DISP <span style="color:${DIM}">${cwStat(cw.dispersion, v => num(v * 100, 1) + '%')}</span></span>
+          <span>VOL <span style="color:${cw.vol_ratio != null && cw.vol_ratio > 2 ? AMB : DIM}">${cwStat(cw.vol_ratio, v => num(v, 2) + '×')}</span></span>
+          <span>VS ${bookParams(page).index_trend_ma ?? 200}D <span style="color:${cw.below_200dma != null && cw.below_200dma < 0 ? AMB : DIM}">${cwStat(cw.below_200dma, v => sgnPct(v, 1))}</span></span>
+          ${cw.elevated ? `<span title="${esc(cw.reasons.join(' · '))}" style="color:${AMB};border:1px solid #4a3a1a;background:rgba(227,179,65,.10);padding:1px 6px">⚠ ELEVATED</span>` : ''}
+        </div>${cw.elevated && cw.reasons.length ? `<div style="font-size:9px;color:${AMB};line-height:1.6;margin-top:4px">${esc(cw.reasons.join(' · ').toUpperCase())}</div>` : ''}`;
     return `
       <div style="padding:12px 18px;${i < arr.length - 1 ? 'border-bottom:1px solid #262626' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#eaffec">${esc(s.key)} <span style="color:#61805f;font-size:10px">· ${esc(s.currency)} · ${num(s.weight * 100, 1)}%</span></span>${chip}</div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:8px"><div><div style="font-size:16px;color:#eaffec;font-weight:600">${eqTxt}</div><div style="font-size:9px;color:#61805f;margin-top:2px">${sub}</div></div><svg viewBox="0 0 120 26" preserveAspectRatio="none" style="width:110px;height:26px"><polyline points="${spark}" fill="none" stroke="${stroke}" stroke-width="1.2"${dash}></polyline></svg></div>
         <div style="height:3px;background:#1a1a1a;margin-top:8px"><div style="height:3px;width:${(investedPct * 100).toFixed(0)}%;background:${barColor}"></div></div>
+        ${crowdLine}
       </div>`;
   }).join('');
 
@@ -476,7 +684,7 @@ function equityOverviewHTML(page) {
   const bookRows = M.rows.map(p => `
     <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#61805f">${esc(p.region)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span>
-      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+      <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
       <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>
     </div>`).join('');
 
@@ -495,13 +703,14 @@ function equityOverviewHTML(page) {
 
   return `
   <div data-screen="overview">
+    ${haltBannerHTML(page)}
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d">
         <div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div>
         <div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div>
         <svg viewBox="0 0 120 24" preserveAspectRatio="none" style="width:100%;height:24px;margin-top:4px;display:block"><polyline points="${eqSpark}" fill="none" stroke="#7ee787" stroke-width="1.2"></polyline></svg>
       </div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(sinceDate)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sinceDate ? 'SINCE ' + esc(sinceDate) : 'NO MARKS YET'}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">GROSS EXPOSURE</div><div style="font-size:20px;font-weight:600;color:${k.gross_exposure > 1.001 ? R : '#e3b341'};margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${k.net_exposure != null ? 'NET ' + sgnPct(k.net_exposure, 0) + ' · ' : ''}VOL-TGT ${pct0(k.target_vol)}</div></div>
@@ -513,18 +722,21 @@ function equityOverviewHTML(page) {
       <div style="border-right:1px solid #262626">
         <div style="padding:12px 18px 0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#61805f">MIN ${vals.length ? num(Math.min(...vals), 2) : '—'}</span><span style="color:#61805f">MAX ${vals.length ? num(Math.max(...vals), 2) : '—'}</span></div>
-            <div style="display:flex;gap:2px;font-size:9px">${rangeChips()}</div>
+            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#7ee787">— THIS BOOK</span>${hasBench ? '<span style="color:#61805f">— EQUAL-WEIGHT INDEX BUY &amp; HOLD</span>' : ''}${vals.length ? `<span style="color:#61805f">MIN ${num(Math.min(...vals), 2)}</span><span style="color:#61805f">MAX ${num(Math.max(...vals), 2)}</span>` : ''}</div>
+            <div style="display:flex;gap:2px;font-size:9px">${vals.length ? rangeChips() : ''}</div>
           </div>
+          ${!vals.length ? `<div style="padding:26px 0 30px;font-size:10.5px;color:#61805f;line-height:1.8">— NO EQUITY HISTORY YET. THIS BOOK IS FUNDED BUT HAS NOT BEEN MARKED: THE CURVE AND THE DRAWDOWN TRACK BELOW DRAW THEMSELVES FROM THE FIRST RUN ONWARDS.<br><span style="color:#3d543f">AN EMPTY CHART IS NOT A FLAT ONE — NOTHING HAS BEEN MEASURED, SO NOTHING IS PLOTTED.</span></div>` : `
           <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
             <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
             <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
             <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
             <polygon points="${eqArea140}" fill="rgba(126,231,135,0.08)"></polygon>
+            ${hasBench ? `<polyline points="${benchPts}" fill="none" stroke="#61805f" stroke-width="1.2"></polyline>` : ''}
             <polyline points="${eqPts140}" fill="none" stroke="#7ee787" stroke-width="1.6" stroke-linejoin="round"></polyline>
-            ${vals.length ? `<circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>` : ''}
-          </svg>
+            <circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>
+          </svg>`}
         </div>
+        ${!vals.length ? '' : `
         <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
           <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:6px 0">DRAWDOWN FROM PEAK</div>
           <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
@@ -533,7 +745,7 @@ function equityOverviewHTML(page) {
             <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
           </svg>
           <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
-        </div>
+        </div>`}
       </div>
       <div style="display:grid;grid-template-rows:repeat(${(page.sleeves || []).length || 1},1fr)">${sleeveCards}</div>
     </div>
@@ -546,16 +758,20 @@ function equityOverviewHTML(page) {
       </div>
       <div style="display:flex;flex-direction:column">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${mdy(M.lastDate)} REBALANCE` : ''}</div>
-        <div>${feedRows}</div>
+        <div>${feedRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. THE FEED LISTS THE MOST RECENT REBALANCE ONCE THIS BOOK HAS TRADED.</div>'}</div>
         <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #262626;background:#0d0d0d">
           <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">TOTAL FINANCIAL POSITION · ${esc(page.base_currency)}</div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">INVESTED</span><span style="color:#c9e8cc">${num(k.invested_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">CASH</span><span style="color:#c9e8cc">${num(k.cash_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">OPEN P&amp;L</span><span style="color:${cSign(k.unrealized_base)}">${sgnNum(k.unrealized_base, 0)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:#ff7b72">−${num(k.fees_base, 0)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:${k.fees_base ? R : DIM}">${k.fees_base ? '−' + num(k.fees_base, 0) : '0'}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${num(k.total_equity, 2)}</span></div>
         </div>
       </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;border-top:1px solid #262626">
+      <div style="border-right:1px solid #262626">${monthlyHeatmapHTML(M.curve)}</div>
+      <div>${ddEpisodesHTML(M.curve)}</div>
     </div>
   </div>`;
 }
@@ -652,10 +868,101 @@ function closedRowsHTML(closed, opts = {}) {
   }).join('');
 }
 
+/* ==================== book diagnostics (POSITIONS foot) ================= */
+/* Three blocks the repo's analytics modules already compute — tca.py (realized
+   vs modelled slippage), attribution.py (live cost drag) and promotion.py (the
+   paper→live gate). Each is independently nullable and each null means "not
+   computable on this book", never zero: a thin book gets ONE quiet line. */
+function analyticsRowHTML(page) {
+  const note = txt => `<div style="padding:14px 18px;font-size:10.5px;color:#61805f;line-height:1.7">${txt}</div>`;
+  const head = (title, right) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">${title}</span><span style="font-size:9px;color:#61805f;text-align:right">${right}</span></div>`;
+
+  /* --- execution quality ------------------------------------------------ */
+  const t = page.tca;
+  const tRegions = t ? Object.keys(t).filter(x => x !== 'alerts') : [];
+  let tcaBody;
+  if (!t) {
+    tcaBody = note('— NOT COMPUTABLE ON THIS BOOK.');
+  } else if (!tRegions.length) {
+    tcaBody = note('— NO FILL CARRIES A DECISION PRICE, SO SLIPPAGE CANNOT BE MEASURED. FILLS RECORDED BEFORE THE DECISION PRICE WAS PERSISTED ARE SKIPPED RATHER THAN GUESSED AT.');
+  } else {
+    tcaBody = `<div style="display:grid;grid-template-columns:.7fr .5fr .8fr .8fr .9fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>REGION</span><span>FILLS</span><span>REALIZED</span><span>MODELLED</span><span>SHORTFALL</span></div>`
+      + tRegions.map(rk => {
+        const e = t[rk];
+        const sym = SYM[e.currency] || e.currency || '';
+        return `<div style="display:grid;grid-template-columns:.7fr .5fr .8fr .8fr .9fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+          <span style="color:#eaffec">${esc(rk)}${e.alert ? ` <span style="color:${R};border:1px solid #4a2a28;padding:1px 4px;font-size:8px">SLIPPAGE</span>` : ''}</span>
+          <span style="color:#9db5a0">${e.n_fills}</span>
+          <span style="color:${e.alert ? R : TXT}">${num(e.realized_slippage_bps, 1)} BPS</span>
+          <span style="color:#61805f">${e.modelled_slippage_bps == null ? '—' : num(e.modelled_slippage_bps, 1) + ' BPS'}</span>
+          <span style="color:#e3b341">${sym}${num(e.implementation_shortfall, 2)}</span>
+        </div>`;
+      }).join('')
+      + note((t.alerts || []).length
+        ? `<span style="color:${R}">${esc(t.alerts.join(' · ').toUpperCase())}</span>`
+        : 'REALIZED MATCHES THE MODEL — PAPER FILLS ARE STAMPED WITH THE MODELLED SPREAD BY CONSTRUCTION. A REAL DIVERGENCE ONLY APPEARS ON LIVE FILLS.');
+  }
+
+  /* --- cost drag / live-vs-backtest ------------------------------------- */
+  const a = page.attribution;
+  let attrBody;
+  if (!a) {
+    attrBody = note('— NOT COMPUTABLE ON THIS BOOK.');
+  } else {
+    const drag = Object.entries(a.cost_drag_by_region || {});
+    attrBody = `
+      <div style="display:flex;gap:18px;padding:10px 18px;border-bottom:1px solid #121212;font-size:10.5px">
+        <span style="color:#61805f">REALIZED RETURN <span style="color:${cSign(a.realized_total_return)}">${sgnPct(a.realized_total_return, 2)}</span></span>
+        <span style="color:#61805f">MARKS <span style="color:#c9e8cc">${a.n_equity_points}</span></span>
+      </div>
+      <div style="padding:8px 18px;border-bottom:1px solid #121212;font-size:9px;color:#3d543f;line-height:1.7">DIVERGENCE VS BACKTEST · TRACKING ERROR — <span style="color:#61805f">NO BACKTEST CURVE SUPPLIED TO THIS ENDPOINT</span> (REFETCHING ONE HERE WOULD RISK LOOKAHEAD). RUN ATTRIBUTION.PY WITH A CACHED CURVE FOR THOSE TWO.</div>`
+      + (drag.length
+        ? `<div style="display:grid;grid-template-columns:.7fr .9fr 1fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>REGION</span><span>COSTS PAID</span><span>NOTIONAL TRADED</span><span>DRAG</span></div>`
+          + drag.map(([rk, d]) => {
+            const sym = SYM[d.currency] || d.currency || '';
+            return `<div style="display:grid;grid-template-columns:.7fr .9fr 1fr .7fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(rk)}</span><span style="color:#ff7b72">${sym}${num(d.cost, 2)}</span><span style="color:#9db5a0">${money0(sym, d.notional)}</span><span style="color:#e3b341">${num(d.cost_drag_bps, 1)} BPS</span></div>`;
+          }).join('')
+          + note('EACH REGION IN ITS OWN LOCAL CURRENCY — THESE DO NOT SUM.')
+        : note('— NO TRADES YET, SO NO COST DRAG TO ATTRIBUTE.'));
+  }
+
+  /* --- promotion gate --------------------------------------------------- */
+  const pr = page.promotion;
+  let promoBody;
+  if (!pr) {
+    promoBody = note('— NOT COMPUTABLE ON THIS BOOK.');
+  } else {
+    /* overfitting/tracking are false for LACK OF EVIDENCE (the DSR/PBO come
+       from the sweep, tracking error from a backtest) — grey "NO EVIDENCE", not
+       a red fail, or the screen accuses the book of something it never tested. */
+    const LABEL = {
+      track_record: 'TRACK RECORD', capacity: 'MIN VIABLE SIZE',
+      schema_valid: 'STATE SCHEMA', not_halted: 'NOT HALTED',
+      overfitting: 'OVERFITTING GATE', tracking: 'TRACKING BUDGET',
+    };
+    const noEvidence = { overfitting: 1, tracking: 1 };
+    promoBody = Object.entries(pr.checks || {}).map(([ck, ok]) => {
+      const grey = !ok && noEvidence[ck];
+      const mark = grey ? '○' : ok ? '✓' : '✗';
+      const color = grey ? DIM : ok ? G : R;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#9db5a0">${LABEL[ck] || esc(ck.toUpperCase())}</span><span style="color:${color}">${mark} ${grey ? 'NO EVIDENCE' : ok ? 'PASS' : 'FAIL'}</span></div>`;
+    }).join('')
+      + `<div style="display:flex;justify-content:space-between;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#61805f">REBALANCE MONTHS TRADED</span><span style="color:#c9e8cc">${pr.rebalance_months}</span></div>`
+      + note('EVERY BOOK READS NOT READY TODAY, AND THAT IS THE HONEST ANSWER: THE OVERFITTING AND TRACKING CRITERIA NEED EVIDENCE FROM THE SWEEP AND A CACHED BACKTEST, WHICH THIS ENDPOINT DOES NOT HOLD.');
+  }
+
+  return `
+  <div style="display:grid;grid-template-columns:1fr 1.15fr .85fr;border-top:1px solid #262626">
+    <div style="border-right:1px solid #262626">${head('■ EXECUTION QUALITY · TCA.PY', 'REALIZED VS MODELLED SLIPPAGE')}${tcaBody}</div>
+    <div style="border-right:1px solid #262626">${head('■ COST DRAG · ATTRIBUTION.PY', 'LIVE, FROM THE FILLS LEDGER')}${attrBody}</div>
+    <div>${head('■ PAPER → LIVE GATE', pr ? (pr.ready ? `<span style="color:${G}">READY</span>` : `<span style="color:${AMB}">NOT READY</span>`) : '')}${promoBody}</div>
+  </div>`;
+}
+
 /* ========================= FULL · POSITIONS ============================ */
 function equityPositionsHTML(page) {
   const M = prepEquity(page);
-  const ma = S.meta ? S.meta.params.index_trend_ma : 200;
+  const ma = bookParams(page).index_trend_ma ?? 200;
 
   const sleeveBlocks = (page.sleeves || []).map(s => {
     const sym = SYM[s.currency] || s.currency;
@@ -673,7 +980,7 @@ function equityPositionsHTML(page) {
         rows.map(p => `
         <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
           <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
-          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:#7ee787;width:${(p.weight / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
+          <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
           <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
         </div>`).join('') + '</div>';
     return `
@@ -712,22 +1019,24 @@ function equityPositionsHTML(page) {
 
   return `
   <div data-screen="positions">
+    ${haltBannerHTML(page)}
     ${sleeveBlocks}
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ALL ${(page.blotter || []).length} FILLS</span>
       <span style="font-size:9px;color:#61805f">COMMISSIONS + UK STAMP DUTY (50BPS ON FTSE BUYS) ITEMISED</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span><span>STAMP</span></div>
-    ${blotterRows}</div>
+    ${blotterRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. EVERY EXECUTION THIS BOOK MAKES IS ITEMISED HERE, COMMISSION BY COMMISSION.</div>'}</div>
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)</span>
       ${regionNetHtml}
-      <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
-      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="font-size:10px;color:#61805f">NET <span style="color:${closed.count ? cSign(closed.net_base) : DIM}">${closed.count ? sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2)) : '—'}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">INCLUDES COMMISSIONS + UK STAMP DUTY · FILLS ALREADY CARRY MODELLED SPREAD/SLIPPAGE</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
+    ${analyticsRowHTML(page)}
   </div>`;
 }
 
@@ -786,12 +1095,16 @@ function backtestHTML(page) {
   if (!bt) return '<div class="boot">LOADING BACKTEST…</div>';
   const real = bt.available && bt.kind === 'equity';
 
-  let banner, curves, m, bm, sleeves, sweep, period;
+  let banner, curves, m, bm, sleeves, sweep, period, bs, overfit;
   if (real) {
     curves = _btCurvesHTML(bt.curve, bt.benchmark);
     m = bt.metrics || {}; bm = bt.benchmark_metrics || {};
     sleeves = bt.sleeves || [];
     sweep = bt.sweep || null;
+    /* both written by newer exporter runs only: benchmark_stats needs a re-export,
+       `overfitting` needs --sweep. Absent = the panel says so, never a zero. */
+    bs = bt.benchmark_stats || null;
+    overfit = bt.overfitting || null;
     period = `${String(bt.start).slice(0, 7)} → ${String(bt.end).slice(0, 7)}`;
     banner = bt.synthetic
       ? `<span style="font-weight:600">⚠ SYNTHETIC DATA</span><span style="color:#8a7433">PIPELINE TEST ONLY — NEVER PERFORMANCE. RE-RUN THE EXPORT WITH REAL DATA.</span>`
@@ -801,7 +1114,7 @@ function backtestHTML(page) {
   } else {
     const ill = _illustrativeBt();
     curves = _btCurvesHTML(ill.strat, ill.bench);
-    m = null; bm = null; sleeves = null; sweep = null;
+    m = null; bm = null; sleeves = null; sweep = null; bs = null; overfit = null;
     period = '2012 → 2026 · ILLUSTRATIVE';
     banner = `<span style="font-weight:600">⚠ ILLUSTRATIVE CURVES — NO CACHED BACKTEST</span><span style="color:#8a7433">RUN python -m trading_algo.dashboard.backtest_store (ON A MACHINE WITH MARKET DATA) TO WIRE REAL RESULTS INTO THIS TAB.</span>`;
   }
@@ -824,15 +1137,55 @@ function backtestHTML(page) {
     kpiCell('REALISED VOL', '—', DIM, `TARGET ${pct0(S.meta ? S.meta.params.target_vol : 0.12)}`, true),
   ].join('');
 
+  /* "IS THIS BETTER THAN OWNING THE INDEX?" — portfolio level only; run_backtest
+     pairs no sleeve with its own index, so these never go in the sleeve table.
+     Every value is independently nullable (<2 overlapping days) → em-dash. */
+  const benchStrip = !bs ? '' : `
+    <div class="mq-x"><div style="display:grid;grid-template-columns:1.1fr repeat(6,1fr);border-bottom:1px solid #262626;background:#0a0a0a">
+      <div style="padding:9px 18px;border-right:1px solid #262626;font-size:9px;color:#eaffec;letter-spacing:.14em;display:flex;align-items:center">■ VS BENCHMARK</div>
+      ${[['BETA', fn(bs.beta)], ["JENSEN'S ALPHA", fp(bs.alpha, 2)], ['ACTIVE RETURN', fp(bs.active_return, 2)],
+         ['TRACKING ERROR', fp(bs.tracking_error, 2)], ['INFO RATIO', fn(bs.info_ratio)],
+         ['WIN RATE (DAYS)', fp(m.win_rate, 1)]]
+        .map(([lbl, v], i) => `<div style="padding:9px 14px;${i < 5 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:8px;color:#61805f;letter-spacing:.12em">${lbl}</div><div style="font-size:13px;color:${v === '—' ? DIM : PALE};margin-top:3px">${v}</div></div>`).join('')}
+    </div></div>`;
+
   let sleeveRows = '';
+  const SLEEVE_COLS = '1fr .7fr .7fr .7fr .85fr .7fr .75fr .8fr .75fr .6fr';
   if (sleeves && sleeves.length) {
     sleeveRows = sleeves.map(s => `
-      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:#7ee787">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:#ff7b72">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span></div>`).join('');
+      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:#7ee787">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:#ff7b72">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span><span style="color:#9db5a0">${fp(s.win_rate, 0)}</span><span style="color:#9db5a0">${fp(s.avg_turnover, 1)}</span><span style="color:${s.total_cost_fraction == null ? FAINT : AMB}">${fp(s.total_cost_fraction, 2)}</span><span style="color:${s.drawdown_halts ? R : FAINT}">${s.drawdown_halts == null ? '—' : (s.drawdown_halts ? `${s.drawdown_halts} · ${s.drawdown_halt_days}D` : '0')}</span></div>`).join('');
     sleeveRows += `
-      <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:8px 18px;font-size:11px;border-bottom:1px solid #121212;background:#0d0d0d"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:#7ee787">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:#ff7b72">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span></div>`;
+      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212;background:#0d0d0d"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:#7ee787">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:#ff7b72">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span><span style="color:#9db5a0">${fp(m.win_rate, 0)}</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span></div>`;
+    /* a backtest that halted on the breaker, or quietly dropped a ticker, is a
+       materially different result — neither may stay invisible */
+    const halted = sleeves.filter(s => s.drawdown_halts);
+    const dropped = sleeves.filter(s => (s.data_quality_excluded || []).length);
+    sleeveRows += `<div style="padding:10px 18px;font-size:9px;line-height:1.8;border-bottom:1px solid #121212">
+      ${halted.length
+        ? `<span style="color:${R}">BREAKER FIRED: ${esc(halted.map(s => `${s.key} ${s.drawdown_halts}× (${s.drawdown_halt_days} DAYS IN CASH)`).join(' · '))}</span>`
+        : `<span style="color:#3d543f">${sleeves.some(s => s.drawdown_halts != null) ? 'NO SLEEVE EVER HIT THE DRAWDOWN BREAKER IN THIS RUN.' : 'TURNOVER / COST / HALT COLUMNS NEED A RE-EXPORT OF THE CACHE.'}</span>`}
+      ${dropped.length ? `<br><span style="color:${AMB}">DATA-QUALITY EXCLUSIONS: ${esc(dropped.map(s => `${s.key} → ${(s.data_quality_excluded || []).join(', ')}`).join(' · '))}</span>` : ''}
+      ${bt.fx_rebalance_cost != null ? `<br><span style="color:#61805f">FX REBALANCE COST A$${num(bt.fx_rebalance_cost, 2)} CUMULATIVE (PORTFOLIO LEVEL, BASE CURRENCY) · ALLOCATION ${esc(Object.entries(bt.allocations || {}).map(([kk, w]) => `${kk} ${num(w * 100, 1)}%`).join(' · '))}</span>` : ''}
+    </div>`;
   } else {
     sleeveRows = `<div style="padding:22px 18px;font-size:10.5px;color:#61805f;line-height:1.8">PER-SLEEVE METRICS APPEAR HERE ONCE THE BACKTEST CACHE EXISTS.<br><span style="color:#3d543f">python -m trading_algo.dashboard.backtest_store</span></div>`;
   }
+
+  /* Deflated Sharpe + PBO per sleeve (purged walk-forward CV). Written under
+     --sweep only; `verdict` is already a printable sentence, so print it rather
+     than re-deriving the thresholds here. dsr/pbo null on the failure paths. */
+  const overfitKeys = overfit ? Object.keys(overfit) : [];
+  const overfitHtml = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OVERFITTING GATE · DSR / PBO</span><span style="font-size:9px;color:#61805f;border:1px solid #262626;padding:2px 8px">${overfitKeys.length ? 'PURGED WALK-FORWARD CV' : 'NOT CACHED'}</span></div>`
+    + (overfitKeys.length
+      ? `<div style="display:grid;grid-template-columns:.7fr .6fr .6fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>SLEEVE</span><span>DSR</span><span>PBO</span><span>GATE</span></div>`
+        + overfitKeys.map(kk => {
+          const o = overfit[kk] || {};
+          const tone = o.passed == null ? DIM : o.passed ? G : R;
+          return `<div title="${esc(o.verdict || '')}" style="display:grid;grid-template-columns:.7fr .6fr .6fr .7fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(kk)}</span><span style="color:${o.dsr == null ? DIM : TXT}">${fn(o.dsr)}</span><span style="color:${o.pbo == null ? DIM : TXT}">${fn(o.pbo)}</span><span style="color:${tone}">${o.passed == null ? 'NO RESULT' : o.passed ? 'PASS' : 'FAIL'}</span></div>`;
+        }).join('')
+        + `<div style="padding:10px 18px;font-size:9px;color:#61805f;line-height:1.7">${overfitKeys.map(kk => `${esc(kk)}: ${esc((overfit[kk] || {}).verdict || 'no result')}`).join('<br>')}</div>`
+      : `<div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">DEFLATED SHARPE (WANTS ≥ 0.95) AND PROBABILITY OF BACKTEST OVERFITTING (WANTS ≤ 0.5) PER SLEEVE, CORRECTED FOR THE NUMBER OF CONFIGURATIONS SEARCHED. WRITTEN BY:<br><span style="color:#3d543f">python -m trading_algo.dashboard.backtest_store --sweep</span></div>`);
 
   let sweepHtml;
   if (sweep && sweep.values) {
@@ -873,6 +1226,7 @@ function backtestHTML(page) {
       <span style="margin-left:auto;color:#8a7433">${esc(period)} · MONTHLY REBALANCE · COSTS ON</span>
     </div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${kpis}</div>
+    ${benchStrip}
     <div style="padding:14px 18px;border-bottom:1px solid #262626">
       <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px">
         <span style="color:#eaffec">■ GROWTH OF A$${num((real && bt.initial_capital) || 100000, 0)} · AUD, NET OF COSTS${real ? '' : ' · ILLUSTRATIVE'}</span>
@@ -897,28 +1251,64 @@ function backtestHTML(page) {
     </div>
     <div style="display:grid;grid-template-columns:1.4fr 1fr">
       <div style="border-right:1px solid #262626">
-        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ PER-SLEEVE METRICS · LOCAL CURRENCY, NET OF COSTS</div>
-        <div style="display:grid;grid-template-columns:1fr .8fr .8fr .8fr .9fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>SLEEVE</span><span>CAGR</span><span>SHARPE</span><span>SORTINO</span><span>MAX DD</span><span>CALMAR</span></div>
-        ${sleeveRows}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ PER-SLEEVE METRICS · LOCAL CURRENCY, NET OF COSTS</span><span style="font-size:9px;color:#61805f">WIN RATE COUNTS DAYS · TURN = MEAN PER REBALANCE · COST = CUMULATIVE % OF NAV</span></div>
+        <div class="mq-x"><div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>SLEEVE</span><span>CAGR</span><span>SHARPE</span><span>SORTINO</span><span>MAX DD</span><span>CALMAR</span><span>WIN(D)</span><span>TURN</span><span>COST</span><span>HALTS</span></div>
+        ${sleeveRows}</div>
         <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">COMBINED VOL SITS BELOW EVERY INDIVIDUAL SLEEVE — THE DIVERSIFICATION BENEFIT OF MULTIPLE REGIONAL BOOKS. ${esc(costFootnote())}</div>
       </div>
-      <div>${sweepHtml}</div>
+      <div>${sweepHtml}${overfitHtml}</div>
     </div>
   </div>`;
 }
 
 /* ============================ METHOD (equity) ========================== */
-function methodHTML() {
-  const p = (S.meta && S.meta.params) || {};
+function methodHTML(page) {
+  /* THIS book's knobs, not the house defaults — a 3× leveraged or market-neutral
+     profile would otherwise be described as plain long-only momentum. `house` is
+     the default set, kept only to mark which knobs the profile overrides. */
+  const p = bookParams(page);
+  const house = (S.meta && S.meta.params) || {};
   const risk = (S.meta && S.meta.risk) || {};
   const regions = (S.meta && S.meta.regions) || [];
   const tests = S.meta && S.meta.tests_total;
+  /* meta.params and page.params are built from the SAME knob tuple
+     (dashboard/meta.BOOK_KNOBS), so every cell can be compared with its house
+     default; the "NOT PUBLISHED" branch below is only a guard for an older
+     payload. Separately, three knobs change the STRATEGY DESCRIPTION rather
+     than a number (no regime filter, shorting, leverage) and are always worth
+     flagging on their own terms. */
+  const notable = k => (k === 'regime_filter' && p[k] === false)
+    || (k === 'long_short' && p[k] === true) || (k === 'max_gross' && p[k] > 1);
+  const over = Object.keys(p).filter(k => (k in house && p[k] !== house[k]) || notable(k));
+  /* `breaker` KEY ABSENT = an older payload with no per-book value, so fall back
+     to the global; breaker === null = this book genuinely has no drawdown stop.
+     The two must never collapse into one branch. */
+  const breaker = page && 'breaker' in page ? page.breaker : (risk.max_drawdown_stop ?? 0.25);
+  const fmtKnob = v => typeof v === 'boolean' ? (v ? 'ON' : 'OFF')
+    : typeof v === 'number' ? num(v, Number.isInteger(v) ? 0 : 2) : String(v);
+  const knobCells = Object.keys(p).map(kk => {
+    const on = over.includes(kk);
+    const foot = !(kk in house) ? 'HOUSE VALUE NOT PUBLISHED'
+      : p[kk] !== house[kk] ? 'HOUSE ' + fmtKnob(house[kk]) : 'HOUSE DEFAULT';
+    return `<div style="border:1px solid ${on ? '#4a3a1a' : '#1a1a1a'};background:${on ? 'rgba(227,179,65,.06)' : '#0d0d0d'};padding:7px 9px">
+      <div style="font-size:8px;color:#61805f;letter-spacing:.1em">${esc(kk.toUpperCase())}</div>
+      <div style="font-size:12px;color:${on ? AMB : PALE};margin-top:3px">${esc(fmtKnob(p[kk]))}</div>
+      <div style="font-size:8px;color:#3d543f;margin-top:2px">${esc(foot)}</div>
+    </div>`;
+  }).join('');
+  const allocKeys = Object.keys((page && page.allocations) || {});
+  const allocLine = Object.entries((page && page.allocations) || {})
+    .map(([k, w]) => `${esc(k)} ${num(w * 100, 1)}%`).join(' · ');
 
   const pipeline = [
     { n: '01', mod: 'SIGNALS.PY', title: 'MOMENTUM SCORE', formula: `P(t−${p.skip_days ?? 21}) / P(t−${p.lookback_days ?? 252}) − 1`, desc: '12-MONTH RETURN, SKIPPING THE LAST MONTH TO AVOID SHORT-TERM REVERSAL.' },
     { n: '02', mod: 'SIGNALS.PY', title: 'TREND FILTER', formula: `PRICE > ${p.stock_trend_ma ?? 200}-DAY MA`, desc: 'ONLY NAMES ACTUALLY RISING — NOT JUST FALLING SLOWER THAN OTHERS.' },
-    { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', formula: `INDEX > ${p.index_trend_ma ?? 200}-DAY MA`, desc: 'INDEX BELOW ITS MA → SLEEVE GOES 100% CASH. THE CRASH PROTECTION.' },
-    { n: '04', mod: 'SIGNALS.PY', title: 'SELECT TOP N', formula: `TOP ${p.top_n ?? 10} BY MOMENTUM`, desc: 'AMONG ELIGIBLE NAMES (MOMENTUM > 0, TREND OK, REGIME RISK-ON).' },
+    /* the crash-protection claim must follow the book's own flag, not the house
+       default — a book with regime_filter OFF has no such protection */
+    p.regime_filter === false
+      ? { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', formula: 'DISABLED — NO REGIME GATE', desc: 'THIS BOOK STAYS INVESTED WITH THE INDEX BELOW ITS MA. NO CRASH PROTECTION FROM THIS STEP.' }
+      : { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', formula: `INDEX > ${p.index_trend_ma ?? 200}-DAY MA`, desc: 'INDEX BELOW ITS MA → SLEEVE GOES 100% CASH. THE CRASH PROTECTION.' },
+    { n: '04', mod: 'SIGNALS.PY', title: p.long_short ? 'SELECT TOP / BOTTOM N' : 'SELECT TOP N', formula: `TOP ${p.top_n ?? 10} BY MOMENTUM${p.long_short ? ` · SHORT BOTTOM ${p.short_n ?? 0}` : ''}`, desc: `AMONG ELIGIBLE NAMES (MOMENTUM > ${num(p.abs_momentum_floor ?? 0, 2)}, TREND OK${p.regime_filter === false ? '' : ', REGIME RISK-ON'}).` },
     { n: '05', mod: 'STRATEGY.PY', title: 'INVERSE-VOL WEIGHTS', formula: `wᵢ ∝ 1/VOLᵢ · CAP ${pct0(p.max_weight ?? 0.15)}`, desc: 'CALM NAMES GET MORE CAPITAL; NO SINGLE NAME DOMINATES.' },
     { n: '06', mod: 'STRATEGY.PY', title: 'VOL TARGETING', formula: `SCALE → ${pct0(p.target_vol ?? 0.12)} VOL · GROSS ≤ ${pct0(p.max_gross ?? 1)}`, desc: 'STEADY RISK, NOT STEADY CAPITAL. TURBULENT MARKETS → MORE CASH.' },
   ].map(st => `
@@ -949,12 +1339,26 @@ function methodHTML() {
   ].map(iv => `
     <div style="display:flex;gap:10px;padding:9px 18px;border-bottom:1px solid #121212;font-size:10.5px;line-height:1.6"><span style="color:#7ee787">✓</span><span style="color:#9db5a0">${iv.text} <span style="color:#3d543f">${iv.test}</span></span></div>`).join('');
 
+  /* A profiled book is NOT running the strategy this tab describes by default,
+     so say so before the prose does any damage. The two overrides that change
+     the words (not just a number) get spelled out. */
+  const overBanner = !over.length ? '' : `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 18px;background:rgba(227,179,65,.06);border-bottom:1px solid #3d3418;font-size:10px;color:#e3b341">
+      <span style="font-weight:600">⚠ PROFILED BOOK — NOT THE HOUSE STRATEGY</span>
+      <span style="color:#8a7433">${esc(over.map(k => k.toUpperCase() + ' ' + fmtKnob(p[k])).join(' · '))}</span>
+      ${p.regime_filter === false ? '<span style="color:#8a7433">REGIME FILTER OFF — THIS BOOK DOES NOT GO TO CASH WHEN THE INDEX ROLLS OVER.</span>' : ''}
+      ${p.long_short ? `<span style="color:#8a7433">LONG/SHORT — IT ALSO SHORTS THE WEAKEST ${p.short_n ?? ''} NAMES.</span>` : ''}
+    </div>`;
+
   return `
   <div data-screen="method">
+    ${overBanner}
     <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:18px;border-right:1px solid #262626">
         <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ THE IDEA IN ONE PARAGRAPH</div>
-        <p style="font-size:12px;line-height:1.9;color:#9db5a0;margin:0">EACH MONTH, IN EACH REGION (FTSE / US / ASX), RANK EVERY STOCK BY ITS <span style="color:#7ee787">12-MONTH-MINUS-1 MOMENTUM</span>. BUY THE STRONGEST NAMES — BUT ONLY THOSE IN AN UPTREND, AND ONLY WHILE THE REGIONAL INDEX ITSELF IS IN AN UPTREND; OTHERWISE HOLD CASH. SIZE BY <span style="color:#7ee787">INVERSE VOLATILITY</span>, SCALE TO A <span style="color:#7ee787">${pct0(p.target_vol ?? 0.12)} VOL TARGET</span>, REBALANCE MONTHLY. THREE BOOKS IN PARALLEL, EACH IN ITS OWN CURRENCY, REPORTED IN AUD.</p>
+        <p style="font-size:12px;line-height:1.9;color:#9db5a0;margin:0">EACH MONTH, IN EVERY REGION THIS BOOK IS FUNDED ON${allocKeys.length ? ` (${esc(allocKeys.join(' / '))})` : ''}, RANK EVERY STOCK BY ITS <span style="color:#7ee787">12-MONTH-MINUS-1 MOMENTUM</span>. BUY THE STRONGEST NAMES — BUT ONLY THOSE IN AN UPTREND, ${p.regime_filter === false
+          ? `AND — SINCE THIS BOOK RUNS WITH THE <span style="color:${AMB}">REGIME FILTER OFF</span> — STAY INVESTED EVEN WITH THE INDEX FALLING.`
+          : 'AND ONLY WHILE THE REGIONAL INDEX ITSELF IS IN AN UPTREND; OTHERWISE HOLD CASH.'}${p.long_short ? ` <span style="color:${AMB}">SHORT THE WEAKEST ${p.short_n ?? 0}</span> FOR A DOLLAR-NEUTRAL BOOK.` : ''} SIZE BY <span style="color:#7ee787">INVERSE VOLATILITY</span>, SCALE TO A <span style="color:#7ee787">${pct0(p.target_vol ?? 0.12)} VOL TARGET</span>, REBALANCE MONTHLY. ${allocKeys.length || 3} SLEEVE${(allocKeys.length || 3) === 1 ? '' : 'S'} IN PARALLEL, EACH IN ITS OWN CURRENCY, REPORTED IN ${esc((S.meta && S.meta.base_currency) || 'AUD')}.</p>
       </div>
       <div style="padding:18px">
         <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:6px">■ EXECUTION CYCLE</div>
@@ -971,6 +1375,13 @@ function methodHTML() {
       <div style="font-size:9px;color:#eaffec;letter-spacing:.14em;margin-bottom:12px">■ THE PER-SLEEVE PIPELINE · SIGNALS.PY → STRATEGY.COMPUTE_TARGETS()</div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">${pipeline}</div>
     </div>
+    <div style="padding:14px 18px;border-bottom:1px solid #262626">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+        <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ STRATEGY KNOBS · THIS BOOK</span>
+        <span style="font-size:9px;color:#61805f;letter-spacing:.06em">${over.length ? `<span style="color:${AMB}">AMBER = DIFFERS FROM THE HOUSE DEFAULT</span> · ` : 'MATCHES THE HOUSE DEFAULTS · '}CONFIG.STRATEGYPARAMS${allocLine ? ` · CAPITAL SPLIT ${allocLine}` : ''}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:6px">${knobCells}</div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr">
       <div style="border-right:1px solid #262626">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST MODEL · REGIONS.PY</div>
@@ -980,9 +1391,15 @@ function methodHTML() {
       </div>
       <div style="border-right:1px solid #262626">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK CONTROLS · CONFIG.PY</div>
-        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>
+        ${breaker == null
+          ? `<div style="padding:12px 18px;border-bottom:1px solid #121212;background:rgba(227,179,65,.06);border-left:2px solid ${AMB}"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:${AMB};font-weight:600">⚠ DISABLED</span></div><div style="font-size:10px;color:#8a7433;line-height:1.7;margin-top:4px">THIS BOOK RUNS WITH <span style="color:${AMB}">NO DRAWDOWN STOP</span> — ITS PROFILE SETS MAX_DRAWDOWN_STOP = NONE DELIBERATELY, SO NO FALL FROM PEAK WILL LIQUIDATE IT TO CASH. THE HOUSE DEFAULT (−${num((risk.max_drawdown_stop ?? 0.25) * 100, 0)}%) DOES NOT APPLY HERE.</div></div>`
+          : page.risk_halted
+            /* the rule AND its current state: describing the breaker in the
+               abstract while it is actually firing hid the live fact. */
+            ? `<div style="padding:12px 18px;border-bottom:1px solid #121212;background:rgba(255,123,114,.07);border-left:2px solid ${R}"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:${R};font-weight:600">⚠ TRIPPED @ −${num(breaker * 100, 0)}%</span></div><div style="font-size:10px;color:#a8635e;line-height:1.7;margin-top:4px">IT HAS FIRED: THIS BOOK FELL MORE THAN ${num(breaker * 100, 0)}% FROM ITS PEAK, WAS LIQUIDATED TO CASH AND IS SITTING OUT${page.halt_cooldown ? ` — ${page.halt_cooldown} TRADING DAY${page.halt_cooldown === 1 ? '' : 'S'} LEFT` : ''}. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>`
+            : `<div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">DRAWDOWN CIRCUIT BREAKER</span><span style="color:#ff7b72">−${num(breaker * 100, 0)}%</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">FALL &gt;${num(breaker * 100, 0)}% FROM PEAK → LIQUIDATE TO CASH, SIT OUT ~${risk.drawdown_cooldown_days ?? 21} TRADING DAYS. A CATASTROPHE BACKSTOP ON TOP OF THE ${p.index_trend_ma ?? 200}-DAY REGIME FILTER.</div></div>`}
         <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE-SIZE GATE</span><span style="color:#e3b341">A$${num(risk.min_viable_equity_base ?? 500, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SLEEVE BELOW THIS HOLDS CASH INSTEAD OF BLEEDING COMMISSION FLOORS — THE LESSON THE $1K ACCOUNT TAUGHT.</div></div>
-        <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">POSITION CAPS</span><span style="color:#7ee787">${pct0(p.max_weight ?? 0.15)} / ${pct0(p.max_gross ?? 1)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">SINGLE-NAME CAP ${pct0(p.max_weight ?? 0.15)}; GROSS EXPOSURE ≤ ${pct0(p.max_gross ?? 1)} — NEVER LEVERED. ENFORCED INSIDE COMPUTE_TARGETS().</div></div>
+        <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">POSITION CAPS</span><span style="color:${(p.max_gross ?? 1) > 1 ? AMB : G}">${pct0(p.max_weight ?? 0.15)} / ${pct0(p.max_gross ?? 1)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">SINGLE-NAME CAP ${pct0(p.max_weight ?? 0.15)}; GROSS EXPOSURE ≤ ${pct0(p.max_gross ?? 1)} — ${(p.max_gross ?? 1) > 1 ? `<span style="color:${AMB}">LEVERED UP TO ${num(p.max_gross, 1)}× GROSS</span>` : 'NEVER LEVERED'}. ENFORCED INSIDE COMPUTE_TARGETS().</div></div>
       </div>
       <div>
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ INVARIANTS${tests ? ` · ENFORCED BY ${tests} TESTS` : ''}</div>
@@ -1013,7 +1430,7 @@ function allAccountsHTML() {
     const up = c.spark.length > 1 ? c.spark[c.spark.length - 1] >= c.spark[0] : true;
     return `
     <div class="hv-acct" data-act="acct" data-arg="${esc(c.key)}" style="padding:16px 18px;border-right:1px solid #262626;display:flex;flex-direction:column;gap:10px;cursor:pointer">
-      <div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)}">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
+      <div style="min-height:46px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)};flex:none;text-align:right">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
       <div style="font-size:21px;font-weight:600;color:#eaffec;letter-spacing:-.01em">A$${num(c.equity, 2)}</div>
       <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${cSign(c.day)}">${sgnPct(c.day, 2)} DAY</span></div>
       <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px;display:block"><polyline points="${spark}" fill="none" stroke="${up ? G : R}" stroke-width="1.3"></polyline></svg>
@@ -1045,7 +1462,7 @@ function allAccountsHTML() {
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.books} BOOKS RED</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
-      <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${T.halts ? R : G};margin-top:8px">${T.halts} / ${T.books}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${T.halts ? 'BREAKER(S) TRIPPED' : 'ALL BREAKERS ARMED'}</div></div>
+      <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${T.halts ? R : G};margin-top:8px">${T.halts} / ${T.books}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${T.halts ? 'BREAKER(S) TRIPPED' : 'NONE TRIPPED'}</div></div>
     </div>
     ${coreCards.length ? allocBar(coreCards) : ''}
     <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${coreCards.length || 1},1fr)">${coreCards.length ? coreCards.map(c => cardHtml(c, 'OF AUM')).join('') : '<div style="padding:26px 18px;font-size:11px;color:#61805f">NO CORE BOOKS YET — open one with <span style="color:#eaffec">paper_trade --init</span>.</div>'}</div>`;
@@ -1210,6 +1627,29 @@ function agentTf(page) {
   return tf;
 }
 
+/* ==================== FX money-terms view-model ========================= */
+/* The FX books are weight-based, so every money figure comes pre-computed from
+   forex/fx_pnl via the snapshot's `pnl` / `positions_money` / `closed` blocks.
+   This just shapes them for the screens (same job prepEquity does). */
+function prepFx(page) {
+  const sym = SYM[page.base_currency] || page.base_currency || 'A$';
+  /* same rule as prepEquity: a mark the book could not be valued on is dropped,
+     never plotted as zero (a null arrives from JSON where a NaN was) */
+  const curve = (page.equity_history || [])
+    .filter(h => Number.isFinite(h[1]))
+    .map(h => ({ date: String(h[0]), v: h[1] }));
+  const pnl = page.pnl || {};
+  const money = page.positions_money || [];
+  const blotter = page.blotter || [];
+  const lastDate = blotter.length ? blotter[blotter.length - 1].date : null;
+  const feed = blotter.filter(t => t.date === lastDate).slice().reverse();
+  const maxN = money.length
+    ? Math.max(...money.map(r => Math.abs(r.notional)), 1e-9) : 1;
+  const unit = page.rows && page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair))
+    ? 'SYMBOL' : 'PAIR';
+  return { sym, curve, pnl, money, blotter, feed, lastDate, maxN, unit };
+}
+
 function agentKpisHTML(page) {
   const isIntraday = page.bar === '60m';
   const unit = page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS';
@@ -1226,19 +1666,35 @@ function agentKpisHTML(page) {
   const daySub = (page.day_aud == null ? '—'
     : sgn(page.day_aud, 'A$' + num(Math.abs(page.day_aud), 2)))
     + (costPct && Math.abs(costPct) >= 0.00005 ? ` · COSTS ${sgnPct(costPct, 2)}` : '');
+  /* money terms — the same NET P&L / COSTS pair the equity screens carry */
+  const M = prepFx(page);
+  const p = M.pnl;
+  const netPnl = p.net_pnl != null ? p.net_pnl : page.equity - page.initial;
+  const pnlSub = p.realized != null
+    ? `REAL ${sgnCcy(p.realized, M.sym, 0)} · OPEN ${sgnCcy(p.open, M.sym, 0)}`
+    : `EQUITY LESS INITIAL`;
+  const costSub = p.carry != null && Math.abs(p.carry) >= 0.005
+    ? `CARRY ${sgnCcy(p.carry, M.sym, 2)} · TURNOVER ${num(p.turnover || 0, 1)}×`
+    : `HALF-SPREAD ON ${num(p.turnover || 0, 1)}× TURNOVER`;
+
   const kpis = [
-    { label: 'TOTAL EQUITY · AUD', val: num(page.equity, 2), color: PALE, sub: `INITIAL ${num(page.initial, 2)}` },
+    { label: `TOTAL EQUITY · ${page.base_currency || 'AUD'}`, val: num(page.equity, 2), color: PALE, sub: `INITIAL ${num(page.initial, 2)}` },
     { label: 'TOTAL RETURN', val: sgnPct(page.total_return, 2), color: cSign(page.total_return), sub: `SINCE ${esc(page.since)}` },
     { label: dayLabel, val: page.day_pct == null ? '—' : sgnPct(page.day_pct, 2), color: cSign(page.day_pct || 0), sub: daySub },
+    { label: 'NET P&L', val: sgnCcy(netPnl, M.sym, 2), color: cSign(netPnl), sub: pnlSub },
     { label: 'OFF PEAK', val: sgnPct(page.off_peak, 2), color: page.off_peak < -0.02 ? AMB : PALE, sub: `PEAK A$${num(page.peak, 2)}` },
     { label: 'GROSS / NET', val: `${pct0(page.gross)} / ${sgn(page.net, num(Math.abs(page.net) * 100, 0) + '%')}`, color: page.gross > 1 ? AMB : PALE, sub: grossSub },
     { label: `ACTIVE ${unit}`, val: String(page.n_long + page.n_short), color: PALE, sub: `${page.n_long} LONG · ${page.n_short} SHORT` },
+    { label: 'SPREAD PAID', val: M.sym + num(p.costs || 0, 2), color: (p.costs || 0) > 0 ? R : PALE, sub: costSub },
     page.risk_halted
       ? { label: 'RISK HALT', val: 'HALTED', color: R, sub: `COOLDOWN ${page.halt_cooldown} BARS` }
-      : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
+      : page.breaker == null
+        // Breaker disabled by profile — do not claim a stop that isn't there.
+        ? { label: 'RISK HALT', val: 'NO STOP', color: AMB, sub: 'BREAKER OFF BY PROFILE' }
+        : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
   ];
-  return `<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">` +
-    kpis.map((k, i) => `<div style="padding:14px 16px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:20px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div>';
+  return `<div class="mq-x"><div style="display:grid;grid-template-columns:1.4fr repeat(${kpis.length - 1},1fr);border-bottom:1px solid #262626">` +
+    kpis.map((k, i) => `<div style="padding:14px 14px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:18px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div></div>';
 }
 
 function agentTapeHTML(page) {
@@ -1267,19 +1723,36 @@ function agentTapeHTML(page) {
     }
   }
   const nextMark = page.bar === '60m' ? 'NEXT 60M BAR' : 'DAILY BAR CLOSE';
-  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · BREAKER <span style="color:${page.risk_halted ? R : G}">${page.risk_halted ? 'TRIPPED' : 'ARMED'}</span> @ −${num(page.breaker * 100, 0)}% · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
+  const breakerBit = page.breaker == null
+    ? `BREAKER <span style="color:${AMB}">OFF</span>`
+    : `BREAKER <span style="color:${page.risk_halted ? R : G}">${page.risk_halted ? 'TRIPPED' : 'ARMED'}</span> @ −${num(page.breaker * 100, 0)}%`;
+  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · ${breakerBit} · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
   return acctTapeHTML(items, right);
 }
 
 function agentCurveAttrHTML(page) {
-  const vals = (page.equity_history || []).map(h => h[1]);
+  const M = prepFx(page);
+  const filt = rangeFilter(M.curve);
+  const vals = filt.map(c => c.v);
+  const dates = filt.map(c => c.date);
   const upCurve = vals.length > 1 ? vals[vals.length - 1] >= vals[0] : true;
   const stroke = upCurve ? G : R;
   const p = toPts(vals, 600, 140, 10);
-  const eqStart = page.equity_history.length ? page.equity_history[0][0] : '';
-  const eqEnd = page.equity_history.length ? page.equity_history[page.equity_history.length - 1][0] : '';
   const rangeTxt = vals.length
     ? `MIN ${num(Math.min(...vals), 2)} · MAX ${num(Math.max(...vals), 2)}${page.bar === '60m' ? ' · HOURLY MARKS' : ''}` : '';
+
+  /* drawdown-from-peak, same panel the equity screens carry. fx_api computes it
+     over the WHOLE book, so a zoomed range still reads against the real
+     high-water mark rather than the range's own local peak. */
+  const ddAll = (page.drawdown || []).map(d => ({ date: String(d.date), v: d.dd }));
+  const from = dates.length ? String(dates[0]).slice(0, 10) : '';
+  const dd = ddAll.filter(d => d.date.slice(0, 10) >= from).map(d => d.v);
+  const ddMin = Math.min(...dd, -1e-9);
+  const ddPts = dd.map((d, i) => ((i / Math.max(dd.length - 1, 1)) * 600).toFixed(1)
+    + ',' + (2 + (d / ddMin) * 40).toFixed(1)).join(' ');
+  const ddArea = dd.length ? '0,2 ' + ddPts + ' 600,2' : '';
+  const ddNow = dd.length ? dd[dd.length - 1] : 0;
+  const axis = axisDates(dates.map(d => String(d).slice(0, 10)), 5);
 
   /* attribution vs ensemble-tilt panel (the design shows tilt for matt) */
   let bars, title;
@@ -1315,22 +1788,126 @@ function agentCurveAttrHTML(page) {
 
   return `
   <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
-    <div style="padding:12px 18px;border-right:1px solid #262626">
-      <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em;margin-bottom:8px"><span style="color:#eaffec">■ EQUITY CURVE · AUD</span><span style="color:#61805f">${rangeTxt}</span></div>
-      <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
-        <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
-        <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
-        <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
-        <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
-        <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
-      </svg>
-      <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px"><span>${esc(mmdd(eqStart) || eqStart)}</span><span>${esc(String(eqEnd).slice(5))}</span></div>
+    <div style="border-right:1px solid #262626">
+      <div style="padding:12px 18px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency || 'AUD')}</span><span style="color:#61805f">${rangeTxt}</span></div>
+          <div style="display:flex;gap:2px;font-size:9px">${rangeChips()}</div>
+        </div>
+        <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
+          <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
+          <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
+          <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
+        </svg>
+      </div>
+      <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
+        <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:.12em;margin:6px 0"><span style="color:#61805f">DRAWDOWN FROM PEAK</span><span style="color:${ddNow < -0.02 ? AMB : DIM}">${dd.length ? `NOW ${sgnPct(ddNow, 2)} · WORST ${sgnPct(ddMin, 2)}` : 'NO HISTORY YET'}</span></div>
+        <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
+          <line x1="0" y1="1" x2="600" y2="1" stroke="#262626" stroke-width="1"></line>
+          <polygon points="${ddArea}" fill="rgba(255,123,114,0.18)"></polygon>
+          <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
+      </div>
     </div>
     <div>
       <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ${title}</div>
       <div style="padding:8px 18px 12px">${barHtml}</div>
     </div>
   </div>`;
+}
+
+/* ============== FX · OPEN BOOK + TRADE FEED + FINANCIAL POSITION ========= */
+/* The money half of the FX overview: what is on, what it is worth, what it
+   cost, and how those add up to equity — the parity item with the equity
+   screens' OPEN BOOK / TRADE FEED / TOTAL FINANCIAL POSITION block. Closes with
+   the same two calendar panels the equity screens carry (returns by period +
+   drawdown episodes), read off this book's own curve. */
+function fxBookHTML(page) {
+  const M = prepFx(page);
+  const p = M.pnl;
+  const sym = M.sym;
+
+  const bookRows = M.money.map(r => {
+    const long = r.weight >= 0;
+    const frac = Math.abs(r.notional) / M.maxN;
+    return `
+    <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .6fr 1.35fr .8fr .8fr .6fr .8fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
+      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
+      <span style="display:flex;align-items:center;gap:8px"><span style="color:#c9e8cc;width:62px">${sym}${num(Math.abs(r.notional), 0)}</span><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${long ? G : R};width:${(frac * 100).toFixed(0)}%"></span></span></span>
+      <span style="color:#e3b341">${pairPrice(r.pair, r.avg_entry)}</span>
+      <span style="color:#9db5a0">${pairPrice(r.pair, r.price)}</span>
+      <span style="color:${r.day_move == null ? FAINT : cSign(r.day_move)}">${r.day_move == null ? '—' : sgnPct(r.day_move, 2)}</span>
+      <span style="color:${cSign(r.unrealized)};font-weight:600">${sgnCcy(r.unrealized, sym, 2)}</span>
+      <span style="color:${cSign(r.unrealized_pct)}">${sgnPct(r.unrealized_pct, 2)}</span>
+    </div>`;
+  }).join('');
+
+  const feedRows = M.feed.slice(0, 9).map(t => `
+    <div style="display:flex;align-items:center;gap:9px;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212">
+      <span style="color:#3d543f">${mmdd(t.date)}</span>
+      <span style="width:32px;font-weight:600;color:${t.side === 'BUY' ? G : R}">${esc(t.side)}</span>
+      <span style="color:#eaffec;width:58px">${esc(t.pair)}</span>
+      <span style="color:#9db5a0">${sgnPct(t.delta_weight, 1)} → ${sym}${num(t.notional, 0)}</span>
+      <span style="color:#e3b341;margin-left:auto">${sym}${num(t.cost, 2)}</span>
+    </div>`).join('');
+
+  /* the reconciliation: realised + open + carry + residual = equity − initial */
+  const line = (label, val, color, dp = 2) => `
+    <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">${label}</span><span style="color:${color}">${val}</span></div>`;
+  const carryLine = p.carry == null
+    ? line('CARRY / FINANCING', 'NOT TRACKED', FAINT)
+    : line('CARRY / FINANCING', sgnCcy(p.carry, sym, 2), cSign(p.carry));
+  const residLine = Math.abs(p.residual || 0) >= 0.01
+    ? line('UNEXPLAINED', sgnCcy(p.residual, sym, 2), AMB) : '';
+  const notes = [];
+  if (p.fx_unstamped) notes.push(`${p.fx_unstamped} EARLY FILL${p.fx_unstamped > 1 ? 'S' : ''} PREDATE THE FX STAMP — PRICE MOVE ONLY`);
+  if (Math.abs(p.residual || 0) >= 0.01) notes.push('UNEXPLAINED = COMPOUNDING DRIFT ON HELD WEIGHT' + (p.carry == null ? ' + UNTRACKED CARRY' : ''));
+
+  /* Period grid: MONTHLY needs years of marks. Every FX book is weeks old (and
+     the hourly one covers days), so under ~3 months of history the honest
+     period is the session — it flips to months on its own once there is
+     enough. Both panels are full width here: 31 day columns do not fit the
+     equity screens' 1.35fr/1fr split. */
+  const spanDays = M.curve.length > 1
+    ? (new Date(String(M.curve[M.curve.length - 1].date).slice(0, 10))
+       - new Date(String(M.curve[0].date).slice(0, 10))) / 86400e3 : 0;
+  const hourly = page.bar === '60m';
+
+  return `
+  <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+    <div style="border-right:1px solid #262626">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN BOOK · ${M.money.length} ${M.unit}${M.money.length === 1 ? '' : 'S'} · MARKED IN ${esc(page.base_currency || 'AUD')}</span><span style="font-size:9px;color:#61805f">NOTIONAL = |WEIGHT| × EQUITY WHEN OPENED</span></div>
+      <div class="mq-x"><div style="display:grid;grid-template-columns:1fr .55fr .6fr 1.35fr .8fr .8fr .6fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>NOTIONAL</span><span>ENTRY</span><span>PRICE</span><span>DAY</span><span>OPEN P&amp;L</span><span>OPEN %</span></div>
+      ${bookRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— FLAT. NO OPEN EXPOSURE.</div>'}</div>
+    </div>
+    <div style="display:flex;flex-direction:column">
+      <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${esc(String(M.lastDate).slice(5))} REBALANCE` : ''}</div>
+      <div>${feedRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS ON THE LAST BAR.</div>'}</div>
+      <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #262626;background:#0d0d0d">
+        <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">TOTAL FINANCIAL POSITION · ${esc(page.base_currency || 'AUD')}</div>
+        ${line('GROSS NOTIONAL', sym + num(p.gross_notional || 0, 0), TXT)}
+        ${line('NET NOTIONAL', sgnCcy(p.net_notional || 0, sym, 0), cSign(p.net_notional || 0))}
+        ${line('REALIZED P&amp;L', sgnCcy(p.realized || 0, sym, 2), cSign(p.realized || 0))}
+        ${line('OPEN P&amp;L', sgnCcy(p.open || 0, sym, 2), cSign(p.open || 0))}
+        ${carryLine}
+        ${residLine}
+        <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">NET P&amp;L</span><span style="color:${cSign(p.net_pnl || 0)};font-weight:600">${sgnCcy(p.net_pnl || 0, sym, 2)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${sym}${num(page.equity, 2)}</span></div>
+        <!-- Memo, NOT a term of the sum above: the spread is already inside
+             REALIZED (both legs) and OPEN (the entry leg). Listing it as a
+             sibling made the column read as summable when it is not. -->
+        <div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0 0;margin-top:5px;border-top:1px solid #1a1a1a"><span style="color:#3d543f">OF WHICH SPREAD PAID</span><span style="color:#8a7433">−${sym}${num(p.costs || 0, 2)}</span></div>
+        ${notes.length ? `<div style="font-size:8.5px;color:#3d543f;line-height:1.6;margin-top:8px;border-top:1px solid #1a1a1a;padding-top:7px">${notes.map(n => esc(n)).join('<br>')}</div>` : ''}
+      </div>
+    </div>
+  </div>
+  <div style="border-bottom:1px solid #262626">${monthlyHeatmapHTML(M.curve, spanDays < 95)}</div>
+  <div style="border-bottom:1px solid #262626">${ddEpisodesHTML(M.curve, hourly)}</div>`;
 }
 
 /* =================== agent pair chart (with TA + hover) ================ */
@@ -1346,8 +1923,33 @@ function chartSectionHTML(page) {
   const volN = (+row.ann_vol || 0.02);
   const { bars: cBars, real: cReal } = synthCandles(selPair, closeN, volN, T.n, tf, T.s);
   const n2 = cBars.length;
-  let cHi = -Infinity, cLo = Infinity;
-  for (const b of cBars) { cHi = Math.max(cHi, b.h); cLo = Math.min(cLo, b.l); }
+  const ta = S.ta;
+  const panes = S.taPanes || {};
+
+  /* ---- the agents' REAL readings for this bar (fx_api rows[].indicators) ----
+     Every value here was computed by the engine on real bars and is what the
+     ensemble actually voted on. There is no indicator HISTORY in state — only
+     this latest read — so the overlays and panes below keep their synthetic
+     shape and show the live numbers separately, rather than passing a made-up
+     curve off as data. {} on a leg held with no decision on file. */
+  const ind = row.indicators || {};
+  const iv = k => (ind[k] == null ? null : +ind[k]);
+  const fpr = (S.meta && S.meta.fx_profiles && S.meta.fx_profiles[page.account]) || {};
+  /* Live levels for the overlays that are ON. These are real, the bars are not,
+     so they set the axis — a synthetic window is no reason to push a true level
+     off-frame (the EMA100 of a trending pair routinely sits outside it). */
+  const lvls = [].concat(
+    ta.ema ? [{ v: iv('ema_fast'), col: '#e3b341', txt: 'live EMA' + (fpr.ema_fast || ' fast') },
+              { v: iv('ema_slow'), col: '#c9e8cc', txt: 'live EMA' + (fpr.ema_slow || ' slow') }] : [],
+    ta.don ? [{ v: iv('donchian_hi'), col: '#8a7433', txt: 'live Donchian high' },
+              { v: iv('donchian_lo'), col: '#8a7433', txt: 'live Donchian low' }] : [],
+  ).filter(l => l.v != null);
+
+  let bHi = -Infinity, bLo = Infinity;          // the BARS' own range (footer)
+  for (const b of cBars) { bHi = Math.max(bHi, b.h); bLo = Math.min(bLo, b.l); }
+  let cHi = bHi, cLo = bLo;                     // the axis, widened for real levels
+  for (const l of lvls) { cHi = Math.max(cHi, l.v); cLo = Math.min(cLo, l.v); }
+  const stretched = cHi > bHi || cLo < bLo;
   const CY = v => Math.max(2, Math.min(238, 10 + (1 - (v - cLo) / (cHi - cLo || 1)) * 220));
   const cp = candlePaths(cBars, 1200, CY);
   const cbw = cp.bw;
@@ -1356,8 +1958,6 @@ function chartSectionHTML(page) {
   const cFmt = v => (dollar ? '$' : '') + (+v).toLocaleString('en-US', { minimumFractionDigits: cdp, maximumFractionDigits: cdp });
 
   /* ---- TA overlays ---- */
-  const ta = S.ta;
-  const panes = S.taPanes || {};
   const closes = cBars.map(b => b.c);
   const cxAt = i => ((i + 0.5) * cbw).toFixed(1);
   const lineOf = (arr, from) => arr.map((v, j) => cxAt(from + j) + ',' + CY(v).toFixed(1)).join(' ');
@@ -1397,6 +1997,11 @@ function chartSectionHTML(page) {
     taDonLo = lineOf(loA, wD - 1);
     legendParts.push('DONCHIAN ' + wD + ' OCHRE');
   }
+  /* The overlay curves are shaped by synthetic bars; these flat references are
+     the agents' true levels for this bar (they are already inside the axis). */
+  const liveLevels = lvls.map(l =>
+    `<line x1="0" y1="${CY(l.v).toFixed(1)}" x2="1200" y2="${CY(l.v).toFixed(1)}" stroke="${l.col}" stroke-width="1.2" opacity="0.95"><title>${esc(l.txt + ' ' + cFmt(l.v))}</title></line>`).join('');
+  if (liveLevels) legendParts.push('FLAT LINE = LIVE LEVEL · CURVE = SYNTHETIC SHAPE');
   const taChips = [
     { key: 'ema', label: 'EMA ' + pF + '/' + pS, dot: '#e3b341' },
     { key: 'boll', label: 'BOLLINGER ±2σ', dot: '#9db5a0' },
@@ -1421,24 +2026,36 @@ function chartSectionHTML(page) {
       }
       const last = rsis[rsis.length - 1];
       const PY = v => 8 + (1 - v / 100) * 64;
-      return _paneHTML('RSI(' + p + ')', last.toFixed(1),
-        (last >= 70 ? 'OVERBOUGHT' : last <= 30 ? 'OVERSOLD' : 'NEUTRAL') + ' · 70 ┄ · 30 ┄',
+      /* the READ that matters is the live one — so the state word and the
+         colour come from it whenever the book has one */
+      const rv = iv('rsi'), rd = rv == null ? last : rv;
+      return _paneHTML('RSI', last.toFixed(1),
+        (rd >= 70 ? 'OVERBOUGHT' : rd <= 30 ? 'OVERSOLD' : 'NEUTRAL') + ' · 70 ┄ · 30 ┄',
         PY(70).toFixed(1), PY(50).toFixed(1), PY(30).toFixed(1),
         rsis.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
-        last >= 70 ? R : last <= 30 ? G : '#c9e8cc');
+        rd >= 70 ? R : rd <= 30 ? G : '#c9e8cc',
+        rv == null ? null : { txt: rv.toFixed(1), y: PY(rv).toFixed(1) });
     }
     if (name === 'MOMENTUM') {
       const w = Math.max(3, Math.min(20, Math.floor(n2 / 3)));
       const rocs = [];
       for (let i = w; i < n2; i++) rocs.push((closes[i] / closes[i - w] - 1) * 100);
-      const m = Math.max(...rocs.map(Math.abs), 0.1);
+      /* the live ROC is over the PROFILE's window, not this pane's, so it can
+         sit outside the synthetic range — scale the pane to hold both */
+      const rv = iv('roc') == null ? null : iv('roc') * 100;
+      const m = Math.max(...rocs.map(Math.abs), Math.abs(rv || 0), 0.1);
       const PY = v => 40 - (v / m) * 30;
       const pts = rocs.map((v, j) => cxAt(w + j) + ',' + PY(v).toFixed(1)).join(' ');
       const last = rocs[rocs.length - 1];
-      return _paneHTML('MOMENTUM · ROC(' + w + ') %', sgn(last, Math.abs(last).toFixed(2) + '%'),
-        (last >= 0 ? 'UP-MOMENTUM' : 'DOWN-MOMENTUM') + ' · ZERO LINE CENTRE',
+      const rd = rv == null ? last : rv;
+      return _paneHTML('MOMENTUM · ROC %', sgn(last, Math.abs(last).toFixed(2) + '%'),
+        (rd >= 0 ? 'UP-MOMENTUM' : 'DOWN-MOMENTUM') + ' · ZERO LINE CENTRE',
         PY(m * 0.66).toFixed(1), '40', PY(-m * 0.66).toFixed(1), pts,
-        cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40', last >= 0 ? G : R);
+        cxAt(w) + ',40 ' + pts + ' ' + cxAt(n2 - 1) + ',40', rd >= 0 ? G : R,
+        rv == null ? null : {
+          txt: (fpr.roc_window ? 'ROC(' + fpr.roc_window + ') ' : '') + sgn(rv, Math.abs(rv).toFixed(2) + '%'),
+          y: PY(rv).toFixed(1),
+        });
     }
     if (name === 'ADX') {
       const p = Math.max(5, Math.min(14, Math.floor(n2 / 3)));
@@ -1458,11 +2075,15 @@ function chartSectionHTML(page) {
       }
       const last = adxs[adxs.length - 1];
       const PY = v => 8 + (1 - Math.min(v, 60) / 60) * 64;
-      return _paneHTML('ADX(' + p + ') · TREND STRENGTH', last.toFixed(1),
-        (last >= 25 ? 'TRENDING' : last < 20 ? 'RANGING' : 'BUILDING') + ' · 25 ┄ · 20 ┄',
+      /* ADX is the regime gate — row.regime is decided off the LIVE value, so
+         the pane must agree with it rather than with a made-up series */
+      const rv = iv('adx'), rd = rv == null ? last : rv;
+      return _paneHTML('ADX · TREND STRENGTH', last.toFixed(1),
+        (rd >= 25 ? 'TRENDING' : rd < 20 ? 'RANGING' : 'BUILDING') + ' · 25 ┄ · 20 ┄',
         PY(40).toFixed(1), PY(25).toFixed(1), PY(10).toFixed(1),
         adxs.map((v, j) => cxAt(1 + j) + ',' + PY(v).toFixed(1)).join(' '), '',
-        last >= 25 ? G : AMB);
+        rd >= 25 ? G : AMB,
+        rv == null ? null : { txt: rv.toFixed(1), y: PY(rv).toFixed(1) });
     }
     return '';
   };
@@ -1550,6 +2171,36 @@ function chartSectionHTML(page) {
   const chartSrc = cReal ? 'LIVE OHLC (candles.json)' : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — DROP A candles.json TO WIRE REAL OHLC';
   const sideColor = row.weight >= 0 ? G : R;
 
+  /* ---- LIVE READINGS: the indicator values the vote was actually cast on ---- */
+  const reads = [
+    { k: 'EMA' + (fpr.ema_fast || ' FAST'), v: iv('ema_fast'), f: cFmt, c: '#e3b341' },
+    { k: 'EMA' + (fpr.ema_slow || ' SLOW'), v: iv('ema_slow'), f: cFmt, c: PALE },
+    { k: 'ADX', v: iv('adx'), f: v => v.toFixed(1), c: v => v >= 25 ? G : AMB },
+    { k: 'RSI', v: iv('rsi'), f: v => v.toFixed(1), c: v => v >= 70 ? R : v <= 30 ? G : TXT },
+    { k: 'ROC' + (fpr.roc_window ? '(' + fpr.roc_window + ')' : ''), v: iv('roc'), f: v => sgnPct(v, 2), c: v => cSign(v) },
+    { k: 'BOLL Z', v: iv('bb_z'), f: v => sgn(v, Math.abs(v).toFixed(2) + 'σ'), c: v => Math.abs(v) >= 2 ? AMB : TXT },
+    { k: 'DONCHIAN HI', v: iv('donchian_hi'), f: cFmt, c: '#8a7433' },
+    { k: 'DONCHIAN LO', v: iv('donchian_lo'), f: cFmt, c: '#8a7433' },
+    { k: 'PRICE', v: iv('price'), f: v => pairPrice(selPair, v), c: PALE },
+    { k: 'ANN VOL', v: iv('ann_vol'), f: v => num(v * 100, 1) + '%', c: TXT },
+  ].map(r => {
+    const col = r.v == null ? FAINT : (typeof r.c === 'function' ? r.c(r.v) : r.c);
+    return `<span style="color:#61805f">${esc(r.k)} <span style="color:${col};font-weight:600">${r.v == null ? '—' : esc(r.f(r.v))}</span></span>`;
+  }).join('');
+  const readsHTML = `
+    <div style="border-top:1px solid #1a1a1a;padding:9px 0 10px">
+      <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;font-size:8.5px;letter-spacing:.1em;margin-bottom:6px">
+        <span style="color:#eaffec;letter-spacing:.14em">■ LIVE INDICATOR READINGS · ${esc(selPair)}</span>
+        <span style="color:#61805f">${Object.keys(ind).length
+          ? `WHAT THE AGENTS ACTUALLY VOTED ON${page.last_bar_date ? ' · BAR ' + esc(page.last_bar_date) : ''}`
+          : 'NOT AVAILABLE FOR THIS LEG'}</span>
+      </div>
+      ${Object.keys(ind).length
+        ? `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:10.5px">${reads}</div>
+           <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:8px">PERSISTED WITH THE DECISION IN state/fx_state_${esc(page.account)}.json — REAL VALUES ON REAL BARS. THE BOOK STORES THE LATEST READ ONLY, NOT A HISTORY, SO THE CANDLES AND OVERLAY CURVES ABOVE STAY SYNTHETIC; THESE NUMBERS AND THE FLAT LEVEL LINES ARE THE REAL PART.</div>`
+        : `<div style="font-size:10.5px;color:#61805f">— NO DECISION ON FILE FOR THIS LEG, SO NO INDICATOR READING: IT IS HELD FROM AN EARLIER BAR. EVERYTHING PLOTTED ABOVE IS SYNTHETIC EXCEPT THE LAST PRICE.</div>`}
+    </div>`;
+
   return `
   <div style="border-bottom:1px solid #262626">
     <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #1a1a1a;flex-wrap:wrap">
@@ -1587,6 +2238,7 @@ function chartSectionHTML(page) {
         <polyline points="${taDonLo}" stroke="#8a7433" stroke-width="1" stroke-dasharray="6 3" fill="none"></polyline>
         <polyline points="${taEmaFast}" stroke="#e3b341" stroke-width="1.4" fill="none"></polyline>
         <polyline points="${taEmaSlow}" stroke="#c9e8cc" stroke-width="1.4" fill="none" opacity="0.85"></polyline>
+        ${liveLevels}
         <line x1="0" y1="${CY(closeN).toFixed(1)}" x2="1200" y2="${CY(closeN).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"></line>
         ${newsLines}
       </svg>
@@ -1595,14 +2247,16 @@ function chartSectionHTML(page) {
       ${panesHtml}
       <div style="display:flex;gap:16px;font-size:9px;color:#3d543f;letter-spacing:.08em;padding:6px 0 8px;flex-wrap:wrap">
         <span>${T.label}</span>
-        <span>HI <span style="color:#61805f">${cFmt(cHi)}</span></span>
-        <span>LO <span style="color:#61805f">${cFmt(cLo)}</span></span>
+        <span>HI <span style="color:#61805f">${cFmt(bHi)}</span></span>
+        <span>LO <span style="color:#61805f">${cFmt(bLo)}</span></span>
+        ${stretched ? '<span style="color:#8a7433">AXIS WIDENED TO HOLD THE LIVE LEVELS — THE BARS SIT IN A NARROWER BAND</span>' : ''}
         <span style="color:#e3b341">LAST ${pairPrice(selPair, closeN)} ┄</span>
         <span>BOOK <span style="color:${sideColor}">${sgnPct(row.weight, 1)}</span></span>
         ${newsOnChart ? `<span style="color:#e3b341">◆ ${newsMarks.length} NEWS MARKER${newsMarks.length > 1 ? 'S' : ''} — HOVER A LINE</span>`
           : (newsMarks.length ? '<span style="color:#8a7433">◆ NEWS IN FEED BELOW (markers show on the 1M / 6M daily view)</span>' : '')}
         <span style="margin-left:auto;color:#8a7433">${chartSrc}</span>
       </div>
+      ${readsHTML}
       ${newsPanelHTML(page, selPair)}
       <div style="border-top:1px solid #1a1a1a;padding:10px 0 12px">
         <div style="display:flex;gap:14px;align-items:baseline;font-size:8.5px;letter-spacing:.1em;margin-bottom:9px"><span style="color:#eaffec;letter-spacing:.14em">■ MOVE BREAKDOWN — WHAT HAPPENED &amp; WHY</span><span style="color:#61805f">${esc(phaseSummary)}</span></div>
@@ -1620,17 +2274,22 @@ function chartSectionHTML(page) {
   </div>`;
 }
 
-function _paneHTML(label, val, hint, y1, y2, y3, pts, area, valColor) {
+/* `live` = {txt, y} — the agents' OWN reading for this bar out of the book's
+   persisted decision (fx_api rows[].indicators). Only that ONE number is real:
+   the line is computed off synthetic bars, so it is labelled as a shape, and
+   the live value gets its own pale marker at its true level on the pane. */
+function _paneHTML(label, val, hint, y1, y2, y3, pts, area, valColor, live) {
   const vc = valColor || '#e3b341';
   return `
   <div style="border-top:1px solid #1a1a1a;padding-top:6px;margin-top:2px">
-    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:4px"><span style="color:#c9e8cc">${label}</span><span>LAST <span style="color:${vc};font-weight:600">${val}</span></span><span style="margin-left:auto">${hint}</span></div>
+    <div style="display:flex;gap:14px;font-size:8.5px;color:#61805f;letter-spacing:.12em;margin-bottom:4px"><span style="color:#c9e8cc">${label}</span>${live ? `<span style="color:#eaffec">LIVE <span style="color:${vc};font-weight:600">${live.txt}</span></span>` : ''}<span style="color:#3d543f">SYNTHETIC SHAPE${live ? '' : ' — NO LIVE READING ON FILE'} · LAST ${val}</span><span style="margin-left:auto">${hint}</span></div>
     <svg viewBox="0 0 1200 80" preserveAspectRatio="none" style="width:100%;height:70px;display:block">
       <line x1="0" y1="${y1}" x2="1200" y2="${y1}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <line x1="0" y1="${y2}" x2="1200" y2="${y2}" stroke="#1a1a1a" stroke-width="1"></line>
       <line x1="0" y1="${y3}" x2="1200" y2="${y3}" stroke="#2e2e2e" stroke-width="1" stroke-dasharray="4 4"></line>
       <polygon points="${area}" fill="rgba(201,232,204,0.06)"></polygon>
-      <polyline points="${pts}" fill="none" stroke="${vc}" stroke-width="1.3" stroke-linejoin="round"></polyline>
+      <polyline points="${pts}" fill="none" stroke="${vc}" stroke-width="1.3" stroke-linejoin="round" opacity="0.55"></polyline>
+      ${live && live.y != null ? `<line x1="0" y1="${live.y}" x2="1200" y2="${live.y}" stroke="${vc}" stroke-width="1.4"><title>live reading ${live.txt}</title></line>` : ''}
     </svg>
   </div>`;
 }
@@ -1869,11 +2528,169 @@ function agentPositionsHTML(page) {
     </div>`;
   }).join('');
 
+  const unit = page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOL' : 'PAIR';
   return `
   <div data-screen="agent-positions">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS'} · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A PAIR FOR THE ENSEMBLE'S REASONING</span></div>
-    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>PAIR</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ DECISION BOOK · ${page.rows.length} ${unit}S · LONG/SHORT</span><span style="font-size:9px;color:#61805f">HOVER A ${unit} FOR THE ENSEMBLE'S REASONING</span></div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${unit}</span><span>SIDE</span><span>WEIGHT</span><span>TILT</span><span>REGIME</span><span>PRICE</span><span>VOL</span><span>AGENTS T·B·M·R·C·N</span></div>
     ${rows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO DECISIONS RECORDED YET. RUN THE FX ENGINE ONCE.</div>'}</div>
+  </div>`;
+}
+
+/* ================= FX · MONEY LEDGER (POSITIONS tab) ==================== */
+/* Everything the equity POSITIONS screen shows in dollars, for a weight book:
+   the open positions at cost basis, where the exposure really sits by currency
+   leg, P&L per instrument, every fill, and the FIFO closed round-trips. */
+function fxLedgerHTML(page) {
+  const M = prepFx(page);
+  const p = M.pnl;
+  const sym = M.sym;
+
+  /* --- 1. open positions, money terms --- */
+  const posRows = M.money.map(r => {
+    const long = r.weight >= 0;
+    return `
+    <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .55fr .6fr .4fr .85fr .8fr .8fr .6fr .8fr .6fr .7fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
+      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
+      <span style="color:#61805f">${r.n_lots}</span>
+      <span style="color:#c9e8cc">${sym}${num(Math.abs(r.notional), 0)}</span>
+      <span style="color:#e3b341">${pairPrice(r.pair, r.avg_entry)}</span>
+      <span style="color:#9db5a0">${r.priced ? pairPrice(r.pair, r.price) : '—'}</span>
+      <span style="color:#e3b341">${sym}${num(r.entry_cost, 2)}</span>
+      <span style="color:${cSign(r.unrealized)};font-weight:600">${sgnCcy(r.unrealized, sym, 2)}</span>
+      <span style="color:${cSign(r.unrealized_pct)}">${sgnPct(r.unrealized_pct, 2)}</span>
+      <span style="color:#3d543f">${esc(String(r.held_since).slice(5))}${r.fx_known ? '' : ' <span style="color:#8a7433">·FX?</span>'}</span>
+    </div>`;
+  }).join('');
+
+  /* --- 2. net exposure by currency leg --- */
+  const exp = page.exposure || [];
+  const maxExp = exp.length ? Math.max(...exp.map(e => Math.abs(e.weight)), 1e-9) : 1;
+  const expRows = exp.map(e => {
+    const pos = e.weight >= 0;
+    const frac = Math.abs(e.weight) / maxExp;
+    return `
+    <div style="display:flex;align-items:center;gap:9px;padding:4px 18px;font-size:10.5px">
+      <span style="color:#c9e8cc;width:46px">${esc(e.currency)}</span>
+      <span style="position:relative;flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${pos ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${pos ? G : R}"></span></span>
+      <span style="color:${pos ? G : R};width:52px;text-align:right">${sgnPct(e.weight, 1)}</span>
+      <span style="color:#61805f;width:74px;text-align:right">${sgnCcy(e.notional, sym, 0)}</span>
+    </div>`;
+  }).join('');
+
+  /* --- 3. P&L by instrument --- */
+  const roll = page.pnl_by_pair || [];
+  const maxRoll = roll.length ? Math.max(...roll.map(r => Math.abs(r.total)), 1e-9) : 1;
+  const rollRows = roll.map(r => {
+    const frac = Math.abs(r.total) / maxRoll;
+    const pos = r.total >= 0;
+    return `
+    <div class="hv-row" style="display:grid;grid-template-columns:.9fr .5fr .5fr .8fr .8fr .7fr .7fr 1fr .85fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#eaffec">${esc(r.pair)}</span>
+      <span style="color:#61805f">${r.trades}</span>
+      <span style="color:#61805f">${r.round_trips}</span>
+      <span style="color:${cSign(r.realized)}">${sgnCcy(r.realized, sym, 2)}</span>
+      <span style="color:${cSign(r.open)}">${sgnCcy(r.open, sym, 2)}</span>
+      <span style="color:${r.carry == null ? FAINT : cSign(r.carry)}">${r.carry == null ? '—' : sgnCcy(r.carry, sym, 2)}</span>
+      <span style="color:#e3b341">${sym}${num(r.costs, 2)}</span>
+      <span style="display:flex;align-items:center;gap:7px"><span style="position:relative;width:80px;height:4px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:8px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:4px;left:${pos ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${pos ? G : R}"></span></span></span>
+      <span style="color:${cSign(r.total)};font-weight:600">${sgnCcy(r.total, sym, 2)}</span>
+    </div>`;
+  }).join('');
+
+  /* the exact per-bar decomposition, when the book has been tracked for it */
+  const c = page.cumulative;
+  const exactStrip = c
+    ? `<span style="font-size:9px;color:#61805f">EXACT SINCE ${esc(String(c.from).slice(0, 10))}${c.from_inception ? ' (INCEPTION)' : ''} · PRICE <span style="color:${cSign(c.price_pnl)}">${sgnCcy(c.price_pnl, sym, 2)}</span> · CARRY <span style="color:${cSign(c.carry)}">${sgnCcy(c.carry, sym, 2)}</span> · SPREAD <span style="color:#ff7b72">−${sym}${num(c.cost, 2)}</span> · NET <span style="color:${cSign(c.net)}">${sgnCcy(c.net, sym, 2)}</span></span>`
+    : `<span style="font-size:9px;color:#3d543f">CARRY TRACKING STARTS AT THIS BOOK'S NEXT BAR — UNTIL THEN FINANCING SITS IN THE UNEXPLAINED LINE</span>`;
+
+  /* --- 4. blotter --- */
+  const blot = M.blotter.slice().reverse();
+  const blotRows = blot.map(t => `
+    <div class="hv-row" style="display:grid;grid-template-columns:.85fr .8fr .5fr .65fr .65fr .85fr 1fr .55fr .8fr .65fr;padding:4px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#3d543f">${esc(t.date)}</span>
+      <span style="color:#eaffec">${esc(t.pair)}</span>
+      <span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${esc(t.side)}</span>
+      <span style="color:${cSign(t.delta_weight)}">${sgnPct(t.delta_weight, 1)}</span>
+      <span style="color:#9db5a0">${sgnPct(t.target_weight || 0, 1)}</span>
+      <span style="color:#9db5a0">${pairPrice(t.pair, t.price)}</span>
+      <span style="color:#61805f">${pairPrice(t.pair, t.bid)} / ${pairPrice(t.pair, t.ask)}</span>
+      <span style="color:#61805f">${num(t.spread_bps, 1)}</span>
+      <span style="color:#c9e8cc">${sym}${num(t.notional, 0)}</span>
+      <span style="color:#e3b341">${sym}${num(t.cost, 2)}</span>
+    </div>`).join('');
+
+  /* --- 5. closed round-trips --- */
+  const closed = page.closed || { rows: [], net: 0, gross: 0, costs: 0, wins: 0, count: 0 };
+  const crows = closed.rows.slice().reverse();
+  const maxRet = crows.length ? Math.max(...crows.map(r => Math.abs(r.return_pct)), 1e-9) : 1;
+  const closedRows = crows.map(r => {
+    const nc = cSign(r.net);
+    return `
+    <div class="hv-row" style="display:grid;grid-template-columns:.85fr .8fr .55fr .55fr 1.1fr .45fr .75fr .7fr .65fr .8fr .8fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#3d543f">${esc(r.date)}</span>
+      <span style="color:#eaffec;font-weight:600">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${r.side === 'LONG' ? G : R}">${esc(r.side)}</span>
+      <span style="color:#c9e8cc">${num(r.weight * 100, 1)}%</span>
+      <span style="color:#9db5a0">${pairPrice(r.pair, r.entry)} <span style="color:#3d543f">→</span> ${pairPrice(r.pair, r.exit)}</span>
+      <span style="color:#61805f">${r.held_days}D</span>
+      <span style="color:#c9e8cc">${sym}${num(r.notional, 0)}</span>
+      <span style="color:${cSign(r.gross)}">${sgnCcy(r.gross, sym, 2)}</span>
+      <span style="color:#e3b341">${sym}${num(r.costs, 2)}</span>
+      <span style="color:${nc};font-weight:600">${sgnCcy(r.net, sym, 2)}</span>
+      <span style="display:flex;align-items:center;gap:6px"><span style="color:${nc}">${sgnPct(r.return_pct, 2)}</span><span style="width:30px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${nc};width:${Math.min(Math.abs(r.return_pct) / maxRet * 100, 100).toFixed(0)}%"></span></span></span>
+    </div>`;
+  }).join('');
+
+  const blotCap = page.blotter_count > (page.blotter_shown || 0)
+    ? ` · SHOWING LAST ${page.blotter_shown} OF ${page.blotter_count}` : '';
+  const closedCap = closed.count > (closed.shown || 0)
+    ? ` · SHOWING LAST ${closed.shown} OF ${closed.count}` : '';
+
+  return `
+  <div data-screen="fx-ledger">
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN POSITIONS · MONEY TERMS · ${esc(page.base_currency || 'AUD')}</span>
+      <span style="font-size:10px;color:#61805f">NOTIONAL <span style="color:#c9e8cc">${sym}${num(p.open_notional || 0, 0)}</span></span>
+      <span style="font-size:10px;color:#61805f">OPEN P&amp;L <span style="color:${cSign(p.open || 0)}">${sgnCcy(p.open || 0, sym, 2)}</span></span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">ENTRY = FIFO COST BASIS OF THE WEIGHT STILL HELD · MARKED AT THE BOOK'S LAST CLOSE</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .55fr .6fr .4fr .85fr .8fr .8fr .6fr .8fr .6fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>LOTS</span><span>NOTIONAL</span><span>ENTRY</span><span>PRICE</span><span>ENTRY FEE</span><span>OPEN P&amp;L</span><span>OPEN %</span><span>SINCE</span></div>
+    ${posRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— FLAT. NO OPEN EXPOSURE TO MARK.</div>'}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 2.1fr;border-top:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ NET EXPOSURE BY LEG</div>
+        <div style="padding:8px 0 12px">${expRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO EXPOSURE.</div>'}</div>
+        <div style="padding:0 18px 12px;font-size:8.5px;color:#3d543f;line-height:1.6">A LONG PAIR IS LONG ITS BASE AND SHORT ITS QUOTE — THIS IS THE CONCENTRATION HIDDEN INSIDE THE PAIRS.</div>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;gap:16px;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ P&amp;L BY ${M.unit}</span>${exactStrip}</div>
+        <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr .5fr .8fr .8fr .7fr .7fr 1fr .85fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>FILLS</span><span>R/T</span><span>REALIZED</span><span>OPEN</span><span>CARRY</span><span>SPREAD</span><span></span><span>TOTAL</span></div>
+        ${rollRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NOTHING TRADED YET.</div>'}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${page.blotter_count || 0} FILLS${blotCap}</span>
+      <span style="font-size:10px;color:#61805f">TURNOVER <span style="color:#c9e8cc">${num(p.turnover || 0, 2)}×</span> = <span style="color:#c9e8cc">${sym}${num(p.turnover_notional || 0, 0)}</span> TRADED</span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">BID/ASK AND COST ARE THE PAIR'S DEALING SPREAD, HALF-CROSSED ON EVERY WEIGHT CHANGE</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.85fr .8fr .5fr .65fr .65fr .85fr 1fr .55fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>BAR</span><span>${M.unit}</span><span>SIDE</span><span>Δ WEIGHT</span><span>TARGET</span><span>PRICE</span><span>BID / ASK</span><span>BPS</span><span>NOTIONAL</span><span>COST</span></div>
+    ${blotRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO FILLS YET.</div>'}</div>
+
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)${closedCap}</span>
+      <span style="font-size:10px;color:#61805f">GROSS <span style="color:${cSign(closed.gross)}">${sgnCcy(closed.gross, sym, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">SPREAD <span style="color:#ff7b72">−${sym}${num(closed.costs, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net)}">${sgnCcy(closed.net, sym, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">EACH ROW IS A WEIGHT SLICE CLOSED OLDEST-FIRST · NET IS AFTER THE SPREAD ON BOTH LEGS</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.85fr .8fr .55fr .55fr 1.1fr .45fr .75fr .7fr .65fr .8fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>ENTRY → EXIT</span><span>HELD</span><span>NOTIONAL</span><span>GROSS</span><span>SPREAD</span><span>NET</span><span>RETURN</span></div>
+    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
   </div>`;
 }
 
@@ -1901,13 +2718,30 @@ function agentPopHTML(page, pair, rect) {
       <span style="color:${bg};width:38px;text-align:right">${sgn(v, Math.abs(v).toFixed(2))}</span>
     </div>`;
   }).join('');
+  const sym = SYM[page.base_currency] || page.base_currency || 'A$';
+  /* the three readings the votes above were actually cast on, straight out of
+     the persisted decision — '—' when this leg has no decision on file */
+  const di = p.indicators || {};
   const ind = [
     { k: 'REGIME', v: p.regime }, { k: 'ANN VOL', v: num((p.ann_vol || 0) * 100, 0) + '%' },
     { k: 'WEIGHT', v: sgnPct(p.weight, 1) }, { k: 'TILT', v: sgn(p.tilt, Math.abs(p.tilt).toFixed(2)) },
     { k: 'SIDE', v: long ? 'LONG' : 'SHORT' }, { k: 'PRICE', v: fmtP(closeN) },
+    { k: 'ADX LIVE', v: di.adx == null ? '—' : (+di.adx).toFixed(1) },
+    { k: 'RSI LIVE', v: di.rsi == null ? '—' : (+di.rsi).toFixed(1) },
+    { k: 'ROC LIVE', v: di.roc == null ? '—' : sgnPct(+di.roc, 2) },
   ].map(iv => `<div><div style="font-size:8px;color:#61805f;letter-spacing:.1em">${iv.k}</div><div style="font-size:10.5px;color:#c9e8cc;margin-top:1px">${esc(iv.v)}</div></div>`).join('');
+  /* the same row in money: what it cost to get on, what it is worth now, and
+     what this instrument has already banked — so a hover answers "and?" */
+  const mny = [
+    { k: 'NOTIONAL', v: sym + num(Math.abs(p.notional || 0), 0), c: TXT },
+    { k: 'COST BASIS', v: p.avg_entry ? fmtP(p.avg_entry) : '—', c: AMB },
+    { k: 'OPEN P&L', v: sgnCcy(p.unrealized || 0, sym, 2) + ' · ' + sgnPct(p.unrealized_pct || 0, 2), c: cSign(p.unrealized || 0) },
+    { k: 'REALIZED', v: sgnCcy(p.realized || 0, sym, 2), c: cSign(p.realized || 0) },
+    { k: 'SPREAD PAID', v: sym + num(p.costs || 0, 2), c: R },
+    { k: 'TOTAL P&L', v: sgnCcy(p.total_pnl || 0, sym, 2), c: cSign(p.total_pnl || 0) },
+  ].map(iv => `<div><div style="font-size:8px;color:#61805f;letter-spacing:.1em;white-space:nowrap">${esc(iv.k)}</div><div style="font-size:10.5px;color:${iv.c};margin-top:1px;white-space:nowrap">${esc(iv.v)}</div></div>`).join('');
   const barLabel = (page.bar === '60m' ? '60 × 60-MINUTE BARS' : '48 × DAILY BARS') + (real ? ' · LIVE OHLC' : '');
-  return popShell(rect, 480, 140, 620, '13px 15px', `
+  return popShell(rect, 560, 140, 620, '13px 15px', `
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
       <span style="font-size:13px;font-weight:600;color:#eaffec">${esc(pair)}</span>
       <span style="font-size:10px;font-weight:600;color:${sideColor}">${long ? '▲ LONG' : '▼ SHORT'} ${sgnPct(p.weight, 1)}</span>
@@ -1932,6 +2766,10 @@ function agentPopHTML(page, pair, rect) {
         ${votes}
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid #1a1a1a">${ind}</div>
       </div>
+    </div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1a1a1a">
+      <div style="font-size:8px;color:#61805f;letter-spacing:.12em;margin-bottom:5px">THIS POSITION IN MONEY · ${esc(page.base_currency || 'AUD')}</div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">${mny}</div>
     </div>`);
 }
 
@@ -1965,10 +2803,20 @@ function agentBacktestHTML(page) {
     fp(m.hit_rate, 0), m.payoff == null ? '—' : num(m.payoff, 2) + '×',
     m.turnover == null ? '—' : '~' + num(m.turnover, 0) + '× / YR',
   ] : abd ? abd.k : ['—', '—', '—', '—', '—', '—'];
-  const period = real ? `${String(bt.start || '').slice(0, 7)} → ${String(bt.end || '').slice(0, 7)}` : 'NET · 2023 → 2026';
+  /* a --synthetic run is a pipeline test: its CAGR is amber, not green, and the
+     word rides the biggest number on the tab (invariant #5) */
+  const synth = !!(real && bt.synthetic);
+  const period = real
+    ? `${synth ? 'SYNTHETIC · ' : ''}${String(bt.start || '').slice(0, 7)} → ${String(bt.end || '').slice(0, 7)}`
+    : 'ILLUSTRATIVE · 2023 → 2026';
+  const btBar = (real ? bt.bar : page.bar) === '60m' ? '60M BARS' : 'DAILY BARS';
+  /* An invented number must not wear the colour of a measured one. The seeded
+     placeholder curve is no more real than a --synthetic run, so its headline
+     CAGR is amber like one — green here read as "this book earns 18.4%". */
+  const notMeasured = synth || !real;
   const abKpis = [
-    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : G, period),
-    kpiCell('SHARPE', kVals[1], kVals[1] === '—' ? DIM : PALE, page.bar === '60m' ? '60M BARS' : 'DAILY BARS'),
+    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : notMeasured ? AMB : G, period),
+    kpiCell('SHARPE', kVals[1], kVals[1] === '—' ? DIM : PALE, btBar),
     kpiCell('MAX DRAWDOWN', kVals[2], kVals[2] === '—' ? DIM : R, 'PEAK TO TROUGH'),
     kpiCell('HIT RATE', kVals[3], kVals[3] === '—' ? DIM : PALE, 'PROFITABLE BARS'),
     kpiCell('AVG WIN / LOSS', kVals[4], kVals[4] === '—' ? DIM : PALE, 'PAYOFF RATIO'),
@@ -1984,8 +2832,11 @@ function agentBacktestHTML(page) {
     const Y = v => 12 + (1 - (Math.log(v) - Math.log(lo)) / ((Math.log(hi) - Math.log(lo)) || 1)) * 196;
     abPts = sv.map((v, i) => ((i / (sv.length - 1)) * 1200).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
     abBench = bv.length > 1 ? bv.map((v, i) => ((i / (bv.length - 1)) * 1200).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ') : '';
+    /* a real cache can be months, not years (the intraday book runs 60m bars
+       over one quarter) — the design's 2023→2026 tick labels would be a lie */
     const years = [...new Set(bt.curve.map(r => String(r[0]).slice(0, 4)))];
-    if (years.length > 1) xLabels = years;
+    xLabels = years.length > 1 ? years
+      : [0, 0.33, 0.66, 1].map(f => mmdd(bt.curve[Math.round(f * (bt.curve.length - 1))][0]));
   } else if (abd) {
     const arnd = mix32(page.key.charCodeAt(0) * 7 + 13);
     const abN = 160;
@@ -2000,6 +2851,11 @@ function agentBacktestHTML(page) {
     abBench = abB.map((v, i) => ((i / abN) * 1200).toFixed(1) + ',' + abY(v).toFixed(1)).join(' ');
   }
 
+  /* No `weights` on a real cache: the ensemble's per-agent weights are re-blended
+     per pair per bar inside ensemble._hedge_pair_tilt and never returned by the
+     backtest, so there is no single set to show. Six empty bars would read as
+     "all agents at zero" — the panel says why instead. */
+  const noWeights = real && !bt.weights;
   const wSrc = real && bt.weights ? AGENT_NAMES.map(n => +bt.weights[n.toLowerCase()] || 0)
     : abd ? abd.w : AGENT_NAMES.map(() => 0);
   const wMax = Math.max(...wSrc, 0.25);
@@ -2010,21 +2866,74 @@ function agentBacktestHTML(page) {
       <span style="color:#61805f;width:34px;text-align:right">${wSrc[i] ? (wSrc[i] * 100).toFixed(0) + '%' : '—'}</span>
     </div>`).join('');
 
-  const foldRows = (real && Array.isArray(bt.folds) ? bt.folds.map(f => ({
+  const foldList = (real && Array.isArray(bt.folds) ? bt.folds.map(f => ({
     fold: f.fold, train: f.train, test: f.test,
     sharpe: f.sharpe == null ? '—' : num(+f.sharpe, 2),
     hit: f.hit_rate == null ? (f.hit || '—') : num(+f.hit_rate * 100, 0) + '%',
     dd: f.max_drawdown == null ? (f.dd || '—') : sgnPct(+f.max_drawdown, 1),
-  })) : abd ? ABD_FOLDS : []).map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
+  })) : abd ? ABD_FOLDS : []);
+  const foldRows = foldList.map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
     || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO WALK-FORWARD FOLDS RECORDED.</div>';
 
+  /* the placeholder curves are indexed to 1.0, so the design's A$10,000 label
+     only ever described the illustrative case — a real cache knows its capital */
+  const growthOf = real
+    ? (SYM[bt.currency] || bt.currency || 'A$') + num(bt.initial_capital || 0, 0)
+    : 'A$10,000';
+  const src = `state/fx_backtest_${esc(page.account)}.json${bt && bt.generated_at ? ' · ' + esc(String(bt.generated_at).slice(0, 10)) : ''}`;
+  /* A --synthetic cache is a pipeline test on made-up prices (invariant #5) and
+     must never wear a performance banner. And nothing here is walk-forward:
+     this engine fits no parameters, so the cache is one continuous run — the
+     old wording claimed a validation the file does not contain. */
   const banner = real
-    ? `<span style="font-weight:600">WALK-FORWARD VALIDATION · CACHED RESULTS</span><span style="color:#8a7433">state/fx_backtest_${esc(page.account)}.json${bt.generated_at ? ' · ' + esc(String(bt.generated_at).slice(0, 10)) : ''}</span>`
+    ? bt.synthetic
+      ? `<span style="font-weight:600">⚠ SYNTHETIC DATA — PIPELINE TEST, NOT PERFORMANCE</span><span style="color:#8a7433">${src} · RUN WITH --synthetic ON GENERATED PRICES: EVERY FIGURE BELOW MEASURES THE PLUMBING, NOT AN EDGE.</span>`
+      : `<span style="font-weight:600">CACHED BACKTEST · ${esc(String(bt.profile || '').toUpperCase())} PROFILE · ${btBar} · ${(bt.universe || []).length} INSTRUMENTS</span><span style="color:#8a7433">${src}</span>`
     : bt && bt._error
       ? `<span style="font-weight:600">⚠ BACKTEST ENDPOINT UNREACHABLE</span><span style="color:#8a7433">WILL RETRY WHEN YOU REVISIT THIS TAB.</span>`
       : abd
         ? `<span style="font-weight:600">⚠ WALK-FORWARD VALIDATION · ILLUSTRATIVE NUMBERS</span><span style="color:#8a7433">POPULATE state/fx_backtest_${esc(page.account)}.json (python -m trading_algo.forex.run_backtest / walkforward) — THE LAYOUT IS WIRED, THE FIGURES ARE PLACEHOLDERS.</span>`
         : `<span style="font-weight:600">⚠ NO BACKTEST DATA FOR THIS BOOK</span><span style="color:#8a7433">POPULATE state/fx_backtest_${esc(page.account)}.json (python -m trading_algo.forex.run_backtest / walkforward) TO WIRE THIS TAB.</span>`;
+
+  /* Where the run's P&L came from and what it cost to get — only a real cache
+     carries these, and only the money-terms figures the exporter measured. */
+  const attr = real ? Object.entries(bt.attribution || {})
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])) : [];
+  const maxA = Math.max(...attr.map(a => Math.abs(a[1])), 1e-9);
+  const attrBars = attr.map(([symb, v]) => {
+    const col = v > 1e-9 ? G : (v < -1e-9 ? R : FAINT);
+    const w = Math.min(Math.abs(v) / maxA, 1) * 50;
+    return `
+    <div style="display:flex;align-items:center;gap:9px;padding:4px 0;font-size:10px">
+      <span style="color:#c9e8cc;width:70px">${esc(symb)}</span>
+      <span style="position:relative;flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${v >= 0 ? '50%' : (50 - w) + '%'};width:${w}%;background:${col}"></span></span>
+      <span style="color:${col};width:58px;text-align:right">${sgnPct(v, 1)}</span>
+    </div>`;
+  }).join('');
+  const rLine = (label, val, color) => `
+    <div style="display:flex;justify-content:space-between;font-size:10.5px;padding:3px 0"><span style="color:#61805f">${label}</span><span style="color:${color}">${val}</span></div>`;
+  const halts = bt && bt.drawdown_halts;
+  const realityRow = !real ? '' : `
+    <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="display:flex;justify-content:space-between;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CONTRIBUTION BY INSTRUMENT</span><span style="font-size:9px;color:#61805f">CUMULATIVE P&amp;L OVER THE RUN, AS A FRACTION OF EQUITY · SIGNED</span></div>
+        <div style="padding:8px 18px 12px">${attrBars || '<div style="font-size:10.5px;color:#61805f">— NO PER-INSTRUMENT ATTRIBUTION IN THIS CACHE.</div>'}</div>
+      </div>
+      <div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST · LEVERAGE · HALTS</div>
+        <div style="padding:10px 18px 14px">
+          ${rLine('AVG GROSS LEVERAGE', bt.avg_gross_leverage == null ? '—' : num(bt.avg_gross_leverage, 2) + '×', bt.avg_gross_leverage > 1 ? AMB : TXT)}
+          ${rLine('SPREAD PAID · CUM', bt.total_cost_fraction == null ? '—' : num(bt.total_cost_fraction * 100, 2) + '% OF EQUITY', R)}
+          ${rLine('CARRY · CUM', bt.total_carry_fraction == null ? '—' : sgnPct(bt.total_carry_fraction, 2), cSign(bt.total_carry_fraction || 0))}
+          ${rLine('TURNOVER', m.turnover == null ? '—' : num(m.turnover, 1) + '× / YR', TXT)}
+          ${rLine('ANN VOL', m.ann_vol == null ? '—' : num(m.ann_vol * 100, 1) + '%', TXT)}
+          ${rLine('SORTINO / CALMAR', `${m.sortino == null ? '—' : num(m.sortino, 2)} / ${m.calmar == null ? '—' : num(m.calmar, 2)}`, TXT)}
+          ${rLine('DRAWDOWN HALTS', halts ? `${halts} · ${bt.drawdown_halt_days} DAY${bt.drawdown_halt_days === 1 ? '' : 'S'} FLAT` : 'NONE — BREAKER NEVER FIRED', halts ? R : TXT)}
+          ${rLine('UNIVERSE', `${(bt.universe || []).length} · ${esc(String(bt.source || 'unknown').toUpperCase())}`, TXT)}
+          <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:9px">SPREAD AND CARRY ARE SUMS OF PER-BAR FRACTIONS OVER THE WHOLE RUN, NOT ANNUALISED. CONTRIBUTIONS ARE SIGNED AND DO NOT NET TO THE CURVE'S RETURN — COSTS AND CARRY SIT OUTSIDE THEM.</div>
+        </div>
+      </div>
+    </div>`;
 
   return `
   <div data-screen="agent-backtest">
@@ -2035,7 +2944,7 @@ function agentBacktestHTML(page) {
     <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${abKpis}</div>
     <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626">
-        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF A$10,000 · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span><span style="color:#61805f">— BUY &amp; HOLD BASKET</span></div>
+        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF ${esc(growthOf)} · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span>${abBench ? '<span style="color:#61805f">— BUY &amp; HOLD BASKET</span>' : '<span style="color:#3d543f">NO BENCHMARK: A LONG-ONLY BASKET OF THESE PAIRS IS NOT A MARKET ANYONE HOLDS</span>'}</div>
         <svg viewBox="0 0 1200 220" preserveAspectRatio="none" style="width:100%;height:230px;display:block">
           <line x1="0" y1="55" x2="1200" y2="55" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="110" x2="1200" y2="110" stroke="#1a1a1a" stroke-width="1"></line>
@@ -2047,14 +2956,19 @@ function agentBacktestHTML(page) {
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${xLabels.map(y => `<span>${esc(y)}</span>`).join('')}</div>
       </div>
       <div>
-        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS</div>
-        <div style="padding:10px 18px 6px">${weights}</div>
-        <div style="padding:4px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS PERFORMANCE-WEIGHTED (AGENTS.PY): AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN — RE-SCORED EVERY BAR.</div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${noWeights ? DIM : PALE};letter-spacing:.14em">■ AGENT PERFORMANCE WEIGHTS${noWeights ? ' · NOT RECORDED' : ''}</div>
+        ${noWeights
+          ? `<div style="padding:12px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS RE-SCORED PER PAIR PER BAR INSIDE THE ENSEMBLE AND THE BACKTEST DOES NOT RETURN A FINAL SET, SO THERE IS NO ONE WEIGHTING TO SHOW FOR THIS RUN — SIX EMPTY BARS WOULD READ AS "EVERY AGENT AT ZERO", WHICH IS NOT WHAT HAPPENED.<br><br>AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN (AGENTS.PY). THE LIVE BOOK'S CURRENT VOTES ARE ON THE POSITIONS TAB.</div>`
+          : `<div style="padding:10px 18px 6px">${weights}</div>
+             <div style="padding:4px 18px 14px;font-size:10px;color:#61805f;line-height:1.7">THE BLEND IS PERFORMANCE-WEIGHTED (AGENTS.PY): AGENTS THAT HAVE BEEN RIGHT RECENTLY GET A LOUDER VOTE, LOSERS GET TURNED DOWN — RE-SCORED EVERY BAR.</div>`}
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
-    ${foldRows}
-    <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">WALK-FORWARD: TRAIN ON A WINDOW, TEST ON THE UNSEEN NEXT SLICE, ROLL FORWARD. IF THE EDGE ONLY EXISTS IN-SAMPLE, IT DIES HERE — THE FOLDS ABOVE ARE THE HONEST TEST.</div>
+    ${realityRow}
+    ${foldList.length ? `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>FOLD</span><span>TRAIN WINDOW</span><span>TEST WINDOW</span><span>TEST SHARPE</span><span>HIT</span><span>MAX DD</span></div>
+    ${foldRows}` : ''}
+    <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.7">${real
+      ? 'NO FOLDS, AND THERE NEVER WILL BE FOR THIS ENGINE: THE ENSEMBLE FITS NO PARAMETERS — IT RE-SCORES THE AGENTS EVERY BAR FROM DATA ≤ T — SO THERE IS NO TRAIN/TEST SPLIT TO REPORT, AND CHOPPING ONE CONTINUOUS RUN INTO WINDOWS WOULD NOT BE WALK-FORWARD. THE RUN ABOVE IS SINGLE-PASS, COSTS AND CARRY ON, SIGNALS AT T TRADED AT T+1.'
+      : 'WALK-FORWARD: TRAIN ON A WINDOW, TEST ON THE UNSEEN NEXT SLICE, ROLL FORWARD. IF THE EDGE ONLY EXISTS IN-SAMPLE, IT DIES HERE — THE FOLDS ABOVE ARE THE HONEST TEST.'}</div>
   </div>`;
 }
 
@@ -2064,10 +2978,13 @@ function agentMethodHTML(page) {
   const cap = pct0(fp.per_pair_cap || page.per_pair_cap || 0.25);
   const brk = num((fp.max_drawdown_stop || page.breaker || 0.2) * 100, 0);
   const books = accounts().filter(a => a.kind === 'fx').map(a => a.account.toUpperCase()).join(', ');
+  /* the windows are per-profile: the intraday book votes on EMA10/40 and a
+     24-BAR ROC, so the house EMA20/EMA100/60-DAY text was simply wrong there */
+  const bw = page.bar === '60m' ? 'BAR' : 'DAY';
   const amAgents = [
-    { name: 'TREND', f: 'EMA20 vs EMA100 · ADX GATE', d: 'Is there a persistent up/down trend? Votes with it, scaled by trend strength.' },
+    { name: 'TREND', f: `EMA${fp.ema_fast || 20} vs EMA${fp.ema_slow || 100} · ADX GATE`, d: 'Is there a persistent up/down trend? Votes with it, scaled by trend strength.' },
     { name: 'BREAKOUT', f: 'DONCHIAN CHANNEL BREAKS', d: 'Did price punch through the recent high/low band? Fires a full ±1 on a break.' },
-    { name: 'MOMENTUM', f: '60-DAY RATE OF CHANGE', d: 'Is price higher than 60 days ago? Winners tend to keep winning.' },
+    { name: 'MOMENTUM', f: `${fp.roc_window || 60}-${bw} RATE OF CHANGE`, d: `Is price higher than ${fp.roc_window || 60} ${bw.toLowerCase()}s ago? Winners tend to keep winning.` },
     { name: 'MEANREV', f: 'BOLLINGER Z-SCORE', d: 'In quiet ranges, fades stretches beyond ±2σ back toward the average.' },
     { name: 'CARRY', f: 'RATE DIFFERENTIAL', d: 'Earns the interest-rate gap by holding the higher-yielding currency.' },
     { name: 'NEURAL', f: 'MLP ON INDICATOR FEATURES', d: 'A small neural net trained on the same indicators; votes −1…+1 (nn.py).' },
@@ -2144,6 +3061,7 @@ function smallOverviewHTML(page) {
 
   return `
   <div data-screen="small-overview">
+    ${haltBannerHTML(page)}
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">INITIAL ${num(k.initial_capital, 2)} · ${(page.sleeves || []).map(s => s.key).join(' / ')} SLEEVE ONLY</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(M.curve.length ? M.curve[0].date : '')}</div></div>
@@ -2167,10 +3085,14 @@ function smallOverviewHTML(page) {
       </div>
       <div>
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ MICRO-ACCOUNT MODE — THE LESSON THIS BOOK TEACHES</div>
-        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="font-size:11px;color:#eaffec">WHOLE SHARES ONLY</div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SMALL BOOK CAN'T HOLD A ${(S.meta ? S.meta.params.top_n : 10)}-NAME BOOK IN WHOLE SHARES — SO IT CONCENTRATES INTO A SINGLE NAME. LAST BOOK: ${lastQty} × ${esc(lastName)}.</div></div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="font-size:11px;color:#eaffec">WHOLE SHARES ONLY</div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SMALL BOOK CAN'T HOLD A ${bookParams(page).top_n ?? 10}-NAME BOOK IN WHOLE SHARES — SO IT CONCENTRATES INTO A SINGLE NAME. LAST BOOK: ${lastQty} × ${esc(lastName)}.</div></div>
         <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">FEE DRAG</span><span style="color:#ff7b72">${feePct != null ? num(feePct * 100, 1) + '% ROUND-TRIP' : 'FLOORS BITE'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">THE $1 COMMISSION FLOOR IS TRIVIAL ON A $10K TRADE BUT EATS A REAL SLICE OF A TINY POSITION. SMALL ACCOUNTS BLEED THROUGH FLOORS.</div></div>
         <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE GATE</span><span style="color:#7ee787">A$${num(gate, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">BELOW A$${num(gate, 0)} THE SLEEVE STOPS TRADING AND HOLDS CASH RATHER THAN FEEDING THE COMMISSION FLOOR (CONFIG.PY · MIN_VIABLE_EQUITY_BASE).</div></div>
       </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;border-top:1px solid #262626">
+      <div style="border-right:1px solid #262626">${monthlyHeatmapHTML(M.curve)}</div>
+      <div>${ddEpisodesHTML(M.curve)}</div>
     </div>
   </div>`;
 }
@@ -2224,6 +3146,7 @@ function smallPositionsHTML(page) {
 
   return `
   <div data-screen="small-positions">
+    ${haltBannerHTML(page)}
     <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a">
       <span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.08em">${esc(sleeve.key || '')} · 100% ALLOCATION</span>
       <span style="font-size:10px;color:#61805f">EQUITY <span style="color:#c9e8cc">${eqTxt}</span></span>
@@ -2233,15 +3156,16 @@ function smallPositionsHTML(page) {
     ${posBody}
     <div style="padding:10px 18px;background:#0d0d0d;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${(page.blotter || []).length} FILLS</div>
     <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>DATE</span><span>REGION</span><span>SIDE</span><span>TICKER</span><span>QTY</span><span>FILL</span><span>VALUE</span><span>COMM</span></div>
-    ${blotterRows}
+    ${blotterRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. EVERY EXECUTION THIS BOOK MAKES IS ITEMISED HERE, COMMISSION BY COMMISSION.</div>'}
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L</span>
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${lastClosed ? `${sgn(lastClosed.net, sym + num(Math.abs(lastClosed.net), 2))} → ` : ''}${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
-      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">FEE DRAG ON A MICRO BOOK, ITEMISED — THE LESSON THIS ACCOUNT TEACHES</span>
     </div>
     <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
+    ${analyticsRowHTML(page)}
   </div>`;
 }
 
@@ -2254,21 +3178,23 @@ function contentHTML() {
   if (S.errors[S.account]) return errPanel(S.account);
   if (!page) return '<div class="boot">LOADING…</div>';
   if (page.kind === 'fx') {
-    if (S.tab === 'POSITIONS') return agentPositionsHTML(page);
+    /* POSITIONS = the ensemble's decision book, then the same book in money */
+    if (S.tab === 'POSITIONS') return agentPositionsHTML(page) + fxLedgerHTML(page);
     if (S.tab === 'BACKTEST') return agentBacktestHTML(page);
     if (S.tab === 'METHOD') return agentMethodHTML(page);
-    return agentKpisHTML(page) + agentCurveAttrHTML(page) + chartSectionHTML(page);
+    return agentKpisHTML(page) + agentCurveAttrHTML(page)
+      + fxBookHTML(page) + chartSectionHTML(page);
   }
   /* equity book — micro accounts get the SMALL screens */
   if (page.micro) {
     if (S.tab === 'POSITIONS') return smallPositionsHTML(page);
     if (S.tab === 'BACKTEST') return backtestHTML(page);
-    if (S.tab === 'METHOD') return methodHTML();
+    if (S.tab === 'METHOD') return methodHTML(page);
     return smallOverviewHTML(page);
   }
   if (S.tab === 'POSITIONS') return equityPositionsHTML(page);
   if (S.tab === 'BACKTEST') return backtestHTML(page);
-  if (S.tab === 'METHOD') return methodHTML();
+  if (S.tab === 'METHOD') return methodHTML(page);
   return equityOverviewHTML(page);
 }
 

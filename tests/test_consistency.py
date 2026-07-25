@@ -15,7 +15,9 @@ Note on costs: the two engines legitimately compute *cost* differently today
 that into one fees.py entrypoint is refactor R1 (ships with F6); until then this
 file asserts weight identity, not cost identity.
 """
+import ast
 import inspect
+import textwrap
 
 import pandas as pd
 
@@ -25,27 +27,76 @@ from trading_algo import backtest, paper_trade, strategy
 # ---------------------------------------------------------------------------
 # Layer 1 — source-level guards
 # ---------------------------------------------------------------------------
-def test_backtest_uses_shared_compute_targets():
-    src = inspect.getsource(backtest)
-    assert "compute_targets" in src
-    assert "strategy" in src
+# The two public roads into the ONE weight formula. `targets_at` IS the formula
+# (selection + vol targeting); `compute_targets` is precompute + targets_at for
+# callers holding a single date. An engine must use one of these and nothing else.
+_SHARED_ENTRYPOINTS = ("strategy.targets_at", "strategy.compute_targets")
+
+# The primitives that live BEHIND the formula. An engine calling any of these
+# directly would be a second sizing path — exactly what invariant #3 forbids.
+_WEIGHT_PRIMITIVES = ("select_portfolio", "select_long_short", "vol_target",
+                      "_apply_capacity")
 
 
-def test_paper_uses_shared_compute_targets():
-    src = inspect.getsource(paper_trade)
-    assert "strategy.compute_targets" in src
+def _calls(obj) -> set[str]:
+    """Every function actually CALLED by a module or function, as dotted names.
+
+    Parsed from the AST rather than grepped from the text, so a docstring or
+    comment that merely *mentions* `compute_targets` can't satisfy the guard, and
+    a `#` inside a string literal can't defeat it.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(obj)))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+            if isinstance(func.value, ast.Name):
+                names.add(f"{func.value.id}.{func.attr}")
+    return names
 
 
-def test_compute_targets_is_the_only_weight_builder():
-    # vol_target + select_portfolio live behind compute_targets; neither engine
-    # should call select_portfolio directly (that would bypass vol targeting).
-    assert "select_portfolio" not in inspect.getsource(backtest)
-    assert "select_portfolio" not in inspect.getsource(paper_trade)
+def test_backtest_uses_a_shared_weight_entrypoint():
+    called = _calls(backtest)
+    assert called & set(_SHARED_ENTRYPOINTS), (
+        "backtest must route through strategy.targets_at / compute_targets")
+
+
+def test_paper_uses_a_shared_weight_entrypoint():
+    called = _calls(paper_trade)
+    assert called & set(_SHARED_ENTRYPOINTS), (
+        "paper trading must route through strategy.targets_at / compute_targets")
+
+
+def test_neither_engine_calls_the_weight_primitives_directly():
+    # Selection and vol targeting live behind the shared entry points; calling
+    # them directly from an engine would bypass part of the formula (and is how
+    # a second sizing path historically crept in).
+    for module in (backtest, paper_trade):
+        called = _calls(module)
+        leaked = called & set(_WEIGHT_PRIMITIVES)
+        assert not leaked, (
+            f"{module.__name__} calls {sorted(leaked)} directly — that is a "
+            f"second weight path (invariant #3)")
+
+
+def test_both_roads_run_the_same_formula():
+    # compute_targets must DELEGATE to targets_at rather than carry its own copy
+    # of the selection/sizing logic — otherwise the backtest road (panel) and the
+    # paper road could drift apart while both still "use strategy".
+    called = _calls(strategy.compute_targets)
+    assert "targets_at" in called, "compute_targets must delegate to targets_at"
+    assert not called & {"select_portfolio", "select_long_short"}, (
+        "compute_targets re-implements selection instead of delegating")
 
 
 def test_metrics_always_present_in_backtest_output():
     # costs-always-on contract: the weight builder always vol-targets.
-    src = inspect.getsource(strategy.compute_targets)
+    src = inspect.getsource(strategy.targets_at)
     assert "vol_target" in src
 
 

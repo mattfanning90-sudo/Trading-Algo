@@ -135,6 +135,39 @@ a known calibration choice, kept for simplicity and internal consistency
 (pinned by `tests/test_fx_marks.py` and
 `tests/test_fx_dashboard_units.py::test_books_and_dashboard_share_one_annualisation`).
 
+### P&L in real terms — the money view of a weight book
+
+The books think in **signed weights** (fractions of equity), which is the right
+unit for sizing and the wrong unit for the question *"what did I make?"*.
+`fx_pnl.py` answers that in the account currency, and the terminal dashboard's
+FX screens now carry the same money panels the equity screens do: NET P&L split
+into realised/open, spread paid, a drawdown-from-peak chart, an open book with a
+cost basis, the full fill blotter and a FIFO closed-trades ledger.
+
+Two derivations run side by side, deliberately:
+
+1. **The weight-lot ledger** (`fx_pnl.build_lots`) replays the trades log FIFO.
+   A *lot* is a slice of weight opened by one trade, and its notional is fixed at
+   open — `|Δweight| × equity_on(trade date)`, the same convention the static
+   dashboard's blotter already used. It works retroactively over a book's whole
+   history and gives per-round-trip realised P&L, a cost basis for what is still
+   open, and the spread charged on both legs. Because the real book *compounds*
+   (a weight is a fraction of *today's* equity), notional-at-open is an honest
+   approximation for multi-bar holds, not an identity.
+2. **The exact bar accumulator** (`state["cumulative"]`, written by
+   `fx_book.run_once`) records the true money amounts one bar at a time, so
+   `equity − start_equity == price_pnl + carry − cost` holds exactly, total and
+   per instrument. This is the *only* source of **carry**: financing accrues per
+   bar on whatever was held and cannot be reconstructed from the trades log.
+
+Every formula on both paths comes from `marks.py`, so the ledger can never drift
+from the book that produced it — and the ledger's spread bill and the
+accumulator's agree (`tests/test_fx_pnl.py`). What the lot convention cannot
+explain — compounding drift, plus AUD translation for fills that predate the
+execution-time `aud_per_quote` stamp — is shown as an **UNEXPLAINED** line
+rather than folded into a tidier number. Books that predate the accumulator
+report carry as `NOT TRACKED` and start measuring at their next bar.
+
 ## Data sources (`--source`)
 
 The system is **source-agnostic**: every feed returns the same aligned OHLC panel,
@@ -309,6 +342,10 @@ Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
    the book and sits out a cooldown.
 5. **Synthetic results are pipeline tests only** — never performance. The
    synthetic generator has unrealistically persistent trends; the CLI says so.
+6. **P&L reconciles or says why.** Money figures route through `marks.py` via
+   `fx_pnl.py`; every trade's spread is allocated exactly once (to a round-trip
+   or to the open lot carrying it), and whatever the weight-lot convention can't
+   explain is reported as a residual, never absorbed. (`tests/test_fx_pnl.py`)
 
 ## Low latency
 
@@ -363,6 +400,8 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `ensemble.py` | performance-weighted agent blending |
 | `risk.py` | vol targeting + per-pair / gross / asset-class caps |
 | `marks.py` | **the one** cost/mark/annualisation formula module (book + dashboard) |
+| `sessions.py` | **the one** market-hours definition — shared by the trading gate (`fx_book`) and the audit (`verify`) so they cannot drift |
+| `fx_pnl.py` | money-terms P&L: FIFO weight lots, round-trips, blotter, exposure |
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |
 | `fx_book.py` | persistent multi-account paper books |

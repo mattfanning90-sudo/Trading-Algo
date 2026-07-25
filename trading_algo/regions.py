@@ -54,14 +54,6 @@ class Region:
         """Universe plus the regime index — everything to download for the sleeve."""
         return [*self.universe, self.index_ticker]
 
-    def to_local(self, raw_price: float) -> float:
-        """Convert a raw Yahoo quote into the region's trading currency.
-
-        LSE ordinary shares are quoted in pence (GBX); price_scale=0.01 turns
-        them into pounds so the sleeve is internally consistent in GBP.
-        """
-        return raw_price * self.price_scale
-
 
 REGIONS: dict[str, Region] = {
     "ASX": Region(

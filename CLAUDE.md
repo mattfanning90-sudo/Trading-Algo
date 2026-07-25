@@ -43,6 +43,10 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `fees.py` — per-region commission floor + UK stamp duty (buys only)
 - `calendars.py` — per-region hours/timezones for the scheduler
 - `fx.py` — convert each sleeve into the base currency (incl. FX P&L)
+- `forex/sessions.py` — per-symbol market hours (crypto 24/7; FX Sun 22:00→Fri
+  22:00 UTC; equities/bonds a weekday cash session). Shut instruments are trimmed
+  from the candidate universe before `compute_targets` and **frozen, not
+  flattened** — you cannot liquidate on a closed venue
 - `backtest.py` — per-sleeve daily walk-forward sim
 - `portfolio_backtest.py` — combine sleeves in AUD, allocation rebalancing
 - `paper_trade.py` — persistent sub-books per region (`paper_state_{name}.json`)
@@ -50,10 +54,20 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `verify.py` — **end-to-end audit of the LIVE books**. The test suite proves the
+  maths on a clean price matrix; this re-derives each persisted book from its own
+  trade ledger and flags what a real broker statement would contradict:
+  reconciliation drift, fills on a closed market, turnover at a forward-filled
+  dead price, sleeves silently parked in cash, and holding period vs the signal
+  horizon that opened the position. Offline by design (the state IS the record),
+  and it runs after every scheduled paper run
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
   OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
-  agent-vote decision book, candlestick pair charts
+  agent-vote decision book, candlestick pair charts. Equity and FX books are at
+  **parity in money terms** — both show net P&L (realised/open), costs, a
+  drawdown chart, an open book at cost basis, a full fill blotter and a FIFO
+  closed-trades ledger; the FX money layer comes from `forex/fx_pnl.py`
 
 ## Commands
 ```bash
@@ -68,6 +82,8 @@ python -m trading_algo.paper_trade --account ultra --init --capital 10000 --prof
 python -m trading_algo.paper_trade --account experimental --init --capital 10000 --profile experimental  # market-neutral long/short (separate total)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
+python -m trading_algo.verify                       # audit every LIVE book end to end
+python -m trading_algo.verify --json --strict       # machine-readable; exit 1 on ERROR
 # --- FX subsystem (independent; see trading_algo/forex/README.md) ---
 python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
 python -m trading_algo.forex.paper --init               # open matt + partner books
@@ -80,7 +96,7 @@ python -m trading_algo.forex.research --synthetic       # quant-research search 
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
 python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
 python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
-pytest -q                                           # 170 tests (80 equity + 90 FX/ML)
+pytest -q                                           # full suite (equity + FX/ML)
 ```
 
 The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a

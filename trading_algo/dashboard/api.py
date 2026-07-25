@@ -7,15 +7,31 @@ and assembles the contract the frontend consumes. Pure read — never mutates st
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
 from .. import config as cfg
-from .. import fx, paper_trade, pnl, signals
+from .. import (attribution, crowding, fx, paper_trade, pnl, promotion,
+                signals, tca)
 from ..regions import get_region
+from . import meta
 
 HISTORY_BARS = 66          # ~90 calendar days of closes for the hover popovers
+
+
+def _try(fn, *args):
+    """Run one observability analytic, returning None if it can't be computed.
+
+    These blocks are diagnostics ABOUT the book, not the book itself: a thin or
+    oddly-shaped account (no trades, a single sleeve, a short history) must never
+    take the whole snapshot down with a 500. Null means "not computable" and the
+    UI says so — we never substitute a plausible-looking zero."""
+    try:
+        return fn(*args)
+    except Exception:
+        return None
 
 
 def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
@@ -28,8 +44,10 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
     try:
         dates = pd.to_datetime([d for d, _ in eq_hist])
         currencies = sorted({ccy for _, ccy in index_by_region.values()})
+        # Cached FX: this is a benchmark line on a daily-bar chart, not a mark —
+        # it does not justify an uncached Yahoo fetch on every /api/state hit.
         fx_tbl = (fx.synthetic_fx(currencies, base=cfg.BASE_CURRENCY) if synthetic
-                  else fx.load_fx(currencies, cfg.START, base=cfg.BASE_CURRENCY, use_cache=False))
+                  else fx.load_fx(currencies, cfg.START, base=cfg.BASE_CURRENCY))
         parts = []
         for idx, ccy in index_by_region.values():
             mult = fx.align_fx(fx_tbl, idx.index, ccy)
@@ -191,7 +209,13 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             gross_local += abs(val_local)
             avg = float(basis.get((k, t)) or price)   # actual cost from the fills ledger
             day_change = (price / prev_price - 1.0) if prev_price else 0.0
+            # The POSITION's return, not the instrument's: on a short a falling
+            # price is a gain. Without the flip this column contradicted the
+            # money column beside it — a short marked +44% green next to −A$202
+            # red — because `price/avg - 1` describes the stock, not the book.
             unrl_pct = (price / avg - 1.0) if avg else 0.0
+            if sh < 0:
+                unrl_pct = -unrl_pct
             unrl_base = sh * (price - avg) * m
             total_unrealized_base += unrl_base
             positions.append({
@@ -227,6 +251,12 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "equity_base": round(eq_base, 2),
             "cash_pct": round(cash_local / eq_local, 4) if eq_local else 1.0,
             "last_rebalance_month": sleeve.get("last_rebalance_month"),
+            # Momentum-crash early warning for this sleeve's CANDIDATE book (its
+            # top-N by momentum), off the prices already loaded above. Read
+            # against THIS book's params — a 6-name profiled book must not be
+            # scored on the 10-name default set. Observability only, never sizing.
+            "crowding": _try(crowding.crowding_report, prices, index_px,
+                             replace(region, params=paper_trade._account_params(state, region))),
             "_positions": positions,
         })
 
@@ -253,14 +283,22 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     initial = state["initial_capital_base"]
     benchmark_curve = _benchmark_curve(index_by_region, eq_hist, initial, synthetic)
 
-    recent = []
-    for t in reversed(state["trades"][-40:]):
-        recent.append({**t, "value": round(t["shares"] * t["fill"], 2)})
-
     blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)}
                for t in state["trades"]]
 
     peak = float(state.get("peak_equity_base") or total_base or 1.0)
+
+    # The knobs THIS book actually runs: its profile's param_overrides layered on
+    # the shared defaults through the SAME StrategyParams path paper_trade sizes
+    # with (`_account_params`) — no second, hand-merged copy of the rule. Without
+    # this the METHOD tab describes an unprofiled book, so a 3× leveraged or
+    # market-neutral account read as plain long-only momentum.
+    overrides = state.get("param_overrides") or {}
+    params = cfg.DEFAULT_PARAMS.with_overrides(**overrides) if overrides else cfg.DEFAULT_PARAMS
+    knobs = meta.BOOK_KNOBS
+    # Union with the book's own overrides so a future profile knob can never be
+    # silently omitted from the screen that claims to describe the book.
+    params_out = {k: getattr(params, k) for k in dict.fromkeys(knobs + tuple(overrides))}
 
     return {
         "kind": "equity",
@@ -270,7 +308,15 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "peak_equity": round(peak, 2),
         "off_peak": round(total_base / peak - 1.0, 6) if peak else 0.0,
         "risk_halted": bool(state.get("risk_halted", False)),
-        "breaker": cfg.MAX_DRAWDOWN_STOP,
+        # How much of the sit-out is left. A halted book that cannot say when it
+        # resumes is only half the story, and the screens must not invent a
+        # number: absent stays absent rather than becoming 0.
+        "halt_cooldown": state.get("halt_cooldown"),
+        # THIS book's breaker, resolved exactly as paper_trade enforces it — key
+        # absent means "use the global", key present with None means DISABLED (the
+        # `ultra` profile). Emitting the global unconditionally made a 3× book
+        # with no circuit breaker read "BREAKER ARMED @ -25%" on screen.
+        "breaker": paper_trade._account_drawdown_stop(state),
         "min_viable": cfg.MIN_VIABLE_EQUITY_BASE,
         "next_rebalance": _next_rebalance(
             as_of, [s.get("last_rebalance_month") for s in sleeves_out]),
@@ -290,7 +336,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "total_return": round(total_base / initial - 1, 4) if initial else 0.0,
             "day_change": round(total_base / prev_equity - 1, 4) if prev_equity else 0.0,
             "day_change_base": round(total_base - prev_equity, 2),
-            "target_vol": cfg.DEFAULT_PARAMS.target_vol,
+            "target_vol": params.target_vol,      # this book's, not the global
             "n_trades": len(state["trades"]),
             "n_positions": n_positions,
             "cash_pct": round(total_cash_base / denom, 4),
@@ -309,10 +355,18 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "fees": [{"currency": c, "amount": round(v, 2)} for c, v in fees.items()],
         },
         "allocations": state.get("allocations", cfg.ALLOCATIONS),
+        "params": params_out,
+        # Realized-vs-modelled slippage per region, off the persisted fills.
+        "tca": _try(tca.tca_report, state["trades"]),
+        # Realized return and cost drag per region. No predicted curve is passed
+        # (this endpoint must not refetch a backtest — invariant #1), so the
+        # report simply carries no divergence / tracking-error keys and the
+        # screen says why; nothing here is filled in with a stand-in.
+        "attribution": _try(attribution.attribution_report, state),
+        "promotion": _try(promotion.promotion_check, state),
         "benchmark_curve": benchmark_curve,
         "fx": snap_fx,
         "equity_curve": [{"date": d, "equity": e} for d, e in eq_hist],
         "sleeve_curves": state.get("sleeve_history", []),
         "sleeves": sleeves_out,
-        "recent_trades": recent,
     }

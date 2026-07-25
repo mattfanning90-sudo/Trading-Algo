@@ -33,7 +33,7 @@ jobs:
     env:
       FX_STATE_DIR: ${{ github.workspace }}/state
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -58,6 +58,18 @@ jobs:
           mkdir -p state public
           python -m trading_algo.forex.paper --init          # creates daytrader if new
           python -m trading_algo.forex.engine --once --account daytrader
+
+      - name: Audit live books (end-to-end verification)
+        # See fx-paper.yml for the rationale. Report-only: never blocks the run.
+        if: always()
+        run: |
+          python -m trading_algo.verify | tee /tmp/audit.txt
+          {
+            echo "## Live-book audit"
+            echo '```'
+            cat /tmp/audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build site (dashboards + landing page)
         env:
@@ -123,11 +135,11 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         continue-on-error: true
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: Back off before retry
         if: steps.deploy.outcome == 'failure'
         run: sleep 25
       - name: Deploy to GitHub Pages (retry)
         id: deploy_retry
         if: steps.deploy.outcome == 'failure'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -8,21 +8,21 @@ version = "0.2.0"
 description = "Multi-region (FTSE / US / ASX) cross-sectional momentum trading system with AUD portfolio layer"
 requires-python = ">=3.11"
 dependencies = [
-    "pandas>=3.0.3",
+    "pandas>=3.0.5",
     "numpy>=2.4.6",
-    "yfinance>=1.5.1",
-    "pyarrow>=24.0.0",
+    "yfinance>=1.5.2",
+    "pyarrow>=25.0.0",
 ]
 
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86"]
 # Free intraday market-data sources (each lazily imported); see docs/DATA_FEEDS.md.
-crypto = ["ccxt>=4.5.64"]            # real-time crypto OHLCV + funding (free, no key)
+crypto = ["ccxt>=4.5.68"]            # real-time crypto OHLCV + funding (free, no key)
 oanda = ["oandapyV20>=0.7.2"]    # real-time FX via a free practice account
 alpaca = ["alpaca-py>=0.43.5"]     # free real-time US equities (IEX) + paper trading
 openbb = ["openbb>=4.7.2"]         # open-source research aggregator
-feeds = ["ccxt>=4.5.64", "oandapyV20>=0.7.2", "alpaca-py>=0.43.5"]  # all live data feeds
-dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0", "ruff>=0.15.20"]
+feeds = ["ccxt>=4.5.68", "oandapyV20>=0.7.2", "alpaca-py>=0.43.5"]  # all live data feeds
+dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0", "ruff>=0.16.0"]
 # Native desktop app (macOS uses the WebKit backend); see packaging/.
 desktop = [
     "pywebview>=6.2.1",

@@ -25,7 +25,7 @@ def account(tmp_path, monkeypatch):
 def test_snapshot_contract(account):
     snap = api.build_snapshot(account, synthetic=True)
     for key in ("account", "base_currency", "kpis", "allocations", "fx",
-                "equity_curve", "sleeve_curves", "sleeves", "recent_trades"):
+                "equity_curve", "sleeve_curves", "sleeves", "blotter"):
         assert key in snap
     assert len(snap["sleeves"]) == len(cfg.ALLOCATIONS)
     for k in ("total_equity", "total_return", "n_positions", "cash_pct", "fees"):
