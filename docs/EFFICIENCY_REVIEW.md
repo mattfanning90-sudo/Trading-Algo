@@ -330,4 +330,5 @@ cost model, or the one-weight-function rule.
 ### One documentation correction
 
 `CLAUDE.md` advertises `pytest -q` as "170 tests (80 equity + 90 FX/ML)". The
-suite currently collects and passes **572**. Worth updating while in here.
+suite collected and passed **572** when this review was written, and **604**
+after the parity tests added alongside E1/E2. Worth updating while in here.
