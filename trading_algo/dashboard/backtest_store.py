@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from .. import config as cfg
 from .. import paper_trade
+from ..metrics import metric as _metric
 
 EQUITY_CACHE = "backtest_equity.json"
 MAX_POINTS = 500        # downsample curves so payloads stay small
@@ -46,10 +47,6 @@ def load_backtest(kind: str = "equity", account: str = "") -> dict:
         return data
     except (OSError, ValueError):
         return {"available": False, "kind": kind}
-
-
-def _metric(metrics: dict, prefix: str):
-    return next((v for k, v in metrics.items() if k.startswith(prefix)), None)
 
 
 def _downsample(series) -> list[list]:
@@ -111,7 +108,6 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
         sleeves.append({
             "key": k, **_metrics_out(s["metrics"]),
             "avg_turnover": round(float(turn.mean()), 4) if len(turn) else None,
-            "rebalances": int(len(turn)),
             "total_cost_fraction": round(float(s["total_cost_fraction"]), 6),
             "drawdown_halts": int(s["drawdown_halts"]),
             "drawdown_halt_days": int(s["drawdown_halt_days"]),
@@ -134,8 +130,8 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
         # "is the strategy adding anything over owning the index?" — portfolio
         # level only; run_backtest pairs no sleeve with its own index. Missing
         # (benchmark_stats returns {} on <2 overlapping days) stays null, never 0.
+        # The benchmark's own CAGR is not repeated here — `benchmark_metrics` has it.
         "benchmark_stats": {
-            "benchmark_cagr": bs.get("BenchmarkCAGR"),
             "active_return": bs.get("ActiveReturn"),
             "beta": bs.get("Beta"),
             "alpha": bs.get("Alpha"),

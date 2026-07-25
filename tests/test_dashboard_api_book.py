@@ -134,9 +134,9 @@ def test_tca_per_region(books):
 def test_attribution_never_fabricates_a_backtest(books):
     a = api.build_snapshot("full", synthetic=True)["attribution"]
     assert a["cost_drag_by_region"]["US"]["cost_drag_bps"] > 0   # measurable
-    # no predicted curve was supplied -> these are UNMEASURED, and say so
-    assert a["divergence"] is None
-    assert a["tracking_error_bps"] is None
+    # no predicted curve was supplied, so the divergence/tracking-error pair is
+    # absent rather than zeroed — the screen prints "no backtest curve supplied"
+    assert "divergence" not in a and "tracking_error_bps" not in a
 
 
 def test_promotion_checklist(books):

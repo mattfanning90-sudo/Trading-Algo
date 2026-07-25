@@ -59,6 +59,15 @@ body {
 *::-webkit-scrollbar-track { background: #060606; }
 *::-webkit-scrollbar-thumb { background: #262626; border: 2px solid #060606; }
 
+/* Tapes carry more cells than fit on a wide book (FULL runs three FX pairs and
+   three regime indices; DAYTRADER spells out its signal windows), and the inline
+   `overflow:hidden` silently ate the right-hand end mid-word — "BREAKER AR",
+   "US 20:0", the whole TSX close. Wrapping (rather than scrolling) keeps every
+   cell on screen with no hidden affordance to discover, at every width; the row
+   only grows when it would otherwise have clipped. The narrow-screen block below
+   already refused to clip, so truncation was never the intent. */
+.mq-tape { flex-wrap: wrap !important; row-gap: 4px; overflow: visible !important; }
+
 /* hover states (the design's style-hover attributes) */
 .hv-row:hover { background: #101010; }
 .hv-dim:hover { color: #eaffec !important; }

@@ -188,10 +188,16 @@ def _closed(book: dict, totals: dict) -> dict:
 
 def _drawdown(hist: list) -> list[dict]:
     """Drawdown-from-peak series off the persisted equity curve — the same
-    chart the equity screens carry, in percent of peak."""
+    chart the equity screens carry, in percent of peak.
+
+    A mark the book could not be valued on (NaN in equity_history) is SKIPPED,
+    not read as zero: `_f`'s 0.0 default would print a −100% drawdown that never
+    happened, and the equity line on the same screen already drops it."""
     out, peak = [], None
     for d, e in hist or []:
-        v = _f(e)
+        v = _f(e, None)
+        if v is None:
+            continue
         peak = v if peak is None else max(peak, v)
         out.append({"date": d, "dd": round(v / peak - 1.0, 6) if peak else 0.0})
     return out

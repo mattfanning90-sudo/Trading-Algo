@@ -16,6 +16,7 @@ from .. import config as cfg
 from .. import (attribution, crowding, fx, paper_trade, pnl, promotion,
                 signals, tca)
 from ..regions import get_region
+from . import meta
 
 HISTORY_BARS = 66          # ~90 calendar days of closes for the hover popovers
 
@@ -208,7 +209,13 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             gross_local += abs(val_local)
             avg = float(basis.get((k, t)) or price)   # actual cost from the fills ledger
             day_change = (price / prev_price - 1.0) if prev_price else 0.0
+            # The POSITION's return, not the instrument's: on a short a falling
+            # price is a gain. Without the flip this column contradicted the
+            # money column beside it — a short marked +44% green next to −A$202
+            # red — because `price/avg - 1` describes the stock, not the book.
             unrl_pct = (price / avg - 1.0) if avg else 0.0
+            if sh < 0:
+                unrl_pct = -unrl_pct
             unrl_base = sh * (price - avg) * m
             total_unrealized_base += unrl_base
             positions.append({
@@ -288,21 +295,10 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # market-neutral account read as plain long-only momentum.
     overrides = state.get("param_overrides") or {}
     params = cfg.DEFAULT_PARAMS.with_overrides(**overrides) if overrides else cfg.DEFAULT_PARAMS
-    knobs = ("lookback_days", "skip_days", "top_n", "max_weight", "target_vol",
-             "vol_lookback", "max_gross", "max_vol_scale", "stock_trend_ma",
-             "index_trend_ma", "regime_filter", "abs_momentum_floor",
-             "long_short", "short_n", "rebalance")
+    knobs = meta.BOOK_KNOBS
     # Union with the book's own overrides so a future profile knob can never be
     # silently omitted from the screen that claims to describe the book.
     params_out = {k: getattr(params, k) for k in dict.fromkeys(knobs + tuple(overrides))}
-
-    # Live-vs-backtest attribution. No predicted curve is supplied here (this
-    # endpoint must not refetch a backtest — invariant #1), so divergence and
-    # tracking error are UNMEASURED, not zero: emit them null explicitly rather
-    # than let their absence read as "on target".
-    attrib = _try(attribution.attribution_report, state)
-    if attrib is not None:
-        attrib = {**attrib, "divergence": None, "tracking_error_bps": None}
 
     return {
         "kind": "equity",
@@ -312,6 +308,10 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "peak_equity": round(peak, 2),
         "off_peak": round(total_base / peak - 1.0, 6) if peak else 0.0,
         "risk_halted": bool(state.get("risk_halted", False)),
+        # How much of the sit-out is left. A halted book that cannot say when it
+        # resumes is only half the story, and the screens must not invent a
+        # number: absent stays absent rather than becoming 0.
+        "halt_cooldown": state.get("halt_cooldown"),
         # THIS book's breaker, resolved exactly as paper_trade enforces it — key
         # absent means "use the global", key present with None means DISABLED (the
         # `ultra` profile). Emitting the global unconditionally made a 3× book
@@ -358,7 +358,11 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "params": params_out,
         # Realized-vs-modelled slippage per region, off the persisted fills.
         "tca": _try(tca.tca_report, state["trades"]),
-        "attribution": attrib,
+        # Realized return and cost drag per region. No predicted curve is passed
+        # (this endpoint must not refetch a backtest — invariant #1), so the
+        # report simply carries no divergence / tracking-error keys and the
+        # screen says why; nothing here is filled in with a stand-in.
+        "attribution": _try(attribution.attribution_report, state),
         "promotion": _try(promotion.promotion_check, state),
         "benchmark_curve": benchmark_curve,
         "fx": snap_fx,
