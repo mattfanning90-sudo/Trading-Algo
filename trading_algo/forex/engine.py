@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from . import feeds
 from . import fx_book
+from . import sessions
 from .agents import AgentPool
 from .fx_config import START
 from .fx_data import load_panel, synthetic_panel
@@ -34,16 +35,16 @@ from .pairs import DEFAULT_UNIVERSE
 
 
 def fx_market_open(dt: datetime | None = None) -> bool:
-    """True during the FX week (Sun 22:00 UTC → Fri 22:00 UTC, roughly)."""
+    """True during the FX week (Sun 22:00 UTC → Fri 22:00 UTC, roughly).
+
+    Delegates to `sessions` so the loop-level idle gate and the per-symbol gate in
+    `fx_book` can never drift apart. This one is coarse by design — it answers
+    "is the FX week running at all", which is all `run_loop` needs to decide
+    whether to bother waking up. The decision about WHICH instruments may trade on
+    a given bar is per-symbol and lives in `fx_book`.
+    """
     dt = (dt or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    wd, hour = dt.weekday(), dt.hour          # Mon=0 .. Sun=6
-    if wd == 5:                                # Saturday
-        return False
-    if wd == 6:                                # Sunday: opens ~22:00 UTC
-        return hour >= 22
-    if wd == 4:                                # Friday: closes ~22:00 UTC
-        return hour < 22
-    return True
+    return sessions.is_open("EURUSD", dt)
 
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,

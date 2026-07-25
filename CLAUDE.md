@@ -43,6 +43,10 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `fees.py` — per-region commission floor + UK stamp duty (buys only)
 - `calendars.py` — per-region hours/timezones for the scheduler
 - `fx.py` — convert each sleeve into the base currency (incl. FX P&L)
+- `forex/sessions.py` — per-symbol market hours (crypto 24/7; FX Sun 22:00→Fri
+  22:00 UTC; equities/bonds a weekday cash session). Shut instruments are trimmed
+  from the candidate universe before `compute_targets` and **frozen, not
+  flattened** — you cannot liquidate on a closed venue
 - `backtest.py` — per-sleeve daily walk-forward sim
 - `portfolio_backtest.py` — combine sleeves in AUD, allocation rebalancing
 - `paper_trade.py` — persistent sub-books per region (`paper_state_{name}.json`)

@@ -40,6 +40,7 @@ from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
+from . import sessions
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -191,12 +192,23 @@ def init_defaults(synthetic: bool, force: bool = False) -> None:
 # Daily run
 # ---------------------------------------------------------------------------
 def _apply_band(positions: dict[str, float], target: pd.Series,
-                p: FXParams) -> dict[str, float]:
-    """No-churn band: keep current weight unless the target moves by >= min_delta."""
+                p: FXParams, frozen: set[str] | None = None) -> dict[str, float]:
+    """No-churn band: keep current weight unless the target moves by >= min_delta.
+
+    `frozen` names are held at their CURRENT weight regardless of target. They are
+    absent from `target` (trimmed from the candidate universe upstream), and
+    without this they would read as target 0.0 and be flattened — i.e. the book
+    would "sell" on a venue that is closed. Holding through the shut session is
+    what actually happens to a real position.
+    """
+    frozen = frozen or set()
     new: dict[str, float] = {}
     keys = set(positions) | set(target.index)
     for k in keys:
         cur = positions.get(k, 0.0)
+        if k in frozen:
+            new[k] = cur
+            continue
         tgt = float(target.get(k, 0.0))
         new[k] = cur if abs(tgt - cur) < p.rebalance_min_delta else tgt
     return {k: v for k, v in new.items() if abs(v) > _DUST}
@@ -279,6 +291,23 @@ def _run_once_locked(account: str, synthetic: bool = False,
             excluded=sorted(dq.excluded), reasons=dq.reasons)
         panel = {s: df for s, df in panel.items() if s not in dq.excluded}
 
+    # --- market-hours gate (BEFORE compute_targets) -----------------------
+    # A shut venue keeps serving its last close through _align's forward-fill, so
+    # without this the book re-weights FX majors and equities at a dead price all
+    # weekend, paying spread for exposure that cannot capture a move. Per SYMBOL,
+    # not per run: a mixed book must keep trading crypto while its FX legs freeze.
+    #
+    # Frozen, never flattened. These names are dropped from the candidate universe
+    # (so compute_targets never scores them — invariant #3: trims the set, never
+    # re-weights) AND their existing weights are carried through untouched below,
+    # because you cannot liquidate on a venue that is closed.
+    bar_ts = px.index[-1].to_pydatetime()
+    shut = sessions.closed_symbols(symbols, bar_ts)
+    if shut:
+        print(f"  [{account}] market hours: freezing "
+              f"{sessions.session_report(symbols, bar_ts)}")
+        panel = {s: df for s, df in panel.items() if s not in shut}
+
     if state["last_bar_date"] == bar_date:
         # No new bar to trade, but keep the dashboard's "today's read" current by
         # refreshing the per-pair reasoning snapshot.
@@ -351,7 +380,15 @@ def _run_once_locked(account: str, synthetic: bool = False,
         target = pd.Series(dtype=float)
     else:
         target, rationale = explain.decide_and_explain(panel, p, pool=pool)
-    new_positions = {} if halted else _apply_band(positions, target, p)
+    if halted:
+        # Even the drawdown breaker cannot sell on a venue that is shut: flatten
+        # everything tradable now, and hold the rest until its session reopens
+        # (the next run flattens them, since the breaker stays on through the
+        # cooldown). Without this the book books an impossible flattening fill.
+        new_positions = {s: w for s, w in positions.items()
+                         if s in shut and abs(w) > _DUST}
+    else:
+        new_positions = _apply_band(positions, target, p, frozen=shut)
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0
