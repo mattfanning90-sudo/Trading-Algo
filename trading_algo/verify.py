@@ -42,7 +42,7 @@ import json
 import os
 import statistics
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Levels, most severe first.
 ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
