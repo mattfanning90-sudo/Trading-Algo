@@ -1688,7 +1688,10 @@ function agentKpisHTML(page) {
     { label: 'SPREAD PAID', val: M.sym + num(p.costs || 0, 2), color: (p.costs || 0) > 0 ? R : PALE, sub: costSub },
     page.risk_halted
       ? { label: 'RISK HALT', val: 'HALTED', color: R, sub: `COOLDOWN ${page.halt_cooldown} BARS` }
-      : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
+      : page.breaker == null
+        // Breaker disabled by profile — do not claim a stop that isn't there.
+        ? { label: 'RISK HALT', val: 'NO STOP', color: AMB, sub: 'BREAKER OFF BY PROFILE' }
+        : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
   ];
   return `<div class="mq-x"><div style="display:grid;grid-template-columns:1.4fr repeat(${kpis.length - 1},1fr);border-bottom:1px solid #262626">` +
     kpis.map((k, i) => `<div style="padding:14px 14px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:18px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div></div>';
@@ -1720,7 +1723,10 @@ function agentTapeHTML(page) {
     }
   }
   const nextMark = page.bar === '60m' ? 'NEXT 60M BAR' : 'DAILY BAR CLOSE';
-  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · BREAKER <span style="color:${page.risk_halted ? R : G}">${page.risk_halted ? 'TRIPPED' : 'ARMED'}</span> @ −${num(page.breaker * 100, 0)}% · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
+  const breakerBit = page.breaker == null
+    ? `BREAKER <span style="color:${AMB}">OFF</span>`
+    : `BREAKER <span style="color:${page.risk_halted ? R : G}">${page.risk_halted ? 'TRIPPED' : 'ARMED'}</span> @ −${num(page.breaker * 100, 0)}%`;
+  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · ${breakerBit} · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
   return acctTapeHTML(items, right);
 }
 

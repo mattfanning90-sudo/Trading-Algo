@@ -19,28 +19,6 @@ commission/stamp allocated to that lot so realised P&L is net of entry costs.
 from __future__ import annotations
 
 
-def add_lot(lots: dict, key: tuple, qty: int, price: float,
-            cost: float, when: str | None) -> None:
-    """Append a BUY lot to the FIFO queue for `key` (mutates `lots`)."""
-    if qty <= 0:
-        return
-    lots.setdefault(key, []).append([qty, float(price), cost / qty, when])
-
-
-def consume(lots: dict, key: tuple, qty: int, price: float,
-            exit_cost: float) -> dict | None:
-    """Sell `qty` LONG shares of `key`, consuming lots oldest-first.
-
-    Long-only helper kept for direct callers; the general (short-aware) entry
-    point is `apply_fill`. Returns the realised round-trip, or None if there
-    were no long lots to match against.
-    """
-    queue = lots.get(key, [])
-    if not queue or queue[0][0] < 0:
-        return None
-    return _close(queue, qty, price, exit_cost)
-
-
 def _close(queue: list, qty: int, price: float, exit_cost: float) -> dict | None:
     """Consume `qty` shares from a same-signed lot queue oldest-first (mutates
     it). Works for both long lots (positive qty) and short lots (negative qty):

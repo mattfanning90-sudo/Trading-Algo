@@ -40,6 +40,7 @@ from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
+from . import sessions
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -102,6 +103,25 @@ def _cached_ml_pool() -> "AgentPool":
     if _ML_POOL is None:
         _ML_POOL = ml_pool()
     return _ML_POOL
+
+
+_CHAMPION_POOLS: dict[str, "AgentPool"] = {}
+
+
+def champion_pool(account: str) -> "AgentPool":
+    """Build an AgentPool with the stable core (5 hand-written agents) plus this
+    account's auto-promoted swarm champions. Lets paper trading opt into the
+    evolutionary layer, mirroring ml_pool's opt-in DL layer."""
+    from .champions import champions_agents
+    return AgentPool(champions_agents(account), max_workers=1)
+
+
+def _cached_champion_pool(account: str) -> "AgentPool":
+    """Memoized champion_pool() so run_all loads each account's roster once per
+    process (per-account, unlike the single shared ML pool)."""
+    if account not in _CHAMPION_POOLS:
+        _CHAMPION_POOLS[account] = champion_pool(account)
+    return _CHAMPION_POOLS[account]
 
 
 def list_accounts() -> list[str]:
@@ -241,12 +261,23 @@ def init_defaults(synthetic: bool, force: bool = False) -> None:
 # Daily run
 # ---------------------------------------------------------------------------
 def _apply_band(positions: dict[str, float], target: pd.Series,
-                p: FXParams) -> dict[str, float]:
-    """No-churn band: keep current weight unless the target moves by >= min_delta."""
+                p: FXParams, frozen: set[str] | None = None) -> dict[str, float]:
+    """No-churn band: keep current weight unless the target moves by >= min_delta.
+
+    `frozen` names are held at their CURRENT weight regardless of target. They are
+    absent from `target` (trimmed from the candidate universe upstream), and
+    without this they would read as target 0.0 and be flattened — i.e. the book
+    would "sell" on a venue that is closed. Holding through the shut session is
+    what actually happens to a real position.
+    """
+    frozen = frozen or set()
     new: dict[str, float] = {}
     keys = set(positions) | set(target.index)
     for k in keys:
         cur = positions.get(k, 0.0)
+        if k in frozen:
+            new[k] = cur
+            continue
         tgt = float(target.get(k, 0.0))
         new[k] = cur if abs(tgt - cur) < p.rebalance_min_delta else tgt
     return {k: v for k, v in new.items() if abs(v) > _DUST}
@@ -255,34 +286,41 @@ def _apply_band(positions: dict[str, float], target: pd.Series,
 def run_once(account: str, synthetic: bool = False,
              pool: AgentPool | None = None, interval: str | None = None,
              source: str | None = None, exchange: str | None = None,
-             use_ml: bool = False) -> None:
+             use_ml: bool = False, use_champions: bool = False) -> None:
     # Hold an exclusive per-account lock across the whole load -> mutate -> save
     # cycle so a manual run and the scheduler can't interleave and clobber each
     # other's writes (SQLite makes each commit atomic but not the RMW cycle; see
     # storage.account_lock). The lock sits alongside the state it guards.
     with storage.account_lock(account, lock_dir=os.path.abspath(STATE_DIR)):
         _run_once_locked(account, synthetic, pool=pool, interval=interval,
-                         source=source, exchange=exchange, use_ml=use_ml)
+                         source=source, exchange=exchange, use_ml=use_ml,
+                         use_champions=use_champions)
 
 
 def _run_once_locked(account: str, synthetic: bool = False,
                      pool: AgentPool | None = None, interval: str | None = None,
                      source: str | None = None, exchange: str | None = None,
-                     use_ml: bool = False) -> None:
+                     use_ml: bool = False, use_champions: bool = False) -> None:
     state = load_state(account)
     p = _params(state)
-    # --- ML gate (the ONE mechanism pinning the ML pool to its training set) --
-    # The NeuralAgent is trained on DAILY bars of the default FX+crypto
-    # universe, so with use_ml=True it only ever scores daily-bar books with
-    # the unlocked default universe. Gated-out books (daytrader: 60m bars;
-    # multiasset: universe_locked) keep the CALLER's technical pool — never a
-    # fresh default when a pool was supplied, so --workers is always honored —
+    # --- ML / champions gate (the ONE mechanism pinning these pools to their
+    # training/promotion set) ------------------------------------------------
+    # Both the NeuralAgent and the swarm champion roster are scored on DAILY
+    # bars of the default FX+crypto universe, so with use_champions=True (or
+    # use_ml=True) they only ever apply to daily-bar books with the unlocked
+    # default universe. Gated-out books (daytrader: 60m bars; multiasset:
+    # universe_locked) keep the CALLER's technical pool — never a fresh
+    # default when a pool was supplied, so --workers is always honored —
     # which makes daytrader's 23:00 bar identical regardless of whether
     # fx-paper or day-paper advances it (last_bar_date dedup then makes the
-    # loser a no-op). With use_ml=False (the default) the caller's explicit
-    # pool is used unconditionally.
+    # loser a no-op). With both flags False (the default) the caller's
+    # explicit pool is used unconditionally. Champions take priority over ML
+    # when both are requested for the same book.
     technical_pool = pool          # may be None -> downstream module default
-    if (use_ml and state.get("bar", "1d") in ("1d", "B")
+    if use_champions and state.get("bar", "1d") in ("1d", "B") \
+            and not state.get("universe_locked"):
+        pool = _cached_champion_pool(account)
+    elif (use_ml and state.get("bar", "1d") in ("1d", "B")
             and not state.get("universe_locked")):
         pool = _cached_ml_pool()
     else:
@@ -333,6 +371,28 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # be visible on the dashboard, not only in this process's stdout.
     state["data_quality"] = {"excluded": sorted(dq.excluded),
                              "reasons": dict(dq.reasons), "date": bar_date}
+
+    # --- market-hours gate (BEFORE compute_targets) -----------------------
+    # A shut venue keeps serving its last close through _align's forward-fill, so
+    # without this the book re-weights FX majors and equities at a dead price all
+    # weekend, paying spread for exposure that cannot capture a move. Per SYMBOL,
+    # not per run: a mixed book must keep trading crypto while its FX legs freeze.
+    #
+    # Frozen, never flattened. These names are dropped from the candidate universe
+    # (so compute_targets never scores them — invariant #3: trims the set, never
+    # re-weights) AND their existing weights are carried through untouched below,
+    # because you cannot liquidate on a venue that is closed.
+    #
+    # `interval` is passed because a DAILY bar is stamped at midnight and names a
+    # whole trading day. Judging a cash equity's intraday session against that
+    # stamp would freeze the (daily) multiasset book's equities and bonds on every
+    # ordinary weekday — the gate would quietly park the book forever.
+    bar_ts = px.index[-1].to_pydatetime()
+    shut = sessions.closed_symbols(symbols, bar_ts, interval)
+    if shut:
+        print(f"  [{account}] market hours: freezing "
+              f"{sessions.session_report(symbols, bar_ts, interval)}")
+        panel = {s: df for s, df in panel.items() if s not in shut}
 
     if state["last_bar_date"] == bar_date:
         # No new bar to trade, but keep the dashboard's "today's read" current by
@@ -414,7 +474,15 @@ def _run_once_locked(account: str, synthetic: bool = False,
         target = pd.Series(dtype=float)
     else:
         target, rationale = explain.decide_and_explain(panel, p, pool=pool)
-    new_positions = {} if halted else _apply_band(positions, target, p)
+    if halted:
+        # Even the drawdown breaker cannot sell on a venue that is shut: flatten
+        # everything tradable now, and hold the rest until its session reopens
+        # (the next run flattens them, since the breaker stays on through the
+        # cooldown). Without this the book books an impossible flattening fill.
+        new_positions = {s: w for s, w in positions.items()
+                         if s in shut and abs(w) > _DUST}
+    else:
+        new_positions = _apply_band(positions, target, p, frozen=shut)
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0
@@ -493,12 +561,14 @@ def _run_once_locked(account: str, synthetic: bool = False,
 
 def run_all(synthetic: bool = False, pool: AgentPool | None = None,
             interval: str | None = None, source: str | None = None,
-            exchange: str | None = None, use_ml: bool = False) -> None:
+            exchange: str | None = None, use_ml: bool = False,
+            use_champions: bool = False) -> None:
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if account_exists(name):
             run_once(name, synthetic, pool=pool, interval=interval,
-                     source=source, exchange=exchange, use_ml=use_ml)
+                     source=source, exchange=exchange, use_ml=use_ml,
+                     use_champions=use_champions)
 
 
 # ---------------------------------------------------------------------------

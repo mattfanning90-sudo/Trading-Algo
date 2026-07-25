@@ -52,9 +52,3 @@ def next_close(region: Region, dt: datetime | None = None) -> datetime:
     while not is_weekday(candidate):
         candidate += timedelta(days=1)
     return candidate
-
-
-def session_date(region: Region, dt: datetime | None = None) -> str:
-    """The local calendar date (YYYY-MM-DD) of the current/last session."""
-    dt = (dt or now_local(region)).astimezone(ZoneInfo(region.timezone))
-    return dt.strftime("%Y-%m-%d")

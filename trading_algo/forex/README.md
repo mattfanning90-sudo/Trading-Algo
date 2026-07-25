@@ -270,6 +270,27 @@ python -m trading_algo.forex.research --synthetic     # offline
 python -m trading_algo.forex.research --out report.md # real data
 ```
 
+## Swarm: evolutionary agent population (offline breeder)
+
+`evolve.py` breeds a population of grammar-constrained `Genome`s (`genome.py`)
+against the paper book's own history — mutate → score on sequential folds
+(mean-minus-std Sharpe, penalised for correlating with the existing roster) →
+cull — and writes an `EvolutionLog` of every genome it evaluated, not just the
+survivors. `champions.py` re-scores the log's finalists on an untouched
+hold-out slice, gates them with the Deflated Sharpe Ratio and Probability of
+Backtest Overfitting (deflated by the honest N of genomes tried), and — subject
+to a rotation cap and a stable core of the five hand-written agents — promotes
+the survivors into `champions_{account}.json`. `engine.py --champions` then
+folds that roster into the live `AgentPool` alongside (or instead of) the
+hand-written agents, so a bred agent is a drop-in the same way `--ml` is.
+
+```bash
+# --- Swarm: evolutionary agent population (offline breeder) ---
+python -m trading_algo.forex.evolve --account matt --synthetic --generations 12 --pop 40   # breed
+python -m trading_algo.forex.champions --account matt --synthetic                          # gate + promote
+python -m trading_algo.forex.engine --once --account matt --champions                      # trade WITH champions
+```
+
 ## Frequency: daily, intraday — and why not HFT
 
 The system is bar-agnostic. Default is **daily**; an **intraday / medium-frequency**
@@ -379,6 +400,7 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `ensemble.py` | performance-weighted agent blending |
 | `risk.py` | vol targeting + per-pair / gross / asset-class caps |
 | `marks.py` | **the one** cost/mark/annualisation formula module (book + dashboard) |
+| `sessions.py` | **the one** market-hours definition — shared by the trading gate (`fx_book`) and the audit (`verify`) so they cannot drift |
 | `fx_pnl.py` | money-terms P&L: FIFO weight lots, round-trips, blotter, exposure |
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |

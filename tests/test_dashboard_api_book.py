@@ -170,3 +170,40 @@ def test_snapshot_survives_a_broken_analytic(books, monkeypatch):
     assert snap["promotion"] is None
     assert all(s["crowding"] is None for s in snap["sleeves"])
     assert snap["kpis"]["total_equity"] > 0            # the book itself is intact
+
+
+# ---------------------------------------------------------------------------
+# bug 3 — the RENDER layer must honour the null the payload already sends
+# ---------------------------------------------------------------------------
+# The payload side is correct and covered above: `breaker` is None for `ultra`.
+# static/app.js then did `num(page.breaker * 100, 0)` with no null branch, and in
+# JS `null * 100 === 0` — so the most leveraged book on the platform displayed
+# "BREAKER ARMED @ −0%" in green while it had no drawdown stop at all.
+#
+# app.js has no JS test harness, so this asserts at the source level (the same
+# technique test_fx_marks.py uses to pin formulas out of a module). It is a guard
+# against the null branch being dropped again, not a substitute for a real
+# rendering test.
+def test_app_js_branches_on_a_disabled_breaker():
+    from pathlib import Path
+
+    src = Path(api.__file__).parent.joinpath("static", "app.js").read_text()
+
+    armed = src.count("BREAKER <span")
+    assert armed >= 3, "expected TRIPPED / ARMED / OFF variants"
+    assert "page.breaker == null" in src, (
+        "app.js must branch on a null breaker; without it `null * 100` renders "
+        "'ARMED @ −0%' for a book whose breaker is disabled")
+    # Every place that formats the breaker as a percentage must sit downstream of
+    # a null check, so none can be reached with breaker === null. The check is the
+    # first arm of a multi-line ternary, so look back over the enclosing
+    # expression rather than the same physical line.
+    WINDOW = 500
+    pos, unguarded = 0, []
+    while (i := src.find("page.breaker * 100", pos)) != -1:
+        if "page.breaker == null" not in src[max(0, i - WINDOW):i]:
+            unguarded.append(src[max(0, i - 90):i + 20].strip())
+        pos = i + 1
+    assert not unguarded, (
+        "breaker percentage rendered with no preceding null guard:\n  "
+        + "\n  ".join(unguarded))

@@ -664,11 +664,11 @@ duty = fees.stamp_duty(region, notional) <span class="kw">if</span> delta &gt; <
   <div class="codecap">paper_trade.py — realised P&amp;L reconstructed from the trade record, not a cached counter</div>
 <pre><code>lots, _ = pnl.build_lots([t <span class="kw">for</span> t <span class="kw">in</span> trade_log <span class="kw">if</span> t[<span class="st">"region"</span>] == region.key])
 ...
-<span class="kw">if</span> delta &gt; <span class="nb">0</span>:
-    pnl.add_lot(lots, key, delta, fill, fee+duty, today)   <span class="cm"># a buy opens a lot</span>
-<span class="kw">else</span>:
-    r = pnl.consume(lots, key, <span class="fn">abs</span>(delta), fill, fee)     <span class="cm"># a sell eats FIFO lots</span>
-    trade[<span class="st">"realized"</span>] = <span class="fn">round</span>(r[<span class="st">"net"</span>], <span class="nb">2</span>)             <span class="cm"># actual gain/loss on this sale</span></code></pre>
+<span class="kw">if</span> delta != <span class="nb">0</span>:
+    r = pnl.apply_fill(lots, key, delta, fill, fee+duty, today)  <span class="cm"># one signed fill, FIFO</span>
+    <span class="cm"># same-direction fill opens/adds a lot; opposite eats lots oldest-first</span>
+    <span class="kw">if</span> r:
+        trade[<span class="st">"realized"</span>] = <span class="fn">round</span>(r[<span class="st">"net"</span>], <span class="nb">2</span>)         <span class="cm"># actual gain/loss on the closed portion</span></code></pre>
   <p>The code comment says it best: cost-basis counters "are NOT the source of truth and nothing reads them… so it can never disagree with the actual trade record." A derived number can't drift from the events that produced it.</p>
 
   <h3>Idempotency: safe to run five times a day</h3>

@@ -5,6 +5,7 @@ the profiles registry, the short-aware paper engine, and the dashboard overview
 group split (experimental books ring-fenced into their own separate total).
 """
 import numpy as np
+import pandas as pd
 import pytest
 
 from trading_algo import data, paper_trade as pt, pnl, profiles, strategy
@@ -165,3 +166,56 @@ def test_overview_ringfences_experimental(acct, monkeypatch):
     all_aum = sum(c["equity"] for c in ov["accounts"])
     assert ov["totals"]["aum"] < all_aum
     assert ov["totals"]["aum"] + exp_aum == pytest.approx(all_aum)
+
+
+# --- post-rounding neutrality gate -----------------------------------------
+# `select_long_short` hedges in WEIGHT space, but paper trading then rounds each
+# name to whole shares with int(), which truncates toward zero. On a small sleeve
+# an expensive name rounds to ZERO shares — and if that happens to one leg only,
+# a "market-neutral" book silently becomes a directional bet while still carrying
+# a drawdown breaker sized for a hedged one. The live `experimental` book showed
+# exactly this shape: 1 long against 6 shorts on a top_n=6 / short_n=6 config.
+def _ls_sleeve(cash=10_000.0):
+    return {"currency": "USD", "cash": cash, "positions": {},
+            "cost_basis": {}, "realized_pnl": 0.0,
+            "last_rebalance_month": None, "last_rebalance_date": None}
+
+
+def test_rounding_that_kills_one_leg_holds_cash(us_region, capsys):
+    """Expensive long + cheap short => the long leg rounds to 0 shares. The book
+    is then 100% net short, so it must flatten rather than trade."""
+    sleeve = _ls_sleeve()
+    px = pd.Series({"RICH": 10_000.0, "CHEAP_A": 10.0, "CHEAP_B": 10.0})
+    targets = pd.Series({"RICH": 0.5, "CHEAP_A": -0.25, "CHEAP_B": -0.25})
+    trades = []
+    pt.rebalance_sleeve(us_region, sleeve, targets, px, "2026-01-05", trades)
+
+    assert trades == [], "an unhedgeable neutral book must not trade"
+    assert sleeve["positions"] == {}
+    assert "net after whole-share rounding" in capsys.readouterr().out
+
+
+def test_both_legs_surviving_rounding_does_trade(us_region):
+    """Control: when both legs round to real share counts the book trades, so the
+    test above cannot pass merely because nothing was tradable."""
+    sleeve = _ls_sleeve()
+    px = pd.Series({"LONG_A": 20.0, "LONG_B": 20.0, "SHORT_A": 20.0, "SHORT_B": 20.0})
+    targets = pd.Series({"LONG_A": 0.25, "LONG_B": 0.25,
+                         "SHORT_A": -0.25, "SHORT_B": -0.25})
+    trades = []
+    pt.rebalance_sleeve(us_region, sleeve, targets, px, "2026-01-05", trades)
+
+    assert trades, "a hedgeable neutral book must trade"
+    longs = [t for t in trades if t["side"] == "BUY"]
+    shorts = [t for t in trades if t["side"] == "SELL"]
+    assert longs and shorts, "both legs must be executed"
+
+
+def test_gate_does_not_touch_long_only_books(us_region):
+    """A long-only book is *supposed* to be 100% net — the gate must ignore it."""
+    sleeve = _ls_sleeve(cash=60_000.0)      # above MICRO_THRESHOLD
+    px = pd.Series({"A": 20.0, "B": 20.0})
+    targets = pd.Series({"A": 0.5, "B": 0.5})
+    trades = []
+    pt.rebalance_sleeve(us_region, sleeve, targets, px, "2026-01-05", trades)
+    assert trades, "long-only books must be unaffected by the neutrality gate"

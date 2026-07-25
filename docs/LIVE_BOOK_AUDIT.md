@@ -2,11 +2,11 @@
 
 ## Why this exists
 
-`pytest -q` passes 572 tests. It passed while a third of the main portfolio sat
-in cash for six weeks and while four books were filling orders on a market that
-was shut. That is not a criticism of the suite — it is the point. The tests prove
-the *maths* is right on a clean price matrix. Nothing was proving the *books*
-were right.
+The whole test suite passes — hundreds of tests, green. It passed while a third
+of the main portfolio sat in cash for six weeks and while four books were filling
+orders on a market that was shut. That is not a criticism of the suite — it is
+the point. The tests prove the *maths* is right on a clean price matrix. Nothing
+was proving the *books* were right.
 
 `verify.py` closes that gap. It reads the state the schedulers actually wrote and
 re-derives it from the trade ledger alone, the way you would reconcile a broker
@@ -61,7 +61,14 @@ off, or no eligible names). `_empty_target_reason` already records which — but
 next scheduled run will record the reason; check `sleeves.ASX.last_status.status`
 on the `full` book.**
 
-### 2. All four FX books trade on a closed market (ERROR)
+### 2. All four FX books trade on a closed market (ERROR) — **fixed**
+
+> **Status: fixed.** `trading_algo/forex/sessions.py` now gates every run by
+> symbol, and `fx_book` freezes shut instruments instead of flattening them. The
+> historical fills described below stay in the ledger, so `verify` will keep
+> reporting them for the books that already have them — the check is asserting
+> the record, not the current behaviour. New weekend fills should stop appearing.
+
 
 104 fills across the four books are stamped on a bar when the venue for that
 instrument was shut — weekends, and after the ~22:00 UTC Friday FX close. Crypto
@@ -82,17 +89,38 @@ there is no price move to capture.
 
 Two gaps let it through:
 
-* **`fx_market_open()` is only wired into `run_loop`, not `run_once`.** The
-  daemon path checks the FX session; the `--once` path — which is what the
-  GitHub Actions cron actually runs — does not check at all.
+* **`fx_market_open()` was only wired into `run_loop`, not `run_once`.** The
+  daemon path checked the FX session; the `--once` path — which is what the
+  GitHub Actions cron actually runs — did not check at all.
 * **The staleness gate tolerates exactly the window that matters.**
   `fx_data_quality.STALE_BARS = 6` is deliberately generous so "a quiet FX
   weekend never trips it". On a 60m book that permits the first six hours after
   the Friday close to trade at a dead price before the gate engages. That is why
   the weekend fills cluster in the hours right after the close.
 
-The `--once`/`run_loop` split is the substantive one: the gate exists and is
-correct, it is simply not on the path that runs.
+The `--once`/`run_loop` split was the substantive one: the gate existed and was
+correct, it simply was not on the path that runs.
+
+**The fix.** `sessions.py` answers "is this instrument's venue open at this bar"
+per symbol, for all four asset classes (crypto 24/7; FX Sun 22:00 → Fri 22:00
+UTC; equities and bond ETFs a weekday cash session). `fx_book.run_once` trims
+shut symbols from the candidate universe before `compute_targets` — mirroring
+the existing data-quality gate, so invariant #3 holds: it trims the set, it never
+re-weights.
+
+Two properties make it safe, and both are pinned by tests:
+
+* **Per symbol, not per run.** A mixed FX+crypto book keeps trading crypto
+  through the weekend while its FX legs sit frozen. A run-level check would
+  either halt crypto or permit the dead-price churn.
+* **Freeze, never flatten.** A trimmed symbol is absent from `target`, which
+  `_apply_band` would otherwise read as target `0.0` and sell — booking a
+  liquidation on a shut venue. `_apply_band` now takes a `frozen` set and carries
+  those weights through untouched. The drawdown breaker follows the same rule: it
+  flattens what is tradable and holds the rest until the session reopens.
+
+`engine.fx_market_open` now delegates to `sessions`, so the coarse loop-level
+idle gate and the per-symbol gate cannot drift apart.
 
 ### 3. Positions are closed long before their signal can resolve (WARN)
 
@@ -156,9 +184,7 @@ holding-period question above a P&L question, not a stylistic one.
 
 ## Suggested order of work
 
-1. **Gate `run_once` on market hours** — the one unambiguous correctness fix.
-   Ideally per-symbol rather than per-run, so a mixed FX+crypto book keeps
-   trading crypto through the weekend while the FX legs freeze.
+1. ~~**Gate `run_once` on market hours**~~ — **done**, see finding 2 above.
 2. **Diagnose ASX** from `last_status` after the next scheduled run.
 3. **Then** decide the holding-period question. It is a strategy change, not a
    bug fix — a minimum-hold rule, a wider `rebalance_min_delta` band, or slower

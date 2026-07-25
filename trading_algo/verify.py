@@ -95,12 +95,11 @@ def discover(account: str | None = None) -> list[tuple[str, str, dict]]:
 
 
 def _parse(stamp: str) -> datetime:
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(stamp, fmt)
-        except ValueError:
-            pass
-    raise ValueError(f"unparseable timestamp {stamp!r}")
+    """A book's bar key -> datetime. Delegates to `forex.sessions.parse_bar` so
+    the auditor and the trading gate read a stamp with the same parser."""
+    from .forex.sessions import parse_bar
+
+    return parse_bar(stamp)
 
 
 def _bar_hours(state: dict) -> float:
@@ -211,31 +210,28 @@ def reconcile_fx(account: str, state: dict) -> list[Finding]:
 def check_market_hours(account: str, state: dict, kind: str) -> list[Finding]:
     """Flag trades stamped on a bar when the market for that instrument was shut.
 
-    FX closes Friday ~22:00 UTC and reopens Sunday ~22:00 UTC; cash equities are
-    shut all weekend. Crypto genuinely is 24/7, so it is exempt. A trade stamped
-    outside its own session was filled against a price that no venue was quoting.
+    The boundaries live in `forex.sessions` — the SAME module `fx_book` gates on
+    before it writes a fill. A second copy here would let the two drift: the gate
+    would permit a fill this audit then flags forever, or the audit would bless
+    one the gate refuses. FX closes Friday ~22:00 UTC and reopens Sunday ~22:00
+    UTC; cash equities are shut all weekend; crypto genuinely is 24/7 and is
+    exempt. A trade stamped outside its own session filled against a price that no
+    venue was quoting.
     """
-    from .forex.pairs import ALL_PAIRS
-
-    crypto = {s for s, p in ALL_PAIRS.items() if p.asset_class == "crypto"}
+    from .forex import sessions
 
     offenders: dict[str, int] = {}
     for t in state.get("trades") or []:
         symbol = t.get("pair") or t.get("ticker") or "?"
-        if symbol in crypto:
-            continue
         try:
-            ts = _parse(t["date"])
+            stamp = t["date"]
+            ts = sessions.parse_bar(stamp)
         except (ValueError, KeyError):
             continue
-        weekend = ts.weekday() >= 5
-        # Friday after 22:00 UTC is already the weekend for FX.
-        if kind == "fx" and ts.weekday() == 4 and ts.hour >= 22:
-            weekend = True
-        # Sunday from 22:00 UTC the FX week has restarted.
-        if kind == "fx" and ts.weekday() == 6 and ts.hour >= 22:
-            weekend = False
-        if weekend:
+        # The book's live interval isn't recorded per trade, so read it off the
+        # stamp: a daily key carries no time and names a whole trading day.
+        if not sessions.bar_is_tradable(symbol, ts, kind,
+                                        sessions.bar_interval(stamp)):
             offenders[symbol] = offenders.get(symbol, 0) + 1
 
     if not offenders:

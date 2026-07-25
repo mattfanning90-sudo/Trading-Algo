@@ -17,10 +17,6 @@ from __future__ import annotations
 import pandas as pd
 
 from . import fx_data
-from .pairs import EQUITY_UNIVERSE
-
-# Research default: a liquid US-equity basket (OpenBB also covers FX/crypto).
-OPENBB_UNIVERSE = list(EQUITY_UNIVERSE)
 
 # Yahoo-style interval -> OpenBB interval string.
 _INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
