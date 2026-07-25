@@ -15,7 +15,7 @@ import os
 import pytest
 
 from trading_algo.dashboard import fx_api, registry
-from trading_algo.forex import explain, fx_book, fx_data, fx_pnl, marks
+from trading_algo.forex import fx_book, fx_data, fx_pnl, marks
 from trading_algo.forex.agents import AgentPool
 from trading_algo.forex.pairs import get_pair
 
