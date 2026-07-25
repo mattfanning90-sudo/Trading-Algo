@@ -3,8 +3,9 @@
 Audit of `main` @ `992752f` (after merging #57, #74, #65, #78, #79, #77).
 
 **Scope**: code, architecture, algorithms, test strategy, built-but-not-wired
-surface, and dead code. **Baseline**: `pytest -q` → 624 passed, ruff clean, mypy
-clean on the 14 money-path files.
+surface, and dead code. **Baseline**: `pytest -q` → **673 passed** (635 test
+functions; parametrisation expands them), ruff clean, mypy clean on the 14
+money-path files.
 
 ## Method
 
@@ -32,8 +33,8 @@ that reports less.
 This is a well-built system with a **reporting-integrity problem, not a
 construction problem**. The architecture is genuinely clean (zero import cycles;
 the FX subsystem touches the equity core through 5 leaf-utility edges). The test
-suite is real (624 tests, 623 with substantive assertions). The signal maths is
-correctly causal.
+suite is real — **634 of 635 test functions carry a substantive assertion**. The
+signal maths is correctly causal.
 
 What is wrong is concentrated in two places:
 
@@ -372,8 +373,9 @@ got copied.
 - **L20. One test asserts nothing.** `test_paper_trade.py:82`
   `test_force_rebalance_resets_months` — its only claim is the comment
   `# second run should not raise`; it never checks that months were reset.
-  Also 5 loose `>= 0` / `is not None` assertions. 623 of 624 tests carry a real
-  assertion — this dimension is a credit to the suite.
+  Also 5 loose `>= 0` / `is not None` assertions. It is the **only** one of 635
+  test functions without a real assertion — including all of #77's new
+  `test_fx_pnl.py` — so this dimension is a credit to the suite.
 - **L21. Test-count drift.** Every doc states a different wrong number; the
   dashboard computes a fourth. (CLAUDE.md corrected to ~600 in this pass.)
 - **L22. `tools/build_vault_notes.py` treats any `argv[1]` as an output
