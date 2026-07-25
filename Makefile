@@ -1,10 +1,15 @@
-.PHONY: install test dashboard dashboard-app mac-app backtest sweep clean
+.PHONY: install test verify dashboard dashboard-app mac-app backtest sweep clean
 
 install:
 	pip install -r requirements.txt
 
 test:
 	pytest -q
+
+# End-to-end audit of the LIVE paper books (reconciliation, closed-market
+# fills, idle sleeves, holding period vs signal horizon). Offline.
+verify:
+	python -m trading_algo.verify
 
 # Web dashboard (browser) — synthetic demo on the "full" account
 dashboard:
