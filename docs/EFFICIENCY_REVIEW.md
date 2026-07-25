@@ -8,6 +8,14 @@ correctness and research integrity; this one reviews **cost**.*
 
 ---
 
+> **Status.** E1 and E2 are **implemented** (`strategy.precompute`/`targets_at`,
+> vectorised `data_quality.assess`), with parity pinned across every book by
+> `tests/test_book_parity.py`. Verified by running all 16 books
+> (4 profiles × 4 sleeves) through the pre-change and post-change trees and
+> comparing equity, returns, metrics, per-date weights, quality reports and the
+> paper-path targets — **identical on every one**. The remaining findings
+> (E3–E7, S1–S3) are unimplemented and stand as written.
+
 ## 1. Verdict
 
 The architecture is sound — the slowness is not structural, it is **four

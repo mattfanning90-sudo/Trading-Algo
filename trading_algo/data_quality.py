@@ -62,46 +62,81 @@ def _jump_threshold(region) -> float:
     return getattr(region, "jump_threshold", JUMP_DEFAULT)
 
 
+# Trailing rows read for the per-name checks. Every check below looks at either
+# the last GAP_WINDOW rows or the last STALE_DAYS+1 *valid* closes, so a window
+# this size covers any column that isn't heavily gapped; the rare column that
+# yields too few valid prints inside it falls back to its full history (see
+# `_valid_tail`), which is what makes this identical to a full scan rather than
+# merely equivalent.
+_SCAN_WINDOW = max(GAP_WINDOW, (STALE_DAYS + 1) * 4, 40)
+
+
+def _valid_tail(block: np.ndarray, col: pd.Series, upto: int) -> np.ndarray:
+    """The trailing non-NaN closes for one name, cheaply.
+
+    Reads them out of the already-materialised `block` (a bounded trailing slice
+    shared by every column). Only if that window holds too few valid prints to
+    answer the staleness / 1-day-return checks does it pay for a full-history
+    `dropna` on that single column.
+    """
+    v = block[~np.isnan(block)]
+    if len(v) >= STALE_DAYS + 1:
+        return v
+    return col.iloc[:upto + 1].dropna().to_numpy(dtype=float)
+
+
 def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:
-    """Flag names whose price data is untrustworthy as-of `asof` (trailing only)."""
+    """Flag names whose price data is untrustworthy as-of `asof` (trailing only).
+
+    Stateless and bounded: the per-name checks read a fixed trailing slice as one
+    NumPy block instead of re-slicing and `dropna`-ing the full history per
+    column, which is what made this O(history × names) on every rebalance. The
+    one check that genuinely needs all history — "are there ≥2 prints ever?" — is
+    a single vectorised `notna().sum()`. Output is unchanged.
+    """
     report = QualityReport()
-    if asof not in prices.index:
-        # snap to the last available date <= asof
-        loc = prices.index.searchsorted(asof, side="right") - 1
-        if loc < 0:
-            return report
-        asof = prices.index[loc]
+    loc = prices.index.searchsorted(asof, side="right") - 1
+    if loc < 0:                      # snap to the last available date <= asof
+        return report
 
-    window = prices.loc[:asof]
     jump_thr = _jump_threshold(region)
+    sub = prices.iloc[:loc + 1]
 
-    for t in prices.columns:
-        col = window[t]
-        valid = col.dropna()
-        if len(valid) < 2:
+    # "Enough history to trade at all" is the only check that spans everything;
+    # one vectorised pass answers it for every name at once.
+    n_valid = sub.notna().sum().to_numpy()
+    # Missing prints inside the trailing gap window, all names at once.
+    gap_block = sub.iloc[-GAP_WINDOW:]
+    n_missing = gap_block.isna().sum().to_numpy()
+    gap_span = len(gap_block)
+    # One bounded slice materialised once and read per column below.
+    scan = sub.iloc[-_SCAN_WINDOW:].to_numpy(dtype=float, na_value=np.nan)
+
+    for j, t in enumerate(prices.columns):
+        if n_valid[j] < 2:
             report.flag(t, "insufficient history")
             continue
 
-        last = valid.iloc[-1]
+        valid = _valid_tail(scan[:, j], prices[t], loc)
+        last = valid[-1]
         if not np.isfinite(last) or last <= 0:
             report.flag(t, f"dead price ({last})")
             continue
 
         # staleness: last STALE_DAYS+1 valid closes all identical
-        tail = valid.iloc[-(STALE_DAYS + 1):]
+        tail = valid[-(STALE_DAYS + 1):]
         if len(tail) >= STALE_DAYS + 1 and float(tail.max() - tail.min()) == 0.0:
             report.flag(t, f"stale ({STALE_DAYS}+ unchanged closes)")
             continue
 
         # gap: too many missing prints in the trailing window
-        recent = col.iloc[-GAP_WINDOW:]
-        missing = int(recent.isna().sum())
+        missing = int(n_missing[j])
         if missing > MAX_GAP_DAYS:
-            report.flag(t, f"gappy ({missing} missing in {len(recent)})")
+            report.flag(t, f"gappy ({missing} missing in {gap_span})")
             continue
 
         # impossible move: latest 1-day return beyond the region threshold
-        prev = valid.iloc[-2]
+        prev = valid[-2]
         if prev > 0:
             ret = last / prev - 1.0
             if abs(ret) > jump_thr:

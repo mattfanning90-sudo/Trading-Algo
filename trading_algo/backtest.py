@@ -71,6 +71,13 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
             from . import signals as _sig
             vols_frame = _sig.realised_vol(prices, p)
 
+    # The signal frames are identical for every rebalance date, so build them
+    # ONCE and read the as-of row per date (strategy.precompute/targets_at).
+    # `targets_at` is the same single weight formula `compute_targets` runs — the
+    # panel only removes the repeated recomputation, never a branch of it — so
+    # invariant #3 holds and `test_consistency` proves it numerically.
+    panel = strategy.precompute(prices, index_prices, p)
+
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     dq_excluded: set[str] = set()
     for d in rebal_marks:
@@ -84,8 +91,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         capacity = None
         if ADV_CAP_PCT and advd is not None and asof in advd.index:
             capacity = (ADV_CAP_PCT * advd.loc[asof] / float(initial_capital)).dropna()
-        weight_schedule[asof] = strategy.compute_targets(
-            prices, index_prices, p, asof=asof, eligible=eligible, capacity=capacity)
+        weight_schedule[asof] = strategy.targets_at(
+            panel, p, asof, eligible=eligible, capacity=capacity)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index
