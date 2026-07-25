@@ -4,7 +4,7 @@ The dashboard itself never runs a backtest (it can take minutes and needs
 market data); instead it reads a JSON cache written by:
 
     python -m trading_algo.dashboard.backtest_store                 # real data
-    python -m trading_algo.dashboard.backtest_store --synthetic     # pipeline test
+    python -m trading_algo.dashboard.backtest_store --synthetic --out /tmp/x.json
     python -m trading_algo.dashboard.backtest_store --point-in-time # PIT universe
     python -m trading_algo.dashboard.backtest_store --sweep         # + robustness grid
 
@@ -63,6 +63,12 @@ def _downsample(series) -> list[list]:
 
 
 def _metrics_out(m: dict) -> dict:
+    """Everything `metrics.compute_metrics` produces except FinalEquity — that
+    one is money and each sleeve reports in its own local currency (invariant
+    #6), so it cannot go in a shared, unlabelled metric row. The rest are
+    unitless and comparable across sleeves. `win_rate` counts DAYS, not trades —
+    a day the sleeve sits in cash scores as a non-win, so a low number is often
+    the regime filter working, not a bad hit rate."""
     return {
         "cagr": _metric(m, "CAGR"),
         "ann_vol": _metric(m, "AnnVol"),
@@ -70,14 +76,18 @@ def _metrics_out(m: dict) -> dict:
         "sortino": _metric(m, "Sortino"),
         "max_drawdown": _metric(m, "MaxDrawdown"),
         "calmar": _metric(m, "Calmar"),
+        "win_rate": _metric(m, "WinRate"),
     }
 
 
 def export_equity(synthetic: bool = False, point_in_time: bool = False,
-                  sweep: bool = False, report_out: str | None = None) -> str:
+                  sweep: bool = False, report_out: str | None = None,
+                  out_path: str | None = None) -> str:
     """Run the portfolio backtest and write the dashboard cache. Returns path.
     `report_out` additionally writes the Markdown report from the SAME run
-    (so CI gets both without paying for two backtests)."""
+    (so CI gets both without paying for two backtests). `out_path` writes the
+    cache somewhere other than the live one — use it with `synthetic=True` so a
+    pipeline test never lands where the dashboard reads it (invariant #5)."""
     from ..portfolio_backtest import run_portfolio_backtest
 
     result = run_portfolio_backtest(synthetic=synthetic, point_in_time=point_in_time)
@@ -91,6 +101,24 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
             result["benchmark"].to_csv("benchmark_curve.csv")
         except Exception:
             pass
+    # Per-sleeve cost/turnover reality, alongside the return metrics. Turnover
+    # and costs are fractions of NAV; `avg_turnover` is the same figure the
+    # Markdown report's per-sleeve table labels "Turnover" (mean per rebalance),
+    # and total_cost_fraction is the un-compounded sum of every rebalance's cost.
+    sleeves = []
+    for k, s in result["sleeves"].items():
+        turn = s["turnover"]
+        sleeves.append({
+            "key": k, **_metrics_out(s["metrics"]),
+            "avg_turnover": round(float(turn.mean()), 4) if len(turn) else None,
+            "rebalances": int(len(turn)),
+            "total_cost_fraction": round(float(s["total_cost_fraction"]), 6),
+            "drawdown_halts": int(s["drawdown_halts"]),
+            "drawdown_halt_days": int(s["drawdown_halt_days"]),
+            "data_quality_excluded": list(s["data_quality_excluded"]),
+        })
+
+    bs = result.get("benchmark_stats") or {}
     out = {
         "kind": "equity",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -103,17 +131,30 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
         "benchmark": _downsample(result["benchmark"]),
         "metrics": _metrics_out(result["metrics"]),
         "benchmark_metrics": _metrics_out(result["benchmark_metrics"]),
-        "sleeves": [
-            {"key": k, **_metrics_out(s["metrics"])}
-            for k, s in result["sleeves"].items()
-        ],
+        # "is the strategy adding anything over owning the index?" — portfolio
+        # level only; run_backtest pairs no sleeve with its own index. Missing
+        # (benchmark_stats returns {} on <2 overlapping days) stays null, never 0.
+        "benchmark_stats": {
+            "benchmark_cagr": bs.get("BenchmarkCAGR"),
+            "active_return": bs.get("ActiveReturn"),
+            "beta": bs.get("Beta"),
+            "alpha": bs.get("Alpha"),
+            "tracking_error": bs.get("TrackingError"),
+            "info_ratio": bs.get("InfoRatio"),
+        },
+        "allocations": {k: round(float(v), 4)
+                        for k, v in result["allocations"].items()},
+        # Base currency, cumulative: the FX spread paid truing sleeves back to
+        # their target allocation. The only portfolio-level cost line.
+        "fx_rebalance_cost": round(float(result["fx_rebalance_cost"]), 2),
+        "sleeves": sleeves,
     }
 
     if sweep:
         out["sweep"] = _run_sweep(synthetic)
         out["overfitting"] = _overfitting_gates(synthetic, point_in_time)
 
-    path = _cache_path()
+    path = out_path or _cache_path()
     with open(path, "w") as f:
         json.dump(out, f)
     return path
@@ -184,7 +225,10 @@ def _overfitting_gates(synthetic: bool, point_in_time: bool,
                 membership=membership)
         except Exception as exc:                     # never fail the cache write
             gate = {"verdict": f"error: {exc}", "n_configs": 0}
-        gates[key] = gate
+        # The failure paths (error here, "no result" from purged_cv_report) carry
+        # only a verdict. Give the UI one shape to key off: absent == null, so it
+        # can say "unavailable" instead of rendering a missing gate as a pass.
+        gates[key] = {"dsr": None, "pbo": None, "passed": None, **gate}
     return gates
 
 
@@ -196,9 +240,13 @@ def main(argv: list[str] | None = None) -> None:
                     help="also run the TOP_N × lookback robustness grid (slow)")
     ap.add_argument("--report", default=None, metavar="PATH",
                     help="also write the Markdown report from the same run")
+    ap.add_argument("--out", default=None, metavar="PATH",
+                    help="write the cache here instead of the live one "
+                         "(use with --synthetic so a pipeline test never lands "
+                         "where the dashboard reads it)")
     args = ap.parse_args(argv)
     path = export_equity(args.synthetic, args.point_in_time, args.sweep,
-                         report_out=args.report)
+                         report_out=args.report, out_path=args.out)
     print(f"backtest cache → {path}")
 
 

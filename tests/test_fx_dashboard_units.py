@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trading_algo.forex import dashboard, fx_book, marks
+from trading_algo.forex import dashboard, fx_book, fx_pnl, marks
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
 
@@ -87,8 +87,11 @@ def test_bar_unit_single_shared_implementation():
     # the ONE calendar-time annualisation convention shared with fx_book.status
     assert dashboard._ppy is marks.periods_per_year
     assert "def _ppy" not in src                       # no local implementation left
-    # equity lookup extracted once too (issue 24)
-    assert src.count("def equity_on") == 1
+    # equity lookup extracted once too (issue 24) — THE implementation now lives
+    # in fx_pnl, next to the money ledger that also prices trades by date; the
+    # dashboard delegates to it rather than keeping a second copy.
+    assert dashboard._equity_lookup is fx_pnl.equity_lookup
+    assert "def equity_on" not in src
 
 
 # ---- issue 6: verdict + significance narration in bar units ----------------
