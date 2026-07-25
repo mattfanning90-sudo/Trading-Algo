@@ -50,6 +50,13 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `verify.py` — **end-to-end audit of the LIVE books**. The test suite proves the
+  maths on a clean price matrix; this re-derives each persisted book from its own
+  trade ledger and flags what a real broker statement would contradict:
+  reconciliation drift, fills on a closed market, turnover at a forward-filled
+  dead price, sleeves silently parked in cash, and holding period vs the signal
+  horizon that opened the position. Offline by design (the state IS the record),
+  and it runs after every scheduled paper run
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
   OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
@@ -68,6 +75,8 @@ python -m trading_algo.paper_trade --account ultra --init --capital 10000 --prof
 python -m trading_algo.paper_trade --account experimental --init --capital 10000 --profile experimental  # market-neutral long/short (separate total)
 python -m trading_algo.engine --once --account full # one scheduler pass
 python -m trading_algo.dashboard --account full     # live web dashboard :8787
+python -m trading_algo.verify                       # audit every LIVE book end to end
+python -m trading_algo.verify --json --strict       # machine-readable; exit 1 on ERROR
 # --- FX subsystem (independent; see trading_algo/forex/README.md) ---
 python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
 python -m trading_algo.forex.paper --init               # open matt + partner books

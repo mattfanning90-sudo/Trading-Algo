@@ -73,6 +73,18 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Audit live books (end-to-end verification)
+        # See fx-paper.yml for the rationale. Report-only: never blocks the run.
+        if: always()
+        run: |
+          python -m trading_algo.verify | tee /tmp/audit.txt
+          {
+            echo "## Live-book audit"
+            echo '```'
+            cat /tmp/audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build the dashboard landing page
         run: |
           {
