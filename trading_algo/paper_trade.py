@@ -320,7 +320,15 @@ def init_account(account: str, capital: float, synthetic: bool,
     destroys the only record its P&L is derived from. `forex.fx_book.init_account`
     has always guarded this; the equity side did not, while CLAUDE.md documents
     `--init` as a plain command — so re-running the documented line wiped the
-    book. Mirrors the FX behaviour, including the `--force` escape hatch.
+    book. `--force` is the deliberate escape hatch, as on the FX side.
+
+    It RAISES where `fx_book.init_account` prints and skips, and the difference is
+    intended. `fx_book.init_defaults` opens four books in one sweep, so skipping an
+    existing one is how "top up whatever is missing" works — the FX workflows call
+    `--init` on every run and rely on it. The equity CLI inits ONE named account
+    because a human asked for that account, so a silent skip would report success
+    for work it did not do. Nothing calls this in a loop: `paper-trade.yml` guards
+    with `[ ! -f … ]`, so raising cannot break a scheduled run.
     """
     if account_exists(account) and not force:
         raise SystemExit(
