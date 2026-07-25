@@ -1,0 +1,102 @@
+name: FX Swarm Breeder (monthly)
+
+on:
+  schedule:
+    - cron: "0 2 1 * *"          # 02:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode"
+        type: choice
+        options: [real, synthetic]
+        default: real
+      generations: {description: "Generations", type: string, default: "12"}
+      pop: {description: "Population size", type: string, default: "40"}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fx-swarm
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
+      GENERATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.generations || '12' }}
+      POP: ${{ github.event_name == 'workflow_dispatch' && inputs.pop || '40' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: trading_algo/forex/.cache
+          key: fx-parquet-${{ github.run_id }}
+          restore-keys: fx-parquet-
+      - name: Breed + promote the swarm
+        run: |
+          mkdir -p state public
+          python -m trading_algo.forex.paper --init $SYNTH   # seed per-account books (locked universes) so --all breeds each correctly
+          python -m trading_algo.forex.evolve --all --generations "$GENERATIONS" --pop "$POP" $SYNTH
+          python -m trading_algo.forex.champions --all $SYNTH
+      - name: Build site
+        env:
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+        run: bash scripts/build_site.sh
+      - name: Commit swarm state back
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A state/
+          if git diff --cached --quiet; then
+            echo "No swarm state change to commit."
+          else
+            git commit -m "chore: update FX swarm state [skip ci]"
+            for attempt in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              git fetch origin ${{ github.ref_name }}
+              git rebase origin/${{ github.ref_name }} || { git rebase --abort || true; git rebase -X theirs origin/${{ github.ref_name }}; }
+              if git push; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                echo "::error::git push failed after 3 attempts"; exit 1
+              fi
+              sleep $((5 * attempt))
+            done
+          fi
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Back off before retry
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 25
+      - name: Deploy to GitHub Pages (retry)
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4

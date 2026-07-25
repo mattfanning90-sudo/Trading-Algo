@@ -92,3 +92,59 @@ def test_ml_gate_pins_ml_pool_to_daily_default_books(isolated_state, monkeypatch
     for acct, (pool, _syms) in used.items():
         assert pool is caller_pool, acct
     assert len(ml_calls) == 1                       # never called again
+
+
+# --- the champions gate: mirrors the ML gate, for the swarm-promoted roster ---
+def test_champion_gate_pins_champions_to_daily_default_books(isolated_state, monkeypatch):
+    """Mirror of the ML gate test, for champions: with use_champions=True, daily-bar
+    unlocked books (matt/partner) get the champion pool; daytrader (60m) and
+    multiasset (universe_locked) get the EXACT caller pool. use_champions=False =>
+    caller pool everywhere. Also proves the per-account cache never cross-bleeds."""
+    import pandas as pd
+
+    fx_book.init_defaults(synthetic=True)
+    caller_pool = AgentPool(max_workers=2)
+    champ_sentinel = AgentPool(max_workers=1)
+    champ_calls = []
+    monkeypatch.setattr(fx_book, "champion_pool",
+                        lambda account: champ_calls.append(account) or champ_sentinel)
+    monkeypatch.setattr(fx_book, "_CHAMPION_POOLS", {})   # reset the per-account memo
+
+    current = {"acct": None}
+    orig_run_once = fx_book.run_once
+
+    def spy_run_once(account, *a, **kw):
+        current["acct"] = account
+        return orig_run_once(account, *a, **kw)
+
+    monkeypatch.setattr(fx_book, "run_once", spy_run_once)
+
+    used: dict[str, tuple] = {}
+
+    def fake_decide(panel, p, pool=None):
+        used[current["acct"]] = (pool, set(panel))
+        return pd.Series(dtype=float), {}
+
+    monkeypatch.setattr(fx_book.explain, "decide_and_explain", fake_decide)
+
+    fx_book.run_all(synthetic=True, use_champions=True, pool=caller_pool)
+    assert used["matt"][0] is champ_sentinel
+    assert used["partner"][0] is champ_sentinel
+    assert used["daytrader"][0] is caller_pool          # 60m bar -> gated OUT
+    assert used["multiasset"][0] is caller_pool         # locked universe -> gated OUT
+    assert set(champ_calls) == {"matt", "partner"}      # only eligible books built a champion pool
+    assert len(champ_calls) == 2                         # one build per eligible account
+
+    # Second pass: per-account cache must NOT rebuild and must NOT cross-bleed.
+    used.clear()
+    fx_book.run_all(synthetic=True, use_champions=True, pool=caller_pool)
+    assert used["matt"][0] is champ_sentinel
+    assert used["partner"][0] is champ_sentinel
+    assert len(champ_calls) == 2                         # never rebuilt
+
+    # use_champions=False: caller pool everywhere, champion_pool untouched.
+    used.clear()
+    fx_book.run_all(synthetic=True, use_champions=False, pool=caller_pool)
+    for acct, (pool, _syms) in used.items():
+        assert pool is caller_pool, acct
+    assert len(champ_calls) == 2
