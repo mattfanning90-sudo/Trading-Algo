@@ -28,6 +28,7 @@ import math
 
 from . import feeds
 from . import fx_data
+from . import fx_pnl
 from . import fxconv
 from . import indicators as ind
 from . import marks
@@ -168,22 +169,10 @@ def _bar_unit(bar: str | None, idx=None) -> tuple[str, int]:
     return unit, bpd
 
 
-def _equity_lookup(state):
-    """(equity_on, eq_map): the ONE string-asof equity lookup for trade dates.
-    Intraday keys rely on lexicographic 'd <= date' — a single implementation
-    keeps the blotter and every card that costs trades in agreement."""
-    eqh = state.get("equity_history", [])
-    eq_map = {d: e for d, e in eqh}
-    eq_dates = [d for d, _ in eqh]
-    cur_eq = float(state.get("equity", state.get("initial_capital", 0.0)))
-
-    def equity_on(date: str) -> float:
-        if date in eq_map:
-            return float(eq_map[date])
-        prior = [d for d in eq_dates if d <= date]
-        return float(eq_map[prior[-1]]) if prior else cur_eq
-
-    return equity_on, eq_map
+# (equity_on, eq_map): the ONE string-asof equity lookup for trade dates, now
+# living in fx_pnl next to the ledger that also needs it — imported here rather
+# than re-implemented, so the blotter and every card that costs a trade agree.
+_equity_lookup = fx_pnl.equity_lookup
 
 
 # Round-2 item 2 (dashboard half): the blotter's cost + mark formulas ARE the

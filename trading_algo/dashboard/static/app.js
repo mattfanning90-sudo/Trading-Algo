@@ -91,6 +91,8 @@ const pairPrice = (pair, v) => {
 const px2 = (sym, v) => sym + num(v, 2);
 const pxFill = (sym, v) => sym + num(v, v < 3 ? 4 : 2);
 const money0 = (sym, v) => sym + num(v, 0);
+/* signed money in a book's own base currency, e.g. '−A$12.40' */
+const sgnCcy = (v, sym, dp = 2) => sgn(v, sym + num(Math.abs(v || 0), dp));
 
 /* ====================== seeded synthetic generators ==================== */
 /* one xorshift-style mixer for every deterministic synthetic series */
@@ -380,13 +382,16 @@ function prepEquity(page) {
   return { rows, maxW, feed, lastDate, lastBuy, curve };
 }
 
+/* Range chips over a [{date, v}] curve. Dates may be bar keys with a time
+   ('2026-07-25 00:00' on the hourly FX book), so slice to the day part before
+   parsing — the ISO prefix keeps the string compare correct either way. */
 function rangeFilter(curve) {
   if (!curve.length) return curve;
   const days = S.range === '1M' ? 31 : S.range === '3M' ? 93 : null;
   if (!days) return curve;
-  const end = new Date(curve[curve.length - 1].date);
+  const end = new Date(String(curve[curve.length - 1].date).slice(0, 10));
   const cut = new Date(end.getTime() - days * 86400e3).toISOString().slice(0, 10);
-  const out = curve.filter(p => p.date >= cut);
+  const out = curve.filter(p => String(p.date).slice(0, 10) >= cut);
   return out.length > 1 ? out : curve;
 }
 
@@ -1210,6 +1215,25 @@ function agentTf(page) {
   return tf;
 }
 
+/* ==================== FX money-terms view-model ========================= */
+/* The FX books are weight-based, so every money figure comes pre-computed from
+   forex/fx_pnl via the snapshot's `pnl` / `positions_money` / `closed` blocks.
+   This just shapes them for the screens (same job prepEquity does). */
+function prepFx(page) {
+  const sym = SYM[page.base_currency] || page.base_currency || 'A$';
+  const curve = (page.equity_history || []).map(h => ({ date: String(h[0]), v: h[1] }));
+  const pnl = page.pnl || {};
+  const money = page.positions_money || [];
+  const blotter = page.blotter || [];
+  const lastDate = blotter.length ? blotter[blotter.length - 1].date : null;
+  const feed = blotter.filter(t => t.date === lastDate).slice().reverse();
+  const maxN = money.length
+    ? Math.max(...money.map(r => Math.abs(r.notional)), 1e-9) : 1;
+  const unit = page.rows && page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair))
+    ? 'SYMBOL' : 'PAIR';
+  return { sym, curve, pnl, money, blotter, feed, lastDate, maxN, unit };
+}
+
 function agentKpisHTML(page) {
   const isIntraday = page.bar === '60m';
   const unit = page.rows.some(r => !isFxPair(r.pair) && !isCrypto(r.pair)) ? 'SYMBOLS' : 'PAIRS';
@@ -1226,19 +1250,32 @@ function agentKpisHTML(page) {
   const daySub = (page.day_aud == null ? '—'
     : sgn(page.day_aud, 'A$' + num(Math.abs(page.day_aud), 2)))
     + (costPct && Math.abs(costPct) >= 0.00005 ? ` · COSTS ${sgnPct(costPct, 2)}` : '');
+  /* money terms — the same NET P&L / COSTS pair the equity screens carry */
+  const M = prepFx(page);
+  const p = M.pnl;
+  const netPnl = p.net_pnl != null ? p.net_pnl : page.equity - page.initial;
+  const pnlSub = p.realized != null
+    ? `REAL ${sgnCcy(p.realized, M.sym, 0)} · OPEN ${sgnCcy(p.open, M.sym, 0)}`
+    : `EQUITY LESS INITIAL`;
+  const costSub = p.carry != null && Math.abs(p.carry) >= 0.005
+    ? `CARRY ${sgnCcy(p.carry, M.sym, 2)} · TURNOVER ${num(p.turnover || 0, 1)}×`
+    : `HALF-SPREAD ON ${num(p.turnover || 0, 1)}× TURNOVER`;
+
   const kpis = [
-    { label: 'TOTAL EQUITY · AUD', val: num(page.equity, 2), color: PALE, sub: `INITIAL ${num(page.initial, 2)}` },
+    { label: `TOTAL EQUITY · ${page.base_currency || 'AUD'}`, val: num(page.equity, 2), color: PALE, sub: `INITIAL ${num(page.initial, 2)}` },
     { label: 'TOTAL RETURN', val: sgnPct(page.total_return, 2), color: cSign(page.total_return), sub: `SINCE ${esc(page.since)}` },
     { label: dayLabel, val: page.day_pct == null ? '—' : sgnPct(page.day_pct, 2), color: cSign(page.day_pct || 0), sub: daySub },
+    { label: 'NET P&L', val: sgnCcy(netPnl, M.sym, 2), color: cSign(netPnl), sub: pnlSub },
     { label: 'OFF PEAK', val: sgnPct(page.off_peak, 2), color: page.off_peak < -0.02 ? AMB : PALE, sub: `PEAK A$${num(page.peak, 2)}` },
     { label: 'GROSS / NET', val: `${pct0(page.gross)} / ${sgn(page.net, num(Math.abs(page.net) * 100, 0) + '%')}`, color: page.gross > 1 ? AMB : PALE, sub: grossSub },
     { label: `ACTIVE ${unit}`, val: String(page.n_long + page.n_short), color: PALE, sub: `${page.n_long} LONG · ${page.n_short} SHORT` },
+    { label: 'SPREAD PAID', val: M.sym + num(p.costs || 0, 2), color: (p.costs || 0) > 0 ? R : PALE, sub: costSub },
     page.risk_halted
       ? { label: 'RISK HALT', val: 'HALTED', color: R, sub: `COOLDOWN ${page.halt_cooldown} BARS` }
       : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
   ];
-  return `<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">` +
-    kpis.map((k, i) => `<div style="padding:14px 16px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:20px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div>';
+  return `<div class="mq-x"><div style="display:grid;grid-template-columns:1.4fr repeat(${kpis.length - 1},1fr);border-bottom:1px solid #262626">` +
+    kpis.map((k, i) => `<div style="padding:14px 14px;${i < kpis.length - 1 ? 'border-right:1px solid #262626' : ''}"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">${esc(k.label)}</div><div style="font-size:18px;font-weight:600;color:${k.color};margin-top:8px">${esc(k.val)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(k.sub)}</div></div>`).join('') + '</div></div>';
 }
 
 function agentTapeHTML(page) {
@@ -1272,14 +1309,31 @@ function agentTapeHTML(page) {
 }
 
 function agentCurveAttrHTML(page) {
-  const vals = (page.equity_history || []).map(h => h[1]);
+  const M = prepFx(page);
+  const filt = rangeFilter(M.curve);
+  const vals = filt.map(c => c.v);
+  const dates = filt.map(c => c.date);
   const upCurve = vals.length > 1 ? vals[vals.length - 1] >= vals[0] : true;
   const stroke = upCurve ? G : R;
   const p = toPts(vals, 600, 140, 10);
-  const eqStart = page.equity_history.length ? page.equity_history[0][0] : '';
-  const eqEnd = page.equity_history.length ? page.equity_history[page.equity_history.length - 1][0] : '';
+  const eqStart = dates.length ? dates[0] : '';
+  const eqEnd = dates.length ? dates[dates.length - 1] : '';
   const rangeTxt = vals.length
     ? `MIN ${num(Math.min(...vals), 2)} · MAX ${num(Math.max(...vals), 2)}${page.bar === '60m' ? ' · HOURLY MARKS' : ''}` : '';
+
+  /* drawdown-from-peak, same panel the equity screens carry (peak over the
+     whole book so a zoomed range still reads against the real high-water mark) */
+  const ddAll = (page.drawdown || []).length
+    ? page.drawdown.map(d => ({ date: String(d.date), v: d.dd }))
+    : M.curve.map((c, i, a) => ({ date: c.date, v: ddSeries(a.map(x => x.v))[i] }));
+  const from = dates.length ? String(dates[0]).slice(0, 10) : '';
+  const dd = ddAll.filter(d => d.date.slice(0, 10) >= from).map(d => d.v);
+  const ddMin = Math.min(...dd, -1e-9);
+  const ddPts = dd.map((d, i) => ((i / Math.max(dd.length - 1, 1)) * 600).toFixed(1)
+    + ',' + (2 + (d / ddMin) * 40).toFixed(1)).join(' ');
+  const ddArea = dd.length ? '0,2 ' + ddPts + ' 600,2' : '';
+  const ddNow = dd.length ? dd[dd.length - 1] : 0;
+  const axis = axisDates(dates.map(d => String(d).slice(0, 10)), 5);
 
   /* attribution vs ensemble-tilt panel (the design shows tilt for matt) */
   let bars, title;
@@ -1315,20 +1369,107 @@ function agentCurveAttrHTML(page) {
 
   return `
   <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
-    <div style="padding:12px 18px;border-right:1px solid #262626">
-      <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em;margin-bottom:8px"><span style="color:#eaffec">■ EQUITY CURVE · AUD</span><span style="color:#61805f">${rangeTxt}</span></div>
-      <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
-        <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
-        <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
-        <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
-        <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
-        <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
-      </svg>
-      <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px"><span>${esc(mmdd(eqStart) || eqStart)}</span><span>${esc(String(eqEnd).slice(5))}</span></div>
+    <div style="border-right:1px solid #262626">
+      <div style="padding:12px 18px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency || 'AUD')}</span><span style="color:#61805f">${rangeTxt}</span></div>
+          <div style="display:flex;gap:2px;font-size:9px">${rangeChips()}</div>
+        </div>
+        <svg viewBox="0 0 600 140" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
+          <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
+          <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
+          <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
+          <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
+        </svg>
+      </div>
+      <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
+        <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:.12em;margin:6px 0"><span style="color:#61805f">DRAWDOWN FROM PEAK</span><span style="color:${ddNow < -0.02 ? AMB : DIM}">${dd.length ? `NOW ${sgnPct(ddNow, 2)} · WORST ${sgnPct(ddMin, 2)}` : 'NO HISTORY YET'}</span></div>
+        <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
+          <line x1="0" y1="1" x2="600" y2="1" stroke="#262626" stroke-width="1"></line>
+          <polygon points="${ddArea}" fill="rgba(255,123,114,0.18)"></polygon>
+          <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
+      </div>
     </div>
     <div>
       <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ${title}</div>
       <div style="padding:8px 18px 12px">${barHtml}</div>
+    </div>
+  </div>`;
+}
+
+/* ============== FX · OPEN BOOK + TRADE FEED + FINANCIAL POSITION ========= */
+/* The money half of the FX overview: what is on, what it is worth, what it
+   cost, and how those add up to equity — the parity item with the equity
+   screens' OPEN BOOK / TRADE FEED / TOTAL FINANCIAL POSITION block. */
+function fxBookHTML(page) {
+  const M = prepFx(page);
+  const p = M.pnl;
+  const sym = M.sym;
+
+  const bookRows = M.money.map(r => {
+    const long = r.weight >= 0;
+    const frac = Math.abs(r.notional) / M.maxN;
+    return `
+    <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .6fr 1.35fr .8fr .8fr .6fr .8fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
+      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
+      <span style="display:flex;align-items:center;gap:8px"><span style="color:#c9e8cc;width:62px">${sym}${num(Math.abs(r.notional), 0)}</span><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${long ? G : R};width:${(frac * 100).toFixed(0)}%"></span></span></span>
+      <span style="color:#e3b341">${pairPrice(r.pair, r.avg_entry)}</span>
+      <span style="color:#9db5a0">${pairPrice(r.pair, r.price)}</span>
+      <span style="color:${r.day_move == null ? FAINT : cSign(r.day_move)}">${r.day_move == null ? '—' : sgnPct(r.day_move, 2)}</span>
+      <span style="color:${cSign(r.unrealized)};font-weight:600">${sgnCcy(r.unrealized, sym, 2)}</span>
+      <span style="color:${cSign(r.unrealized_pct)}">${sgnPct(r.unrealized_pct, 2)}</span>
+    </div>`;
+  }).join('');
+
+  const feedRows = M.feed.slice(0, 9).map(t => `
+    <div style="display:flex;align-items:center;gap:9px;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212">
+      <span style="color:#3d543f">${mmdd(t.date)}</span>
+      <span style="width:32px;font-weight:600;color:${t.side === 'BUY' ? G : R}">${esc(t.side)}</span>
+      <span style="color:#eaffec;width:58px">${esc(t.pair)}</span>
+      <span style="color:#9db5a0">${sgnPct(t.delta_weight, 1)} → ${sym}${num(t.notional, 0)}</span>
+      <span style="color:#e3b341;margin-left:auto">${sym}${num(t.cost, 2)}</span>
+    </div>`).join('');
+
+  /* the reconciliation: realised + open + carry + residual = equity − initial */
+  const line = (label, val, color, dp = 2) => `
+    <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">${label}</span><span style="color:${color}">${val}</span></div>`;
+  const carryLine = p.carry == null
+    ? line('CARRY / FINANCING', 'NOT TRACKED', FAINT)
+    : line('CARRY / FINANCING', sgnCcy(p.carry, sym, 2), cSign(p.carry));
+  const residLine = Math.abs(p.residual || 0) >= 0.01
+    ? line('UNEXPLAINED', sgnCcy(p.residual, sym, 2), AMB) : '';
+  const notes = [];
+  if (p.fx_unstamped) notes.push(`${p.fx_unstamped} EARLY FILL${p.fx_unstamped > 1 ? 'S' : ''} PREDATE THE FX STAMP — PRICE MOVE ONLY`);
+  if (Math.abs(p.residual || 0) >= 0.01) notes.push('UNEXPLAINED = COMPOUNDING DRIFT ON HELD WEIGHT' + (p.carry == null ? ' + UNTRACKED CARRY' : ''));
+
+  return `
+  <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
+    <div style="border-right:1px solid #262626">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN BOOK · ${M.money.length} ${M.unit}${M.money.length === 1 ? '' : 'S'} · MARKED IN ${esc(page.base_currency || 'AUD')}</span><span style="font-size:9px;color:#61805f">NOTIONAL = |WEIGHT| × EQUITY WHEN OPENED</span></div>
+      <div class="mq-x"><div style="display:grid;grid-template-columns:1fr .55fr .6fr 1.35fr .8fr .8fr .6fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>NOTIONAL</span><span>ENTRY</span><span>PRICE</span><span>DAY</span><span>OPEN P&amp;L</span><span>OPEN %</span></div>
+      ${bookRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— FLAT. NO OPEN EXPOSURE.</div>'}</div>
+    </div>
+    <div style="display:flex;flex-direction:column">
+      <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE FEED${M.lastDate ? ` · ${esc(String(M.lastDate).slice(5))} REBALANCE` : ''}</div>
+      <div>${feedRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS ON THE LAST BAR.</div>'}</div>
+      <div style="margin-top:auto;padding:12px 18px;border-top:1px solid #262626;background:#0d0d0d">
+        <div style="font-size:9px;color:#61805f;letter-spacing:.14em;margin-bottom:8px">TOTAL FINANCIAL POSITION · ${esc(page.base_currency || 'AUD')}</div>
+        ${line('GROSS NOTIONAL', sym + num(p.gross_notional || 0, 0), TXT)}
+        ${line('NET NOTIONAL', sgnCcy(p.net_notional || 0, sym, 0), cSign(p.net_notional || 0))}
+        ${line('REALIZED P&amp;L', sgnCcy(p.realized || 0, sym, 2), cSign(p.realized || 0))}
+        ${line('OPEN P&amp;L', sgnCcy(p.open || 0, sym, 2), cSign(p.open || 0))}
+        ${carryLine}
+        ${line('SPREAD PAID', '−' + sym + num(p.costs || 0, 2), R)}
+        ${residLine}
+        <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">NET P&amp;L</span><span style="color:${cSign(p.net_pnl || 0)};font-weight:600">${sgnCcy(p.net_pnl || 0, sym, 2)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${sym}${num(page.equity, 2)}</span></div>
+        ${notes.length ? `<div style="font-size:8.5px;color:#3d543f;line-height:1.6;margin-top:8px;border-top:1px solid #1a1a1a;padding-top:7px">${notes.map(n => esc(n)).join('<br>')}</div>` : ''}
+      </div>
     </div>
   </div>`;
 }
@@ -1877,6 +2018,163 @@ function agentPositionsHTML(page) {
   </div>`;
 }
 
+/* ================= FX · MONEY LEDGER (POSITIONS tab) ==================== */
+/* Everything the equity POSITIONS screen shows in dollars, for a weight book:
+   the open positions at cost basis, where the exposure really sits by currency
+   leg, P&L per instrument, every fill, and the FIFO closed round-trips. */
+function fxLedgerHTML(page) {
+  const M = prepFx(page);
+  const p = M.pnl;
+  const sym = M.sym;
+
+  /* --- 1. open positions, money terms --- */
+  const posRows = M.money.map(r => {
+    const long = r.weight >= 0;
+    return `
+    <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .55fr .6fr .4fr .85fr .8fr .8fr .6fr .8fr .6fr .7fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
+      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
+      <span style="color:#61805f">${r.n_lots}</span>
+      <span style="color:#c9e8cc">${sym}${num(Math.abs(r.notional), 0)}</span>
+      <span style="color:#e3b341">${pairPrice(r.pair, r.avg_entry)}</span>
+      <span style="color:#9db5a0">${r.priced ? pairPrice(r.pair, r.price) : '—'}</span>
+      <span style="color:#e3b341">${sym}${num(r.entry_cost, 2)}</span>
+      <span style="color:${cSign(r.unrealized)};font-weight:600">${sgnCcy(r.unrealized, sym, 2)}</span>
+      <span style="color:${cSign(r.unrealized_pct)}">${sgnPct(r.unrealized_pct, 2)}</span>
+      <span style="color:#3d543f">${esc(String(r.held_since).slice(5))}${r.fx_known ? '' : ' <span style="color:#8a7433">·FX?</span>'}</span>
+    </div>`;
+  }).join('');
+
+  /* --- 2. net exposure by currency leg --- */
+  const exp = page.exposure || [];
+  const maxExp = exp.length ? Math.max(...exp.map(e => Math.abs(e.weight)), 1e-9) : 1;
+  const expRows = exp.map(e => {
+    const pos = e.weight >= 0;
+    const frac = Math.abs(e.weight) / maxExp;
+    return `
+    <div style="display:flex;align-items:center;gap:9px;padding:4px 18px;font-size:10.5px">
+      <span style="color:#c9e8cc;width:46px">${esc(e.currency)}</span>
+      <span style="position:relative;flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${pos ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${pos ? G : R}"></span></span>
+      <span style="color:${pos ? G : R};width:52px;text-align:right">${sgnPct(e.weight, 1)}</span>
+      <span style="color:#61805f;width:74px;text-align:right">${sgnCcy(e.notional, sym, 0)}</span>
+    </div>`;
+  }).join('');
+
+  /* --- 3. P&L by instrument --- */
+  const roll = page.pnl_by_pair || [];
+  const maxRoll = roll.length ? Math.max(...roll.map(r => Math.abs(r.total)), 1e-9) : 1;
+  const rollRows = roll.map(r => {
+    const frac = Math.abs(r.total) / maxRoll;
+    const pos = r.total >= 0;
+    return `
+    <div class="hv-row" style="display:grid;grid-template-columns:.9fr .5fr .5fr .8fr .8fr .7fr .7fr 1fr .85fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#eaffec">${esc(r.pair)}</span>
+      <span style="color:#61805f">${r.trades}</span>
+      <span style="color:#61805f">${r.round_trips}</span>
+      <span style="color:${cSign(r.realized)}">${sgnCcy(r.realized, sym, 2)}</span>
+      <span style="color:${cSign(r.open)}">${sgnCcy(r.open, sym, 2)}</span>
+      <span style="color:${r.carry == null ? FAINT : cSign(r.carry)}">${r.carry == null ? '—' : sgnCcy(r.carry, sym, 2)}</span>
+      <span style="color:#e3b341">${sym}${num(r.costs, 2)}</span>
+      <span style="display:flex;align-items:center;gap:7px"><span style="position:relative;width:80px;height:4px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:8px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:4px;left:${pos ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${pos ? G : R}"></span></span></span>
+      <span style="color:${cSign(r.total)};font-weight:600">${sgnCcy(r.total, sym, 2)}</span>
+    </div>`;
+  }).join('');
+
+  /* the exact per-bar decomposition, when the book has been tracked for it */
+  const c = page.cumulative;
+  const exactStrip = c
+    ? `<span style="font-size:9px;color:#61805f">EXACT SINCE ${esc(String(c.from).slice(0, 10))}${c.from_inception ? ' (INCEPTION)' : ''} · PRICE <span style="color:${cSign(c.price_pnl)}">${sgnCcy(c.price_pnl, sym, 2)}</span> · CARRY <span style="color:${cSign(c.carry)}">${sgnCcy(c.carry, sym, 2)}</span> · SPREAD <span style="color:#ff7b72">−${sym}${num(c.cost, 2)}</span> · NET <span style="color:${cSign(c.net)}">${sgnCcy(c.net, sym, 2)}</span></span>`
+    : `<span style="font-size:9px;color:#3d543f">CARRY TRACKING STARTS AT THIS BOOK'S NEXT BAR — UNTIL THEN FINANCING SITS IN THE UNEXPLAINED LINE</span>`;
+
+  /* --- 4. blotter --- */
+  const blot = M.blotter.slice().reverse();
+  const blotRows = blot.map(t => `
+    <div class="hv-row" style="display:grid;grid-template-columns:.85fr .8fr .5fr .65fr .65fr .85fr 1fr .55fr .8fr .65fr;padding:4px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#3d543f">${esc(t.date)}</span>
+      <span style="color:#eaffec">${esc(t.pair)}</span>
+      <span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${esc(t.side)}</span>
+      <span style="color:${cSign(t.delta_weight)}">${sgnPct(t.delta_weight, 1)}</span>
+      <span style="color:#9db5a0">${sgnPct(t.target_weight || 0, 1)}</span>
+      <span style="color:#9db5a0">${pairPrice(t.pair, t.price)}</span>
+      <span style="color:#61805f">${pairPrice(t.pair, t.bid)} / ${pairPrice(t.pair, t.ask)}</span>
+      <span style="color:#61805f">${num(t.spread_bps, 1)}</span>
+      <span style="color:#c9e8cc">${sym}${num(t.notional, 0)}</span>
+      <span style="color:#e3b341">${sym}${num(t.cost, 2)}</span>
+    </div>`).join('');
+
+  /* --- 5. closed round-trips --- */
+  const closed = page.closed || { rows: [], net: 0, gross: 0, costs: 0, wins: 0, count: 0 };
+  const crows = closed.rows.slice().reverse();
+  const maxRet = crows.length ? Math.max(...crows.map(r => Math.abs(r.return_pct)), 1e-9) : 1;
+  const closedRows = crows.map(r => {
+    const nc = cSign(r.net);
+    return `
+    <div class="hv-row" style="display:grid;grid-template-columns:.85fr .8fr .55fr .55fr 1.1fr .45fr .75fr .7fr .65fr .8fr .8fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+      <span style="color:#3d543f">${esc(r.date)}</span>
+      <span style="color:#eaffec;font-weight:600">${esc(r.pair)}</span>
+      <span style="font-size:9px;font-weight:600;color:${r.side === 'LONG' ? G : R}">${esc(r.side)}</span>
+      <span style="color:#c9e8cc">${num(r.weight * 100, 1)}%</span>
+      <span style="color:#9db5a0">${pairPrice(r.pair, r.entry)} <span style="color:#3d543f">→</span> ${pairPrice(r.pair, r.exit)}</span>
+      <span style="color:#61805f">${r.held_days}D</span>
+      <span style="color:#c9e8cc">${sym}${num(r.notional, 0)}</span>
+      <span style="color:${cSign(r.gross)}">${sgnCcy(r.gross, sym, 2)}</span>
+      <span style="color:#e3b341">${sym}${num(r.costs, 2)}</span>
+      <span style="color:${nc};font-weight:600">${sgnCcy(r.net, sym, 2)}</span>
+      <span style="display:flex;align-items:center;gap:6px"><span style="color:${nc}">${sgnPct(r.return_pct, 2)}</span><span style="width:30px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${nc};width:${Math.min(Math.abs(r.return_pct) / maxRet * 100, 100).toFixed(0)}%"></span></span></span>
+    </div>`;
+  }).join('');
+
+  const blotCap = page.blotter_count > (page.blotter_shown || 0)
+    ? ` · SHOWING LAST ${page.blotter_shown} OF ${page.blotter_count}` : '';
+  const closedCap = closed.count > (closed.shown || 0)
+    ? ` · SHOWING LAST ${closed.shown} OF ${closed.count}` : '';
+
+  return `
+  <div data-screen="fx-ledger">
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ OPEN POSITIONS · MONEY TERMS · ${esc(page.base_currency || 'AUD')}</span>
+      <span style="font-size:10px;color:#61805f">NOTIONAL <span style="color:#c9e8cc">${sym}${num(p.open_notional || 0, 0)}</span></span>
+      <span style="font-size:10px;color:#61805f">OPEN P&amp;L <span style="color:${cSign(p.open || 0)}">${sgnCcy(p.open || 0, sym, 2)}</span></span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">ENTRY = FIFO COST BASIS OF THE WEIGHT STILL HELD · MARKED AT THE BOOK'S LAST CLOSE</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .55fr .6fr .4fr .85fr .8fr .8fr .6fr .8fr .6fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>LOTS</span><span>NOTIONAL</span><span>ENTRY</span><span>PRICE</span><span>ENTRY FEE</span><span>OPEN P&amp;L</span><span>OPEN %</span><span>SINCE</span></div>
+    ${posRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— FLAT. NO OPEN EXPOSURE TO MARK.</div>'}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 2.1fr;border-top:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ NET EXPOSURE BY LEG</div>
+        <div style="padding:8px 0 12px">${expRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO EXPOSURE.</div>'}</div>
+        <div style="padding:0 18px 12px;font-size:8.5px;color:#3d543f;line-height:1.6">A LONG PAIR IS LONG ITS BASE AND SHORT ITS QUOTE — THIS IS THE CONCENTRATION HIDDEN INSIDE THE PAIRS.</div>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;gap:16px;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ P&amp;L BY ${M.unit}</span>${exactStrip}</div>
+        <div class="mq-x"><div style="display:grid;grid-template-columns:.9fr .5fr .5fr .8fr .8fr .7fr .7fr 1fr .85fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>${M.unit}</span><span>FILLS</span><span>R/T</span><span>REALIZED</span><span>OPEN</span><span>CARRY</span><span>SPREAD</span><span></span><span>TOTAL</span></div>
+        ${rollRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NOTHING TRADED YET.</div>'}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ TRADE BLOTTER · ${page.blotter_count || 0} FILLS${blotCap}</span>
+      <span style="font-size:10px;color:#61805f">TURNOVER <span style="color:#c9e8cc">${num(p.turnover || 0, 2)}×</span> = <span style="color:#c9e8cc">${sym}${num(p.turnover_notional || 0, 0)}</span> TRADED</span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">BID/ASK AND COST ARE THE PAIR'S DEALING SPREAD, HALF-CROSSED ON EVERY WEIGHT CHANGE</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.85fr .8fr .5fr .65fr .65fr .85fr 1fr .55fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>BAR</span><span>${M.unit}</span><span>SIDE</span><span>Δ WEIGHT</span><span>TARGET</span><span>PRICE</span><span>BID / ASK</span><span>BPS</span><span>NOTIONAL</span><span>COST</span></div>
+    ${blotRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO FILLS YET.</div>'}</div>
+
+    <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
+      <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)${closedCap}</span>
+      <span style="font-size:10px;color:#61805f">GROSS <span style="color:${cSign(closed.gross)}">${sgnCcy(closed.gross, sym, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">SPREAD <span style="color:#ff7b72">−${sym}${num(closed.costs, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net)}">${sgnCcy(closed.net, sym, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:#c9e8cc">${closed.wins} / ${closed.count}</span></span>
+      <span style="margin-left:auto;font-size:9px;color:#3d543f">EACH ROW IS A WEIGHT SLICE CLOSED OLDEST-FIRST · NET IS AFTER THE SPREAD ON BOTH LEGS</span>
+    </div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:.85fr .8fr .55fr .55fr 1.1fr .45fr .75fr .7fr .65fr .8fr .8fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>${M.unit}</span><span>SIDE</span><span>WEIGHT</span><span>ENTRY → EXIT</span><span>HELD</span><span>NOTIONAL</span><span>GROSS</span><span>SPREAD</span><span>NET</span><span>RETURN</span></div>
+    ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
+  </div>`;
+}
+
 /* ---- agent decision popover (candles + why + votes) ---- */
 function agentPopHTML(page, pair, rect) {
   const p = page.rows.find(r => r.pair === pair);
@@ -1901,13 +2199,24 @@ function agentPopHTML(page, pair, rect) {
       <span style="color:${bg};width:38px;text-align:right">${sgn(v, Math.abs(v).toFixed(2))}</span>
     </div>`;
   }).join('');
+  const sym = SYM[page.base_currency] || page.base_currency || 'A$';
   const ind = [
     { k: 'REGIME', v: p.regime }, { k: 'ANN VOL', v: num((p.ann_vol || 0) * 100, 0) + '%' },
     { k: 'WEIGHT', v: sgnPct(p.weight, 1) }, { k: 'TILT', v: sgn(p.tilt, Math.abs(p.tilt).toFixed(2)) },
     { k: 'SIDE', v: long ? 'LONG' : 'SHORT' }, { k: 'PRICE', v: fmtP(closeN) },
   ].map(iv => `<div><div style="font-size:8px;color:#61805f;letter-spacing:.1em">${iv.k}</div><div style="font-size:10.5px;color:#c9e8cc;margin-top:1px">${esc(iv.v)}</div></div>`).join('');
+  /* the same row in money: what it cost to get on, what it is worth now, and
+     what this instrument has already banked — so a hover answers "and?" */
+  const mny = [
+    { k: 'NOTIONAL', v: sym + num(Math.abs(p.notional || 0), 0), c: TXT },
+    { k: 'COST BASIS', v: p.avg_entry ? fmtP(p.avg_entry) : '—', c: AMB },
+    { k: 'OPEN P&L', v: sgnCcy(p.unrealized || 0, sym, 2) + ' · ' + sgnPct(p.unrealized_pct || 0, 2), c: cSign(p.unrealized || 0) },
+    { k: 'REALIZED', v: sgnCcy(p.realized || 0, sym, 2), c: cSign(p.realized || 0) },
+    { k: 'SPREAD PAID', v: sym + num(p.costs || 0, 2), c: R },
+    { k: 'TOTAL P&L', v: sgnCcy(p.total_pnl || 0, sym, 2), c: cSign(p.total_pnl || 0) },
+  ].map(iv => `<div><div style="font-size:8px;color:#61805f;letter-spacing:.1em;white-space:nowrap">${esc(iv.k)}</div><div style="font-size:10.5px;color:${iv.c};margin-top:1px;white-space:nowrap">${esc(iv.v)}</div></div>`).join('');
   const barLabel = (page.bar === '60m' ? '60 × 60-MINUTE BARS' : '48 × DAILY BARS') + (real ? ' · LIVE OHLC' : '');
-  return popShell(rect, 480, 140, 620, '13px 15px', `
+  return popShell(rect, 560, 140, 620, '13px 15px', `
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
       <span style="font-size:13px;font-weight:600;color:#eaffec">${esc(pair)}</span>
       <span style="font-size:10px;font-weight:600;color:${sideColor}">${long ? '▲ LONG' : '▼ SHORT'} ${sgnPct(p.weight, 1)}</span>
@@ -1932,6 +2241,10 @@ function agentPopHTML(page, pair, rect) {
         ${votes}
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid #1a1a1a">${ind}</div>
       </div>
+    </div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1a1a1a">
+      <div style="font-size:8px;color:#61805f;letter-spacing:.12em;margin-bottom:5px">THIS POSITION IN MONEY · ${esc(page.base_currency || 'AUD')}</div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">${mny}</div>
     </div>`);
 }
 
@@ -2254,10 +2567,12 @@ function contentHTML() {
   if (S.errors[S.account]) return errPanel(S.account);
   if (!page) return '<div class="boot">LOADING…</div>';
   if (page.kind === 'fx') {
-    if (S.tab === 'POSITIONS') return agentPositionsHTML(page);
+    /* POSITIONS = the ensemble's decision book, then the same book in money */
+    if (S.tab === 'POSITIONS') return agentPositionsHTML(page) + fxLedgerHTML(page);
     if (S.tab === 'BACKTEST') return agentBacktestHTML(page);
     if (S.tab === 'METHOD') return agentMethodHTML(page);
-    return agentKpisHTML(page) + agentCurveAttrHTML(page) + chartSectionHTML(page);
+    return agentKpisHTML(page) + agentCurveAttrHTML(page)
+      + fxBookHTML(page) + chartSectionHTML(page);
   }
   /* equity book — micro accounts get the SMALL screens */
   if (page.micro) {

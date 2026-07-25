@@ -139,6 +139,56 @@ def _sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
 
+def _accrue_cumulative(state: dict, bar_date: str, prev_equity: float,
+                       marked: float, pnl_by_pair: dict[str, float],
+                       carry_by_pair: dict[str, float],
+                       cost_by_pair: dict[str, float]) -> None:
+    """Accumulate this bar's P&L in the ACCOUNT CURRENCY into ``state["cumulative"]``.
+
+    The book marks multiplicatively in *fractions of equity*, so the only place
+    the money amounts exist is here, one bar at a time::
+
+        equity_final = prev + prev*pnl_frac + prev*carry_frac - marked*cost_frac
+
+    Summing those three terms bar by bar gives an EXACT decomposition of the
+    book's P&L into price (incl. FX translation), carry/financing and spread —
+    total and per instrument. Nothing else can produce it: carry accrues on
+    whatever was held per bar and is unrecoverable from the trades log, which is
+    why ``fx_pnl``'s weight-lot ledger reports carry from this accumulator
+    instead of reconstructing it.
+
+    ``from``/``start_equity`` mark where accumulation began. For a book opened
+    after this shipped that is inception, so
+    ``equity - start_equity == price_pnl + carry - cost`` holds over the book's
+    whole life; a book that predates it simply reports "tracked since" that bar.
+    Full float precision is kept on purpose — rounding every bar would drift.
+    """
+    cum = state.get("cumulative")
+    if not isinstance(cum, dict) or "from" not in cum:
+        cum = {"from": bar_date, "start_equity": float(prev_equity),
+               "price_pnl": 0.0, "carry": 0.0, "cost": 0.0, "by_pair": {}}
+    by_pair = cum.setdefault("by_pair", {})
+
+    def leg(sym: str) -> dict:
+        return by_pair.setdefault(sym, {"pnl": 0.0, "carry": 0.0, "cost": 0.0})
+
+    for sym, frac in pnl_by_pair.items():
+        v = frac * prev_equity
+        cum["price_pnl"] += v
+        leg(sym)["pnl"] += v
+    for sym, frac in carry_by_pair.items():
+        v = frac * prev_equity
+        cum["carry"] += v
+        leg(sym)["carry"] += v
+    for sym, frac in cost_by_pair.items():
+        v = frac * marked
+        cum["cost"] += v
+        leg(sym)["cost"] += v
+    cum["to"] = bar_date
+    cum["bars"] = int(cum.get("bars", 0)) + 1
+    state["cumulative"] = cum
+
+
 # ---------------------------------------------------------------------------
 # Account lifecycle
 # ---------------------------------------------------------------------------
@@ -301,6 +351,9 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # --- mark to market over the move since the last close ----------------
     pnl_frac = 0.0
     day_contribs: list[dict] = []          # per-pair P&L attribution for the daily summary
+    # Unrounded per-instrument fractions, kept alongside the (rounded) display
+    # contribs so the cumulative money accumulator stays exact.
+    pnl_by_pair: dict[str, float] = {}
     for s, w in positions.items():
         lc = last_close.get(s)
         nc = px_last.get(s)
@@ -312,6 +365,7 @@ def _run_once_locked(account: str, synthetic: bool = False,
             fxf = fxconv.conversion_factor(get_pair(s).quote, last_close, px_last)
             contrib = marks.position_contribution(w, lc, nc, fxf)
             pnl_frac += contrib
+            pnl_by_pair[s] = pnl_by_pair.get(s, 0.0) + contrib
             day_contribs.append({"pair": s, "weight": round(w, 4),
                                  "move": round(nc / lc - 1.0, 6),     # the pair's own move
                                  "fx": round(fxf - 1.0, 6),           # AUD/quote translation
@@ -325,12 +379,16 @@ def _run_once_locked(account: str, synthetic: bool = False,
         secs = (pd.Timestamp(bar_date) - pd.Timestamp(state["last_bar_date"])).total_seconds()
         elapsed = float(np.clip(secs / 86400.0, 0.0, 7.0))
     carry_frac = 0.0
+    carry_by_pair: dict[str, float] = {}
     if p.include_carry:
         for s, w in positions.items():
             if w:
-                carry_frac += abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
+                c = abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
+                carry_frac += c
+                carry_by_pair[s] = carry_by_pair.get(s, 0.0) + c
 
     equity = state["equity"] * (1.0 + pnl_frac + carry_frac)
+    marked = equity              # equity after the mark, BEFORE today's spread
 
     # --- drawdown breaker --------------------------------------------------
     peak = max(state.get("peak_equity", equity), equity)
@@ -355,13 +413,16 @@ def _run_once_locked(account: str, synthetic: bool = False,
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0
+    cost_by_pair: dict[str, float] = {}
     trades = []
     for s in sorted(set(positions) | set(new_positions)):
         delta = new_positions.get(s, 0.0) - positions.get(s, 0.0)
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        cost_frac += marks.cost_fraction(delta, get_pair(s), price)
+        c = marks.cost_fraction(delta, get_pair(s), price)
+        cost_frac += c
+        cost_by_pair[s] = cost_by_pair.get(s, 0.0) + c
         why = rationale.get(s, {})
         # Execution-time AUD/quote factor, stamped at the trade bar's CLOSE (the
         # same px_last marks the book itself uses — an execution-time
@@ -380,6 +441,13 @@ def _run_once_locked(account: str, synthetic: bool = False,
                        "agents": why.get("agents"),
                        "indicators": why.get("indicators")})
     equity *= (1.0 - cost_frac)
+
+    # --- cumulative money P&L (price / carry / spread, total and per leg) ---
+    # The ONE place the book's fraction-of-equity marks become AUD amounts; the
+    # dashboard reads it back rather than re-deriving (carry is unrecoverable
+    # from the trades log). See _accrue_cumulative for the exact identity.
+    _accrue_cumulative(state, bar_date, prev_equity, marked,
+                       pnl_by_pair, carry_by_pair, cost_by_pair)
 
     # --- persist -----------------------------------------------------------
     state["equity"] = float(equity)

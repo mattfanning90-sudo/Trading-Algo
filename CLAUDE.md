@@ -53,7 +53,10 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
   OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
-  agent-vote decision book, candlestick pair charts
+  agent-vote decision book, candlestick pair charts. Equity and FX books are at
+  **parity in money terms** — both show net P&L (realised/open), costs, a
+  drawdown chart, an open book at cost basis, a full fill blotter and a FIFO
+  closed-trades ledger; the FX money layer comes from `forex/fx_pnl.py`
 
 ## Commands
 ```bash
@@ -78,7 +81,7 @@ python -m trading_algo.forex.train --synthetic          # train DL models + walk
 python -m trading_algo.forex.dashboard --all --out-dir public  # candlestick dashboards + "why" callouts
 python -m trading_algo.forex.research --synthetic       # quant-research search + Deflated-Sharpe/PBO
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
-pytest -q                                           # 170 tests (80 equity + 90 FX/ML)
+pytest -q                                           # full suite (equity + FX/ML)
 ```
 
 The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
