@@ -114,8 +114,11 @@ def promote(account: str, *, synthetic: bool, profile_name: str,
     _, holdout_panel = evolve.split_history(evolve._panel_for(account, synthetic),
                                             log.holdout_frac)
     # DSR deflation uses the population-wide Sharpe dispersion, consistent with n_trials
-    pps = [v.get("sharpe_pp") for v in log.registry.values()
-           if isinstance(v, dict) and v.get("sharpe_pp") is not None]
+    # Bind the value before testing it: `v.get(...) is not None` in the filter
+    # does not narrow the element type of the comprehension, so the list stays
+    # `list[Any | None]` and np.var rejects it.
+    pps = [float(pp) for v in log.registry.values()
+           if isinstance(v, dict) and (pp := v.get("sharpe_pp")) is not None]
     sr_variance = float(np.var(pps)) if len(pps) > 1 else None
     passed, pbo = gate(finalists, holdout_panel, p, log.n_trials,
                        dsr_min=dsr_min, pbo_max=pbo_max, sr_variance=sr_variance)

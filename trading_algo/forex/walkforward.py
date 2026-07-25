@@ -21,12 +21,25 @@ together between train and test.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Protocol
 
 import numpy as np
 import pandas as pd
 
 from .nn import StandardScaler
+
+
+class SupportsFitPredict(Protocol):
+    """What `model_factory()` must return — the contract the docstrings below
+    already state in prose, written so a type checker can hold us to it.
+
+    Was `Callable[[], object]`, which said nothing: mypy then rejected every
+    `.fit`/`.predict` call on the result.
+    """
+
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> Any: ...
+
+    def predict(self, X: np.ndarray) -> np.ndarray: ...
 
 
 def _fold_bounds(n_times: int, n_folds: int) -> list[tuple[int, int]]:
@@ -35,7 +48,7 @@ def _fold_bounds(n_times: int, n_folds: int) -> list[tuple[int, int]]:
 
 
 def walk_forward_predict(X: np.ndarray, y: np.ndarray, time_index: np.ndarray,
-                         model_factory: Callable[[], object], *,
+                         model_factory: Callable[[], SupportsFitPredict], *,
                          n_folds: int = 6, label_horizon: int = 1, embargo: int = 5,
                          min_train: int = 250, rolling: int | None = None,
                          scale: bool = True, fit_kwargs: dict | None = None
@@ -77,14 +90,14 @@ def walk_forward_predict(X: np.ndarray, y: np.ndarray, time_index: np.ndarray,
     return preds
 
 
-def fit_final_model(X: np.ndarray, y: np.ndarray, model_factory: Callable[[], object],
+def fit_final_model(X: np.ndarray, y: np.ndarray, model_factory: Callable[[], SupportsFitPredict],
                     *, scale: bool = True, fit_kwargs: dict | None = None):
     """Fit one model on ALL available rows (for live deployment) and return
     (model, scaler). The scaler is fit on the same rows; persist both together."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float).reshape(-1, 1)
     scaler = StandardScaler().fit(X) if scale else None
-    Xs = scaler.transform(X) if scale else X
+    Xs = scaler.transform(X) if scaler is not None else X
     model = model_factory()
     model.fit(Xs, y, **(fit_kwargs or {}))
     return model, scaler

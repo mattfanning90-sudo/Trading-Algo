@@ -177,7 +177,7 @@ def breed(panel: dict, p, *, generations: int, pop_size: int, seed: int,
         elite = [g for g, _ in scored[:n_elite]]
         # tournament selection over the top half
         pool_ = [g for g, _ in scored[: max(2, pop_size // 2)]]
-        offspring = []
+        offspring: list[gm.Genome] = []
         parentage: dict[str, list[str]] = {}
         while len(offspring) < pop_size - n_elite:
             a, b = rng.choice(pool_), rng.choice(pool_)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import random
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -57,7 +58,11 @@ class Genome:
         key = (f"{self.archetype}|{self.fast}|{self.slow}|{self.window}|"
                f"{self.z:.4f}|{self.atr_window}|{self.adx_min:.4f}|"
                f"{int(self.adx_gate)}|{','.join(self.symbols)}")
-        return hashlib.sha1(key.encode()).hexdigest()[:10]
+        # `usedforsecurity=False` is the point, not a formality: this is a
+        # content-addressed LABEL for lineage, never a credential or integrity
+        # check. Bandit's B324 gate (fail on High) flags an undeclared sha1.
+        return hashlib.sha1(key.encode(),
+                            usedforsecurity=False).hexdigest()[:10]
 
     def describe(self) -> str:
         """Plain-English label for the dashboard roster table."""
@@ -70,6 +75,17 @@ class Genome:
             "momentum": f"momentum · roc{self.window}·vol{self.fast}",
         }[self.archetype]
         return body + gate + scope
+
+    def to_agent(self) -> "ChampionAgent":
+        """The phenotype: an `Agent`-contract object the live pool can hold.
+
+        Declared here rather than attached after `ChampionAgent`'s definition —
+        the name resolves at CALL time, so a forward reference inside the class
+        is fine, and unlike the previous `Genome.to_agent = _to_agent` patch a
+        type checker can actually see it. (mypy reported `"Genome" has no
+        attribute "to_agent"` at all three call sites.)
+        """
+        return ChampionAgent(self)
 
 
 def _randint(rng: random.Random, gene: str) -> int:
@@ -112,7 +128,10 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3) -> Genome:
     import dataclasses
     for _ in range(8):
         ref = random_genome(rng)                              # source of fresh gene values
-        fields = {
+        # `Any` because the genes are deliberately heterogeneous (str/int/float/
+        # bool/tuple); without it the dict widens to `object` and `replace()`
+        # rejects every field.
+        fields: dict[str, Any] = {
             "archetype": ref.archetype, "fast": ref.fast, "slow": ref.slow,
             "window": ref.window, "z": ref.z, "atr_window": ref.atr_window,
             "adx_min": ref.adx_min, "adx_gate": ref.adx_gate, "symbols": ref.symbols,
@@ -186,13 +205,6 @@ class ChampionAgent(Agent):
             sig = pd.Series(sig, index=close.index) * gate.astype(float)
 
         return _clip_signal(pd.Series(sig, index=close.index))
-
-
-def _to_agent(self: "Genome") -> ChampionAgent:
-    return ChampionAgent(self)
-
-
-Genome.to_agent = _to_agent          # attach as a method
 
 
 def signal_panel(genome: Genome, panel: dict, p) -> pd.DataFrame:
