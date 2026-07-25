@@ -45,6 +45,11 @@ What is wrong is concentrated in two places:
   a *safety* mechanism is the unwired part. The worst instance has already caused
   104 bad fills in the committed live state.
 
+Three defects were serious enough to fix in this pass rather than only report:
+the FX market-hours gate (C1), `--init` destroying a live book (C2), and
+whole-share rounding breaking the market-neutral book (C3). Everything else is
+recorded for a decision.
+
 ---
 
 ## CRITICAL
@@ -74,9 +79,131 @@ The `daytrader` book shows what this costs: **gross turnover 85.1× equity over
 159 bars, implied spread cost 2.57% against a net return of −2.57%.** The entire
 loss is the spread.
 
-**Fix**: call `fx_market_open()` (and `_is_24_7`) in `run_once`, not just
-`run_loop`. This is a handful of lines and it is the highest-value change in this
-document.
+### ✅ C1 — FIXED
+
+The fix turned out to be larger, and better, than the "call `fx_market_open()` in
+`run_once`" I first proposed. Three things made the naive version wrong:
+
+1. **`engine.run_once` is not the convergence point.** `fx_book.main` (i.e.
+   `python -m trading_algo.forex.paper`) calls `fx_book.run_once`/`run_all`
+   *directly*, bypassing `engine` entirely. Gating the engine would have left
+   that path open.
+2. **A wall-clock gate makes tests time-dependent.** Three tests in
+   `test_fx_currency.py` call `run_once` non-synthetically; a clock-based gate
+   would pass or fail by the day of the week the suite happened to run.
+3. **The gate must agree with the auditor.** If `fx_book` and
+   `verify.check_market_hours` each carried their own boundaries, the gate could
+   permit a fill the audit then flags forever.
+
+What shipped instead:
+
+- **`forex/sessions.py`** — one leaf module owning the session boundaries
+  (`bar_is_tradable`, `parse_bar`, `is_crypto`). Both `fx_book` (which prevents)
+  and `verify` (which audits) import it, so they cannot drift. `verify._parse`
+  now delegates to it too, and `engine.fx_market_open` is a thin wall-clock
+  convenience over it for the `--loop` idle message.
+- **The gate keys off the BAR's timestamp, not the clock** — so it protects
+  `--once` and `--loop` alike, is deterministic under test, and refuses a stale
+  bar whenever it is replayed.
+- **It gates per SYMBOL and holds rather than flattens.** Crypto keeps trading
+  (genuinely 24/7); a shut FX pair keeps its existing weight instead of being
+  "sold" at a price nobody was quoting. Marking still happens — valuation on a
+  stale close is fine, transacting on it is not.
+
+`tests/test_fx_sessions.py` (14 tests) pins it, including the two that matter
+most: a control proving an *open* bar still fills (so the closed-bar test cannot
+pass for the wrong reason), and two asserting the gate and the verifier agree on
+both the FX and the weekend-crypto case.
+
+**Residual, deliberately not fixed**: weekend and FX-week boundaries are
+modelled; per-exchange intraday *cash equity* hours are not. An equity ETF in the
+`multiasset` book can still be traded on a bar inside the FX week but outside its
+own session. Closing that needs per-instrument calendars — a design decision, not
+a fix — and it is documented in `sessions.py`'s docstring.
+
+### C2. `paper_trade --init` silently destroyed a live book — ✅ FIXED
+
+`init_account` built a fresh state with `"trades": []` and **no existence check**,
+then saved it. Since every P&L number is *derived* from that ledger, re-running
+the line CLAUDE.md documents verbatim —
+
+```
+python -m trading_algo.paper_trade --account full --init --capital 100000
+```
+
+— wiped the entire record of a funded book.
+
+The asymmetry is what makes this an oversight rather than a choice:
+`forex.fx_book.init_account` has always guarded it
+(`if account_exists(account) and not force: … use --force to reset`). The equity
+side never did. The CI workflow protects *itself* with a
+`if [ ! -f state/paper_state_$name.json ]` shell test — so the footgun was aimed
+squarely at a human following the docs.
+
+**Fixed** by mirroring the FX behaviour: `init_account` now raises unless
+`force=True`, with a message that explains what would be lost, and `--force` is
+wired through the CLI. `tests/test_paper_trade.py` pins it — the refused `--init`
+must leave the ledger byte-identical, and `--force` must still reset.
+
+### C3. Whole-share rounding broke the "market-neutral" book — ✅ FIXED
+
+`profiles.py` configures `experimental` as `top_n=6, short_n=6`,
+`max_gross=2.0`, labelled **"MARKET-NEUTRAL LONG/SHORT · PURE ALPHA"**, and keeps
+the drawdown breaker on the assumption that beta is hedged out.
+
+The live book holds **1 long (SMH) against 6 shorts** — so five of six longs
+rounded to **zero shares**.
+
+`signals.select_long_short` does hedge properly: both legs are normalised to ±1,
+and it already refuses to trade when there aren't enough names
+(`not enough names to hedge — stay flat`). But that check happens in *weight*
+space. `paper_trade` then does `int((equity * w) / price)`, and `int()` truncates
+toward zero — so on a small sleeve an expensive name rounds to nothing. Lose
+enough of one leg and a book advertised as market-neutral is running a
+directional short bet with a breaker sized for a hedged one.
+
+**Fixed** by applying the *same* can't-hedge-then-stay-flat rule to the book
+actually executable: after rounding, if residual net exposure
+`|L−S| / (L+S)` exceeds `config.LS_MAX_NET_EXPOSURE` (0.20, `None` disables),
+the sleeve holds cash, prints the long/short notionals, and raises an
+`ls_not_neutral` alert. Three tests pin it, including a control proving a
+*hedgeable* book still trades and one proving long-only books are untouched.
+
+Note this will flatten the live `experimental` book on its next run — correct, in
+my view: it is currently carrying unintended directional risk. Set
+`LS_MAX_NET_EXPOSURE = None` to keep the old behaviour deliberately.
+
+### C4. The dashboard showed "BREAKER ARMED" on the book with no breaker — ✅ FIXED
+
+`profiles.py` gives `ultra` (3× gross, 35% vol target, all timing filters off)
+`max_drawdown_stop=None` — the circuit breaker is **deliberately disabled** so the
+book "runs hot on purpose".
+
+The payload side is correct and was already tested: `api.build_snapshot("ultra")`
+returns `breaker: None`, pinned by `test_dashboard_api_book.py` (which arrived
+with #77). But `static/app.js` then rendered
+`num(page.breaker * 100, 0)` with **no null branch**, and in JavaScript
+`null * 100 === 0`. So the most leveraged book on the platform displayed:
+
+```
+BREAKER ARMED @ −0%          (in green)
+```
+
+— claiming a safety net that does not exist, on precisely the book where its
+absence matters most. #77 fixed the Python half and left the render.
+
+**Fixed** at all **three** render sites. I had found two by reading; the guard
+test I wrote then failed and surfaced a third (`app.js:1307`, a compact
+single-expression variant) — which is the argument for writing the test before
+declaring the fix done.
+
+`app.js` has no JS harness, so the guard asserts at the source level (the
+technique `test_fx_marks.py` already uses to pin formulas out of a module): every
+`page.breaker * 100` must sit downstream of a `page.breaker == null` check. I
+mutation-tested it — replacing the guard makes it fail, restoring it makes it
+pass. It is a guard against regression, not a substitute for a rendering test;
+**zero automated coverage of `static/app.js` remains an open finding**, and it is
+the layer where the confirmed misreports live.
 
 ---
 

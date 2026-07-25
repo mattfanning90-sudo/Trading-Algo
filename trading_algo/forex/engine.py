@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from . import feeds
 from . import fx_book
+from . import sessions
 from .agents import AgentPool
 from .fx_config import START
 from .fx_data import load_panel, synthetic_panel
@@ -34,16 +35,17 @@ from .pairs import DEFAULT_UNIVERSE
 
 
 def fx_market_open(dt: datetime | None = None) -> bool:
-    """True during the FX week (Sun 22:00 UTC → Fri 22:00 UTC, roughly)."""
+    """True during the FX week (Sun 22:00 UTC → Fri 22:00 UTC, roughly).
+
+    A wall-clock convenience for the `--loop` daemon's idle message. It is NOT
+    the trading gate: the gate lives in `fx_book`, keyed off the BAR's timestamp
+    rather than the clock, so `--once` (what every workflow uses) is protected
+    too and a stale bar is refused whenever it is replayed. Both roads share the
+    boundaries in `sessions`.
+    """
     dt = (dt or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    wd, hour = dt.weekday(), dt.hour          # Mon=0 .. Sun=6
-    if wd == 5:                                # Saturday
-        return False
-    if wd == 6:                                # Sunday: opens ~22:00 UTC
-        return hour >= 22
-    if wd == 4:                                # Friday: closes ~22:00 UTC
-        return hour < 22
-    return True
+    # Any non-crypto symbol carries the FX-week rule; "FX" is the canonical one.
+    return sessions.bar_is_tradable("EURUSD", dt.replace(tzinfo=None), kind="fx")
 
 
 def run_once(account: str | None, synthetic: bool, pool: AgentPool,

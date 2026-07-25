@@ -379,6 +379,7 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `ensemble.py` | performance-weighted agent blending |
 | `risk.py` | vol targeting + per-pair / gross / asset-class caps |
 | `marks.py` | **the one** cost/mark/annualisation formula module (book + dashboard) |
+| `sessions.py` | **the one** market-hours definition — shared by the trading gate (`fx_book`) and the audit (`verify`) so they cannot drift |
 | `fx_pnl.py` | money-terms P&L: FIFO weight lots, round-trips, blotter, exposure |
 | `fx_strategy.py` | **the single source of truth** for target weights |
 | `fx_backtest.py` | walk-forward backtest, costs + breaker |

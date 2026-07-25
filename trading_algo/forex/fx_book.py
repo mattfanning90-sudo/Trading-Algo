@@ -40,6 +40,7 @@ from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
+from . import sessions
 from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
@@ -410,6 +411,31 @@ def _run_once_locked(account: str, synthetic: bool = False,
     else:
         target, rationale = explain.decide_and_explain(panel, p, pool=pool)
     new_positions = {} if halted else _apply_band(positions, target, p)
+
+    # --- market-hours gate: never fill on a bar no venue was quoting ---------
+    # fx_data._align forward-fills, so a weekend/after-close bar carries the last
+    # real print. Trading it books a fill (and pays the spread) at a price nobody
+    # was making — which is exactly what verify.check_market_hours flags. HOLD
+    # such symbols at their current weight instead: marking to a stale close is
+    # fine and desirable, transacting on it is not.
+    #
+    # Gated per SYMBOL (crypto is 24/7 and keeps trading) using the SAME
+    # `sessions` boundaries the verifier audits with, so the gate and the audit
+    # cannot disagree. Synthetic runs are exempt: they are offline fixtures with
+    # no venue behind them, never presented as performance (invariant #5), and
+    # gating them would make the suite depend on the calendar.
+    if not (halted or synthetic):
+        shut = [s for s in sorted(set(positions) | set(new_positions))
+                if not sessions.bar_is_tradable(s, sessions.parse_bar(bar_date))]
+        if shut:
+            for s in shut:                        # hold: delta becomes 0 below
+                held = positions.get(s, 0.0)
+                if held:
+                    new_positions[s] = held
+                else:
+                    new_positions.pop(s, None)
+            print(f"  [{account}] market closed for {', '.join(shut)} on "
+                  f"{bar_date} — holding, not trading")
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0
