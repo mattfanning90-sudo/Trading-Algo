@@ -6,8 +6,7 @@ outcome) and are therefore only ever used for *training*, never as inputs — an
 the walk-forward harness (`walkforward.py`) guarantees a model predicting bar t
 was trained only on bars whose labels were already known before t.
 
-Two labeling schemes:
-* `direction_labels` — sign of the forward return (with an optional deadband).
+Labeling scheme:
 * `triple_barrier_labels` — López de Prado's method: from each bar, which comes
   first within `max_h` bars — a +ATR profit barrier, a −ATR stop, or the time
   limit. Used for meta-labeling (was the primary signal's side profitable?).
@@ -85,18 +84,6 @@ def build_features(bars: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # Labels (forward-looking — training only)
 # ---------------------------------------------------------------------------
-def direction_labels(close: pd.Series, horizon: int = 1,
-                     deadband: float = 0.0) -> pd.Series:
-    """1 if the forward `horizon`-bar return exceeds `deadband`, else 0.
-
-    Tail rows whose forward return is unknown are NaN (excluded from training).
-    """
-    fwd = close.shift(-horizon) / close - 1.0
-    y = (fwd > deadband).astype(float)
-    y[fwd.isna()] = np.nan
-    return y
-
-
 def triple_barrier_labels(close: pd.Series, atr: pd.Series, side: pd.Series,
                           pt_mult: float = 1.5, sl_mult: float = 1.0,
                           max_h: int = 10) -> pd.Series:
