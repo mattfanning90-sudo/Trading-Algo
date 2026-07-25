@@ -6,8 +6,9 @@ Pure read, fully offline; never touches the network.
 
 Two layers of the same book
 ---------------------------
-* the **decision** layer (`rows`, `attribution`, `tape`, `news`) — what the
-  agent ensemble thinks, in signed weights and tilts;
+* the **decision** layer (`rows`, `attribution`, `tape`, `news`,
+  `data_quality`) — what the agent ensemble thinks, in signed weights and
+  tilts, on which indicator readings, over which symbols it was allowed to see;
 * the **money** layer (`pnl`, `positions_money`, `blotter`, `closed`,
   `drawdown`, `exposure`, `cumulative`) — the same book in AUD, so the FX
   screens report profit and loss the way the equity screens do.
@@ -88,6 +89,12 @@ def _rows(state: dict, book: dict | None = None) -> list[dict]:
             "regime": str(d.get("regime", "")).upper(),
             "price": _f(price, None),
             "ann_vol": _f(vol, None),
+            # The agents' OWN indicator readings for this bar (ema_fast/slow,
+            # adx, rsi, roc, bb_z, donchian_hi/lo, price, ann_vol) — so the
+            # terminal shows what the vote was actually cast on instead of
+            # re-deriving oscillators from bars it made up. {} when a decision
+            # carried none; a field is null when it was NaN on this history.
+            "indicators": {k: _f(v, None) for k, v in ind.items()},
             "agents": [round(_f(agents.get(a)), 3) for a in AGENT_ORDER],
             "why": d.get("text", ""),
             # --- money terms (account currency) ---
@@ -308,6 +315,16 @@ def build_fx_snapshot(account: str) -> dict:
     closed = _closed(book, pnl)
     blotter = fx_pnl.blotter(state)
 
+    # Symbols the quality gate dropped from the target book on the last bar (a
+    # book silently trading one leg fewer must not be invisible). None — not an
+    # empty dict — on any book written before fx_book persisted this, since
+    # "nothing flagged" and "never measured" are different claims.
+    dq = state.get("data_quality")
+    dq = {"date": str(dq.get("date") or ""),
+          "excluded": [str(s) for s in (dq.get("excluded") or [])],
+          "reasons": {str(k): str(v) for k, v in (dq.get("reasons") or {}).items()},
+          } if isinstance(dq, dict) else None
+
     return {
         "kind": "fx",
         "account": account,
@@ -331,6 +348,7 @@ def build_fx_snapshot(account: str) -> dict:
         "n_long": n_long,
         "n_short": n_short,
         "risk_halted": bool(state.get("risk_halted", False)),
+        "data_quality": dq,
         "halt_cooldown": int(state.get("halt_cooldown", 0)),
         "breaker": p.max_drawdown_stop,
         "per_pair_cap": p.per_pair_cap,
