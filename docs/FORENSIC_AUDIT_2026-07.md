@@ -18,7 +18,11 @@ Two passes, cross-checked against each other:
    (fan-in/fan-out, cycles, cross-subsystem edges) and a smoke test of all 26
    entrypoints.
 2. **Specialist review.** Ten parallel auditors over disjoint slices, each
-   required to supply reproducible evidence.
+   required to supply reproducible evidence. All ten returned. The eleventh step —
+   an automated synthesis meant to dedupe and rank them — **failed**, exceeding a
+   64k output-token cap on ~150 findings. The dedupe, spot-check and ranking below
+   were therefore done by hand, which is also why each finding carries its own
+   verification rather than a reviewer's word.
 
 **Every finding below was independently re-verified before being written down.**
 Two agent claims were corrected in the process (see *Corrections*), and two of my
@@ -485,6 +489,45 @@ with a hardcoded 0.035 risk-free.
 Credit: the **hard** statistics are properly shared — `validation.py` owns
 PSR/DSR/PBO and `forex/validation.py` re-exports it. Only the trivial formulas
 got copied.
+
+---
+
+### C5. Two mutants survive the whole suite — the equity breaker and the LSE pence conversion are untested
+
+The test-strategy pass ran real mutation experiments rather than reading tests, and
+**two mutants survived all 692 tests**. Both are money-path.
+
+**(a) The equity drawdown circuit breaker has no test that it fires.**
+`paper_trade.py:688`'s trip condition — `elif stop is not None and combined / peak
+- 1 <= -stop:` — can be deleted and the suite stays green. The breaker is the
+catastrophe backstop for every funded book, and nothing proves it works. Note
+`tests/test_backtest.py` *does* cover the **backtest** breaker; it is the **paper**
+one that is unpinned, which is the one holding real book state.
+
+**(b) The LSE pence→pounds conversion is covered by zero tests.**
+`data.py:145` (`prices = prices * region.price_scale`) turns GBX into GBP for the
+FTSE sleeve — a **100× money error** if it breaks. I verified the gap structurally
+rather than taking the mutation result on trust:
+
+- `synthetic_region` (`data.py:~225`) returns prices **without** applying
+  `price_scale`; only `load_region` applies it.
+- The single test that calls `load_region` at all is `test_cache_key.py`, and it
+  asserts on **cache keys**, not prices.
+
+So the real and synthetic paths diverge exactly at the conversion, and every test
+takes the synthetic side. A secondary consequence worth noting: synthetic FTSE
+prices are in a different unit regime from production FTSE prices, so any
+synthetic FTSE test exercises a price scale the live sleeve never sees.
+
+**Why neither was ever surfaced**: `ci.yml`'s mutation job is `|| true` on both
+steps, so it cannot fail — a gate that never fails, of the same family as
+`verify` running without `--strict` (L25).
+
+Also from this pass, unverified by me and recorded as reported: `engine.py` (the
+production entrypoint in `paper-trade.yml`) and `forex/train.py` both have **0%
+coverage**; the fake `ib_insync` omits `avgFillPrice`, so the code recording the
+real broker fill price never executes; and six documents state six different wrong
+test counts (79 / 170 / 62 / 67 / 572 / 400).
 
 ---
 
