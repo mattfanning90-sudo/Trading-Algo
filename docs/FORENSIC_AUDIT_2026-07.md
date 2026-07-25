@@ -1,6 +1,6 @@
 # Forensic audit — July 2026
 
-Audit of `main` @ `e0b1114` (after merging #57, #74, #65, #78, #79).
+Audit of `main` @ `992752f` (after merging #57, #74, #65, #78, #79, #77).
 
 **Scope**: code, architecture, algorithms, test strategy, built-but-not-wired
 surface, and dead code. **Baseline**: `pytest -q` → 624 passed, ruff clean, mypy
@@ -308,7 +308,45 @@ the real site never produces. Every weekday run discards the output.
 channel prints to a log. The abstraction exists precisely so unattended risk
 events (drawdown halts, FX unavailability) are not lost in a log.
 
-### M18. Duplicated metric maths
+### M18. The FX "FX-unavailable" honesty flag is plumbed but rendered in only one place
+
+Added by #77. `fx_pnl._factor` returns `(1.0, False)` when either end of a hold
+lacks an `aud_per_quote` stamp — i.e. the AUD P&L is computed with **no FX
+translation**, and the result carries `fx_known: False` to say so. That is good
+design.
+
+`dashboard/fx_api.py` attaches `fx_known` to **three** payloads (open marks
+~line 109, the position view ~line 148, and the closed round-trips ~line 171,
+alongside `net` and `return_pct`). `app.js` renders the `·FX?` marker in exactly
+**one** place — line 2045, the open-lots row.
+
+So a *realised* round-trip whose FX translation was unavailable is displayed as a
+definitive AUD `net` and return percentage, with nothing marking it. The flag
+already reaches the client; only the render is missing.
+
+**Fix**: render the marker (or dim the figure) wherever `fx_known` is false —
+most importantly in the closed-trades ledger, where the number reads as settled.
+
+### M19. Two FIFO lot engines now exist, by design
+
+`pnl.py` (`_open`/`_close`/`apply_fill`/`build_lots`) and `forex/fx_pnl.py`
+(`_open`/`_close`/`apply_delta`/`build_lots`) are structural mirrors.
+
+This duplication is **justified**, not careless: equity matches whole-share `int`
+quantities in one currency with exact `== 0` lot exhaustion, while FX matches
+signed `float` weights with a `DUST` epsilon and routes gross through
+`marks.trade_mark` for cross-currency translation plus an `fx_known` flag.
+Same shape, genuinely different domain.
+
+The risk is drift in the *shared* semantics both must honour — oldest-first
+matching, sign-aware gross, net after entry+exit costs. Nothing currently pins
+those two engines against each other.
+
+**Suggested**: one shared property test asserting both engines agree on a
+common scenario set (partial close, full close, flip through zero, short
+round-trip) rather than merging them.
+
+### M20. Duplicated metric maths
 
 `s / s.cummax() - 1` is hand-inlined at `metrics.py:33`, `paper_trade.py:720`,
 `forex/fx_book.py:457`, `forex/dashboard.py:273` and `:573`. Annualisation is
