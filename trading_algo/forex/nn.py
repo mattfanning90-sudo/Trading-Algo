@@ -74,9 +74,6 @@ class StandardScaler:
     def transform(self, X: np.ndarray) -> np.ndarray:
         return (X - self.mean_) / self.std_
 
-    def fit_transform(self, X: np.ndarray) -> np.ndarray:
-        return self.fit(X).transform(X)
-
     def to_dict(self) -> dict:
         if self.mean_ is None or self.std_ is None:
             raise ValueError("StandardScaler must be fit before serialising")

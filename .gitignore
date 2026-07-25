@@ -18,6 +18,8 @@ paper.log
 equity_curve*.csv
 sweep_*.csv
 reports/
+# Built static site (scripts/build_site.sh writes it into the repo root)
+public/
 # Run manifests + experiment ledger (F17): per-run reproducibility records.
 # Match at the repo root too (a backtest run outside CI uses the repo root as its
 # state dir, so `manifests/` and the ledger land here, not under state/).
@@ -29,6 +31,9 @@ trading_algo/forex/models/*.json
 fx_ml_report.md
 *_ml_report.md
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 .venv/
 venv/
 *.egg-info/
