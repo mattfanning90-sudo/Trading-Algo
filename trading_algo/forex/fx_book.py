@@ -328,6 +328,11 @@ def _run_once_locked(account: str, synthetic: bool = False,
             level="warning", account=account,
             excluded=sorted(dq.excluded), reasons=dq.reasons)
         panel = {s: df for s, df in panel.items() if s not in dq.excluded}
+    # Persist the verdict every bar, including the empty case — "checked, all
+    # clear" is information, and a book silently trading a reduced universe must
+    # be visible on the dashboard, not only in this process's stdout.
+    state["data_quality"] = {"excluded": sorted(dq.excluded),
+                             "reasons": dict(dq.reasons), "date": bar_date}
 
     if state["last_bar_date"] == bar_date:
         # No new bar to trade, but keep the dashboard's "today's read" current by
@@ -336,9 +341,9 @@ def _run_once_locked(account: str, synthetic: bool = False,
             try:
                 _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
                 state["decisions"] = refresh_rationale
-                save_state(account, state)
             except Exception as exc:                       # never let display break a run
                 print(f"  [{account}] (decision refresh skipped: {exc!r})")
+        save_state(account, state)      # today's read + the data-quality verdict
         print(f"  [{account}] no new bar ({bar_date}) — equity "
               f"{state['equity']:,.2f} {state['currency']}")
         return

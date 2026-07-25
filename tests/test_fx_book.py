@@ -110,3 +110,56 @@ def test_conservative_profile_lower_gross_than_aggressive(isolated_state, pool):
     gc = sum(abs(v) for v in fx_book.load_state("c")["positions"].values())
     ga = sum(abs(v) for v in fx_book.load_state("a")["positions"].values())
     assert gc <= ga + 1e-9
+
+
+def test_data_quality_verdict_is_persisted_all_clear(isolated_state, pool):
+    """An empty exclusion list is information — "checked, all clear" — so the
+    dashboard can distinguish it from "never checked"."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    fx_book.run_once("matt", synthetic=True, pool=pool)
+    state = fx_book.load_state("matt")
+    dq = state["data_quality"]
+    assert dq["excluded"] == [] and dq["reasons"] == {}
+    assert dq["date"] == state["last_bar_date"]
+
+
+def test_data_quality_verdict_records_exclusions(isolated_state, pool, monkeypatch):
+    """A book silently trading a reduced universe must be visible in state."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    symbols = ["EURUSD", "GBPUSD", "USDJPY"]
+    panel = fx_data.synthetic_panel(symbols, start="2015-01-01", end="2026-01-01")
+    df = panel["USDJPY"].copy()
+    stuck = float(df["close"].iloc[-41])
+    for c in ("open", "high", "low", "close"):
+        df.iloc[-40:, df.columns.get_loc(c)] = stuck
+    panel["USDJPY"] = df
+    monkeypatch.setattr(fx_book, "_panel", lambda *a, **k: panel)
+
+    fx_book.run_once("matt", synthetic=True, pool=pool)
+    dq = fx_book.load_state("matt")["data_quality"]
+    assert dq["excluded"] == ["USDJPY"]
+    assert isinstance(dq["reasons"]["USDJPY"], str) and dq["reasons"]["USDJPY"]
+
+
+def test_data_quality_verdict_refreshed_on_a_no_new_bar_run(isolated_state, pool,
+                                                            monkeypatch):
+    """The early-return path (same bar, nothing to trade) still ran the gate, so
+    it must still record what the gate found."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    symbols = ["EURUSD", "GBPUSD", "USDJPY"]
+    clean = fx_data.synthetic_panel(symbols, start="2015-01-01", end="2026-01-01")
+    monkeypatch.setattr(fx_book, "_panel", lambda *a, **k: clean)
+    fx_book.run_once("matt", synthetic=True, pool=pool)
+    assert fx_book.load_state("matt")["data_quality"]["excluded"] == []
+
+    frozen = {s: df.copy() for s, df in clean.items()}
+    df = frozen["USDJPY"]
+    stuck = float(df["close"].iloc[-41])
+    for c in ("open", "high", "low", "close"):
+        df.iloc[-40:, df.columns.get_loc(c)] = stuck
+    monkeypatch.setattr(fx_book, "_panel", lambda *a, **k: frozen)
+
+    fx_book.run_once("matt", synthetic=True, pool=pool)      # same bar → no trade
+    state = fx_book.load_state("matt")
+    assert state["data_quality"]["excluded"] == ["USDJPY"]
+    assert len(state["equity_history"]) == 1                  # genuinely a no-op bar
