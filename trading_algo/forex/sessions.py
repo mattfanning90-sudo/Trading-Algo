@@ -103,6 +103,12 @@ def is_open(pair: Pair | str, ts: datetime, interval: str = "1d") -> bool:
     return _EQUITY_OPEN_UTC <= hour < _EQUITY_CLOSE_UTC
 
 
+def is_crypto(symbol: str) -> bool:
+    """True when `symbol` is a crypto instrument (24/7, never gated)."""
+    p = ALL_PAIRS.get(symbol)
+    return bool(p is not None and p.asset_class == "crypto")
+
+
 def closed_symbols(symbols, ts: datetime, interval: str = "1d") -> set[str]:
     """The subset of `symbols` whose venue is shut on the bar stamped `ts`."""
     return {s for s in symbols if not is_open(s, ts, interval)}

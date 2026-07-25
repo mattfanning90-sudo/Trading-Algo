@@ -304,7 +304,7 @@ def rebalance_allocations(sleeves: dict, snap: dict[str, float],
 
 def init_account(account: str, capital: float, synthetic: bool,
                  allocations: dict[str, float] | None = None,
-                 profile: str | None = None) -> None:
+                 profile: str | None = None, force: bool = False) -> None:
     """Open a paper account. `allocations` overrides which regions it trades and
     their weights (e.g. {"US": 1.0} for a single-region small account). Default
     is the global 3-region split from config.
@@ -314,7 +314,21 @@ def init_account(account: str, capital: float, synthetic: bool,
     (leverage, long/short, …), drawdown-breaker override, and reporting group.
     An explicit `allocations` still wins over the profile's, so a profile can be
     funded across custom regions if desired.
+
+    Refuses to touch a book that already exists unless `force=True`: this builds
+    a FRESH state with an empty `trades` ledger, so overwriting a live book
+    destroys the only record its P&L is derived from. `forex.fx_book.init_account`
+    has always guarded this; the equity side did not, while CLAUDE.md documents
+    `--init` as a plain command — so re-running the documented line wiped the
+    book. Mirrors the FX behaviour, including the `--force` escape hatch.
     """
+    if account_exists(account) and not force:
+        raise SystemExit(
+            f"Paper account '{account}' already exists — refusing to overwrite it.\n"
+            f"  --init builds a fresh book with an EMPTY trade ledger, and all P&L "
+            f"is derived from that ledger, so this would destroy the record.\n"
+            f"  Run without --init to advance the existing book, or pass --force "
+            f"to deliberately reset it.")
     prof = profiles.get_profile(profile) if profile else None
     if prof is not None and allocations is None:
         allocations = prof.allocations
@@ -406,6 +420,34 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         price = px.get(t)
         if price and price == price and price > 0:
             desired[t] = int((equity * w) / price)
+
+    # --- post-rounding neutrality gate (long/short books only) --------------
+    # `select_long_short` builds both legs to ±1 and stays flat when it can't
+    # hedge — but that check happens on WEIGHTS. Whole-share rounding then
+    # truncates toward zero, and on a small sleeve an expensive name rounds to 0
+    # shares. Lose enough of one leg and a "market-neutral" book is a directional
+    # bet carrying a breaker sized for a hedged one. So re-apply the same
+    # can't-hedge-then-stay-flat rule to the book actually executable.
+    if not long_only and desired and cfg.LS_MAX_NET_EXPOSURE is not None:
+        longs = sum(q * px[t] for t, q in desired.items() if q > 0 and px.get(t))
+        shorts = sum(-q * px[t] for t, q in desired.items() if q < 0 and px.get(t))
+        gross = longs + shorts
+        net = abs(longs - shorts) / gross if gross > 0 else 1.0
+        if net > cfg.LS_MAX_NET_EXPOSURE:
+            print(f"    ⚠ long/short book is {net:.0%} net after whole-share "
+                  f"rounding (long {longs:,.0f} vs short {shorts:,.0f} "
+                  f"{region.currency}) — exceeds the "
+                  f"{cfg.LS_MAX_NET_EXPOSURE:.0%} cap, holding cash instead of "
+                  f"running an unhedged bet.")
+            notifications.notify(
+                "ls_not_neutral",
+                f"[{region.key}] market-neutral book could not be formed: "
+                f"{net:.0%} net exposure after rounding (long {longs:,.0f} vs "
+                f"short {shorts:,.0f} {region.currency}) — flattening to cash",
+                level="alert", region=region.key,
+                net_exposure=round(net, 4),
+                long_notional=round(longs, 2), short_notional=round(shorts, 2))
+            desired = {}          # flatten: every held name exits below
 
     # Seed the FIFO lot book for this region from the fills ledger — the single
     # source of truth for cost basis. Each executed trade updates it; each sell
@@ -864,6 +906,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="live-vs-backtest tracking + attribution report (F3)")
     ap.add_argument("--promotion", action="store_true",
                     help="paper->live promotion readiness checklist (F10)")
+    ap.add_argument("--force", action="store_true",
+                    help="(--init) RESET an existing book. Destroys its trade "
+                         "ledger, and all P&L is derived from that ledger.")
     ap.add_argument("--force-rebalance", action="store_true")
     ap.add_argument("--compare", nargs="+", metavar="ACCT")
     ap.add_argument("--synthetic", action="store_true", help="run offline on synthetic data")
@@ -874,7 +919,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.init:
         allocations = {r: 1.0 for r in args.regions} if args.regions else None
         init_account(args.account, args.capital, args.synthetic, allocations,
-                     profile=args.profile)
+                     profile=args.profile, force=args.force)
     elif args.status:
         status(args.account)
     elif args.tca:

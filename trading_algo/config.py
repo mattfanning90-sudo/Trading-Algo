@@ -203,6 +203,20 @@ DRAWDOWN_COOLDOWN_DAYS = DRAWDOWN_COOLDOWN.length
 # bleeding fees. Set 0 to disable the gate.
 MIN_VIABLE_EQUITY_BASE = 500.0
 
+# Maximum residual net exposure a DOLLAR-NEUTRAL (long_short) book may carry
+# after whole-share rounding, as a fraction of its gross: |L−S| / (L+S).
+#
+# `signals.select_long_short` builds both legs to ±1 and already refuses to trade
+# when there aren't enough names to hedge. But paper trading then rounds each
+# name to whole shares with `int()`, which truncates toward zero — and on a small
+# sleeve an expensive name can round to ZERO shares. If that happens to one leg
+# and not the other, a book labelled "market-neutral" silently becomes a
+# directional bet, with a drawdown breaker sized for a hedged book.
+#
+# So the "can't hedge -> stay flat" rule is enforced AFTER rounding too, against
+# the book actually executable. 0.20 = tolerate 20% net; set None to disable.
+LS_MAX_NET_EXPOSURE: float | None = 0.20
+
 # ---------------------------------------------------------------------------
 # Paper->live promotion gate (backlog F10)
 # ---------------------------------------------------------------------------

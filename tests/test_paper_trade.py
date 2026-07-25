@@ -46,6 +46,28 @@ def account(tmp_path, monkeypatch):
     return "test"
 
 
+def test_init_refuses_to_overwrite_a_live_book(account):
+    """--init builds a FRESH book with an empty trade ledger, and every P&L
+    number is derived from that ledger — so re-running the documented
+    `--init` line on a funded account would destroy the only record of it.
+    forex.fx_book.init_account has always guarded this; the equity side must too.
+    """
+    pt.init_account(account, capital=100_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    before = pt.load_state(account)
+    assert before["trades"], "need a book with history to prove it is protected"
+
+    with pytest.raises(SystemExit, match="already exists"):
+        pt.init_account(account, capital=100_000, synthetic=True)
+
+    assert pt.load_state(account)["trades"] == before["trades"], \
+        "the refused --init must leave the ledger untouched"
+
+    # --force is the deliberate escape hatch, and it DOES reset.
+    pt.init_account(account, capital=100_000, synthetic=True, force=True)
+    assert pt.load_state(account)["trades"] == []
+
+
 def test_init_splits_into_sleeves(account):
     pt.init_account(account, capital=100_000, synthetic=True)
     state = pt.load_state(account)
