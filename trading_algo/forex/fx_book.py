@@ -356,11 +356,16 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # (so compute_targets never scores them — invariant #3: trims the set, never
     # re-weights) AND their existing weights are carried through untouched below,
     # because you cannot liquidate on a venue that is closed.
+    #
+    # `interval` is passed because a DAILY bar is stamped at midnight and names a
+    # whole trading day. Judging a cash equity's intraday session against that
+    # stamp would freeze the (daily) multiasset book's equities and bonds on every
+    # ordinary weekday — the gate would quietly park the book forever.
     bar_ts = px.index[-1].to_pydatetime()
-    shut = sessions.closed_symbols(symbols, bar_ts)
+    shut = sessions.closed_symbols(symbols, bar_ts, interval)
     if shut:
         print(f"  [{account}] market hours: freezing "
-              f"{sessions.session_report(symbols, bar_ts)}")
+              f"{sessions.session_report(symbols, bar_ts, interval)}")
         panel = {s: df for s, df in panel.items() if s not in shut}
 
     if state["last_bar_date"] == bar_date:

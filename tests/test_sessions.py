@@ -52,12 +52,69 @@ def test_crypto_never_closes():
     (SUN_LATE, False),                    # equities do NOT follow the FX reopen
 ])
 def test_equities_and_bonds_trade_a_weekday_cash_session(ts, expected):
-    assert sessions.is_open("AAPL", ts) is expected
-    assert sessions.is_open("TLT", ts) is expected
+    """Intraday cash hours apply to an INTRADAY bar, which is the only bar whose
+    stamp names an instant."""
+    assert sessions.is_open("AAPL", ts, "60m") is expected
+    assert sessions.is_open("TLT", ts, "60m") is expected
+
+
+# ---------------------------------------------------------------------------
+# Daily bars name a DAY, not an instant
+# ---------------------------------------------------------------------------
+# A daily bar is stamped at midnight (`_bar_key` -> "YYYY-MM-DD"), so judging a
+# cash equity's intraday session against it asks a question nobody posed and
+# answers "shut" on every ordinary weekday. The live `multiasset` book is US
+# equities and bonds on DAILY bars: without this distinction the gate freezes it
+# permanently — it would hold its positions and never rebalance again.
+@pytest.mark.parametrize("symbol", ["AAPL", "TLT", "SPY", "AGG", "QQQ"])
+def test_daily_equity_bar_on_a_weekday_is_tradable(symbol):
+    wednesday = datetime(2026, 7, 22)            # midnight stamp, as daily bars are
+    assert sessions.is_open(symbol, wednesday, "1d") is True
+    assert sessions.is_open(symbol, wednesday) is True          # daily is default
+
+
+def test_daily_equity_bar_on_a_weekend_is_still_shut():
+    """The weekday rule still bites — a daily bar cannot excuse a Saturday fill."""
+    assert sessions.is_open("AAPL", datetime(2026, 7, 4), "1d") is False
+
+
+def test_the_live_multiasset_universe_is_not_frozen_on_an_ordinary_weekday():
+    """Regression guard for the whole book, not one ticker."""
+    from trading_algo.forex.pairs import MULTI_ASSET_UNIVERSE
+
+    wednesday = datetime(2026, 7, 22)
+    assert sessions.closed_symbols(MULTI_ASSET_UNIVERSE, wednesday, "1d") == set()
 
 
 def test_unknown_symbol_is_not_assigned_an_invented_session():
     assert sessions.is_open("WAT.NOPE", SAT) is True
+
+
+# ---------------------------------------------------------------------------
+# The auditor shares these boundaries
+# ---------------------------------------------------------------------------
+def test_verify_and_the_gate_read_the_same_boundaries():
+    """`verify.check_market_hours` must not be able to flag a fill the gate
+    permits, so it consumes this module rather than its own copy."""
+    from trading_algo import verify
+
+    trades = [{"date": "2026-07-04", "pair": "EURUSD"},   # Saturday: shut
+              {"date": "2026-07-04", "pair": "BTCUSD"},   # Saturday: crypto, fine
+              {"date": "2026-07-22", "pair": "AAPL"}]     # weekday daily bar: fine
+    found = verify.check_market_hours("acct", {"trades": trades}, "fx")
+    assert len(found) == 1
+    assert found[0].detail["by_symbol"] == {"EURUSD": 1}
+
+
+def test_verify_still_flags_equity_sleeve_tickers_it_cannot_classify():
+    """`BHP.AX` isn't in ALL_PAIRS. The live gate declines to invent a session for
+    an unknown symbol; an AUDIT needs the opposite default, or weekend fills in the
+    equity sleeves would stop being reported."""
+    from trading_algo import verify
+
+    found = verify.check_market_hours(
+        "acct", {"trades": [{"date": "2026-07-04", "ticker": "BHP.AX"}]}, "equity")
+    assert found and found[0].detail["by_symbol"] == {"BHP.AX": 1}
 
 
 def test_closed_symbols_splits_a_mixed_universe():
