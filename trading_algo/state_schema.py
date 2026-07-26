@@ -19,7 +19,7 @@ so an older pre-schema file is upgraded, not lost.
 """
 from __future__ import annotations
 
-from numbers import Number
+import math
 
 # Bump when the on-disk shape changes; migrate_state stamps it so old files can
 # be recognised and upgraded rather than rejected.
@@ -34,7 +34,9 @@ class StateValidationError(Exception):
 
 def _is_number(x) -> bool:
     # bool is a subclass of int; a flag is not a monetary amount.
-    return isinstance(x, Number) and not isinstance(x, bool)
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    return math.isfinite(x)
 
 
 def _validate_sleeve(key: str, sleeve) -> list[str]:

@@ -17,7 +17,8 @@ from .regions import all_region_keys, get_region
 from .strategy import compute_targets
 
 # Where run manifests + the experiment ledger live (env override for CI).
-_STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
+_STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "state")
 _LEDGER = os.path.join(_STATE_DIR, "experiment_ledger.jsonl")
 
 

@@ -42,8 +42,9 @@ from . import (attribution, data, data_quality, fees, fx, notifications, pnl,
 from . import state_schema
 from .regions import REGIONS, get_region
 
-# State location: env override (used by CI to persist to a tracked dir), else repo root.
-STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..")
+# State location: env override, else the repo's tracked state directory.
+STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "state")
 MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
 
 

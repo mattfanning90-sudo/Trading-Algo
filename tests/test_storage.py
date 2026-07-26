@@ -52,6 +52,24 @@ def test_atomic_write_overwrites_prior_content(tmp_path):
     assert json.load(open(path)) == {"v": 2}
 
 
+def test_db_rejects_nonfinite_json(tmp_path):
+    db = str(tmp_path / "books.db")
+    with pytest.raises(ValueError):
+        storage.db_save(db, "bad", {"value": float("nan")})
+    assert storage.db_load(db, "bad") is None
+
+
+def test_atomic_write_rejects_nonfinite_and_preserves_prior_content(tmp_path):
+    path = str(tmp_path / "book.json")
+    storage.atomic_write_json(path, {"v": 1})
+
+    with pytest.raises(ValueError):
+        storage.atomic_write_json(path, {"v": float("inf")})
+
+    assert json.load(open(path)) == {"v": 1}
+    assert not os.path.exists(path + ".tmp")
+
+
 # --- paper_trade wiring -----------------------------------------------------
 # These exercise the DB/JSON dual-write PLUMBING with sentinel states, not schema
 # validation, so they run with the state-file gate off (B1 made it default ON).

@@ -45,7 +45,8 @@ from .agents import AgentPool
 from .fx_config import FXParams, profile
 from .pairs import DEFAULT_UNIVERSE, get_pair
 
-STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(os.path.dirname(__file__), "..", "..")
+STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "..", "state")
 _DUST = 1e-4   # drop near-zero weights
 
 

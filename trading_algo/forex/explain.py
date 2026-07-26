@@ -9,6 +9,8 @@ can see *why* the system acted at that point — the whole goal being learnabili
 """
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from . import indicators as ind
@@ -45,6 +47,11 @@ def _pair_indicators(bars: pd.DataFrame, p: FXParams) -> dict:
         "ann_vol": float(ind.realized_vol(
             close, p.vol_lookback, ann=marks.periods_per_year(close.index)).iloc[-1]),
     }
+
+
+def _rounded_finite(value: float, digits: int = 5) -> float | None:
+    """Return a JSON-safe rounded diagnostic, or null when it is undefined."""
+    return round(value, digits) if math.isfinite(value) else None
 
 
 def _explain_text(sym: str, weight: float, tilt: float, agents: dict,
@@ -119,7 +126,7 @@ def decide_and_explain(panel: dict[str, pd.DataFrame], p: FXParams,
             "tilt": round(tilt, 4),
             "regime": "trending" if iv["adx"] >= p.adx_trend_min else "ranging",
             "agents": {k: round(v, 3) for k, v in agents.items()},
-            "indicators": {k: (round(v, 5) if isinstance(v, float) else v)
+            "indicators": {k: (_rounded_finite(v) if isinstance(v, float) else v)
                            for k, v in iv.items()},
             "text": _explain_text(s, weight, tilt, agents, iv, p),
         }

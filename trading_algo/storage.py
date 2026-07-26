@@ -107,7 +107,7 @@ def db_load(db_path: str, account: str) -> dict | None:
 
 def db_save(db_path: str, account: str, state: dict) -> None:
     """Upsert ``account``'s book as one atomic, durable transaction."""
-    payload = json.dumps(state, indent=2)
+    payload = json.dumps(state, indent=2, allow_nan=False)
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO books (account, state, updated_at) "
@@ -144,9 +144,12 @@ def atomic_write_json(path: str, state: dict) -> None:
     same directory, ``fsync`` it, then ``os.replace`` (atomic on POSIX) over the
     target. A crash leaves either the old file or the new one — never a
     half-written one."""
+    # Serialise before touching the filesystem. Besides rejecting NaN/Infinity,
+    # this guarantees a failed serialisation cannot leave a partial temp file.
+    payload = json.dumps(state, indent=2, allow_nan=False)
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
+        f.write(payload)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)

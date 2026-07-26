@@ -70,6 +70,13 @@ def test_bool_is_not_a_number():
     assert validate_state(s), "a bool must not pass as a monetary amount"
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_values_are_not_valid_numbers(bad):
+    s = _good_state()
+    s["sleeves"]["US"]["cash"] = bad
+    assert validate_state(s), "persisted monetary values must be finite JSON numbers"
+
+
 # --- migrate_state ---------------------------------------------------------
 def test_migration_backfills_missing_sleeve_fields():
     old = {

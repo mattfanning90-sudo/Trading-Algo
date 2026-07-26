@@ -1,4 +1,6 @@
 """Explainability layer + candlestick dashboard export."""
+import json
+
 import pytest
 
 from trading_algo.forex import dashboard, explain, fx_book
@@ -48,6 +50,17 @@ def test_rationale_has_learnable_fields(panel, params):
 def test_crypto_included_in_rationale(panel, params):
     _, rationale = explain.decide_and_explain(panel, params, pool=AgentPool(max_workers=1))
     assert "BTCUSD" in rationale and "ETHUSD" in rationale
+
+
+def test_rationale_is_strict_json_when_bollinger_z_is_undefined(panel, params):
+    flat = panel["EURUSD"].copy()
+    flat.loc[flat.index[-params.bb_window:], "close"] = flat["close"].iloc[-1]
+
+    _, rationale = explain.decide_and_explain(
+        {"EURUSD": flat}, params, pool=AgentPool(max_workers=1))
+
+    assert rationale["EURUSD"]["indicators"]["bb_z"] is None
+    json.dumps(rationale, allow_nan=False)
 
 
 # ---- book attaches the why to trades ------------------------------------

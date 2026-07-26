@@ -231,8 +231,8 @@ def test_errors_are_structured_and_sanitized(tmp_path):
         category="VENUE_TIMEOUT", retryable=True,
         correlation_id="corr-1", account="crypto",
         context={
-            "apiKey": "top-secret",
-            "headers": {"Authorization": "Bearer secret-token"},
+            "apiKey": "top-secret",  # pragma: allowlist secret
+            "headers": {"Authorization": "Bearer secret-token"},  # pragma: allowlist secret
             "symbol": "BTC/USDT",
         },
     )
