@@ -30,6 +30,7 @@ short's winning day render red.
 import inspect
 import json
 import math
+import os
 import pathlib
 import re
 
@@ -291,19 +292,42 @@ def test_num_keeps_only_finite_numbers():
     assert overview._num(3.0) == 3.0
 
 
-def test_a_nan_mark_cannot_make_the_payload_invalid_json(books):
-    """`state/paper_state_full.json` carries four unvaluable marks today.
-    json.dumps emits a BARE `NaN` token, which is not JSON: the browser's
-    JSON.parse throws, loadJSON swallows it and returns null, and the account
-    page renders empty with no error shown. app.js already guards with
-    Number.isFinite on the assumption that a NaN 'reaches the browser as null' —
-    this is what makes that assumption true."""
+def test_storage_refuses_to_persist_an_unvaluable_mark(books):
+    """The FIRST line of defence, and the strongest: a non-finite mark can no
+    longer be written at all — `storage.db_save` dumps with `allow_nan=False`,
+    so it raises rather than emitting a bare `NaN` token that is not valid JSON.
+
+    This test used to assert the opposite: that a NaN COULD be persisted and the
+    API would sanitise it downstream. That expectation was wrong once the
+    storage layer was hardened — refusing the write is strictly better than
+    cleaning up after it, because the bad value never enters the ledger."""
+    pt.init_account("full", capital=300_000, synthetic=True)
+    pt.run_daily("full", synthetic=True)
+    state = pt.load_state("full")
+    state["equity_history"].append(["2026-07-21", float("nan")])
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        pt.save_state("full", state)
+
+
+def test_a_legacy_nan_on_disk_cannot_make_the_payload_invalid_json(books):
+    """The SECOND line of defence, still required: books written BEFORE the
+    storage hardening already carry unvaluable marks on disk, and those files
+    are read, not rewritten. A bare `NaN` reaching the browser makes
+    JSON.parse throw, loadJSON swallow it, and the account page render empty
+    with no error shown — app.js guards with Number.isFinite on the assumption
+    that a NaN 'reaches the browser as null'. This is what makes that true.
+
+    Written straight to the JSON file (and the DB dropped so the fallback path
+    is used), because `save_state` now correctly refuses to produce this state."""
     pt.init_account("full", capital=300_000, synthetic=True)
     pt.run_daily("full", synthetic=True)
     state = pt.load_state("full")
     state["equity_history"].append(["2026-07-21", float("nan")])
     state["sleeve_history"].append({"date": "2026-07-21", "US": float("nan")})
-    pt.save_state("full", state)
+    with open(pt._state_file("full"), "w") as f:
+        json.dump(state, f)                    # allow_nan defaults True: legacy shape
+    if os.path.exists(pt._db_path()):
+        os.remove(pt._db_path())               # force the JSON fallback in load_state
 
     snap = api.build_snapshot("full", synthetic=True)
     json.dumps(snap, allow_nan=False)          # raises if any NaN survived
