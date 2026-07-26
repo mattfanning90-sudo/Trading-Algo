@@ -6,6 +6,7 @@ and assembles the contract the frontend consumes. Pure read — never mutates st
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
@@ -19,6 +20,36 @@ from ..regions import get_region
 from . import meta
 
 HISTORY_BARS = 66          # ~90 calendar days of closes for the hover popovers
+
+
+def _num(v, nd: int | None = None):
+    """A mark the book could not be valued on is None, never a number.
+
+    json.dumps emits a BARE `NaN` token for a float nan — which is not JSON, so
+    `await r.json()` throws, loadJSON returns null and the whole account page
+    renders empty with no error shown. `state/paper_state_full.json` carries
+    exactly this today (four unvaluable marks in equity_history). The frontend
+    already guards with Number.isFinite on the assumption that NaN "reaches the
+    browser as null"; this is what makes that assumption true.
+    """
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    return round(v, nd) if nd is not None else v
+
+
+def _nan_free(obj):
+    """Same guarantee as `_num`, applied through a nested analytics block."""
+    if isinstance(obj, float):
+        return _num(obj)
+    if isinstance(obj, dict):
+        return {k: _nan_free(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_nan_free(v) for v in obj]
+    return obj
 
 
 def _try(fn, *args):
@@ -76,9 +107,18 @@ def closed_trades(trades: list[dict], snap_fx: dict) -> dict:
             held = 0
         costs = r["entry_cost"] + r["exit_cost"]
         net = r["net"]
+        # Which way round the trip was. pnl._close knows this exactly (`lot_dir`)
+        # and then discards it, so recover it from the identity it used:
+        # gross = lot_dir × (exit notional − entry notional). Without it a
+        # profitable SHORT cover reads "120.00 → 100.00 · +$198 · +16.5%" in
+        # green — a gain on a price that fell — and looks like a data error.
+        # None when the price did not move at all (nothing to infer from).
+        move = r["filled"] * r["exit"] - r["entry_notional"]
+        side = None if abs(move) < 1e-9 else (
+            "LONG" if (r["gross"] > 0) == (move > 0) else "SHORT")
         rows.append({
             "date": r["date"], "ticker": r["ticker"], "region": r["region"],
-            "currency": r["currency"], "qty": r["filled"],
+            "currency": r["currency"], "qty": r["filled"], "side": side,
             "entry": round(r["entry"], 4), "exit": round(r["exit"], 4),
             "held_days": held,
             "gross": round(r["gross"], 2), "costs": round(costs, 2),
@@ -120,16 +160,23 @@ def _next_rebalance(as_of: str, last_rebalance_months: list[str | None]) -> str:
 def _month_return(sleeve_hist: list[dict], key: str) -> float | None:
     """This-month % move of one sleeve, from the persisted sleeve history.
     Baseline is the last mark BEFORE the month (so rebalance-day moves count);
-    falls back to the first in-month mark for a book born this month."""
-    vals = [(h["date"], h.get(key)) for h in sleeve_hist if h.get(key)]
+    falls back to the first in-month mark for a book born this month.
+
+    None means NOT MEASURABLE and the screens say so. It used to return 0.0
+    there — which reads as "flat", a measurement nobody made — and `h.get(key)`
+    admitted NaN (truthy) while rejecting a legitimately-zero mark (falsy), so
+    an unvaluable sleeve poisoned the payload with a bare NaN token.
+    """
+    vals = [(h["date"], _num(h.get(key))) for h in sleeve_hist]
+    vals = [(d, v) for d, v in vals if v is not None]
     if not vals:
         return None
     month = vals[-1][0][:7]
     prior = [v for d, v in vals if d[:7] < month]
     in_month = [v for d, v in vals if d[:7] == month]
     base = prior[-1] if prior else (in_month[0] if len(in_month) > 1 else None)
-    if not base or not in_month:
-        return 0.0
+    if not base or base <= 0 or not in_month:
+        return None
     return round(in_month[-1] / base - 1.0, 4)
 
 
@@ -202,29 +249,41 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
                     "dates": [d.strftime("%Y-%m-%d") for d in tail.index],
                     "closes": [round(float(v), 4) for v in tail],
                 }
-            price = _safe_price(px, t)
+            mark = _safe_price(px, t)
             prev_price = _safe_price(px_prev, t)
+            avg = float(basis.get((k, t)) or mark)   # actual cost from the fills ledger
+            # A held name with NO price on the latest bar is UNPRICED, not
+            # worthless. data.load_region does not forward-fill and delisting.py
+            # deliberately terminates a dead series, so a halt/delisting leaves
+            # a NaN tail — and _safe_price's 0.0 then printed "−100.00%" on the
+            # row and quietly subtracted the whole cost basis from TOTAL EQUITY.
+            # Hold it at cost, mark nothing, and SAY it is unpriced.
+            priced = mark > 0.0
+            price = mark if priced else avg
             val_local = sh * price
             invested_local += val_local
             gross_local += abs(val_local)
-            avg = float(basis.get((k, t)) or price)   # actual cost from the fills ledger
-            day_change = (price / prev_price - 1.0) if prev_price else 0.0
+            day_change = (price / prev_price - 1.0) if (priced and prev_price) else 0.0
             # The POSITION's return, not the instrument's: on a short a falling
-            # price is a gain. Without the flip this column contradicted the
-            # money column beside it — a short marked +44% green next to −A$202
-            # red — because `price/avg - 1` describes the stock, not the book.
+            # price is a gain. Without the flip these columns contradicted the
+            # money column beside them — a short marked +44% green next to
+            # −A$202 red — because `price/avg - 1` describes the stock, not the
+            # book. DAY is the same claim over one bar and needs the same flip:
+            # a short whose stock rose 2% did NOT make 2% today.
             unrl_pct = (price / avg - 1.0) if avg else 0.0
             if sh < 0:
                 unrl_pct = -unrl_pct
+                day_change = -day_change
             unrl_base = sh * (price - avg) * m
             total_unrealized_base += unrl_base
             positions.append({
                 "ticker": t, "shares": int(sh),
                 "price": round(price, 4),
+                "priced": priced,
                 "value_local": round(val_local, 2),
                 "value_base": round(val_local * m, 2),
                 "day_change": round(day_change, 4),
-                "change_local": round(price - prev_price, 4),
+                "change_local": round(price - prev_price, 4) if priced else 0.0,
                 "avg_cost": round(avg, 4),
                 "unrealized_pct": round(unrl_pct, 4),
                 "unrealized_base": round(unrl_base, 2),
@@ -279,14 +338,22 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     fees_base = sum(v * snap_fx.get(c, 1.0) for c, v in fees.items())
 
     eq_hist = state.get("equity_history", [])
-    prev_equity = eq_hist[-1][1] if eq_hist else state["initial_capital_base"]
+    # The last mark the book could actually be VALUED on. Taking eq_hist[-1]
+    # blind picked up a NaN and turned day_change into a NaN token; falling
+    # back to initial capital would report the whole book's return as "today".
+    prev_equity = next((v for _, v in reversed(eq_hist) if _num(v) is not None),
+                       state["initial_capital_base"])
     initial = state["initial_capital_base"]
     benchmark_curve = _benchmark_curve(index_by_region, eq_hist, initial, synthetic)
 
     blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)}
                for t in state["trades"]]
 
-    peak = float(state.get("peak_equity_base") or total_base or 1.0)
+    # A running peak INCLUDES the current mark. paper_trade only updates it on a
+    # scheduled run, while this endpoint re-marks live, so today's equity could
+    # sit above the persisted high-water mark — and off_peak then came out
+    # POSITIVE ("OFF-PEAK +89.96%"), which cannot happen to a real book.
+    peak = max(float(state.get("peak_equity_base") or 0.0), total_base, 1e-9)
 
     # The knobs THIS book actually runs: its profile's param_overrides layered on
     # the shared defaults through the SAME StrategyParams path paper_trade sizes
@@ -362,11 +429,18 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         # (this endpoint must not refetch a backtest — invariant #1), so the
         # report simply carries no divergence / tracking-error keys and the
         # screen says why; nothing here is filled in with a stand-in.
-        "attribution": _try(attribution.attribution_report, state),
-        "promotion": _try(promotion.promotion_check, state),
+        "attribution": _nan_free(_try(attribution.attribution_report, state)),
+        # promotion.equity comes off the last persisted mark, and `nan >= MIN`
+        # is False — so an unvaluable mark failed the capacity gate as though
+        # the book were undercapitalised, and put another NaN in the payload.
+        "promotion": _nan_free(_try(promotion.promotion_check, state)),
         "benchmark_curve": benchmark_curve,
         "fx": snap_fx,
-        "equity_curve": [{"date": d, "equity": e} for d, e in eq_hist],
-        "sleeve_curves": state.get("sleeve_history", []),
+        # Both curves go out NaN-free (see _num): one unvaluable mark used to
+        # make the entire payload invalid JSON and blank the account page.
+        "equity_curve": [{"date": d, "equity": _num(e)} for d, e in eq_hist],
+        "sleeve_curves": [{kk: (vv if kk == "date" else _num(vv))
+                           for kk, vv in row.items()}
+                          for row in (state.get("sleeve_history") or [])],
         "sleeves": sleeves_out,
     }

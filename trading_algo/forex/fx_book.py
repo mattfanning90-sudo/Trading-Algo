@@ -24,6 +24,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 
@@ -32,6 +33,7 @@ import pandas as pd
 
 from .. import notifications
 from .. import storage
+from . import bar_quality
 from . import explain
 from . import feeds
 from . import fx_config as cfg
@@ -160,6 +162,32 @@ def _sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
 
+def _stamp_bar_quality(rationale: dict[str, dict], close_only: set) -> dict[str, dict]:
+    """Label decisions that were made on close-only bars (a no-op if none were).
+
+    `explain` publishes its readings as ``adx`` / ``donchian_hi`` / ``donchian_lo``
+    and prints a "trending"/"ranging" verdict. On bars with no intrabar range
+    those are close-derived quantities wearing range-based names — and the
+    decision book is exactly what a human reads to LEARN why the system acted, so
+    an unqualified "ADX 18, ranging" there would be the same silent substitution
+    this gate exists to prevent. Only `close_only_signals="allow"` gets this far
+    with a close-only instrument still in the panel.
+    """
+    for sym in close_only:
+        why = rationale.get(sym)
+        if not isinstance(why, dict):
+            continue
+        why["bar_quality"] = "close_only"
+        why["indicator_basis"] = {"adx": "close-to-close (no intrabar range)",
+                                  "atr": "abs(delta close)",
+                                  "donchian": "channel of closes"}
+        if why.get("text"):
+            why["text"] += (" NOTE: this instrument's bars are close-only (one "
+                            "observed price per bar), so the ADX / ATR / Donchian "
+                            "readings above are close-derived, not range-derived.")
+    return rationale
+
+
 def _accrue_cumulative(state: dict, bar_date: str, prev_equity: float,
                        marked: float, pnl_by_pair: dict[str, float],
                        carry_by_pair: dict[str, float],
@@ -216,7 +244,8 @@ def _accrue_cumulative(state: dict, bar_date: str, prev_equity: float,
 def init_account(account: str, capital: float, profile_name: str,
                  symbols: list[str] | None = None,
                  currency: str = cfg.ACCOUNT_CURRENCY, source: str = "yahoo",
-                 bar: str = "1d", force: bool = False) -> None:
+                 bar: str = "1d", force: bool = False,
+                 close_only_signals: str | None = None) -> None:
     if account_exists(account) and not force:
         print(f"  account '{account}' already exists — skipping (use --force to reset)")
         return
@@ -243,6 +272,11 @@ def init_account(account: str, capital: float, profile_name: str,
         "trades": [],
         "equity_history": [],
     }
+    # Per-book override of the profile's close-only policy. Stored ONLY when the
+    # caller asked for one, so a book with no key inherits `FXParams` (refuse)
+    # and the knob is visible in the state file a human can read.
+    if close_only_signals is not None:
+        state["close_only_signals"] = bar_quality.check_policy(close_only_signals)
     save_state(account, state)
     print(f"  FX account '{account}' opened: {capital:,.0f} {currency} "
           f"[{profile_name}] over {len(syms)} instruments "
@@ -251,10 +285,12 @@ def init_account(account: str, capital: float, profile_name: str,
 
 def init_defaults(synthetic: bool, force: bool = False) -> None:
     """Open every ready-to-run book from config (matt, partner, daytrader,
-    multiasset) — each with its own capital / profile / universe / bar."""
+    multiasset) — each with its own capital / profile / universe / bar / source."""
     for name, spec in cfg.ACCOUNTS.items():
         init_account(name, spec["capital"], spec["profile"],
                      symbols=spec.get("symbols"), bar=spec.get("bar", "1d"),
+                     source=spec.get("source", "yahoo"),
+                     close_only_signals=spec.get("close_only_signals"),
                      force=force)
 
 
@@ -333,7 +369,10 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # source (defaults to yahoo). `--exchange` implies crypto (back-compat).
     src = feeds.resolve_source(source if source is not None
                                else state.get("source", "yahoo"), exchange)
-    if src == "yahoo" and not state.get("universe_locked"):
+    # `auto` routes per symbol but trades the same default universe as `yahoo`
+    # (that universe is precisely the one no single provider can serve), so it
+    # must pick up newly-added instruments the same way.
+    if src in ("yahoo", feeds.AUTO) and not state.get("universe_locked"):
         # Pick up any newly-added instruments (e.g. crypto) without losing history.
         symbols = list(dict.fromkeys([*state.get("symbols", []), *DEFAULT_UNIVERSE]))
     else:
@@ -357,7 +396,33 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # candidate universe so the single weight function never scores them and they
     # never sit in the target book at a stale mark (invariant #3: trims the set,
     # never re-weights). Conservative thresholds keep a quiet FX weekend clean.
-    dq = fx_data_quality.assess(px)
+    #
+    # `assess_panel` (not `assess`) because the closes alone cannot reveal the
+    # OTHER way a feed corrupts signals: bars with no intrabar range. A
+    # close-only source (an ECB daily fixing) has perfectly healthy closes and no
+    # high/low, which leaves ADX/ATR/Donchian computing a different statistic
+    # under the same name. `refuse` (the default) raises here — before any
+    # marking is persisted and before compute_targets is reached.
+    policy = bar_quality.check_policy(state.get("close_only_signals")
+                                      or p.close_only_signals)
+    dq = fx_data_quality.assess_panel(panel, policy=policy, closes=px)
+    if dq.close_only and policy == bar_quality.ALLOW:
+        detail = ", ".join(sorted(dq.close_only))
+        print(f"  [{account}] ⚠ bar quality: {detail} are CLOSE-ONLY "
+              f"(no intrabar range) and close_only_signals='allow' — ADX/ATR/"
+              f"Donchian below are close-derived, not range-derived.")
+        notifications.notify(
+            "fx_bar_quality",
+            f"[{account}] trading on close-only bars (degraded ADX/ATR/Donchian): "
+            f"{detail}", level="warning", account=account,
+            close_only=sorted(dq.close_only), policy=policy)
+
+    def acknowledge():
+        """Scope the close-only opt-in to the decision itself, never wider."""
+        if dq.close_only and policy == bar_quality.ALLOW:
+            return bar_quality.allow_close_only()
+        return contextlib.nullcontext()
+
     if dq.excluded:
         detail = ", ".join(f"{s} ({dq.reasons[s]})" for s in sorted(dq.excluded))
         print(f"  [{account}] data-quality: freezing {detail}")
@@ -371,7 +436,12 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # clear" is information, and a book silently trading a reduced universe must
     # be visible on the dashboard, not only in this process's stdout.
     state["data_quality"] = {"excluded": sorted(dq.excluded),
-                             "reasons": dict(dq.reasons), "date": bar_date}
+                             "reasons": dict(dq.reasons), "date": bar_date,
+                             # Always present (usually empty): "checked, none" is
+                             # information, and a book running on degraded bars
+                             # must be visible, not inferable.
+                             "close_only": sorted(dq.close_only),
+                             "close_only_policy": policy}
 
     # --- market-hours gate (BEFORE compute_targets) -----------------------
     # A shut venue keeps serving its last close through _align's forward-fill, so
@@ -400,8 +470,10 @@ def _run_once_locked(account: str, synthetic: bool = False,
         # refreshing the per-pair reasoning snapshot.
         if not state.get("risk_halted"):
             try:
-                _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
-                state["decisions"] = refresh_rationale
+                with acknowledge():
+                    _, refresh_rationale = explain.decide_and_explain(panel, p, pool=pool)
+                state["decisions"] = _stamp_bar_quality(refresh_rationale,
+                                                        dq.close_only)
             except Exception as exc:                       # never let display break a run
                 print(f"  [{account}] (decision refresh skipped: {exc!r})")
         save_state(account, state)      # today's read + the data-quality verdict
@@ -474,7 +546,9 @@ def _run_once_locked(account: str, synthetic: bool = False,
     if halted:
         target = pd.Series(dtype=float)
     else:
-        target, rationale = explain.decide_and_explain(panel, p, pool=pool)
+        with acknowledge():
+            target, rationale = explain.decide_and_explain(panel, p, pool=pool)
+        rationale = _stamp_bar_quality(rationale, dq.close_only)
     if halted:
         # Even the drawdown breaker cannot sell on a venue that is shut: flatten
         # everything tradable now, and hold the rest until its session reopens
@@ -526,9 +600,16 @@ def _run_once_locked(account: str, synthetic: bool = False,
     # --- persist -----------------------------------------------------------
     state["equity"] = float(equity)
     state["positions"] = {k: round(v, 5) for k, v in new_positions.items()}
+    # Drop the mark only for instruments excluded because their PRICE is
+    # untrustworthy (stale / dead) — carrying that forward is what the gate
+    # exists to stop. A close-only instrument is the opposite case: its price is
+    # a good mark and only its bars are unusable, so it keeps marking whatever
+    # residual weight the no-churn band leaves behind while it is out of scoring.
+    price_bad = {s for s in dq.excluded
+                 if dq.reasons.get(s) != bar_quality.CLOSE_ONLY_REASON}
     state["last_close"] = {s: float(px_last[s]) for s in symbols
                            if s in px_last.index and px_last[s] == px_last[s]
-                           and s not in dq.excluded}
+                           and s not in price_bad}
     state["last_bar_date"] = bar_date
     state["peak_equity"] = float(peak)
     state["risk_halted"] = halted
@@ -567,9 +648,19 @@ def run_all(synthetic: bool = False, pool: AgentPool | None = None,
     accts = list_accounts() or list(cfg.ACCOUNTS)
     for name in accts:
         if account_exists(name):
-            run_once(name, synthetic, pool=pool, interval=interval,
-                     source=source, exchange=exchange, use_ml=use_ml,
-                     use_champions=use_champions)
+            try:
+                run_once(name, synthetic, pool=pool, interval=interval,
+                         source=source, exchange=exchange, use_ml=use_ml,
+                         use_champions=use_champions)
+            except bar_quality.CloseOnlyBarsError as exc:
+                # ONE book pointed at a source that can't produce signal-grade
+                # bars must not trade — and must not stop the others' pass
+                # either. Loud + skipped, never silent (a single-account
+                # run_once still raises, so a human sees the traceback).
+                print(f"  [{name}] ⛔ REFUSED — {exc}")
+                notifications.notify(
+                    "fx_bar_quality", f"[{name}] refused to trade: {exc}",
+                    level="error", account=name)
 
 
 # ---------------------------------------------------------------------------
@@ -640,8 +731,17 @@ def main(argv: list[str] | None = None) -> None:
                          "book's own cadence, else daily). Live intraday needs a "
                          "real-time feed; see docs/HFT_REALITY.md.")
     ap.add_argument("--source", default=None, choices=feeds.SOURCES,
-                    help="market-data source: yahoo (default), crypto, oanda, "
-                         "alpaca, openbb. See docs/DATA_FEEDS.md.")
+                    help="market-data source: yahoo (default), auto (per-symbol "
+                         "routing: real crypto via ccxt, FX bars via yahoo), "
+                         "crypto, oanda, alpaca, openbb, frankfurter (ECB daily "
+                         "fixings — CLOSE-ONLY, see --close-only-signals). "
+                         "See docs/DATA_FEEDS.md.")
+    ap.add_argument("--close-only-signals", default=None,
+                    dest="close_only_signals", choices=list(bar_quality.POLICIES),
+                    help="on --init: what this book does when a source gives bars "
+                         "with no intrabar range (frankfurter/ECB). refuse "
+                         "(default) / exclude those instruments / allow the "
+                         "degraded ADX-ATR-Donchian reading. See docs/DATA_FEEDS.md.")
     ap.add_argument("--exchange", default=None,
                     help="crypto exchange via ccxt (e.g. binance) for the crypto "
                          "source; default binance. See docs/CRYPTO_HF.md.")
@@ -669,9 +769,13 @@ def main(argv: list[str] | None = None) -> None:
             if args.universe:
                 symbols = pairs.resolve_universe(args.universe)
             else:
-                symbols = None if src == "yahoo" else feeds.default_universe(src, args.profile)
+                # `auto` shares yahoo's mixed FX+crypto universe and, like yahoo,
+                # stays UNLOCKED so new default instruments are picked up.
+                symbols = (None if src in ("yahoo", feeds.AUTO)
+                           else feeds.default_universe(src, args.profile))
             init_account(args.account, args.capital, args.profile, symbols=symbols,
-                         source=src, bar=args.bar or "1d", force=args.force)
+                         source=src, bar=args.bar or "1d", force=args.force,
+                         close_only_signals=args.close_only_signals)
         else:
             init_defaults(args.synthetic, force=args.force)
     elif args.status:
