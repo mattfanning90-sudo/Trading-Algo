@@ -109,8 +109,8 @@ path, that moves **75–85% of target weights** and puts **16–21% of bars on t
 opposite side**, while gross leverage, turnover and the spread bill are
 essentially unchanged. No risk or P&L report would show that anything happened.
 
-Everything that reads only closes is **bit-identical**: `ema`, `rsi`, `roc`,
-`bollinger_z`, `macd`, `realized_vol`, the vol-targeting in `risk.pair_vols`, and
+Everything that reads only closes is **bit-identical**: `ema`, `sma`, `rsi`, `roc`,
+`bollinger_z`, `realized_vol`, the vol-targeting in `risk.pair_vols`, and
 the entire money layer (`marks`, `fx_pnl`, `fxconv` never read high/low). **A
 fixing is a perfectly good mark. It is not a usable signal input.**
 

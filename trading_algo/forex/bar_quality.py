@@ -29,7 +29,7 @@ that anything had changed. That is the definition of a silent, strategy-altering
 bug, and it is why the check lives here as a hard contract.
 
 What is *unaffected* (and therefore still sanctioned): everything that reads only
-closes — ``ema``/``rsi``/``roc``/``bollinger_z``/``macd``/``realized_vol``,
+closes — ``ema``/``sma``/``rsi``/``roc``/``bollinger_z``/``realized_vol``,
 `risk.pair_vols` (bit-identical), and the whole money layer (`marks`, `fx_pnl`,
 `fxconv`) which never reads high/low. A close-only fixing is a perfectly good
 **mark**; it is not a usable **signal** input.
