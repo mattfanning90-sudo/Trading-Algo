@@ -46,7 +46,8 @@ def _inline_fonts(css: str) -> str:
     return re.sub(r"""url\((['"]?)(fonts/[^)'"]+\.woff2)\1\)""", repl, css)
 
 
-def render_html(payloads: dict, locked_key: str | None) -> str:
+def render_html(payloads: dict, locked_key: str | None,
+                candles_payload: dict | None = None) -> str:
     """Produce a standalone HTML document for the given API payload map."""
     with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
         html = f.read()
@@ -62,6 +63,13 @@ def render_html(payloads: dict, locked_key: str | None) -> str:
     # Guard against any "</script>" sequence prematurely closing inline scripts.
     js = js.replace("</script", "<\\/script")
     snap_json = json.dumps(payloads).replace("</", "<\\/")
+    # Real OHLC must be BAKED, not fetched: the export opens over file://,
+    # where a relative fetch("candles.json") is a CORS error. Without this a
+    # shared export silently falls back to invented bars.
+    candles_js = ""
+    if candles_payload:
+        blob = json.dumps(candles_payload).replace("</", "<\\/")
+        candles_js = f"window.__CANDLES__ = {blob};\n"
 
     shim = (
         "<script>\n"
@@ -69,6 +77,8 @@ def render_html(payloads: dict, locked_key: str | None) -> str:
         f"window.__SNAPSHOT__ = {snap_json};\n"
         f"window.__EXPORT_ACCOUNT__ = {json.dumps(locked_key)};\n"
         f"window.__EXPORT_ALL__ = {'true' if locked_key is None else 'false'};\n"
+        + candles_js
+        + (
         "(function () {\n"
         "  const real = window.fetch ? window.fetch.bind(window) : null;\n"
         "  window.fetch = function (url, opts) {\n"
@@ -83,7 +93,7 @@ def render_html(payloads: dict, locked_key: str | None) -> str:
         "    return real ? real(url, opts) : Promise.reject(new Error('offline'));\n"
         "  };\n"
         "})();\n"
-        "</script>"
+        "</script>")
     )
 
     html = html.replace(_CSS_LINK, f"<style>\n{css}\n</style>")
@@ -152,9 +162,32 @@ def build_payloads_site(synthetic: bool) -> dict:
     return payloads
 
 
+def _candles_for(accounts: list[str], synthetic: bool) -> dict | None:
+    """Real OHLC for the books being baked, or None if unreachable.
+
+    Never fatal: an export with invented bars is still useful and app.js labels
+    them as synthetic — an export that failed to build because the market was
+    unreachable is not."""
+    try:
+        from . import candles as candles_mod
+        by_bar = candles_mod.book_symbols(accounts)
+        syms = sorted({s for v in by_bar.values() for s in v})
+        if not syms:
+            return None
+        # One cadence per export: the baked page charts whatever its books use,
+        # and the daily set is the right default for a mixed bake.
+        bar = "60m" if set(by_bar) == {"60m"} else "1d"
+        return candles_mod.build(syms, interval=bar, synthetic=synthetic)
+    except Exception as exc:                       # noqa: BLE001 — see docstring
+        print(f"  candles unavailable ({exc!r}) — charts fall back to synthetic")
+        return None
+
+
 def export(account: str, synthetic: bool, out_path: str) -> str:
     payloads, key = build_payloads(account, synthetic)
-    html = render_html(payloads, key)
+    entry = registry.resolve(account)
+    fx_acct = [entry["account"]] if entry and entry["kind"] == "fx" else []
+    html = render_html(payloads, key, _candles_for(fx_acct, synthetic))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     return out_path
@@ -162,7 +195,7 @@ def export(account: str, synthetic: bool, out_path: str) -> str:
 
 def export_site(synthetic: bool, out_path: str) -> str:
     payloads = build_payloads_site(synthetic)
-    html = render_html(payloads, None)
+    html = render_html(payloads, None, _candles_for([], synthetic))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     return out_path

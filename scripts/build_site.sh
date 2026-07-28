@@ -67,6 +67,13 @@ python scripts/build_walkthrough.py public/walkthrough.html \
   || cp docs/explainer/how-it-works.html public/walkthrough.html \
   || echo "skip walkthrough"
 
+# --- Real OHLC for the terminal's charts ----------------------------------------
+# app.js has always PREFERRED real bars (synthCandles reads S.candles first) and
+# labelled invented ones; nothing ever wrote the file. One per bar cadence, since
+# the daytrader book charts 60m and the rest daily.
+python -m trading_algo.dashboard.candles --out-dir public $SYNTH \
+  || echo "skip candles (charts fall back to synthetic, labelled as such)"
+
 # --- The landing page IS the terminal ------------------------------------------
 # One static page baking every book + the ALL-ACCOUNTS overview, switcher live.
 python -m trading_algo.dashboard.export --site $SYNTH -o public/index.html \

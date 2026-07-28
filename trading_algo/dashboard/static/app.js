@@ -182,7 +182,17 @@ function synthCandles(pair, close, volAnn, nBars, tfKey = '', sigScale = 1) {
     const bars = real.slice(-nBars).map(b => Array.isArray(b)
       ? { o: +b[1], h: +b[2], l: +b[3], c: +b[4] }
       : { o: +b.o, h: +b.h, l: +b.l, c: +b.c });
-    _candleCache[key] = { bars, real: true };
+    /* A close-only source (ECB fixings) publishes open==high==low==close. The
+       CLOSES are real, so we draw them — but the range was never observed, and
+       flat ticks read as a genuinely quiet market rather than as missing data.
+       Carry the distinction so the caption can state it. */
+    const meta = (S.candles && S.candles._meta) || {};
+    const rangeLess = Array.isArray(meta.range_less) && meta.range_less.includes(pair);
+    /* A --synthetic build routes generated bars through this same file. They are
+       a pipeline test, not market data (invariant #5), so they must never wear
+       the LIVE label just because they arrived by the real-data path. */
+    _candleCache[key] = { bars, real: meta.synthetic !== true, rangeLess,
+                          fromFile: true, src: (meta.served || {})[pair] || '' };
     return _candleCache[key];
   }
   let h = 5381;
@@ -2079,7 +2089,7 @@ function chartSectionHTML(page) {
   const T = TF_MAP[tf];
   const closeN = +row.price || 1;
   const volN = (+row.ann_vol || 0.02);
-  const { bars: cBars, real: cReal } = synthCandles(selPair, closeN, volN, T.n, tf, T.s);
+  const { bars: cBars, real: cReal, rangeLess: cFlat, src: cSrc, fromFile: cFile } = synthCandles(selPair, closeN, volN, T.n, tf, T.s);
   const n2 = cBars.length;
   const ta = S.ta;
   const panes = S.taPanes || {};
@@ -2327,7 +2337,14 @@ function chartSectionHTML(page) {
     }).join('\n');
   }
 
-  const chartSrc = cReal ? 'LIVE OHLC (candles.json)' : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — DROP A candles.json TO WIRE REAL OHLC';
+  /* Three distinct states, never conflated: measured bars, real closes whose
+     range was never observed (close-only source), and bars we invented. */
+  const chartSrc = !cReal
+    ? (cFile ? 'SYNTHETIC PANEL — PIPELINE TEST BUILD, NOT MARKET DATA'
+             : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — NO candles.json FOR THIS BOOK')
+    : cFlat
+      ? `REAL CLOSES · RANGE UNOBSERVED${cSrc ? ' (' + cSrc.toUpperCase() + ', CLOSE-ONLY)' : ' (CLOSE-ONLY SOURCE)'} — WICKS ARE NOT MEASURED`
+      : `LIVE OHLC${cSrc ? ' · ' + cSrc.toUpperCase() : ''}`;
   const sideColor = rowSide.c;
 
   /* ---- LIVE READINGS: the indicator values the vote was actually cast on ---- */
@@ -2356,7 +2373,7 @@ function chartSectionHTML(page) {
       </div>
       ${Object.keys(ind).length
         ? `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:10.5px">${reads}</div>
-           <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:8px">PERSISTED WITH THE DECISION IN state/fx_state_${esc(page.account)}.json — REAL VALUES ON REAL BARS. THE BOOK STORES THE LATEST READ ONLY, NOT A HISTORY, SO THE CANDLES AND OVERLAY CURVES ABOVE STAY SYNTHETIC; THESE NUMBERS AND THE FLAT LEVEL LINES ARE THE REAL PART.</div>`
+           <div style="font-size:9px;color:#3d543f;line-height:1.7;margin-top:8px">PERSISTED WITH THE DECISION IN state/fx_state_${esc(page.account)}.json — REAL VALUES ON REAL BARS. THE BOOK STORES THE LATEST READ ONLY, NOT A HISTORY${cReal ? ', SO THE OVERLAY CURVES ARE SHAPED, NOT REPLAYED — THE CANDLES THEMSELVES ARE REAL' : '; THE CANDLES AND OVERLAY CURVES ABOVE ARE SYNTHETIC — THESE NUMBERS AND THE FLAT LEVEL LINES ARE THE REAL PART'}.</div>`
         : `<div style="font-size:10.5px;color:#61805f">— NO DECISION ON FILE FOR THIS LEG, SO NO INDICATOR READING: IT IS HELD FROM AN EARLIER BAR. EVERYTHING PLOTTED ABOVE IS SYNTHETIC EXCEPT THE LAST PRICE.</div>`}
     </div>`;
 
@@ -2868,7 +2885,7 @@ function agentPopHTML(page, pair, rect) {
   const sideColor = side.c;
   const nBars = page.bar === '60m' ? 60 : 48;
   const closeN = +p.price || 1;
-  const { bars, real } = synthCandles(pair, closeN, +p.ann_vol || 0.02, nBars);
+  const { bars, real, rangeLess } = synthCandles(pair, closeN, +p.ann_vol || 0.02, nBars);
   let hi = -Infinity, lo = Infinity;
   for (const b of bars) { hi = Math.max(hi, b.h); lo = Math.min(lo, b.l); }
   const Y = v => 6 + (1 - (v - lo) / (hi - lo || 1)) * 98;
@@ -2924,7 +2941,7 @@ function agentPopHTML(page, pair, rect) {
       <path d="${cp.bodyDn}" fill="#ff7b72"></path>
       <line x1="0" y1="${Y(closeN).toFixed(1)}" x2="590" y2="${Y(closeN).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"></line>
     </svg>
-    <div style="display:flex;gap:14px;font-size:8.5px;color:#3d543f;letter-spacing:.08em;margin-bottom:9px"><span>${barLabel}</span><span>HI <span style="color:#61805f">${fmtP(hi)}</span></span><span>LO <span style="color:#61805f">${fmtP(lo)}</span></span><span style="margin-left:auto;color:#e3b341">LAST ${fmtP(closeN)} ┄</span>${real ? '' : '<span style="color:#8a7433">SYNTHETIC BARS — DROP A candles.json TO WIRE REAL OHLC</span>'}</div>
+    <div style="display:flex;gap:14px;font-size:8.5px;color:#3d543f;letter-spacing:.08em;margin-bottom:9px"><span>${barLabel}</span><span>HI <span style="color:#61805f">${fmtP(hi)}</span></span><span>LO <span style="color:#61805f">${fmtP(lo)}</span></span><span style="margin-left:auto;color:#e3b341">LAST ${fmtP(closeN)} ┄</span>${real ? (rangeLess ? '<span style="color:#8a7433">REAL CLOSES · RANGE UNOBSERVED — WICKS NOT MEASURED</span>' : '') : '<span style="color:#8a7433">SYNTHETIC BARS — NO candles.json FOR THIS BOOK</span>'}</div>
     <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:14px">
       <div style="font-size:10.5px;line-height:1.75;color:#9db5a0;border-right:1px solid #1a1a1a;padding-right:14px">${esc(p.why)}</div>
       <div>
@@ -3569,8 +3586,11 @@ async function boot() {
   try { S.meta = await loadJSON('/api/meta'); }
   catch (e) { S.meta = null; }               // poll() retries until it loads
 
-  /* optional real OHLC dropped into static/ as candles.json */
+  /* Real OHLC: baked by the standalone export (a relative fetch CORS-fails
+     on file://), else fetched beside the page when served. */
+  if (window.__CANDLES__ && typeof window.__CANDLES__ === 'object') S.candles = window.__CANDLES__;
   try {
+    if (S.candles) throw 0;                    // already baked
     const r = await fetch('candles.json', { cache: 'no-store' });
     if (r.ok) { const d = await r.json(); if (d && typeof d === 'object') S.candles = d; }
   } catch (e) { /* optional */ }
