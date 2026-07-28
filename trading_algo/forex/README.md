@@ -182,16 +182,39 @@ dependency, and all ship a synthetic generator so the pipeline runs offline.
 | `oanda` | FX majors | ✅ | free practice acct + token | `oandapyV20` |
 | `alpaca` | US equities | ✅ (IEX) | free acct + keys | `alpaca-py` |
 | `openbb` | research | mostly delayed | free | `openbb` |
+| `frankfurter` | fiat FX (ECB) | daily fixing only | **free, no key** | stdlib `urllib` |
+| `auto` | per-symbol routing | per leg | per leg | — |
 
 ```bash
 python -m trading_algo.forex.run_backtest --source alpaca --bar 1h     # US equities
 python -m trading_algo.forex.paper --init --account fx --source oanda --profile intraday
 python -m trading_algo.forex.engine --loop --account fx --source oanda --bar 1h
+python -m trading_algo.forex.paper --account matt --source auto        # route per symbol
 ```
 
+**`auto`** exists because `matt`/`partner` hold FX majors *and* crypto in one
+universe and no single provider serves both. It groups by asset class, fetches
+each group from its own provider (crypto → a real exchange via `ccxt`, FX → bar
+data), merges through the usual align/forward-fill, and *reports* anything nobody
+could serve rather than silently shrinking the universe. Both books default to it.
+
+**Close-only sources are a strategy question, not a plumbing detail.**
+`frankfurter` serves the ECB's daily reference fixing — real, citable, keyless —
+but one price per working day, so `open == high == low == close`. `indicators.py`
+computes a *different statistic under the same name* on such bars (ATR ≈ 0.53×,
+ADX a close-efficiency ratio that stays plausible instead of going to zero,
+Donchian a channel of closes), which puts 16–21% of bars on the **opposite side**
+while leverage, turnover and costs look unchanged. So `bar_quality.py` detects
+range-less bars structurally, `true_range`/`donchian` (and so `atr`/`adx`) raise
+on them, and each book picks a policy once in the open —
+`FXParams.close_only_signals` ∈ `refuse` (default) / `exclude` / `allow`. FX is
+**not** routed to the fixing by default; it is the right source for a *close*
+series (marking, AUD translation, a daily reference cross-check), and `daytrader`
+(60m) cannot use it at all. Numbers and per-book table: `docs/DATA_FEEDS.md`.
+
 The honest distinction (open-source *software* vs free real-time *data*), the
-per-asset-class reality, credentials and caveats are all in
-[`docs/DATA_FEEDS.md`](../../docs/DATA_FEEDS.md).
+per-asset-class reality, the per-book source table, credentials and caveats are
+all in [`docs/DATA_FEEDS.md`](../../docs/DATA_FEEDS.md).
 
 ## The parallel agent ecosystem
 
@@ -346,6 +369,12 @@ Full scope, the real (small) edges, deployment (a VPS, not Actions) and risks:
    `fx_pnl.py`; every trade's spread is allocated exactly once (to a round-trip
    or to the open lot carrying it), and whatever the weight-lot convention can't
    explain is reported as a residual, never absorbed. (`tests/test_fx_pnl.py`)
+7. **An indicator gets the data it needs, or it refuses.** A range-based
+   indicator (ATR/ADX/Donchian) never runs on bars without an intrabar range —
+   it raises rather than compute a close-to-close statistic under a range-based
+   name. A book may opt into the degraded reading, but only explicitly, per book,
+   and it is recorded in the state. (`bar_quality.py`,
+   `tests/test_close_only_bars.py`)
 
 ## Low latency
 
@@ -393,8 +422,9 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `fx_config.py` | `FXParams` + risk profiles + account presets |
 | `indicators.py` | vectorized indicators + streaming variants |
 | `fx_data.py` | OHLC panel loader + synthetic generator |
-| `feeds.py` | source resolver — yahoo / crypto / oanda / alpaca / openbb |
-| `crypto_data.py` / `oanda_data.py` / `alpaca_data.py` / `openbb_data.py` | per-source data adapters |
+| `feeds.py` | source resolver + per-symbol routing (`auto`) |
+| `crypto_data.py` / `oanda_data.py` / `alpaca_data.py` / `openbb_data.py` / `frankfurter_data.py` | per-source data adapters |
+| `bar_quality.py` | the bar-capability contract: refuse close-only bars for range indicators |
 | `crypto_exec.py` | live crypto order execution via ccxt (dry-run by default) |
 | `agents.py` | the five agents + concurrent `AgentPool` |
 | `ensemble.py` | performance-weighted agent blending |

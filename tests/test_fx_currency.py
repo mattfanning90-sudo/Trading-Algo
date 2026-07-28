@@ -52,7 +52,12 @@ def test_aud_per_quote_frame():
 # --- the book applies it to mark-to-market ---------------------------------
 def _one_bar_panel(eurusd, audusd, date="2025-01-02"):
     idx = pd.to_datetime([date])
-    mk = lambda v: pd.DataFrame({"open": [v], "high": [v], "low": [v], "close": [v]}, index=idx)
+    # A real bar has an intrabar range, and `bar_quality` refuses range-less
+    # (close-only) bars before the weight function — so a fixture standing in for
+    # market data needs one. The book marks off CLOSES, so the band is inert for
+    # every assertion below.
+    mk = lambda v: pd.DataFrame({"open": [v], "high": [v * 1.001],
+                                 "low": [v * 0.999], "close": [v]}, index=idx)
     return {"EURUSD": mk(eurusd), "AUDUSD": mk(audusd)}
 
 

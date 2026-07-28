@@ -20,6 +20,7 @@ from ..config import (
     RiskParams,
     lookup_registry,
 )
+from . import bar_quality
 
 # Daily FX bars: ~252 trading days a year (matches the equity metrics module).
 ANNUALIZATION = 252
@@ -72,6 +73,17 @@ class FXParams(RiskParams):
     include_carry: bool = True         # apply overnight swap/financing
     bar: str = "1d"                    # informational: intended data bar interval
 
+    # --- Data capability: what to do with CLOSE-ONLY bars ------------------
+    # Some real sources publish one price per bar and no range at all (the ECB
+    # daily fixing behind `frankfurter_data`), and ADX/ATR/Donchian silently
+    # compute a different statistic on such data — see `bar_quality.py` for the
+    # measurements. So the choice is made once, per book, in the open:
+    # "refuse" (default) raises before trading, "exclude" freezes those
+    # instruments out of the candidate universe, "allow" proceeds on the degraded
+    # reading and records it. Validated in __post_init__ so a typo can never
+    # silently mean "refuse".
+    close_only_signals: str = "refuse"
+
     # --- Asset-class concentration caps --------------------------------------
     # Crypto legs are near-perfectly correlated with each other: several crypto
     # positions are effectively ONE bet. Cap total crypto gross (Σ|w|) at this
@@ -97,6 +109,11 @@ class FXParams(RiskParams):
     # existing callers (fx_book / fx_backtest) read it unchanged; the unit is
     # exposed explicitly via the `cooldown` property below (R2).
     drawdown_cooldown_days: int = 10
+
+    def __post_init__(self) -> None:
+        # Frozen dataclass: validate only, never assign. A bad policy name must
+        # fail at construction, not degrade to a default nobody chose.
+        bar_quality.check_policy(self.close_only_signals)
 
     @property
     def cooldown(self) -> Cooldown:
@@ -178,11 +195,21 @@ DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
 START = "2015-01-01"                 # default backtest start
 
 # Ready-to-run paper books, each an isolated state file with its own capital,
-# risk profile, universe and bar cadence. Add more here or via the CLI.
-#   matt / partner — the original daily FX+crypto books.
+# risk profile, universe, bar cadence and DATA SOURCE. Add more here or via the
+# CLI. `source` is the default a NEW book is opened with (init_defaults); an
+# existing book keeps the source persisted in its own state until a human
+# overrides it once with `--source` (which the book then remembers).
+#
+#   matt / partner — the original daily FX+crypto books, on `auto` (per-symbol
+#                    routing): crypto legs from a real exchange via ccxt (free,
+#                    keyless), FX legs from Yahoo bars. FX is deliberately NOT
+#                    routed to the ECB fixing — those bars have no intrabar range
+#                    (see feeds.ROUTES / bar_quality.py / docs/DATA_FEEDS.md).
 #   daytrader      — the DAY-TRADING book: $10k, intraday profile on 60m bars,
-#                    advanced hourly by the day-paper workflow. Honest note:
-#                    Yahoo intraday is ~15-min delayed — fine for paper cadence,
+#                    advanced hourly by the day-paper workflow. Stays on `yahoo`:
+#                    a routed intraday panel would splice ccxt bar edges onto
+#                    Yahoo's (unverified alignment). Honest note: Yahoo intraday
+#                    is ~15-min delayed — a real hourly-cadence paper exercise,
 #                    not a live-feed simulation.
 #   multiasset     — the full STOCK + BOND book: $10k, daily bars, US equities +
 #                    bond ETFs plus an AUDUSD overlay (which doubles as the AUD
@@ -190,11 +217,14 @@ START = "2015-01-01"                 # default backtest start
 from .pairs import MULTI_ASSET_UNIVERSE  # noqa: E402  (no circularity: pairs is leaf)
 
 ACCOUNTS: dict[str, dict] = {
-    "matt":       {"capital": DEFAULT_CAPITAL, "profile": "balanced"},
-    "partner":    {"capital": DEFAULT_CAPITAL, "profile": "conservative"},
-    "daytrader":  {"capital": 10_000.0, "profile": "intraday", "bar": "60m"},
+    "matt":       {"capital": DEFAULT_CAPITAL, "profile": "balanced",
+                   "source": "auto"},
+    "partner":    {"capital": DEFAULT_CAPITAL, "profile": "conservative",
+                   "source": "auto"},
+    "daytrader":  {"capital": 10_000.0, "profile": "intraday", "bar": "60m",
+                   "source": "yahoo"},
     # universe-locked => never receives the FX-trained neural agent
     # (see fx_book.run_once ML gate).
     "multiasset": {"capital": 10_000.0, "profile": "balanced",
-                   "symbols": MULTI_ASSET_UNIVERSE},
+                   "source": "yahoo", "symbols": MULTI_ASSET_UNIVERSE},
 }

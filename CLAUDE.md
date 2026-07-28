@@ -87,6 +87,8 @@ python -m trading_algo.verify --json --strict       # machine-readable; exit 1 o
 # --- FX subsystem (independent; see trading_algo/forex/README.md) ---
 python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
 python -m trading_algo.forex.paper --init               # open matt + partner books
+python -m trading_algo.forex.paper --account matt --source auto  # per-symbol routing: real crypto (ccxt) + FX bars
+python -m trading_algo.forex.paper --account matt --source frankfurter  # ECB daily fixings — CLOSE-ONLY, refused for signals by default
 python -m trading_algo.forex.engine --once              # one FX decision cycle (all accts)
 python -m trading_algo.forex.engine --once --ml         # ...including the deep-learning agent
 python -m trading_algo.forex.engine --benchmark         # live cycle latency
@@ -103,6 +105,15 @@ The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
 Sharpe-ratio loss, Hedge ensemble, meta-labeling, purged walk-forward,
 Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
 It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
+
+**Data sourcing is per SYMBOL, not per book** (`--source auto`): the FX books
+hold majors *and* crypto, which no single provider serves, so crypto legs route
+to a real exchange via `ccxt` (keyless) and FX legs to a bar source. The ECB's
+keyless daily fixings (`frankfurter`) are real but **close-only** (one price per
+working day), which silently changes ADX/ATR/Donchian — so `bar_quality.py` makes
+the range indicators refuse range-less bars and each book declares a policy
+(`FXParams.close_only_signals`: `refuse` default / `exclude` / `allow`). Measured
+cost and the per-book source table: `docs/DATA_FEEDS.md`.
 
 A **quant-research agent** (`research.py`) systematically searches candidate
 edges (OU mean-reversion, trend/breakout variants, cross-sectional momentum,

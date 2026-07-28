@@ -102,6 +102,11 @@ def _rows(state: dict, book: dict | None = None) -> list[dict]:
             "avg_entry": _f(mk.get("avg_entry"), None),
             "unrealized": round(_f(mk.get("unrealized")), 2) if mk else 0.0,
             "unrealized_pct": round(_f(mk.get("unrealized_pct")), 4) if mk else 0.0,
+            # fx_pnl only accumulates `unrl` when it HAS a price, so an
+            # unpriceable leg leaves 0.00 — indistinguishable from a genuinely
+            # flat position. The OPEN BOOK already reads this flag; the
+            # decision row and its popover show the same P&L and had none.
+            "priced": bool(mk.get("priced", True)) if mk else True,
             "realized": round(_f(mn.get("realized")), 2),
             "costs": round(_f(mn.get("costs")), 2),
             "total_pnl": round(_f(mn.get("total")), 2),
@@ -131,9 +136,16 @@ def _positions_money(book: dict, state: dict) -> list[dict]:
     positions = state.get("positions") or {}
     out = []
     for r in book.get("open_rows", []):
+        w = _f(positions.get(r["pair"], r["weight"]))
+        # The POSITION's move on the last bar, not the instrument's. fx_book
+        # stores `move` as "the pair's own move", so a SHORT on a pair that
+        # rose showed DAY green next to OPEN P&L red and OPEN % red in the same
+        # row — the identical defect already fixed for the equity books, and
+        # the column header says only "DAY", so nothing signalled the switch.
+        raw_move = moves.get(r["pair"])
         out.append({
             "pair": r["pair"], "quote": r["quote"],
-            "weight": round(_f(positions.get(r["pair"], r["weight"])), 5),
+            "weight": round(w, 5),
             "lot_weight": r["weight"],
             "avg_entry": _f(r.get("avg_entry"), None),
             "price": _f(r.get("price"), None),
@@ -141,8 +153,8 @@ def _positions_money(book: dict, state: dict) -> list[dict]:
             "entry_cost": round(_f(r.get("entry_cost")), 2),
             "unrealized": round(_f(r.get("unrealized")), 2),
             "unrealized_pct": round(_f(r.get("unrealized_pct")), 4),
-            "day_move": (round(moves[r["pair"]], 6)
-                         if r["pair"] in moves else None),
+            "day_move": (None if raw_move is None
+                         else round(-raw_move if w < 0 else raw_move, 6)),
             "held_since": r.get("entry_date") or "",
             "n_lots": r.get("n_lots", 0),
             "fx_known": bool(r.get("fx_known", True)),
@@ -293,7 +305,9 @@ def build_fx_snapshot(account: str) -> dict:
 
     equity = _f(state.get("equity"))
     initial = _f(state.get("initial_capital"))
-    peak = _f(state.get("peak_equity"), equity) or equity
+    # A running peak includes the current mark, so off_peak can never be
+    # positive — the same guard the equity snapshot carries.
+    peak = max(_f(state.get("peak_equity"), equity) or equity, equity)
     hist = state.get("equity_history") or []
     daily = state.get("daily") or {}
 

@@ -8,9 +8,11 @@
 const G = '#7ee787', R = '#ff7b72', DIM = '#61805f', AMB = '#e3b341';
 const PALE = '#eaffec', TXT = '#c9e8cc', FAINT = '#3d543f';
 const SYM = { AUD: 'A$', USD: '$', GBP: '£', EUR: '€', JPY: '¥' };
-const ALLOC_COLORS = { FULL: '#7ee787', SMALL: '#ff7b72', MATT: '#e3b341',
-                       PARTNER: '#b08a2e', DAY: '#4a9c55', MULTI: '#2a4a2c' };
-const ALLOC_FALLBACK = ['#7ee787', '#e3b341', '#4a9c55', '#b08a2e', '#ff7b72', '#2a4a2c'];
+/* Capital-share segments are a CATEGORICAL palette — they encode identity, not
+   outcome. They used to spend #7ee787 and #ff7b72, the two P&L colours on this
+   exact screen, so SMALL's sliver read as an alert and FULL's block as profit.
+   Nothing here is a direction claim, so nothing here uses a direction colour. */
+const ALLOC_RAMP = ['#9db5a0', '#4a9c55', '#c9e8cc', '#61805f', '#8a7433', '#2a4a2c'];
 const REGION_COUNTRY = { ASX: 'AUSTRALIA', US: 'UNITED STATES', FTSE: 'LONDON' };
 const REGION_SHORT = { FTSE: 'LSE' };   // status-bar / tape labels
 
@@ -44,12 +46,46 @@ const esc = s => String(s == null ? '' : s)
 const num = (v, dp = 2) => (+v).toLocaleString('en-US',
   { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
-/* signed with the design's true minus sign */
-const sgn = (v, body) => (v < 0 ? '−' : '+') + body;
+/* ===================== the one direction rule ===========================
+   A colour is a CLAIM: green says "this went up", red says "this went down".
+   Neither is true of a flat, empty, single-point or unmeasurable series, so
+   the neutral branch is EXPLICIT here — `v >= 0` silently painting a dead-flat
+   book green is the whole bug this exists to prevent.
+
+   EPS also closes the rounding trap in both directions: Python's round()
+   emits −0.0, which `v < 0` cannot see (so a losing row printed "+0.00%" in
+   GREEN), and a −4e-9 residual must not paint a cell red under a "0.00%"
+   label. Colour is always decided from the UNROUNDED value. */
+const EPS = 1e-9;
+const dirOf = v => (!Number.isFinite(+v) || Math.abs(+v) <= EPS) ? 0 : (+v > 0 ? 1 : -1);
+const dirColor = (d, flat = TXT) => (d > 0 ? G : d < 0 ? R : flat);
+/* a NUMBER claims its own sign */
+const cSign = v => dirColor(dirOf(v));
+/* a SERIES claims the direction it actually DRAWS, over the window it draws */
+const curveDir = vals => {
+  const f = (vals || []).filter(v => Number.isFinite(v));
+  if (f.length < 2 || !f[0]) return 0;      // one point is not a trend
+  return dirOf(f[f.length - 1] / f[0] - 1);
+};
+const areaFill = d => (d > 0 ? 'rgba(126,231,135,0.08)'
+  : d < 0 ? 'rgba(255,123,114,0.08)' : 'rgba(97,128,95,0.07)');
+/* LONG / SHORT / neither — a leg at exactly zero weight is not "▲ LONG" */
+const sideOf = w => (dirOf(w) > 0 ? { t: '▲ LONG', c: G }
+  : dirOf(w) < 0 ? { t: '▼ SHORT', c: R } : { t: '— FLAT', c: TXT });
+/* A COST is always a drag, never an outcome: one colour for fees, commission,
+   stamp duty and spread on every screen — they used to render red here, amber
+   there, white in a third tile and dim in a fourth, for the same quantity. */
+const COST = AMB;
+/* Off-peak deep enough to be worth flagging. One threshold, all books — the
+   same −1.5% must not be amber on the FX screen and neutral on the equity one. */
+const OFF_PEAK_WARN = -0.01;
+
+/* signed with the design's true minus sign; an exactly-zero quantity gets NO
+   sign, because "+0.00%" is a claim of gain that the number does not support */
+const sgn = (v, body) => (dirOf(v) === 0 ? '' : v < 0 ? '−' : '+') + body;
 const sgnPct = (v, dp = 1) => sgn(v, num(Math.abs(v) * 100, dp) + '%');
 const sgnNum = (v, dp = 0) => sgn(v, num(Math.abs(v), dp));
 const pct0 = v => num(v * 100, 0) + '%';
-const cSign = v => (v < 0 ? R : G);
 
 /* split 100510.34 -> ['100,510', '.34'] for the big KPI numerals */
 const moneySplit = v => {
@@ -71,9 +107,12 @@ const mmdd = iso => String(iso || '').slice(5, 10);
 const toPts = (vals, w, h, pad) => {
   if (!vals.length) return [];
   const min = Math.min(...vals), max = Math.max(...vals);
-  const n = Math.max(vals.length - 1, 1), rng = (max - min) || 1;
+  const n = Math.max(vals.length - 1, 1), rng = max - min;
+  /* A flat series has no range to fit. `rng || 1` pinned every point at
+     (v−min)/1 = 0 → the BOTTOM edge of the box: a shape claiming "at its low"
+     for a book that simply has not moved. Draw it down the middle instead. */
   return vals.map((v, i) => ((i / n) * w).toFixed(1) + ',' +
-    (pad + (1 - (v - min) / rng) * (h - 2 * pad)).toFixed(1));
+    (pad + (rng ? 1 - (v - min) / rng : 0.5) * (h - 2 * pad)).toFixed(1));
 };
 
 /* price formatting for the FX / multi-asset books */
@@ -218,8 +257,12 @@ function clockStr() { return new Date().toISOString().slice(11, 19); }
 function connLabel() {
   return S.isExport ? 'EXPORT' : (S.stale ? 'RECONNECTING' : 'LIVE');
 }
+/* The chip's green is the "connected to a live book" claim. A static export is
+   not connected to anything, so it wears the neutral chip — the word EXPORT in
+   the connected colour was the page asserting a feed it does not have. */
 function liveChipStyle() {
-  return S.stale && !S.isExport
+  if (S.isExport) return 'background:#101010;border:1px solid #262626;color:#61805f;padding:3px 10px;border-radius:2px';
+  return S.stale
     ? 'background:rgba(227,179,65,.08);border:1px solid #4a3a1a;color:#e3b341;padding:3px 10px;border-radius:2px'
     : 'background:#12200f;border:1px solid #2a4a2c;color:#7ee787;padding:3px 10px;border-radius:2px';
 }
@@ -324,7 +367,7 @@ function equityTapeHTML(page) {
     items.push(`<span style="color:#61805f">${esc(ix.symbol)} <span style="color:${ix.risk_on ? G : R}">${ix.risk_on ? 'ABOVE' : 'BELOW'} ${bookParams(page).index_trend_ma ?? 200}D</span></span>`);
   }
   items.push(`<span style="color:#2e2e2e">│</span>`);
-  items.push(`<span style="color:#61805f">PEAK <span style="color:#c9e8cc">A$${num(page.peak_equity, 2)}</span> · OFF-PEAK <span style="color:${page.off_peak < 0 ? AMB : TXT}">${sgnPct(page.off_peak, 2)}</span></span>`);
+  items.push(`<span style="color:#61805f">PEAK <span style="color:#c9e8cc">A$${num(page.peak_equity, 2)}</span> · OFF-PEAK <span style="color:${page.off_peak < OFF_PEAK_WARN ? AMB : TXT}">${sgnPct(page.off_peak, 2)}</span></span>`);
   /* breaker == null means this book has NO drawdown stop (the `ultra` profile
      sets max_drawdown_stop = None). Saying "ARMED @ −25%" there — the global —
      is a false statement about risk, so the disabled case gets its own loud
@@ -371,9 +414,16 @@ function statusBarHTML(page) {
   } else if (dq) {
     dqCell = `<span>DATA QUALITY CHECKED ${esc(dq.date)} · NONE EXCLUDED</span>`;
   }
+  /* The health pip is a claim that this book is running and reachable. It was
+     hardcoded green, so a reconnecting terminal or a liquidated book still
+     showed a healthy pip. Halted outranks stale: both are worth seeing. */
+  const halted = !!(page && page.risk_halted);
+  const pip = halted ? R : (S.stale && !S.isExport) ? AMB : G;
+  const engine = halted ? 'ENGINE HALTED — BREAKER TRIPPED'
+    : (S.stale && !S.isExport) ? 'ENGINE — RECONNECTING' : 'ENGINE IDLE';
   return `
   <div class="mq-tape" style="display:flex;align-items:center;gap:20px;padding:7px 18px;background:#0d0d0d;border-top:1px solid #262626;font-size:9px;color:#61805f;letter-spacing:.06em;flex:none">
-    <span><span style="color:#7ee787">●</span> ENGINE IDLE — ${esc(wake)}</span>
+    <span><span style="color:${pip}">●</span> ${engine} — ${esc(wake)}</span>
     ${mark ? `<span>LAST MARK ${esc(mark)}</span>` : ''}
     ${dqCell}
     ${tests ? `<span>${tests} TESTS</span>` : ''}
@@ -403,6 +453,12 @@ function haltBannerHTML(page) {
 }
 
 /* ========================= equity view-model =========================== */
+/* A held name with NO price on the latest bar — a halt, a delisting, a
+   universe edit — is UNPRICED, not worthless. api.py now holds it at cost and
+   flags it; an em-dash is the only honest cell, because a number here would be
+   invented and its colour would be a claim about a move nobody measured. */
+const dashCell = (p, inner) => (p.priced === false ? `<span style="color:${FAINT}">—</span>` : inner);
+
 function prepEquity(page) {
   const rows = [];
   for (const s of page.sleeves || []) {
@@ -514,7 +570,8 @@ function monthlyHeatmapHTML(curve, daily) {
     if (r == null) return `<span style="display:grid;place-items:center;padding:6px 0;color:${FAINT};font-size:9px">·</span>`;
     const t = Math.min(Math.abs(r) / mx, 1);
     const a = (0.07 + t * 0.40).toFixed(2);
-    return `<span style="display:grid;place-items:center;padding:6px 0;font-size:10px;background:${r >= 0 ? `rgba(126,231,135,${a})` : `rgba(255,123,114,${a})`};color:${t > 0.55 ? PALE : (r >= 0 ? '#9db5a0' : '#e0a3a0')}">${sgnPct(r, 1)}</span>`;
+    const d = dirOf(r);      // a session that closed exactly flat is not a gain
+    return `<span style="display:grid;place-items:center;padding:6px 0;font-size:10px;background:${d > 0 ? `rgba(126,231,135,${a})` : d < 0 ? `rgba(255,123,114,${a})` : 'transparent'};color:${d === 0 ? DIM : t > 0.55 ? PALE : (d > 0 ? '#9db5a0' : '#e0a3a0')}">${sgnPct(r, 1)}</span>`;
   };
   const rows = [...byYear.keys()].sort().map(y => {
     const arr = byYear.get(y);
@@ -617,16 +674,47 @@ function equityOverviewHTML(page) {
   const lo = Math.min(...vals, ...(hasBench ? bVals : []));
   const hi = Math.max(...vals, ...(hasBench ? bVals : []));
   const eqX = i => ((i / Math.max(vals.length - 1, 1)) * 600).toFixed(1);
-  const eqY = v => (10 + (1 - (v - lo) / ((hi - lo) || 1)) * 120).toFixed(1);
+  /* `(hi-lo) || 1` pinned a FLAT book's line to the BOTTOM edge — a shape
+     claiming "at its all-time low" for a book that has not moved, and the
+     opposite of what toPts (and so every FX curve) draws. Centre it. */
+  const eqY = v => (10 + (1 - (hi > lo ? (v - lo) / (hi - lo) : 0.5)) * 120).toFixed(1);
   const eqPts140 = vals.map((v, i) => eqX(i) + ',' + eqY(v)).join(' ');
   const benchPts = hasBench ? bVals.map((v, i) => eqX(i) + ',' + eqY(v)).join(' ') : '';
   const eqArea140 = vals.length ? '0,140 ' + eqPts140 + ' 600,140' : '';
   const eqLastY = vals.length ? eqY(vals[vals.length - 1]) : 70;
-  const eqSpark = toPts(vals, 120, 24, 2).join(' ');
-  const dd = ddSeries(vals);
+  /* The big curve claims the direction IT draws, over the window the 1M/3M/ALL
+     chips say it is drawing. */
+  const curveTone = curveDir(vals);
+  const curveColor = dirColor(curveTone, DIM);
+  /* The TOTAL EQUITY tile's sparkline sits directly under the equity figure
+     and beside TOTAL RETURN, which is measured since inception — so it draws
+     the FULL history and takes TOTAL RETURN's colour. Range-filtering it (and
+     hardcoding it green) is what put a rising green line under −59.32% red.
+     The drawn history alone was still not that number: it starts at the FIRST
+     MARK (already net of the opening rebalance) and ends at the last SCHEDULED
+     mark, while TOTAL RETURN runs initial capital → the live mark printed above.
+     FULL drew a falling green line under +92.03% on that gap, so the series is
+     anchored at both ends and the shape IS the number. */
+  const anchor = v => (Number.isFinite(v) ? [v] : []);
+  const allVals = M.curve.length
+    ? [...anchor(k.initial_capital), ...M.curve.map(p => p.v), ...anchor(k.total_equity)]
+    : [];
+  const eqSpark = toPts(allVals, 120, 24, 2).join(' ');
+  const eqSparkColor = dirColor(allVals.length > 1 ? dirOf(k.total_return) : 0, DIM);
+  /* Drawdown against the book's OWN high-water mark, then sliced to the window
+     on screen. ddSeries over the range-filtered curve made "PEAK" mean the
+     VISIBLE window's local high: a book 17.5% underwater printed "DRAWDOWN FROM
+     PEAK NOW −5.89% · WORST −5.89%" under a tape reading OFF-PEAK −17.50%, on
+     one screen. The FX twin already reads against the real high-water mark. */
+  const dd = ddSeries(M.curve.map(p => p.v)).slice(-Math.max(vals.length, 1));
   const ddMin = Math.min(...dd, -1e-9);
+  const ddNow = dd.length ? dd[dd.length - 1] : 0;
   const ddPts = dd.map((d, i) => ((i / Math.max(dd.length - 1, 1)) * 600).toFixed(1) + ',' + (2 + (d / ddMin) * 40).toFixed(1)).join(' ');
   const ddArea = dd.length ? '0,2 ' + ddPts + ' 600,2' : '';
+  /* Red is the loss colour: it must not claim "underwater" on a book that has
+     never traded below a prior peak — the panel prints WORST 0.00% and the
+     episodes table below it says NO DRAWDOWN YET on the very same screen. */
+  const ddDeep = ddMin < -EPS;
   const axis = axisDates(dates, 5);
 
   /* per-region position counts, in sleeve order */
@@ -641,9 +729,14 @@ function equityOverviewHTML(page) {
     const sym = SYM[s.currency] || s.currency;
     const nPos = (s.positions || []).length;
     const investedPct = 1 - s.cash_pct;
-    const sVals = sleeveCurves.map(r => r[s.key]).filter(v => v != null);
+    const sVals = sleeveCurves.map(r => r[s.key]).filter(v => Number.isFinite(v));
     const mret = s.month_return;
-    const stroke = nPos === 0 ? DIM : (mret != null && mret < 0 ? AMB : G);
+    /* Colour the line by the line: this polyline draws the sleeve's WHOLE
+       curve, so it took its colour from month_return — a one-month number
+       describing a different window, which drew a green line over a falling
+       shape whenever a sleeve bounced inside a long decline. A sleeve parked
+       in cash still gets the dashed neutral (nothing is being claimed). */
+    const stroke = nPos === 0 ? DIM : dirColor(curveDir(sVals), DIM);
     const dash = nPos === 0 ? ' stroke-dasharray="3 2"' : '';
     const spark = toPts(sVals, 120, 26, 3).join(' ');
     const eqTxt = s.currency === page.base_currency
@@ -655,7 +748,13 @@ function equityOverviewHTML(page) {
     const chip = s.regime === 'RISK_OFF'
       ? `<span style="font-size:9px;color:#ff7b72;border:1px solid #4a2a28;background:rgba(255,123,114,.06);padding:2px 7px">RISK_OFF → CASH</span>`
       : `<span style="font-size:9px;color:#7ee787;border:1px solid #2a4a2c;background:rgba(126,231,135,.06);padding:2px 7px">RISK_ON</span>`;
-    const barColor = nPos === 0 ? G : stroke;
+    /* Short sale proceeds sit in cash, so a long/short sleeve reports
+       cash_pct > 1 and investedPct goes NEGATIVE — `width:-19%` is invalid
+       CSS, the declaration is dropped and the bar fills its whole track. Same
+       maxed-out-bar failure already fixed once for position weights: length
+       is |exposure|, the sign only picks the colour. */
+    const barPct = Math.min(Math.abs(investedPct) * 100, 100).toFixed(0);
+    const barColor = nPos === 0 ? DIM : (investedPct < 0 ? R : G);
     /* crowding = momentum-crash early warning for this sleeve's candidate book
        (crowding.py). Each stat is independently nullable on a short history —
        show an em-dash, never a zero. `elevated` is the only badge worth having;
@@ -675,7 +774,7 @@ function equityOverviewHTML(page) {
       <div style="padding:12px 18px;${i < arr.length - 1 ? 'border-bottom:1px solid #262626' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#eaffec">${esc(s.key)} <span style="color:#61805f;font-size:10px">· ${esc(s.currency)} · ${num(s.weight * 100, 1)}%</span></span>${chip}</div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:8px"><div><div style="font-size:16px;color:#eaffec;font-weight:600">${eqTxt}</div><div style="font-size:9px;color:#61805f;margin-top:2px">${sub}</div></div><svg viewBox="0 0 120 26" preserveAspectRatio="none" style="width:110px;height:26px"><polyline points="${spark}" fill="none" stroke="${stroke}" stroke-width="1.2"${dash}></polyline></svg></div>
-        <div style="height:3px;background:#1a1a1a;margin-top:8px"><div style="height:3px;width:${(investedPct * 100).toFixed(0)}%;background:${barColor}"></div></div>
+        <div style="height:3px;background:#1a1a1a;margin-top:8px"><div style="height:3px;width:${barPct}%;background:${barColor}"></div></div>
         ${crowdLine}
       </div>`;
   }).join('');
@@ -683,9 +782,9 @@ function equityOverviewHTML(page) {
   /* open book rows */
   const bookRows = M.rows.map(p => `
     <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1.1fr .6fr .55fr .75fr .8fr 1fr .65fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
-      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#61805f">${esc(p.region)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span>
+      <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#61805f">${esc(p.region)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#9db5a0">${dashCell(p, px2(p.sym, p.price))}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span>
       <span style="display:flex;align-items:center;gap:7px"><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
-      <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>
+      ${dashCell(p, `<span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span>`)}${dashCell(p, `<span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>`)}
     </div>`).join('');
 
   /* trade feed */
@@ -697,7 +796,7 @@ function equityOverviewHTML(page) {
       <span style="width:32px;font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span>
       <span style="color:#eaffec;width:58px">${esc(t.ticker)}</span>
       <span style="color:#9db5a0">${t.shares} @ ${pxFill(sym, t.fill)}</span>
-      <span style="color:#61805f;margin-left:auto">${sym}${num((t.commission || 0) + (t.stamp_duty || 0), 2)}</span>
+      <span style="color:${COST};margin-left:auto">${sym}${num((t.commission || 0) + (t.stamp_duty || 0), 2)}</span>
     </div>`;
   }).join('');
 
@@ -708,21 +807,21 @@ function equityOverviewHTML(page) {
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d">
         <div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div>
         <div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div>
-        <svg viewBox="0 0 120 24" preserveAspectRatio="none" style="width:100%;height:24px;margin-top:4px;display:block"><polyline points="${eqSpark}" fill="none" stroke="#7ee787" stroke-width="1.2"></polyline></svg>
+        <svg viewBox="0 0 120 24" preserveAspectRatio="none" style="width:100%;height:24px;margin-top:4px;display:block"><polyline points="${eqSpark}" fill="none" stroke="${eqSparkColor}" stroke-width="1.2"></polyline></svg>
       </div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sinceDate ? 'SINCE ' + esc(sinceDate) : 'NO MARKS YET'}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgn(k.day_change_base, 'A$' + num(Math.abs(k.day_change_base), 2))}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(k.net_pnl_base)};margin-top:8px">${sgnNum(k.net_pnl_base, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">REAL ${sgnNum(k.realized_base, 0)} · OPEN ${sgnNum(k.unrealized_base, 0)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">GROSS EXPOSURE</div><div style="font-size:20px;font-weight:600;color:${k.gross_exposure > 1.001 ? R : '#e3b341'};margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${k.net_exposure != null ? 'NET ' + sgnPct(k.net_exposure, 0) + ' · ' : ''}VOL-TGT ${pct0(k.target_vol)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">GROSS EXPOSURE</div><div style="font-size:20px;font-weight:600;color:${k.gross_exposure > 1.001 ? AMB : PALE};margin-top:8px">${pct0(k.gross_exposure)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${k.net_exposure != null ? 'NET ' + sgnPct(k.net_exposure, 0) + ' · ' : ''}VOL-TGT ${pct0(k.target_vol)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${esc(posCounts)}</div></div>
-      <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">A$${num(k.fees_base, 0)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feesSub}</div></div>
+      <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:${k.fees_base ? COST : DIM};margin-top:8px">A$${num(k.fees_base, 0)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feesSub}</div></div>
     </div>
 
     <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
       <div style="border-right:1px solid #262626">
         <div style="padding:12px 18px 0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:#7ee787">— THIS BOOK</span>${hasBench ? '<span style="color:#61805f">— EQUAL-WEIGHT INDEX BUY &amp; HOLD</span>' : ''}${vals.length ? `<span style="color:#61805f">MIN ${num(Math.min(...vals), 2)}</span><span style="color:#61805f">MAX ${num(Math.max(...vals), 2)}</span>` : ''}</div>
+            <div style="display:flex;gap:14px;font-size:9px;letter-spacing:.12em"><span style="color:#eaffec">■ EQUITY CURVE · ${esc(page.base_currency)}</span><span style="color:${curveColor}">— THIS BOOK</span>${hasBench ? '<span style="color:#61805f">— EQUAL-WEIGHT INDEX BUY &amp; HOLD</span>' : ''}${vals.length ? `<span style="color:#61805f">MIN ${num(Math.min(...vals), 2)}</span><span style="color:#61805f">MAX ${num(Math.max(...vals), 2)}</span>` : ''}</div>
             <div style="display:flex;gap:2px;font-size:9px">${vals.length ? rangeChips() : ''}</div>
           </div>
           ${!vals.length ? `<div style="padding:26px 0 30px;font-size:10.5px;color:#61805f;line-height:1.8">— NO EQUITY HISTORY YET. THIS BOOK IS FUNDED BUT HAS NOT BEEN MARKED: THE CURVE AND THE DRAWDOWN TRACK BELOW DRAW THEMSELVES FROM THE FIRST RUN ONWARDS.<br><span style="color:#3d543f">AN EMPTY CHART IS NOT A FLAT ONE — NOTHING HAS BEEN MEASURED, SO NOTHING IS PLOTTED.</span></div>` : `
@@ -730,19 +829,23 @@ function equityOverviewHTML(page) {
             <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
             <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
             <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
-            <polygon points="${eqArea140}" fill="rgba(126,231,135,0.08)"></polygon>
+            <polygon points="${eqArea140}" fill="${areaFill(curveTone)}"></polygon>
             ${hasBench ? `<polyline points="${benchPts}" fill="none" stroke="#61805f" stroke-width="1.2"></polyline>` : ''}
-            <polyline points="${eqPts140}" fill="none" stroke="#7ee787" stroke-width="1.6" stroke-linejoin="round"></polyline>
-            <circle cx="600" cy="${eqLastY}" r="3" fill="#7ee787"></circle>
+            <polyline points="${eqPts140}" fill="none" stroke="${curveColor}" stroke-width="1.6" stroke-linejoin="round"></polyline>
+            <circle cx="600" cy="${eqLastY}" r="3" fill="${curveColor}"></circle>
           </svg>`}
         </div>
         ${!vals.length ? '' : `
         <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
-          <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:6px 0">DRAWDOWN FROM PEAK</div>
+          <!-- The band is normalised to this book's OWN worst, so a −0.1% max
+               drawdown paints exactly the same full-height mountain as a −40%
+               one. The FX twin prints the magnitudes beside it; without them
+               the shape is the only claim, and the shape cannot be read. -->
+          <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:.12em;margin:6px 0"><span style="color:#61805f">DRAWDOWN FROM PEAK</span><span style="color:${ddNow < OFF_PEAK_WARN ? AMB : DIM}">NOW ${sgnPct(ddNow, 2)} · WORST ${sgnPct(ddMin, 2)}</span></div>
           <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
             <line x1="0" y1="1" x2="600" y2="1" stroke="#262626" stroke-width="1"></line>
-            <polygon points="${ddArea}" fill="rgba(255,123,114,0.18)"></polygon>
-            <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
+            <polygon points="${ddArea}" fill="${ddDeep ? 'rgba(255,123,114,0.18)' : 'rgba(97,128,95,0.07)'}"></polygon>
+            <polyline points="${ddPts}" fill="none" stroke="${ddDeep ? R : DIM}" stroke-width="1.2"></polyline>
           </svg>
           <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
         </div>`}
@@ -764,7 +867,7 @@ function equityOverviewHTML(page) {
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">INVESTED</span><span style="color:#c9e8cc">${num(k.invested_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">CASH</span><span style="color:#c9e8cc">${num(k.cash_base, 0)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">OPEN P&amp;L</span><span style="color:${cSign(k.unrealized_base)}">${sgnNum(k.unrealized_base, 0)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:${k.fees_base ? R : DIM}">${k.fees_base ? '−' + num(k.fees_base, 0) : '0'}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span style="color:#61805f">FEES TO DATE</span><span style="color:${k.fees_base ? COST : DIM}">${k.fees_base ? '−' + num(k.fees_base, 0) : '0'}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0;border-top:1px solid #262626;margin-top:5px"><span style="color:#eaffec">EQUITY</span><span style="color:#eaffec;font-weight:600">${num(k.total_equity, 2)}</span></div>
         </div>
       </div>
@@ -797,7 +900,7 @@ function equityPopHTML(page, region, ticker, rect) {
   const X = i => (i / (s.length - 1)) * 360;
   const Y = v => 8 + (1 - (v - lo) / (hi - lo || 1)) * 88;
   const pts = s.map((v, i) => X(i).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
-  const up = s[s.length - 1] >= s[0];
+  const tone = curveDir(s);          // a flat 90 days is neither up nor down
   const dp = p.price < 3 ? 4 : 2;
   const fmt = v => p.sym + num(v, dp);
   const chgPct = (s[s.length - 1] / s[0] - 1) * 100;
@@ -820,14 +923,14 @@ function equityPopHTML(page, region, ticker, rect) {
       <span style="font-size:9px;color:#61805f;letter-spacing:.1em">${esc(region)} · 90-DAY PRICE</span>
       <span style="font-size:8px;letter-spacing:.12em;border:1px solid #262626;padding:1px 6px;color:${real ? G : AMB}">${real ? 'LIVE DATA' : 'SYNTHETIC'}</span>
       <span style="margin-left:auto;font-size:13px;font-weight:600;color:#eaffec">${px2(p.sym, p.price)}</span>
-      <span style="font-size:11px;color:${chgPct >= 0 ? G : R}">${sgn(chgPct, num(Math.abs(chgPct), 1))}% 90D</span>
+      <span style="font-size:11px;color:${dirColor(tone)}">${sgn(chgPct, num(Math.abs(chgPct), 1))}% 90D</span>
     </div>
     <svg viewBox="0 0 360 104" style="width:100%;height:104px;display:block">
       <line x1="0" y1="26" x2="360" y2="26" stroke="#1a1a1a" stroke-width="1"></line>
       <line x1="0" y1="52" x2="360" y2="52" stroke="#1a1a1a" stroke-width="1"></line>
       <line x1="0" y1="78" x2="360" y2="78" stroke="#1a1a1a" stroke-width="1"></line>
-      <polygon points="0,104 ${pts} 360,104" fill="${up ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
-      <polyline points="${pts}" fill="none" stroke="${up ? G : R}" stroke-width="1.4" stroke-linejoin="round"></polyline>
+      <polygon points="0,104 ${pts} 360,104" fill="${areaFill(tone)}"></polygon>
+      <polyline points="${pts}" fill="none" stroke="${dirColor(tone, DIM)}" stroke-width="1.4" stroke-linejoin="round"></polyline>
       <line x1="0" y1="${Y(entry).toFixed(1)}" x2="360" y2="${Y(entry).toFixed(1)}" stroke="#e3b341" stroke-width="1" stroke-dasharray="4 3" opacity="0.75"></line>
       <circle cx="${X(buyIdx).toFixed(1)}" cy="${Y(entry).toFixed(1)}" r="3.2" fill="#e3b341" stroke="#060606" stroke-width="1.2"></circle>
     </svg>
@@ -841,26 +944,33 @@ function equityPopHTML(page, region, ticker, rect) {
 }
 
 /* closed-trades rows shared by the FULL and SMALL position screens; each
-   row formats in its own currency (books can mix regions). */
+   row formats in its own currency (books can mix regions).
+   SIDE is load-bearing, not decoration: on a short cover the price FALLS and
+   the round-trip GAINS, so "120.00 → 100.00 · +$198 · +16.5%" in green read as
+   a data error until the row said SHORT. The FX ledger has carried this column
+   all along; the equity ledger dropped `lot_dir` on the floor. */
+const CLOSED_COLS = '.65fr .55fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr';
 function closedRowsHTML(closed, opts = {}) {
   const rows = (closed && closed.rows) || [];
   const maxRet = rows.length ? Math.max(...rows.map(r => Math.abs(r.return_pct)), 1e-9) : 1;
   return rows.map(c => {
     const sym = SYM[c.currency] || c.currency;
     const nc = cSign(c.net);
+    const sd = c.side ? sideOf(c.side === 'SHORT' ? -1 : 1) : null;
     const retCell = opts.bar === false
       ? `<span style="color:${nc}">${sgnPct(c.return_pct, 1)}</span>`
       : `<span style="display:flex;align-items:center;gap:6px"><span style="color:${nc}">${sgnPct(c.return_pct, 1)}</span><span style="width:34px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${nc};width:${Math.min(Math.abs(c.return_pct) / maxRet * 100, 100).toFixed(0)}%"></span></span></span>`;
     return `
-    <div class="hv-row" style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
+    <div class="hv-row" style="display:grid;grid-template-columns:${CLOSED_COLS};padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212;align-items:center">
       <span style="color:#3d543f">${esc(c.date)}</span>
+      <span style="font-size:9px;font-weight:600;color:${sd ? sd.c : FAINT}">${sd ? sd.t : '—'}</span>
       <span style="color:#eaffec;font-weight:600">${esc(c.ticker)} <span style="font-weight:400;color:#3d543f;font-size:9px">${esc(c.note)}</span></span>
       <span style="color:#61805f">${esc(c.region)}</span>
       <span style="color:#9db5a0">${c.qty}</span>
       <span style="color:#9db5a0">${pxFill(sym, c.entry)} <span style="color:#3d543f">→</span> ${pxFill(sym, c.exit)}</span>
       <span style="color:#61805f">${c.held_days}D</span>
       <span style="color:${cSign(c.gross)}">${sgn(c.gross, sym + num(Math.abs(c.gross), 2))}</span>
-      <span style="color:#e3b341">${sym}${num(c.costs, 2)}</span>
+      <span style="color:${COST}">${sym}${num(c.costs, 2)}</span>
       <span style="color:${nc};font-weight:600">${sgn(c.net, sym + num(Math.abs(c.net), 2))}</span>
       <span style="color:${nc}">${sgn(c.net_base, 'A$' + num(Math.abs(c.net_base), 2))}</span>
       ${retCell}
@@ -912,7 +1022,11 @@ function analyticsRowHTML(page) {
     const drag = Object.entries(a.cost_drag_by_region || {});
     attrBody = `
       <div style="display:flex;gap:18px;padding:10px 18px;border-bottom:1px solid #121212;font-size:10.5px">
-        <span style="color:#61805f">REALIZED RETURN <span style="color:${cSign(a.realized_total_return)}">${sgnPct(a.realized_total_return, 2)}</span></span>
+        <!-- Named for its basis: this is measured from the FIRST PERSISTED
+             MARK, while the TOTAL RETURN tile is measured from initial
+             capital. They differ by the opening rebalance's costs, so an
+             unlabelled pair could print red beside green on one screen. -->
+        <span style="color:#61805f">RETURN SINCE FIRST MARK <span style="color:${cSign(a.realized_total_return)}">${sgnPct(a.realized_total_return, 2)}</span></span>
         <span style="color:#61805f">MARKS <span style="color:#c9e8cc">${a.n_equity_points}</span></span>
       </div>
       <div style="padding:8px 18px;border-bottom:1px solid #121212;font-size:9px;color:#3d543f;line-height:1.7">DIVERGENCE VS BACKTEST · TRACKING ERROR — <span style="color:#61805f">NO BACKTEST CURVE SUPPLIED TO THIS ENDPOINT</span> (REFETCHING ONE HERE WOULD RISK LOOKAHEAD). RUN ATTRIBUTION.PY WITH A CACHED CURVE FOR THOSE TWO.</div>`
@@ -920,7 +1034,7 @@ function analyticsRowHTML(page) {
         ? `<div style="display:grid;grid-template-columns:.7fr .9fr 1fr .7fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.1em;border-bottom:1px solid #1a1a1a"><span>REGION</span><span>COSTS PAID</span><span>NOTIONAL TRADED</span><span>DRAG</span></div>`
           + drag.map(([rk, d]) => {
             const sym = SYM[d.currency] || d.currency || '';
-            return `<div style="display:grid;grid-template-columns:.7fr .9fr 1fr .7fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(rk)}</span><span style="color:#ff7b72">${sym}${num(d.cost, 2)}</span><span style="color:#9db5a0">${money0(sym, d.notional)}</span><span style="color:#e3b341">${num(d.cost_drag_bps, 1)} BPS</span></div>`;
+            return `<div style="display:grid;grid-template-columns:.7fr .9fr 1fr .7fr;padding:6px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(rk)}</span><span style="color:${COST}">${sym}${num(d.cost, 2)}</span><span style="color:#9db5a0">${money0(sym, d.notional)}</span><span style="color:#e3b341">${num(d.cost_drag_bps, 1)} BPS</span></div>`;
           }).join('')
           + note('EACH REGION IN ITS OWN LOCAL CURRENCY — THESE DO NOT SUM.')
         : note('— NO TRADES YET, SO NO COST DRAG TO ATTRIBUTE.'));
@@ -979,9 +1093,9 @@ function equityPositionsHTML(page) {
       : `<div class="mq-x"><div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
         rows.map(p => `
         <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
-          <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
+          <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${dashCell(p, px2(p.sym, p.price))}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
           <span style="display:flex;align-items:center;gap:7px"><span style="width:48px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${p.weight < 0 ? R : G};width:${(Math.abs(p.weight) / M.maxW * 100).toFixed(0)}%"></span></span><span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span></span>
-          <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
+          ${dashCell(p, `<span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span>`)}${dashCell(p, `<span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>`)}${dashCell(p, `<span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>`)}
         </div>`).join('') + '</div>';
     return `
     <div style="border-bottom:1px solid #262626">
@@ -1001,7 +1115,7 @@ function equityPositionsHTML(page) {
     const sym = SYM[t.currency] || t.currency;
     return `
     <div class="hv-row" style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr .7fr;padding:4px 18px;font-size:10.5px;border-bottom:1px solid #121212">
-      <span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${pxFill(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:#61805f">${sym}${num(t.commission || 0, 2)}</span><span style="color:${t.stamp_duty ? AMB : FAINT}">${t.stamp_duty ? sym + num(t.stamp_duty, 2) : '—'}</span>
+      <span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${pxFill(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:${t.commission ? COST : FAINT}">${sym}${num(t.commission || 0, 2)}</span><span style="color:${t.stamp_duty ? COST : FAINT}">${t.stamp_duty ? sym + num(t.stamp_duty, 2) : '—'}</span>
     </div>`;
   }).join('');
 
@@ -1034,7 +1148,7 @@ function equityPositionsHTML(page) {
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">INCLUDES COMMISSIONS + UK STAMP DUTY · FILLS ALREADY CARRY MODELLED SPREAD/SLIPPAGE</span>
     </div>
-    <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:${CLOSED_COLS};padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>SIDE</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
     ${analyticsRowHTML(page)}
   </div>`;
@@ -1067,6 +1181,7 @@ function _btCurvesHTML(stratCurve, benchCurve) {
   const btBench = bv.map((v, i) => ((i / nb) * 1200).toFixed(1) + ',' + logY(v).toFixed(1)).join(' ');
   const dd = ddSeries(sv);
   const ddMin = Math.min(...dd, -1e-9);
+  const dir = curveDir(sv);           // the growth line claims its own direction
   const btDd = dd.map((d, i) => ((i / n) * 1200).toFixed(1) + ',' + (2 + (d / ddMin) * 56).toFixed(1)).join(' ');
   const years = [];
   const seen = new Set();
@@ -1074,7 +1189,7 @@ function _btCurvesHTML(stratCurve, benchCurve) {
     const y = d.slice(0, 4);
     if (!seen.has(y) && +y % 2 === 0) { seen.add(y); years.push(y); }
   }
-  return { btPts, btBench, btArea: '0,240 ' + btPts + ' 1200,240', btDd, btDdArea: '0,2 ' + btDd + ' 1200,2', years };
+  return { btPts, btBench, btArea: '0,240 ' + btPts + ' 1200,240', btDd, btDdArea: '0,2 ' + btDd + ' 1200,2', years, dir };
 }
 
 function costFootnote() {
@@ -1121,13 +1236,18 @@ function backtestHTML(page) {
 
   const fp = (v, dp = 1) => v == null ? '—' : num(v * 100, dp) + '%';
   const fn = (v, dp = 2) => v == null ? '—' : num(v, dp);
+  /* CAGR was hardcoded green, so a losing backtest printed its NEGATIVE
+     compound rate in the colour of a gain — and a --synthetic run (invariant
+     #5: plumbing, never performance) wore the same green as a measured one.
+     The FX tab already ambers the invented case; this is the same rule. */
+  const cagrTone = m == null || m.cagr == null ? DIM : bt.synthetic ? AMB : cSign(m.cagr);
   const kpis = real ? [
-    kpiCell('CAGR', fp(m.cagr), G, bm ? `BENCH ${fp(bm.cagr)}` : ''),
-    kpiCell('SHARPE', fn(m.sharpe), PALE, bm ? `BENCH ${fn(bm.sharpe)}` : ''),
-    kpiCell('SORTINO', fn(m.sortino), PALE, 'DOWNSIDE-ONLY VOL'),
-    kpiCell('MAX DRAWDOWN', m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1), R, bm ? `BENCH ${bm.max_drawdown == null ? '—' : sgnPct(bm.max_drawdown, 1)}` : ''),
-    kpiCell('CALMAR', fn(m.calmar), PALE, 'CAGR / MAXDD'),
-    kpiCell('REALISED VOL', fp(m.ann_vol), PALE, `TARGET ${pct0(S.meta ? S.meta.params.target_vol : 0.12)}`, true),
+    kpiCell('CAGR', fp(m.cagr), cagrTone, bm ? `BENCH ${fp(bm.cagr)}` : ''),
+    kpiCell('SHARPE', fn(m.sharpe), m.sharpe == null ? DIM : PALE, bm ? `BENCH ${fn(bm.sharpe)}` : ''),
+    kpiCell('SORTINO', fn(m.sortino), m.sortino == null ? DIM : PALE, 'DOWNSIDE-ONLY VOL'),
+    kpiCell('MAX DRAWDOWN', m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1), m.max_drawdown == null ? DIM : R, bm ? `BENCH ${bm.max_drawdown == null ? '—' : sgnPct(bm.max_drawdown, 1)}` : ''),
+    kpiCell('CALMAR', fn(m.calmar), m.calmar == null ? DIM : PALE, 'CAGR / MAXDD'),
+    kpiCell('REALISED VOL', fp(m.ann_vol), m.ann_vol == null ? DIM : PALE, `TARGET ${pct0(S.meta ? S.meta.params.target_vol : 0.12)}`, true),
   ].join('') : [
     kpiCell('CAGR', '—', DIM, 'NO CACHE'),
     kpiCell('SHARPE', '—', DIM, 'NO CACHE'),
@@ -1152,10 +1272,13 @@ function backtestHTML(page) {
   let sleeveRows = '';
   const SLEEVE_COLS = '1fr .7fr .7fr .7fr .85fr .7fr .75fr .8fr .75fr .6fr';
   if (sleeves && sleeves.length) {
+    /* The CAGR cell is the only one in this table that asserts anything, and it
+       always asserted "up": a sleeve compounding at −4% printed green beside a
+       neutral Sharpe of −0.19. */
     sleeveRows = sleeves.map(s => `
-      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:#7ee787">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:#ff7b72">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span><span style="color:#9db5a0">${fp(s.win_rate, 0)}</span><span style="color:#9db5a0">${fp(s.avg_turnover, 1)}</span><span style="color:${s.total_cost_fraction == null ? FAINT : AMB}">${fp(s.total_cost_fraction, 2)}</span><span style="color:${s.drawdown_halts ? R : FAINT}">${s.drawdown_halts == null ? '—' : (s.drawdown_halts ? `${s.drawdown_halts} · ${s.drawdown_halt_days}D` : '0')}</span></div>`).join('');
+      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(s.key)}</span><span style="color:${s.cagr == null ? DIM : bt.synthetic ? AMB : cSign(s.cagr)}">${fp(s.cagr)}</span><span style="color:#c9e8cc">${fn(s.sharpe)}</span><span style="color:#c9e8cc">${fn(s.sortino)}</span><span style="color:${s.max_drawdown == null ? DIM : R}">${s.max_drawdown == null ? '—' : sgnPct(s.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(s.calmar)}</span><span style="color:#9db5a0">${fp(s.win_rate, 0)}</span><span style="color:#9db5a0">${fp(s.avg_turnover, 1)}</span><span style="color:${s.total_cost_fraction == null ? FAINT : AMB}">${fp(s.total_cost_fraction, 2)}</span><span style="color:${s.drawdown_halts ? R : FAINT}">${s.drawdown_halts == null ? '—' : (s.drawdown_halts ? `${s.drawdown_halts} · ${s.drawdown_halt_days}D` : '0')}</span></div>`).join('');
     sleeveRows += `
-      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212;background:#0d0d0d"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:#7ee787">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:#ff7b72">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span><span style="color:#9db5a0">${fp(m.win_rate, 0)}</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span></div>`;
+      <div style="display:grid;grid-template-columns:${SLEEVE_COLS};padding:8px 18px;font-size:11px;border-bottom:1px solid #121212;background:#0d0d0d"><span style="color:#eaffec;font-weight:600">COMBINED · AUD</span><span style="color:${cagrTone}">${fp(m.cagr)}</span><span style="color:#c9e8cc">${fn(m.sharpe)}</span><span style="color:#c9e8cc">${fn(m.sortino)}</span><span style="color:${m.max_drawdown == null ? DIM : R}">${m.max_drawdown == null ? '—' : sgnPct(m.max_drawdown, 1)}</span><span style="color:#c9e8cc">${fn(m.calmar)}</span><span style="color:#9db5a0">${fp(m.win_rate, 0)}</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span><span style="color:${FAINT}">—</span></div>`;
     /* a backtest that halted on the breaker, or quietly dropped a ticker, is a
        materially different result — neither may stay invisible */
     const halted = sleeves.filter(s => s.drawdown_halts);
@@ -1189,23 +1312,33 @@ function backtestHTML(page) {
 
   let sweepHtml;
   if (sweep && sweep.values) {
+    /* Tint by the SIGN of each Sharpe and the magnitude around zero — exactly
+       what monthlyHeatmapHTML already does. Min-max normalising into a single
+       green ramp meant a grid where every configuration LOSES money rendered
+       as a solid green plateau with the worst cell merely paler, and a
+       0.10–0.15 grid looked as hot as a 0.5–2.0 one. */
     const flat = sweep.values.flat();
-    const lo = Math.min(...flat), hi = Math.max(...flat);
+    const mag = Math.max(...flat.map(Math.abs), 1e-9);
     const cells = [];
     sweep.top_ns.forEach((tn, i) => {
       cells.push(`<span style="display:grid;place-items:center;padding:12px 4px;color:${DIM};font-size:9px;letter-spacing:.06em">TOP_N ${tn}</span>`);
       sweep.values[i].forEach(v => {
-        const t = (v - lo) / ((hi - lo) || 1);
-        cells.push(`<span style="display:grid;place-items:center;padding:12px 4px;background:rgba(126,231,135,${(0.05 + t * 0.28).toFixed(2)});color:${t > 0.8 ? PALE : '#9db5a0'};font-size:11px;letter-spacing:.06em">${num(v, 2)}</span>`);
+        const t = Math.min(Math.abs(v) / mag, 1);
+        const a = (0.05 + t * 0.30).toFixed(2);
+        const d = dirOf(v);      // a configuration that earned exactly nothing is not a good one
+        cells.push(`<span style="display:grid;place-items:center;padding:12px 4px;background:${d > 0 ? `rgba(126,231,135,${a})` : d < 0 ? `rgba(255,123,114,${a})` : 'transparent'};color:${d === 0 ? DIM : t > 0.7 ? PALE : (d > 0 ? '#9db5a0' : '#e0a3a0')};font-size:11px;letter-spacing:.06em">${num(v, 2)}</span>`);
       });
     });
     /* tone follows sweep.py's three verdicts: ROBUST / MODERATE / PEAKY */
     const v = sweep.verdict || '';
     const vTone = /ROBUST/.test(v) ? G : /PEAKY/.test(v) ? R : AMB;
     const vBorder = /ROBUST/.test(v) ? '#2a4a2c' : /PEAKY/.test(v) ? '#4a2a28' : '#4a3a1a';
+    /* the wash used to stay green whatever the verdict, so a curve-fit warning
+       sat on the background colour of a pass */
+    const vWash = /ROBUST/.test(v) ? 'rgba(126,231,135,.04)' : /PEAKY/.test(v) ? 'rgba(255,123,114,.05)' : 'rgba(227,179,65,.05)';
     const vShort = v.split(' — ')[0] || '—';
     sweepHtml = `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span title="${esc(v)}" style="font-size:9px;color:${vTone};border:1px solid ${vBorder};background:rgba(126,231,135,.04);padding:2px 8px">VERDICT: ${esc(vShort)}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid #1a1a1a"><span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ ROBUSTNESS SWEEP · SHARPE</span><span title="${esc(v)}" style="font-size:9px;color:${vTone};border:1px solid ${vBorder};background:${vWash};padding:2px 8px">VERDICT: ${esc(vShort)}</span></div>
       <div style="padding:14px 18px">
         <div style="display:grid;grid-template-columns:70px repeat(${sweep.lookbacks.length},1fr);gap:3px;font-size:10px">
           <span></span>${sweep.lookbacks.map(l => `<span style="color:#61805f;text-align:center;font-size:9px;letter-spacing:.1em">LOOKBACK ${esc(String(l).toUpperCase())}</span>`).join('')}
@@ -1230,16 +1363,16 @@ function backtestHTML(page) {
     <div style="padding:14px 18px;border-bottom:1px solid #262626">
       <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px">
         <span style="color:#eaffec">■ GROWTH OF A$${num((real && bt.initial_capital) || 100000, 0)} · AUD, NET OF COSTS${real ? '' : ' · ILLUSTRATIVE'}</span>
-        <span style="color:#7ee787">— MOMENTUM/3R</span>
+        <span style="color:${dirColor(curves.dir, DIM)}">— MOMENTUM/3R</span>
         <span style="color:#61805f">— EQUAL-WEIGHT INDEX BENCHMARK</span>
       </div>
       <svg viewBox="0 0 1200 240" preserveAspectRatio="none" style="width:100%;height:250px;display:block">
         <line x1="0" y1="60" x2="1200" y2="60" stroke="#1a1a1a" stroke-width="1"></line>
         <line x1="0" y1="120" x2="1200" y2="120" stroke="#1a1a1a" stroke-width="1"></line>
         <line x1="0" y1="180" x2="1200" y2="180" stroke="#1a1a1a" stroke-width="1"></line>
-        <polygon points="${curves.btArea}" fill="rgba(126,231,135,0.06)"></polygon>
+        <polygon points="${curves.btArea}" fill="${areaFill(curves.dir)}"></polygon>
         <polyline points="${curves.btBench}" fill="none" stroke="#61805f" stroke-width="1.3"></polyline>
-        <polyline points="${curves.btPts}" fill="none" stroke="#7ee787" stroke-width="1.7" stroke-linejoin="round"></polyline>
+        <polyline points="${curves.btPts}" fill="none" stroke="${dirColor(curves.dir, DIM)}" stroke-width="1.7" stroke-linejoin="round"></polyline>
       </svg>
       <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${curves.years.map(y => `<span>${y}</span>`).join('')}</div>
       <div style="font-size:9px;color:#61805f;letter-spacing:.12em;margin:12px 0 6px">DRAWDOWN</div>
@@ -1306,7 +1439,7 @@ function methodHTML(page) {
     /* the crash-protection claim must follow the book's own flag, not the house
        default — a book with regime_filter OFF has no such protection */
     p.regime_filter === false
-      ? { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', formula: 'DISABLED — NO REGIME GATE', desc: 'THIS BOOK STAYS INVESTED WITH THE INDEX BELOW ITS MA. NO CRASH PROTECTION FROM THIS STEP.' }
+      ? { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', off: true, formula: '⚠ DISABLED — NO REGIME GATE', desc: 'THIS BOOK STAYS INVESTED WITH THE INDEX BELOW ITS MA. NO CRASH PROTECTION FROM THIS STEP.' }
       : { n: '03', mod: 'SIGNALS.PY', title: 'REGIME FILTER', formula: `INDEX > ${p.index_trend_ma ?? 200}-DAY MA`, desc: 'INDEX BELOW ITS MA → SLEEVE GOES 100% CASH. THE CRASH PROTECTION.' },
     { n: '04', mod: 'SIGNALS.PY', title: p.long_short ? 'SELECT TOP / BOTTOM N' : 'SELECT TOP N', formula: `TOP ${p.top_n ?? 10} BY MOMENTUM${p.long_short ? ` · SHORT BOTTOM ${p.short_n ?? 0}` : ''}`, desc: `AMONG ELIGIBLE NAMES (MOMENTUM > ${num(p.abs_momentum_floor ?? 0, 2)}, TREND OK${p.regime_filter === false ? '' : ', REGIME RISK-ON'}).` },
     { n: '05', mod: 'STRATEGY.PY', title: 'INVERSE-VOL WEIGHTS', formula: `wᵢ ∝ 1/VOLᵢ · CAP ${pct0(p.max_weight ?? 0.15)}`, desc: 'CALM NAMES GET MORE CAPITAL; NO SINGLE NAME DOMINATES.' },
@@ -1315,7 +1448,12 @@ function methodHTML(page) {
     <div style="border:1px solid #262626;background:#0d0d0d;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:15px;color:#3d543f;font-weight:600">${st.n}</span><span style="font-size:8px;color:#61805f;letter-spacing:.1em">${st.mod}</span></div>
       <div style="font-size:11px;color:#eaffec;font-weight:600;letter-spacing:.04em">${st.title}</div>
-      <div style="font-size:10px;color:#7ee787;background:#121212;border:1px solid #1a1a1a;padding:6px 8px;line-height:1.5">${st.formula}</div>
+      <!-- The green formula box says "this is the live mechanism, in force".
+           Step 03 prints DISABLED — NO REGIME GATE in that same box, i.e. a
+           switched-off control wearing the colour of a working one, while the
+           RISK CONTROLS panel on this very screen ambers its disabled breaker
+           with a ⚠. Same fact, same treatment. -->
+      <div style="font-size:10px;color:${st.off ? AMB : G};background:${st.off ? 'rgba(227,179,65,.06)' : '#121212'};border:1px solid ${st.off ? '#4a3a1a' : '#1a1a1a'};padding:6px 8px;line-height:1.5">${st.formula}</div>
       <div style="font-size:9.5px;color:#61805f;line-height:1.6">${st.desc}</div>
     </div>`).join('');
 
@@ -1421,19 +1559,27 @@ function allAccountsHTML() {
     const rank = c => (c.kind === 'equity' && c.equity < 5000) ? 2 : (c.kind === 'fx' ? 1 : 0);
     return rank(a) - rank(b);
   });
-  const colorOf = (key, i) => ALLOC_COLORS[key] || ALLOC_FALLBACK[i % ALLOC_FALLBACK.length];
-  const toneColor = t => t === 'bad' ? R : t === 'warn' ? AMB : G;
+  const colorOf = (key, i) => ALLOC_RAMP[i % ALLOC_RAMP.length];
+  /* An unknown/absent tone must not assert health: green was the fallback for
+     "the API didn't say", so a missing status_tone read as CLEAR. */
+  const toneColor = t => t === 'bad' ? R : t === 'warn' ? AMB : t === 'ok' ? G : DIM;
 
   /* one book card; `shareLabel` names what the % share is OF (its group) */
   const cardHtml = (c, shareLabel) => {
     const spark = toPts(c.spark, 120, 30, 3).join(' ');
-    const up = c.spark.length > 1 ? c.spark[c.spark.length - 1] >= c.spark[0] : true;
+    /* Colour by c.ret, NOT by the drawn spark — DAYTRADER drew a GREEN line
+       under "−2.57%" in red, 30px apart, the reported bug on a second screen.
+       The card carries no range chips saying what window the line covers, so
+       the line answers to the number printed above it; overview.py in turn
+       anchors `spark` at initial capital and samples the book's whole life, so
+       the series drawn IS what `ret` measures and the two cannot disagree. */
+    const tone = c.spark.length > 1 ? dirOf(c.ret) : 0;
     return `
     <div class="hv-acct" data-act="acct" data-arg="${esc(c.key)}" style="padding:16px 18px;border-right:1px solid #262626;display:flex;flex-direction:column;gap:10px;cursor:pointer">
       <div style="min-height:46px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;font-weight:600;color:#eaffec;letter-spacing:.06em">${esc(c.label)}</span><span style="font-size:9px;color:${toneColor(c.status_tone)};flex:none;text-align:right">${esc(c.status)}</span></div><div style="font-size:9px;color:#61805f;margin-top:3px;letter-spacing:.08em">${esc(c.sub)}</div></div>
       <div style="font-size:21px;font-weight:600;color:#eaffec;letter-spacing:-.01em">A$${num(c.equity, 2)}</div>
-      <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${cSign(c.day)}">${sgnPct(c.day, 2)} DAY</span></div>
-      <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px;display:block"><polyline points="${spark}" fill="none" stroke="${up ? G : R}" stroke-width="1.3"></polyline></svg>
+      <div style="display:flex;gap:14px;font-size:11px"><span style="color:${cSign(c.ret)}">${sgnPct(c.ret, 2)}</span><span style="color:${c.day == null ? DIM : cSign(c.day)}">${c.day == null ? '— DAY NOT MEASURED' : sgnPct(c.day, 2) + ' DAY'}</span></div>
+      <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px;display:block"><polyline points="${spark}" fill="none" stroke="${dirColor(tone, DIM)}" stroke-width="1.3"></polyline></svg>
       <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f"><span>${esc(c.n_line)}</span><span>${num(c.share * 100, 1)}% ${shareLabel}</span></div>
       <div class="hv-open" style="margin-top:auto;font-size:9px;letter-spacing:.12em;color:#7ee787;border:1px solid #2a4a2c;padding:5px 0;text-align:center">OPEN BOOK →</div>
     </div>`;
@@ -1454,14 +1600,18 @@ function allAccountsHTML() {
   const coreCards = sortCards(ov.accounts.filter(c => (c.group || 'CORE') === 'CORE'));
   const best = T.best, worst = T.worst;
 
-  /* --- headline (CORE) summary ------------------------------------------ */
+  /* --- headline (CORE) summary ------------------------------------------
+     BEST / WORST are RANKS, not outcomes: when every book is down, "best"
+     means "least bad", and the tile printed the winner's name in green with
+     "−0.46%" directly underneath it. The name now takes the colour of the
+     return it is ranked on. */
   const headline = `
     <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL AUM · AUD</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px;letter-spacing:-.01em">${aumInt}<span style="font-size:15px;color:#61805f">${aumDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">ACROSS ${T.books} CORE BOOKS · EXCL. EXPERIMENTAL</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(T.net_pnl)};margin-top:8px">${sgnNum(T.net_pnl, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.net_pnl_pct, 2)} ON ${num(T.initial, 0)}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.books} BOOKS RED</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(T.day_aud)};margin-top:8px">${sgnNum(T.day_aud, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${sgnPct(T.day_pct, 2)} · ${T.books_red} OF ${T.day_books} BOOKS RED${T.day_books < T.books ? ` · ${T.books - T.day_books} NOT MEASURED` : ''}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">BEST BOOK</div><div style="font-size:20px;font-weight:600;color:${best ? cSign(best.ret) : DIM};margin-top:8px">${esc(best ? best.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${best ? `${sgnPct(best.ret, 2)} SINCE ${mmdd(best.since)}` : ''}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">WORST BOOK</div><div style="font-size:20px;font-weight:600;color:${worst ? cSign(worst.ret) : DIM};margin-top:8px">${esc(worst ? worst.name : '—')}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${worst ? `${sgnPct(worst.ret, 2)} SINCE ${mmdd(worst.since)}` : ''}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${T.halts ? R : G};margin-top:8px">${T.halts} / ${T.books}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${T.halts ? 'BREAKER(S) TRIPPED' : 'NONE TRIPPED'}</div></div>
     </div>
     ${coreCards.length ? allocBar(coreCards) : ''}
@@ -1481,9 +1631,9 @@ function allAccountsHTML() {
       <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;border-bottom:1px solid #262626">
         <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0b07"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">${esc(g.name)} TOTAL · AUD</div><div style="font-size:26px;font-weight:600;color:${AMB};margin-top:5px;letter-spacing:-.01em">${gInt}<span style="font-size:15px;color:#8a6d2f">${gDec}</span></div><div style="font-size:9px;color:#5c4a20;margin-top:4px">ACROSS ${g.books} BOOK${g.books === 1 ? '' : 'S'}</div></div>
         <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">NET P&amp;L</div><div style="font-size:20px;font-weight:600;color:${cSign(g.net_pnl)};margin-top:8px">${sgnNum(g.net_pnl, 2)}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${sgnPct(g.net_pnl_pct, 2)} ON ${num(g.initial, 0)}</div></div>
-        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(g.day_aud)};margin-top:8px">${sgnNum(g.day_aud, 2)}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${sgnPct(g.day_pct, 2)} · ${g.books_red} OF ${g.books} RED</div></div>
-        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">BEST</div><div style="font-size:20px;font-weight:600;color:#7ee787;margin-top:8px">${esc(g.best ? g.best.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.best ? sgnPct(g.best.ret, 2) : ''}</div></div>
-        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">WORST</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${esc(g.worst ? g.worst.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.worst ? sgnPct(g.worst.ret, 2) : ''}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(g.day_aud)};margin-top:8px">${sgnNum(g.day_aud, 2)}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${sgnPct(g.day_pct, 2)} · ${g.books_red} OF ${g.day_books} RED${g.day_books < g.books ? ` · ${g.books - g.day_books} NOT MEASURED` : ''}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">BEST</div><div style="font-size:20px;font-weight:600;color:${g.best ? cSign(g.best.ret) : DIM};margin-top:8px">${esc(g.best ? g.best.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.best ? sgnPct(g.best.ret, 2) : ''}</div></div>
+        <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">WORST</div><div style="font-size:20px;font-weight:600;color:${g.worst ? cSign(g.worst.ret) : DIM};margin-top:8px">${esc(g.worst ? g.worst.name : '—')}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.worst ? sgnPct(g.worst.ret, 2) : ''}</div></div>
         <div style="padding:14px 16px"><div style="font-size:9px;color:#8a6d2f;letter-spacing:.14em">RISK HALTS</div><div style="font-size:20px;font-weight:600;color:${g.halts ? R : G};margin-top:8px">${g.halts} / ${g.books}</div><div style="font-size:9px;color:#5c4a20;margin-top:4px">${g.halts ? 'BREAKER TRIPPED' : 'RUNNING'}</div></div>
       </div>
       <div class="mq-cards" style="display:grid;grid-template-columns:repeat(${gc.length || 1},1fr)">${gc.map(c => cardHtml(c, `OF ${g.name}`)).join('')}</div>
@@ -1680,17 +1830,21 @@ function agentKpisHTML(page) {
   const kpis = [
     { label: `TOTAL EQUITY · ${page.base_currency || 'AUD'}`, val: num(page.equity, 2), color: PALE, sub: `INITIAL ${num(page.initial, 2)}` },
     { label: 'TOTAL RETURN', val: sgnPct(page.total_return, 2), color: cSign(page.total_return), sub: `SINCE ${esc(page.since)}` },
-    { label: dayLabel, val: page.day_pct == null ? '—' : sgnPct(page.day_pct, 2), color: cSign(page.day_pct || 0), sub: daySub },
+    /* `page.day_pct || 0` sent an ABSENT percent (an older state that persisted
+       net_aud but not net_pct) down the green branch, over a red money line. */
+    { label: dayLabel, val: page.day_pct == null ? '—' : sgnPct(page.day_pct, 2), color: page.day_pct == null ? DIM : cSign(page.day_pct), sub: daySub },
     { label: 'NET P&L', val: sgnCcy(netPnl, M.sym, 2), color: cSign(netPnl), sub: pnlSub },
-    { label: 'OFF PEAK', val: sgnPct(page.off_peak, 2), color: page.off_peak < -0.02 ? AMB : PALE, sub: `PEAK A$${num(page.peak, 2)}` },
+    { label: 'OFF PEAK', val: sgnPct(page.off_peak, 2), color: page.off_peak < OFF_PEAK_WARN ? AMB : PALE, sub: `PEAK A$${num(page.peak, 2)}` },
     { label: 'GROSS / NET', val: `${pct0(page.gross)} / ${sgn(page.net, num(Math.abs(page.net) * 100, 0) + '%')}`, color: page.gross > 1 ? AMB : PALE, sub: grossSub },
     { label: `ACTIVE ${unit}`, val: String(page.n_long + page.n_short), color: PALE, sub: `${page.n_long} LONG · ${page.n_short} SHORT` },
-    { label: 'SPREAD PAID', val: M.sym + num(p.costs || 0, 2), color: (p.costs || 0) > 0 ? R : PALE, sub: costSub },
+    { label: 'SPREAD PAID', val: M.sym + num(p.costs || 0, 2), color: (p.costs || 0) > 0 ? COST : DIM, sub: costSub },
     page.risk_halted
       ? { label: 'RISK HALT', val: 'HALTED', color: R, sub: `COOLDOWN ${page.halt_cooldown} BARS` }
+      /* breaker == null means this profile has NO drawdown stop — the equity
+         screens already refuse to print "ARMED @ −x%" over one, and inventing
+         a percentage here would be the same false statement about risk. */
       : page.breaker == null
-        // Breaker disabled by profile — do not claim a stop that isn't there.
-        ? { label: 'RISK HALT', val: 'NO STOP', color: AMB, sub: 'BREAKER OFF BY PROFILE' }
+        ? { label: 'RISK HALT', val: '⚠ NO STOP', color: AMB, sub: 'THIS BOOK HAS NO DRAWDOWN BREAKER' }
         : { label: 'RISK HALT', val: 'CLEAR', color: G, sub: `BREAKER ARMED @ −${num(page.breaker * 100, 0)}%` },
   ];
   return `<div class="mq-x"><div style="display:grid;grid-template-columns:1.4fr repeat(${kpis.length - 1},1fr);border-bottom:1px solid #262626">` +
@@ -1723,10 +1877,10 @@ function agentTapeHTML(page) {
     }
   }
   const nextMark = page.bar === '60m' ? 'NEXT 60M BAR' : 'DAILY BAR CLOSE';
-  const breakerBit = page.breaker == null
-    ? `BREAKER <span style="color:${AMB}">OFF</span>`
+  const breakerTxt = page.breaker == null
+    ? `<span style="color:${AMB}">⚠ BREAKER OFF · NO DRAWDOWN STOP</span>`
     : `BREAKER <span style="color:${page.risk_halted ? R : G}">${page.risk_halted ? 'TRIPPED' : 'ARMED'}</span> @ −${num(page.breaker * 100, 0)}%`;
-  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · ${breakerBit} · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
+  const right = `PEAK <span style="color:#c9e8cc">A$${num(page.peak, 2)}</span> · ${breakerTxt} · NEXT MARK <span style="color:#c9e8cc">${nextMark}</span>`;
   return acctTapeHTML(items, right);
 }
 
@@ -1735,8 +1889,10 @@ function agentCurveAttrHTML(page) {
   const filt = rangeFilter(M.curve);
   const vals = filt.map(c => c.v);
   const dates = filt.map(c => c.date);
-  const upCurve = vals.length > 1 ? vals[vals.length - 1] >= vals[0] : true;
-  const stroke = upCurve ? G : R;
+  /* `length > 1 ? … : true` made a one-point book green by default, and `>=`
+     made a perfectly flat one green too. Neither is a direction. */
+  const curveTone = curveDir(vals);
+  const stroke = dirColor(curveTone, DIM);
   const p = toPts(vals, 600, 140, 10);
   const rangeTxt = vals.length
     ? `MIN ${num(Math.min(...vals), 2)} · MAX ${num(Math.max(...vals), 2)}${page.bar === '60m' ? ' · HOURLY MARKS' : ''}` : '';
@@ -1752,6 +1908,8 @@ function agentCurveAttrHTML(page) {
     + ',' + (2 + (d / ddMin) * 40).toFixed(1)).join(' ');
   const ddArea = dd.length ? '0,2 ' + ddPts + ' 600,2' : '';
   const ddNow = dd.length ? dd[dd.length - 1] : 0;
+  /* red must not claim "underwater" on a book that has never been off its peak */
+  const ddDeep = ddMin < -EPS;
   const axis = axisDates(dates.map(d => String(d).slice(0, 10)), 5);
 
   /* attribution vs ensemble-tilt panel (the design shows tilt for matt) */
@@ -1798,16 +1956,16 @@ function agentCurveAttrHTML(page) {
           <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
-          <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${upCurve ? 'rgba(126,231,135,0.08)' : 'rgba(255,123,114,0.08)'}"></polygon>
+          <polygon points="${vals.length ? '0,140 ' + p.join(' ') + ' 600,140' : ''}" fill="${areaFill(curveTone)}"></polygon>
           <polyline points="${p.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
         </svg>
       </div>
       <div style="padding:8px 18px 14px;border-top:1px solid #1a1a1a;margin-top:10px">
-        <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:.12em;margin:6px 0"><span style="color:#61805f">DRAWDOWN FROM PEAK</span><span style="color:${ddNow < -0.02 ? AMB : DIM}">${dd.length ? `NOW ${sgnPct(ddNow, 2)} · WORST ${sgnPct(ddMin, 2)}` : 'NO HISTORY YET'}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:.12em;margin:6px 0"><span style="color:#61805f">DRAWDOWN FROM PEAK</span><span style="color:${ddNow < OFF_PEAK_WARN ? AMB : DIM}">${dd.length ? `NOW ${sgnPct(ddNow, 2)} · WORST ${sgnPct(ddMin, 2)}` : 'NO HISTORY YET'}</span></div>
         <svg viewBox="0 0 600 44" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
           <line x1="0" y1="1" x2="600" y2="1" stroke="#262626" stroke-width="1"></line>
-          <polygon points="${ddArea}" fill="rgba(255,123,114,0.18)"></polygon>
-          <polyline points="${ddPts}" fill="none" stroke="#ff7b72" stroke-width="1.2"></polyline>
+          <polygon points="${ddArea}" fill="${ddDeep ? 'rgba(255,123,114,0.18)' : 'rgba(97,128,95,0.07)'}"></polygon>
+          <polyline points="${ddPts}" fill="none" stroke="${ddDeep ? R : DIM}" stroke-width="1.2"></polyline>
         </svg>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
       </div>
@@ -1831,16 +1989,16 @@ function fxBookHTML(page) {
   const sym = M.sym;
 
   const bookRows = M.money.map(r => {
-    const long = r.weight >= 0;
+    const side = sideOf(r.weight);
     const frac = Math.abs(r.notional) / M.maxN;
     return `
     <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .6fr 1.35fr .8fr .8fr .6fr .8fr .65fr;padding:5px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
-      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="font-size:9px;font-weight:600;color:${side.c}">${side.t}</span>
       <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
-      <span style="display:flex;align-items:center;gap:8px"><span style="color:#c9e8cc;width:62px">${sym}${num(Math.abs(r.notional), 0)}</span><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${long ? G : R};width:${(frac * 100).toFixed(0)}%"></span></span></span>
+      <span style="display:flex;align-items:center;gap:8px"><span style="color:#c9e8cc;width:62px">${sym}${num(Math.abs(r.notional), 0)}</span><span style="width:56px;height:3px;background:#1a1a1a;display:inline-block"><span style="display:block;height:3px;background:${side.c};width:${(frac * 100).toFixed(0)}%"></span></span></span>
       <span style="color:#e3b341">${pairPrice(r.pair, r.avg_entry)}</span>
-      <span style="color:#9db5a0">${pairPrice(r.pair, r.price)}</span>
+      <span style="color:#9db5a0">${r.priced === false ? '—' : pairPrice(r.pair, r.price)}</span>
       <span style="color:${r.day_move == null ? FAINT : cSign(r.day_move)}">${r.day_move == null ? '—' : sgnPct(r.day_move, 2)}</span>
       <span style="color:${cSign(r.unrealized)};font-weight:600">${sgnCcy(r.unrealized, sym, 2)}</span>
       <span style="color:${cSign(r.unrealized_pct)}">${sgnPct(r.unrealized_pct, 2)}</span>
@@ -1901,7 +2059,7 @@ function fxBookHTML(page) {
         <!-- Memo, NOT a term of the sum above: the spread is already inside
              REALIZED (both legs) and OPEN (the entry leg). Listing it as a
              sibling made the column read as summable when it is not. -->
-        <div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0 0;margin-top:5px;border-top:1px solid #1a1a1a"><span style="color:#3d543f">OF WHICH SPREAD PAID</span><span style="color:#8a7433">−${sym}${num(p.costs || 0, 2)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0 0;margin-top:5px;border-top:1px solid #1a1a1a"><span style="color:#3d543f">OF WHICH SPREAD PAID</span><span style="color:${COST}">−${sym}${num(p.costs || 0, 2)}</span></div>
         ${notes.length ? `<div style="font-size:8.5px;color:#3d543f;line-height:1.6;margin-top:8px;border-top:1px solid #1a1a1a;padding-top:7px">${notes.map(n => esc(n)).join('<br>')}</div>` : ''}
       </div>
     </div>
@@ -2123,7 +2281,8 @@ function chartSectionHTML(page) {
     });
   }
   const drivenM = String(row.why || '').match(/Driven by:[^.]*\./);
-  const phaseSummary = selPair + ' MOVED ' + sgn(phTot, Math.abs(phTot).toFixed(1) + '%') + ' OVER THIS ' + tf + ' WINDOW · BOOK IS ' + (row.weight >= 0 ? 'LONG' : 'SHORT') + ' ' + Math.abs(row.weight * 100).toFixed(1) + '% · ' + (drivenM ? drivenM[0].toUpperCase() : '');
+  const rowSide = sideOf(row.weight);          // ▲ LONG / ▼ SHORT / — FLAT
+  const phaseSummary = selPair + ' MOVED ' + sgn(phTot, Math.abs(phTot).toFixed(1) + '%') + ' OVER THIS ' + tf + ' WINDOW · BOOK IS ' + rowSide.t.slice(2) + ' ' + Math.abs(row.weight * 100).toFixed(1) + '% · ' + (drivenM ? drivenM[0].toUpperCase() : '');
 
   /* ---- fundamentals ---- */
   const fu = _fundamentals(page, row, selPair);
@@ -2169,7 +2328,7 @@ function chartSectionHTML(page) {
   }
 
   const chartSrc = cReal ? 'LIVE OHLC (candles.json)' : 'SYNTHETIC BARS ANCHORED TO REAL LAST CLOSE — DROP A candles.json TO WIRE REAL OHLC';
-  const sideColor = row.weight >= 0 ? G : R;
+  const sideColor = rowSide.c;
 
   /* ---- LIVE READINGS: the indicator values the vote was actually cast on ---- */
   const reads = [
@@ -2205,7 +2364,7 @@ function chartSectionHTML(page) {
   <div style="border-bottom:1px solid #262626">
     <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #1a1a1a;flex-wrap:wrap">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ PAIR CHART · ${esc(selPair)}</span>
-      <span style="font-size:9px;font-weight:600;color:${sideColor}">${row.weight >= 0 ? '▲ LONG ' : '▼ SHORT '}</span>
+      <span style="font-size:9px;font-weight:600;color:${sideColor}">${rowSide.t} </span>
       <span style="font-size:9px;color:#61805f">${esc(row.regime)} · VOL ${num(volN * 100, 0)}%</span>
       <div style="position:relative;margin-left:auto">
         <span class="hv-dim" data-act="tf-toggle" style="display:inline-flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.08em;padding:4px 10px;border:1px solid #2a4a2c;color:#7ee787;background:#0d0d0d;cursor:pointer;user-select:none">◷ ${tf} <span style="color:#61805f">▾</span></span>
@@ -2319,10 +2478,16 @@ function newsPanelHTML(page, selPair) {
   const rows = news.slice().reverse().slice(0, 14).map(e => {
     const onPair = legs.has(String(e.currency).toUpperCase());
     const dot = e.impact === 'high' ? '#e3b341' : '#8a7433';
-    const surprise = (e.actual != null && e.estimate != null)
-      ? (parseFloat(e.actual) > parseFloat(e.estimate) ? G
-         : parseFloat(e.actual) < parseFloat(e.estimate) ? R : '#c9e8cc') : '#c9e8cc';
     const b = biasStyle(e.bias);
+    /* "Bigger than expected" is NOT "better than expected": a hot CPI print
+       and a rising unemployment number both beat their estimate and both hurt
+       the currency, yet both rendered GREEN — beside a RED bias cell on the
+       same row, derived properly in the backend from the indicator's polarity.
+       This panel's own header says LIKELY IMPACT = SURPRISE × INDICATOR TYPE,
+       so the ACTUAL takes the backend's polarity-aware verdict, and stays
+       neutral when there is none rather than guessing from the magnitude. */
+    const surprise = (e.actual != null && e.estimate != null
+      && (e.bias === 'positive' || e.bias === 'negative')) ? b.c : '#c9e8cc';
     return `
     <div style="display:grid;grid-template-columns:.7fr .45fr .45fr 1.7fr 1.05fr 1.05fr;gap:8px;padding:5px 0;font-size:10px;border-bottom:1px solid #121212;align-items:baseline${onPair ? ';background:rgba(227,179,65,.05)' : ''}">
       <span style="color:#61805f">${esc(mdy(e.date))}${e.time ? ' <span style="color:#3d543f">' + esc(e.time) + '</span>' : ''}</span>
@@ -2508,8 +2673,9 @@ function updateCandleHover(e) {
 function agentPositionsHTML(page) {
   const cap = page.per_pair_cap || 0.25;
   const rows = page.rows.map(p => {
-    const long = p.weight >= 0;
-    const sideColor = long ? G : R;
+    const side = sideOf(p.weight);
+    const long = dirOf(p.weight) >= 0;
+    const sideColor = side.c;
     const frac = Math.min(Math.abs(p.weight) / cap, 1);
     const mini = p.agents.map(v => {
       const bg = v > 0.02 ? G : (v < -0.02 ? R : '#2e2e2e');
@@ -2518,7 +2684,7 @@ function agentPositionsHTML(page) {
     return `
     <div class="hv-row" ${hovAttrs('fx', p.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .5fr 1.2fr .5fr .65fr .8fr .5fr 1.1fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(p.pair)}</span>
-      <span style="font-size:9px;font-weight:600;color:${sideColor}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="font-size:9px;font-weight:600;color:${sideColor}">${side.t}</span>
       <span style="display:flex;align-items:center;gap:8px"><span style="position:relative;width:90px;height:5px;background:#1a1a1a;display:inline-block"><span style="position:absolute;left:50%;top:-2px;width:1px;height:9px;background:#2e2e2e"></span><span style="position:absolute;top:0;height:5px;left:${long ? '50%' : (50 - frac * 50) + '%'};width:${frac * 50}%;background:${sideColor}"></span></span><span style="color:#c9e8cc;font-size:10px">${sgnPct(p.weight, 1)}</span></span>
       <span style="color:${cSign(p.tilt)}">${sgn(p.tilt, Math.abs(p.tilt).toFixed(2))}</span>
       <span style="font-size:9px;color:${p.regime === 'TRENDING' ? TXT : AMB}">${esc(p.regime)}</span>
@@ -2548,11 +2714,11 @@ function fxLedgerHTML(page) {
 
   /* --- 1. open positions, money terms --- */
   const posRows = M.money.map(r => {
-    const long = r.weight >= 0;
+    const side = sideOf(r.weight);
     return `
     <div class="hv-row" ${hovAttrs('fx', r.pair)} style="position:relative;display:grid;grid-template-columns:.9fr .55fr .6fr .4fr .85fr .8fr .8fr .6fr .8fr .6fr .7fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
       <span style="color:#eaffec;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#3d543f;text-underline-offset:3px">${esc(r.pair)}</span>
-      <span style="font-size:9px;font-weight:600;color:${long ? G : R}">${long ? '▲ LONG' : '▼ SHORT'}</span>
+      <span style="font-size:9px;font-weight:600;color:${side.c}">${side.t}</span>
       <span style="color:#c9e8cc">${sgnPct(r.weight, 1)}</span>
       <span style="color:#61805f">${r.n_lots}</span>
       <span style="color:#c9e8cc">${sym}${num(Math.abs(r.notional), 0)}</span>
@@ -2603,7 +2769,7 @@ function fxLedgerHTML(page) {
   /* the exact per-bar decomposition, when the book has been tracked for it */
   const c = page.cumulative;
   const exactStrip = c
-    ? `<span style="font-size:9px;color:#61805f">EXACT SINCE ${esc(String(c.from).slice(0, 10))}${c.from_inception ? ' (INCEPTION)' : ''} · PRICE <span style="color:${cSign(c.price_pnl)}">${sgnCcy(c.price_pnl, sym, 2)}</span> · CARRY <span style="color:${cSign(c.carry)}">${sgnCcy(c.carry, sym, 2)}</span> · SPREAD <span style="color:#ff7b72">−${sym}${num(c.cost, 2)}</span> · NET <span style="color:${cSign(c.net)}">${sgnCcy(c.net, sym, 2)}</span></span>`
+    ? `<span style="font-size:9px;color:#61805f">EXACT SINCE ${esc(String(c.from).slice(0, 10))}${c.from_inception ? ' (INCEPTION)' : ''} · PRICE <span style="color:${cSign(c.price_pnl)}">${sgnCcy(c.price_pnl, sym, 2)}</span> · CARRY <span style="color:${cSign(c.carry)}">${sgnCcy(c.carry, sym, 2)}</span> · SPREAD <span style="color:${COST}">−${sym}${num(c.cost, 2)}</span> · NET <span style="color:${cSign(c.net)}">${sgnCcy(c.net, sym, 2)}</span></span>`
     : `<span style="font-size:9px;color:#3d543f">CARRY TRACKING STARTS AT THIS BOOK'S NEXT BAR — UNTIL THEN FINANCING SITS IN THE UNEXPLAINED LINE</span>`;
 
   /* --- 4. blotter --- */
@@ -2684,7 +2850,7 @@ function fxLedgerHTML(page) {
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L (FIFO, FROM FILLS)${closedCap}</span>
       <span style="font-size:10px;color:#61805f">GROSS <span style="color:${cSign(closed.gross)}">${sgnCcy(closed.gross, sym, 2)}</span></span>
-      <span style="font-size:10px;color:#61805f">SPREAD <span style="color:#ff7b72">−${sym}${num(closed.costs, 2)}</span></span>
+      <span style="font-size:10px;color:#61805f">SPREAD <span style="color:${COST}">−${sym}${num(closed.costs, 2)}</span></span>
       <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net)}">${sgnCcy(closed.net, sym, 2)}</span></span>
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">EACH ROW IS A WEIGHT SLICE CLOSED OLDEST-FIRST · NET IS AFTER THE SPREAD ON BOTH LEGS</span>
@@ -2698,8 +2864,8 @@ function fxLedgerHTML(page) {
 function agentPopHTML(page, pair, rect) {
   const p = page.rows.find(r => r.pair === pair);
   if (!p) return '';
-  const long = p.weight >= 0;
-  const sideColor = long ? G : R;
+  const side = sideOf(p.weight);
+  const sideColor = side.c;
   const nBars = page.bar === '60m' ? 60 : 48;
   const closeN = +p.price || 1;
   const { bars, real } = synthCandles(pair, closeN, +p.ann_vol || 0.02, nBars);
@@ -2725,7 +2891,7 @@ function agentPopHTML(page, pair, rect) {
   const ind = [
     { k: 'REGIME', v: p.regime }, { k: 'ANN VOL', v: num((p.ann_vol || 0) * 100, 0) + '%' },
     { k: 'WEIGHT', v: sgnPct(p.weight, 1) }, { k: 'TILT', v: sgn(p.tilt, Math.abs(p.tilt).toFixed(2)) },
-    { k: 'SIDE', v: long ? 'LONG' : 'SHORT' }, { k: 'PRICE', v: fmtP(closeN) },
+    { k: 'SIDE', v: side.t.slice(2) }, { k: 'PRICE', v: fmtP(closeN) },
     { k: 'ADX LIVE', v: di.adx == null ? '—' : (+di.adx).toFixed(1) },
     { k: 'RSI LIVE', v: di.rsi == null ? '—' : (+di.rsi).toFixed(1) },
     { k: 'ROC LIVE', v: di.roc == null ? '—' : sgnPct(+di.roc, 2) },
@@ -2735,16 +2901,16 @@ function agentPopHTML(page, pair, rect) {
   const mny = [
     { k: 'NOTIONAL', v: sym + num(Math.abs(p.notional || 0), 0), c: TXT },
     { k: 'COST BASIS', v: p.avg_entry ? fmtP(p.avg_entry) : '—', c: AMB },
-    { k: 'OPEN P&L', v: sgnCcy(p.unrealized || 0, sym, 2) + ' · ' + sgnPct(p.unrealized_pct || 0, 2), c: cSign(p.unrealized || 0) },
+    { k: 'OPEN P&L', v: p.priced === false ? '— NOT PRICED' : sgnCcy(p.unrealized || 0, sym, 2) + ' · ' + sgnPct(p.unrealized_pct || 0, 2), c: p.priced === false ? FAINT : cSign(p.unrealized || 0) },
     { k: 'REALIZED', v: sgnCcy(p.realized || 0, sym, 2), c: cSign(p.realized || 0) },
-    { k: 'SPREAD PAID', v: sym + num(p.costs || 0, 2), c: R },
+    { k: 'SPREAD PAID', v: sym + num(p.costs || 0, 2), c: COST },
     { k: 'TOTAL P&L', v: sgnCcy(p.total_pnl || 0, sym, 2), c: cSign(p.total_pnl || 0) },
   ].map(iv => `<div><div style="font-size:8px;color:#61805f;letter-spacing:.1em;white-space:nowrap">${esc(iv.k)}</div><div style="font-size:10.5px;color:${iv.c};margin-top:1px;white-space:nowrap">${esc(iv.v)}</div></div>`).join('');
   const barLabel = (page.bar === '60m' ? '60 × 60-MINUTE BARS' : '48 × DAILY BARS') + (real ? ' · LIVE OHLC' : '');
   return popShell(rect, 560, 140, 620, '13px 15px', `
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
       <span style="font-size:13px;font-weight:600;color:#eaffec">${esc(pair)}</span>
-      <span style="font-size:10px;font-weight:600;color:${sideColor}">${long ? '▲ LONG' : '▼ SHORT'} ${sgnPct(p.weight, 1)}</span>
+      <span style="font-size:10px;font-weight:600;color:${sideColor}">${side.t} ${sgnPct(p.weight, 1)}</span>
       <span style="font-size:9px;color:#61805f;letter-spacing:.1em">NET TILT ${sgn(p.tilt, Math.abs(p.tilt).toFixed(2))} · ${esc(p.regime)}</span>
       <span style="margin-left:auto;font-size:12px;color:#eaffec">${fmtP(closeN)}</span>
     </div>
@@ -2815,7 +2981,9 @@ function agentBacktestHTML(page) {
      CAGR is amber like one — green here read as "this book earns 18.4%". */
   const notMeasured = synth || !real;
   const abKpis = [
-    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : notMeasured ? AMB : G, period),
+    /* the direction half of this rule was never added: a REAL cache with a
+       negative CAGR still printed green */
+    kpiCell('CAGR', kVals[0], kVals[0] === '—' ? DIM : notMeasured ? AMB : cSign(m.cagr), period),
     kpiCell('SHARPE', kVals[1], kVals[1] === '—' ? DIM : PALE, btBar),
     kpiCell('MAX DRAWDOWN', kVals[2], kVals[2] === '—' ? DIM : R, 'PEAK TO TROUGH'),
     kpiCell('HIT RATE', kVals[3], kVals[3] === '—' ? DIM : PALE, 'PROFITABLE BARS'),
@@ -2824,9 +2992,10 @@ function agentBacktestHTML(page) {
   ].join('');
 
   /* curves: real cache > seeded illustrative > nothing */
-  let abPts = '', abBench = '', xLabels = ['2023', '2024', '2025', '2026'];
+  let abPts = '', abBench = '', abDir = 0, xLabels = ['2023', '2024', '2025', '2026'];
   if (real && Array.isArray(bt.curve) && bt.curve.length > 1) {
     const sv = bt.curve.map(r => r[1]);
+    abDir = curveDir(sv);
     const bv = (bt.benchmark || []).map(r => r[1]);
     const lo = Math.min(...sv, ...(bv.length ? bv : sv)), hi = Math.max(...sv, ...(bv.length ? bv : sv));
     const Y = v => 12 + (1 - (Math.log(v) - Math.log(lo)) / ((Math.log(hi) - Math.log(lo)) || 1)) * 196;
@@ -2845,6 +3014,7 @@ function agentBacktestHTML(page) {
       abS.push(abS[i - 1] * (1 + abd.d * 4 + (arnd() - 0.5) * 0.05));
       abB.push(abB[i - 1] * (1 + 0.0018 + (arnd() - 0.5) * 0.045));
     }
+    abDir = curveDir(abS);
     const abLo = Math.min(...abS, ...abB), abHi = Math.max(...abS, ...abB);
     const abY = v => 12 + (1 - (Math.log(v) - Math.log(abLo)) / ((Math.log(abHi) - Math.log(abLo)) || 1)) * 196;
     abPts = abS.map((v, i) => ((i / abN) * 1200).toFixed(1) + ',' + abY(v).toFixed(1)).join(' ');
@@ -2858,21 +3028,32 @@ function agentBacktestHTML(page) {
   const noWeights = real && !bt.weights;
   const wSrc = real && bt.weights ? AGENT_NAMES.map(n => +bt.weights[n.toLowerCase()] || 0)
     : abd ? abd.w : AGENT_NAMES.map(() => 0);
-  const wMax = Math.max(...wSrc, 0.25);
+  /* The bar is the share of the blend — so it must BE that share of the track.
+     Normalising to the largest weight drew TREND's 21% as 84% of its track,
+     and six weights summing to 100% as ~360% of one: a length the number
+     beside it denies. And a placeholder blend must not wear the colour of a
+     measured one (the rule this function states 50 lines above). */
+  const wTone = notMeasured ? AMB : G;
   const weights = AGENT_NAMES.map((name, i) => `
     <div style="display:flex;align-items:center;gap:9px;padding:4px 0;font-size:10px">
       <span style="color:#c9e8cc;width:70px">${name}</span>
-      <span style="flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="display:block;height:5px;width:${(wSrc[i] / wMax * 100).toFixed(0)}%;background:#7ee787"></span></span>
+      <span style="flex:1;height:5px;background:#1a1a1a;display:inline-block"><span style="display:block;height:5px;width:${Math.min(wSrc[i] * 100, 100).toFixed(0)}%;background:${wTone}"></span></span>
       <span style="color:#61805f;width:34px;text-align:right">${wSrc[i] ? (wSrc[i] * 100).toFixed(0) + '%' : '—'}</span>
     </div>`).join('');
 
+  /* TEST SHARPE is the single number that would kill the strategy, and it was
+     hardcoded green — a fold that failed out of sample printed in the colour
+     of one that passed. `sv` carries the raw value so the colour comes off the
+     number, not off the formatted string; the illustrative folds are ambered
+     like every other invented figure on this tab. */
   const foldList = (real && Array.isArray(bt.folds) ? bt.folds.map(f => ({
     fold: f.fold, train: f.train, test: f.test,
+    sv: f.sharpe == null ? null : +f.sharpe,
     sharpe: f.sharpe == null ? '—' : num(+f.sharpe, 2),
     hit: f.hit_rate == null ? (f.hit || '—') : num(+f.hit_rate * 100, 0) + '%',
     dd: f.max_drawdown == null ? (f.dd || '—') : sgnPct(+f.max_drawdown, 1),
-  })) : abd ? ABD_FOLDS : []);
-  const foldRows = foldList.map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:#7ee787">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:#ff7b72">${esc(f.dd)}</span></div>`).join('')
+  })) : abd ? ABD_FOLDS.map(f => ({ ...f, sv: null })) : []);
+  const foldRows = foldList.map(f => `<div style="display:grid;grid-template-columns:.5fr 1.2fr 1.2fr .8fr .6fr .8fr;padding:7px 18px;font-size:11px;border-bottom:1px solid #121212"><span style="color:#eaffec">${esc(f.fold)}</span><span style="color:#61805f">${esc(f.train)}</span><span style="color:#9db5a0">${esc(f.test)}</span><span style="color:${f.sv == null ? (real ? DIM : AMB) : cSign(f.sv)}">${esc(f.sharpe)}</span><span style="color:#c9e8cc">${esc(f.hit)}</span><span style="color:${real ? R : AMB}">${esc(f.dd)}</span></div>`).join('')
     || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO WALK-FORWARD FOLDS RECORDED.</div>';
 
   /* the placeholder curves are indexed to 1.0, so the design's A$10,000 label
@@ -2923,7 +3104,7 @@ function agentBacktestHTML(page) {
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ COST · LEVERAGE · HALTS</div>
         <div style="padding:10px 18px 14px">
           ${rLine('AVG GROSS LEVERAGE', bt.avg_gross_leverage == null ? '—' : num(bt.avg_gross_leverage, 2) + '×', bt.avg_gross_leverage > 1 ? AMB : TXT)}
-          ${rLine('SPREAD PAID · CUM', bt.total_cost_fraction == null ? '—' : num(bt.total_cost_fraction * 100, 2) + '% OF EQUITY', R)}
+          ${rLine('SPREAD PAID · CUM', bt.total_cost_fraction == null ? '—' : num(bt.total_cost_fraction * 100, 2) + '% OF EQUITY', COST)}
           ${rLine('CARRY · CUM', bt.total_carry_fraction == null ? '—' : sgnPct(bt.total_carry_fraction, 2), cSign(bt.total_carry_fraction || 0))}
           ${rLine('TURNOVER', m.turnover == null ? '—' : num(m.turnover, 1) + '× / YR', TXT)}
           ${rLine('ANN VOL', m.ann_vol == null ? '—' : num(m.ann_vol * 100, 1) + '%', TXT)}
@@ -2944,14 +3125,14 @@ function agentBacktestHTML(page) {
     <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">${abKpis}</div>
     <div style="display:grid;grid-template-columns:2.1fr 1fr;border-bottom:1px solid #262626">
       <div style="padding:14px 18px;border-right:1px solid #262626">
-        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF ${esc(growthOf)} · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:#7ee787">— ENSEMBLE</span>${abBench ? '<span style="color:#61805f">— BUY &amp; HOLD BASKET</span>' : '<span style="color:#3d543f">NO BENCHMARK: A LONG-ONLY BASKET OF THESE PAIRS IS NOT A MARKET ANYONE HOLDS</span>'}</div>
+        <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px"><span style="color:#eaffec">■ GROWTH OF ${esc(growthOf)} · NET OF COSTS + CARRY${real ? '' : ' · ILLUSTRATIVE'}</span><span style="color:${dirColor(abDir, DIM)}">— ENSEMBLE</span>${abBench ? '<span style="color:#61805f">— BUY &amp; HOLD BASKET</span>' : '<span style="color:#3d543f">NO BENCHMARK: A LONG-ONLY BASKET OF THESE PAIRS IS NOT A MARKET ANYONE HOLDS</span>'}</div>
         <svg viewBox="0 0 1200 220" preserveAspectRatio="none" style="width:100%;height:230px;display:block">
           <line x1="0" y1="55" x2="1200" y2="55" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="110" x2="1200" y2="110" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="165" x2="1200" y2="165" stroke="#1a1a1a" stroke-width="1"></line>
-          ${abPts ? `<polygon points="0,220 ${abPts} 1200,220" fill="rgba(126,231,135,0.06)"></polygon>` : ''}
+          ${abPts ? `<polygon points="0,220 ${abPts} 1200,220" fill="${areaFill(abDir)}"></polygon>` : ''}
           <polyline points="${abBench}" fill="none" stroke="#61805f" stroke-width="1.3"></polyline>
-          <polyline points="${abPts}" fill="none" stroke="#7ee787" stroke-width="1.7" stroke-linejoin="round"></polyline>
+          <polyline points="${abPts}" fill="none" stroke="${dirColor(abDir, DIM)}" stroke-width="1.7" stroke-linejoin="round"></polyline>
         </svg>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${xLabels.map(y => `<span>${esc(y)}</span>`).join('')}</div>
       </div>
@@ -2976,7 +3157,12 @@ function agentBacktestHTML(page) {
 function agentMethodHTML(page) {
   const fp = (S.meta && S.meta.fx_profiles && S.meta.fx_profiles[page.account]) || {};
   const cap = pct0(fp.per_pair_cap || page.per_pair_cap || 0.25);
-  const brk = num((fp.max_drawdown_stop || page.breaker || 0.2) * 100, 0);
+  /* `|| 0.2` invented a −20% stop for a profile that has none — the same shape
+     as the fixed "BREAKER ARMED @ −25%" bug on the equity side. */
+  const brkV = fp.max_drawdown_stop != null ? fp.max_drawdown_stop : page.breaker;
+  const brkTxt = brkV == null
+    ? `<span style="color:${AMB}">⚠ NO DRAWDOWN STOP</span>`
+    : `<span style="color:#ff7b72">−${num(brkV * 100, 0)}%</span> FROM PEAK → FLAT + COOLDOWN`;
   const books = accounts().filter(a => a.kind === 'fx').map(a => a.account.toUpperCase()).join(', ');
   /* the windows are per-profile: the intraday book votes on EMA10/40 and a
      24-BAR ROC, so the house EMA20/EMA100/60-DAY text was simply wrong there */
@@ -3026,7 +3212,7 @@ function agentMethodHTML(page) {
       </div>
       <div style="border-right:1px solid #262626">
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ RISK LAYER</div>
-        <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">EACH POSITION IS SIZED SO ITS <span style="color:#c9e8cc">RISK</span> (NOT ITS DOLLARS) IS CONSTANT — WILD PAIRS GET LESS CAPITAL. PER-PAIR CAP <span style="color:#c9e8cc">${cap}</span>, ACCOUNT BREAKER <span style="color:#ff7b72">−${brk}%</span> FROM PEAK → FLAT + COOLDOWN.</div>
+        <div style="padding:12px 18px;font-size:10px;color:#61805f;line-height:1.8">EACH POSITION IS SIZED SO ITS <span style="color:#c9e8cc">RISK</span> (NOT ITS DOLLARS) IS CONSTANT — WILD PAIRS GET LESS CAPITAL. PER-PAIR CAP <span style="color:#c9e8cc">${cap}</span>, ACCOUNT BREAKER ${brkTxt}.</div>
       </div>
       <div>
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ ISOLATED BOOKS</div>
@@ -3046,8 +3232,11 @@ function smallOverviewHTML(page) {
   const vals = M.curve.map(p => p.v);
   const dates = M.curve.map(p => p.date);
   const p140 = toPts(vals, 600, 140, 10);
-  const down = k.total_return < 0;
-  const stroke = down ? R : G;
+  /* This panel draws the WHOLE curve and carries no range chips, so it claims
+     the direction of that curve. `total_return < 0` also sent a dead-flat book
+     to green by default. */
+  const curveTone = curveDir(vals);
+  const stroke = dirColor(curveTone, DIM);
   const closed = page.closed || { rows: [] };
   const lastClosed = closed.rows[closed.rows.length - 1];
   const lastTrade = (page.blotter || [])[Math.max((page.blotter || []).length - 1, 0)];
@@ -3066,9 +3255,9 @@ function smallOverviewHTML(page) {
       <div style="padding:14px 18px;border-right:1px solid #262626;background:#0d0d0d"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL EQUITY · ${esc(page.base_currency)}</div><div style="font-size:26px;font-weight:600;color:#eaffec;margin-top:5px">${eqInt}<span style="font-size:15px;color:#61805f">${eqDec}</span></div><div style="font-size:9px;color:#3d543f;margin-top:4px">INITIAL ${num(k.initial_capital, 2)} · ${(page.sleeves || []).map(s => s.key).join(' / ')} SLEEVE ONLY</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">TOTAL RETURN</div><div style="font-size:20px;font-weight:600;color:${cSign(k.total_return)};margin-top:8px">${sgnPct(k.total_return, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">SINCE ${esc(M.curve.length ? M.curve[0].date : '')}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">DAY CHANGE</div><div style="font-size:20px;font-weight:600;color:${cSign(k.day_change)};margin-top:8px">${sgnPct(k.day_change, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${allCash ? 'FX-DRIVEN · 100% CASH' : pct0(1 - k.cash_pct) + ' INVESTED'}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">OFF PEAK</div><div style="font-size:20px;font-weight:600;color:${page.off_peak < -0.01 ? AMB : PALE};margin-top:8px">${sgnPct(page.off_peak, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">PEAK A$${num(page.peak_equity, 2)}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">OFF PEAK</div><div style="font-size:20px;font-weight:600;color:${page.off_peak < OFF_PEAK_WARN ? AMB : PALE};margin-top:8px">${sgnPct(page.off_peak, 2)}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">PEAK A$${num(page.peak_equity, 2)}</div></div>
       <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">POSITIONS</div><div style="font-size:20px;font-weight:600;color:#eaffec;margin-top:8px">${k.n_positions}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">CASH ${sym}${num(sleeve.cash_local || 0, 2)} ${esc(sleeve.currency || '')}</div></div>
-      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:#ff7b72;margin-top:8px">${(k.fees || []).map(f => (SYM[f.currency] || f.currency) + num(f.amount, 2)).join(' · ') || 'A$0'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feePct != null ? `= ${num(feePct * 100, 1)}% OF THE ONLY POSITION` : 'COMMISSION FLOORS DOMINATE'}</div></div>
+      <div style="padding:14px 16px;border-right:1px solid #262626"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">FEES PAID</div><div style="font-size:20px;font-weight:600;color:${COST};margin-top:8px">${(k.fees || []).map(f => (SYM[f.currency] || f.currency) + num(f.amount, 2)).join(' · ') || 'A$0'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">${feePct != null ? `= ${num(feePct * 100, 1)}% OF THE ONLY POSITION` : 'COMMISSION FLOORS DOMINATE'}</div></div>
       <div style="padding:14px 16px"><div style="font-size:9px;color:#61805f;letter-spacing:.14em">VIABILITY GATE</div><div style="font-size:20px;font-weight:600;color:${above ? G : R};margin-top:8px">${above ? 'ABOVE' : 'BELOW'}</div><div style="font-size:9px;color:#3d543f;margin-top:4px">HOLDS CASH BELOW A$${num(gate, 0)}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:2.1fr 1fr">
@@ -3078,7 +3267,7 @@ function smallOverviewHTML(page) {
           <line x1="0" y1="35" x2="600" y2="35" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="70" x2="600" y2="70" stroke="#1a1a1a" stroke-width="1"></line>
           <line x1="0" y1="105" x2="600" y2="105" stroke="#1a1a1a" stroke-width="1"></line>
-          <polygon points="${vals.length ? '0,140 ' + p140.join(' ') + ' 600,140' : ''}" fill="${down ? 'rgba(255,123,114,0.08)' : 'rgba(126,231,135,0.08)'}"></polygon>
+          <polygon points="${vals.length ? '0,140 ' + p140.join(' ') + ' 600,140' : ''}" fill="${areaFill(curveTone)}"></polygon>
           <polyline points="${p140.join(' ')}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linejoin="round"></polyline>
         </svg>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#3d543f;margin-top:5px">${axis.map(d => `<span>${d}</span>`).join('')}</div>
@@ -3086,8 +3275,8 @@ function smallOverviewHTML(page) {
       <div>
         <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:#eaffec;letter-spacing:.14em">■ MICRO-ACCOUNT MODE — THE LESSON THIS BOOK TEACHES</div>
         <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="font-size:11px;color:#eaffec">WHOLE SHARES ONLY</div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">A SMALL BOOK CAN'T HOLD A ${bookParams(page).top_n ?? 10}-NAME BOOK IN WHOLE SHARES — SO IT CONCENTRATES INTO A SINGLE NAME. LAST BOOK: ${lastQty} × ${esc(lastName)}.</div></div>
-        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">FEE DRAG</span><span style="color:#ff7b72">${feePct != null ? num(feePct * 100, 1) + '% ROUND-TRIP' : 'FLOORS BITE'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">THE $1 COMMISSION FLOOR IS TRIVIAL ON A $10K TRADE BUT EATS A REAL SLICE OF A TINY POSITION. SMALL ACCOUNTS BLEED THROUGH FLOORS.</div></div>
-        <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE GATE</span><span style="color:#7ee787">A$${num(gate, 0)}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">BELOW A$${num(gate, 0)} THE SLEEVE STOPS TRADING AND HOLDS CASH RATHER THAN FEEDING THE COMMISSION FLOOR (CONFIG.PY · MIN_VIABLE_EQUITY_BASE).</div></div>
+        <div style="padding:12px 18px;border-bottom:1px solid #121212"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">FEE DRAG</span><span style="color:${COST}">${feePct != null ? num(feePct * 100, 1) + '% ROUND-TRIP' : 'FLOORS BITE'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">THE $1 COMMISSION FLOOR IS TRIVIAL ON A $10K TRADE BUT EATS A REAL SLICE OF A TINY POSITION. SMALL ACCOUNTS BLEED THROUGH FLOORS.</div></div>
+        <div style="padding:12px 18px"><div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:#eaffec">MIN-VIABLE GATE</span><span style="color:${above ? G : R}">A$${num(gate, 0)}${above ? '' : ' · BELOW'}</span></div><div style="font-size:10px;color:#61805f;line-height:1.7;margin-top:4px">BELOW A$${num(gate, 0)} THE SLEEVE STOPS TRADING AND HOLDS CASH RATHER THAN FEEDING THE COMMISSION FLOOR (CONFIG.PY · MIN_VIABLE_EQUITY_BASE).</div></div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1.35fr 1fr;border-top:1px solid #262626">
@@ -3130,13 +3319,13 @@ function smallPositionsHTML(page) {
     : `<div style="display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>TICKER</span><span>QTY</span><span>AVG COST</span><span>PRICE</span><span>VALUE LOC</span><span>VALUE AUD</span><span>WEIGHT</span><span>DAY</span><span>UNRL %</span><span>UNRL AUD</span></div>` +
       rows.map(p => `
       <div class="hv-row" ${hovAttrs('eq', p.region + ':' + p.ticker)} style="position:relative;display:grid;grid-template-columns:1fr .55fr .8fr .8fr .85fr .9fr .9fr .65fr .7fr .75fr;padding:6px 18px;font-size:11px;border-bottom:1px solid #121212;align-items:center;cursor:crosshair">
-        <span style="color:#eaffec">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${px2(p.sym, p.price)}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
+        <span style="color:#eaffec">${esc(p.ticker)}</span><span style="color:#9db5a0">${p.shares}</span><span style="color:#e3b341">${pxFill(p.sym, p.avg_cost)}</span><span style="color:#9db5a0">${dashCell(p, px2(p.sym, p.price))}</span><span style="color:#c9e8cc">${money0(p.sym, p.value_local)}</span><span style="color:#c9e8cc">A$${num(p.value_base, 0)}</span>
         <span style="color:#61805f;font-size:10px">${num(p.weight * 100, 1)}%</span>
-        <span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span><span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span><span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>
+        ${dashCell(p, `<span style="color:${cSign(p.day_change)}">${sgnPct(p.day_change, 1)}</span>`)}${dashCell(p, `<span style="color:${cSign(p.unrealized_pct)}">${sgnPct(p.unrealized_pct, 1)}</span>`)}${dashCell(p, `<span style="color:${cSign(p.unrealized_base)}">${sgn(p.unrealized_base, 'A$' + num(Math.abs(p.unrealized_base), 0))}</span>`)}
       </div>`).join('');
 
   const blotterRows = (page.blotter || []).map(t => `
-    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${px2(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:#61805f">${sym}${num(t.commission || 0, 2)}</span></div>`).join('');
+    <div style="display:grid;grid-template-columns:.7fr .6fr .5fr 1fr .55fr .8fr .9fr .7fr;padding:5px 18px;font-size:10.5px;border-bottom:1px solid #121212"><span style="color:#3d543f">${esc(t.date)}</span><span style="color:#61805f">${esc(t.region)}</span><span style="font-weight:600;color:${t.side === 'BUY' ? G : R}">${t.side}</span><span style="color:#eaffec">${esc(t.ticker)}</span><span style="color:#9db5a0">${t.shares}</span><span style="color:#9db5a0">${px2(sym, t.fill)}</span><span style="color:#c9e8cc">${money0(sym, t.value)}</span><span style="color:${t.commission ? COST : FAINT}">${sym}${num(t.commission || 0, 2)}</span></div>`).join('');
 
   const closedRows = closedRowsHTML(closed, { bar: false });
 
@@ -3159,11 +3348,17 @@ function smallPositionsHTML(page) {
     ${blotterRows || '<div style="padding:14px 18px;font-size:10.5px;color:#61805f">— NO FILLS YET. EVERY EXECUTION THIS BOOK MAKES IS ITEMISED HERE, COMMISSION BY COMMISSION.</div>'}
     <div style="display:flex;align-items:center;gap:18px;padding:12px 18px;background:#0d0d0d;border-top:1px solid #262626;border-bottom:1px solid #1a1a1a">
       <span style="font-size:9px;color:#eaffec;letter-spacing:.14em">■ CLOSED TRADES · REALIZED P&amp;L</span>
-      <span style="font-size:10px;color:#61805f">NET <span style="color:${cSign(closed.net_base)}">${lastClosed ? `${sgn(lastClosed.net, sym + num(Math.abs(lastClosed.net), 2))} → ` : ''}${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span></span>
+      <!-- Two different numbers under ONE colour taken from the second: a +$5
+           last trade inside a −A$3 running total printed entirely red. And an
+           empty ledger printed "+A$0.00" in green, where the FULL screen
+           already guards the identical strip with an em-dash. -->
+      <span style="font-size:10px;color:#61805f">NET ${closed.count
+        ? `${lastClosed ? `<span style="color:${cSign(lastClosed.net)}">${sgn(lastClosed.net, sym + num(Math.abs(lastClosed.net), 2))}</span> → ` : ''}<span style="color:${cSign(closed.net_base)}">${sgn(closed.net_base, 'A$' + num(Math.abs(closed.net_base), 2))}</span>`
+        : `<span style="color:${DIM}">—</span>`}</span>
       <span style="font-size:10px;color:#61805f">WIN RATE <span style="color:${closed.count ? PALE : DIM}">${closed.count ? closed.wins + ' / ' + closed.count : '—'}</span></span>
       <span style="margin-left:auto;font-size:9px;color:#3d543f">FEE DRAG ON A MICRO BOOK, ITEMISED — THE LESSON THIS ACCOUNT TEACHES</span>
     </div>
-    <div class="mq-x"><div style="display:grid;grid-template-columns:.65fr .9fr .55fr .45fr 1.15fr .5fr .75fr .7fr .85fr .8fr .65fr;padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
+    <div class="mq-x"><div style="display:grid;grid-template-columns:${CLOSED_COLS};padding:7px 18px;font-size:9px;color:#61805f;letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>CLOSED</span><span>SIDE</span><span>TICKER</span><span>REGION</span><span>QTY</span><span>ENTRY → EXIT</span><span>HELD</span><span>GROSS</span><span>COSTS</span><span>NET LOCAL</span><span>NET AUD</span><span>RETURN</span></div>
     ${closedRows || '<div style="padding:22px 18px;font-size:11px;color:#61805f">— NO CLOSED ROUND-TRIPS YET.</div>'}</div>
     ${analyticsRowHTML(page)}
   </div>`;

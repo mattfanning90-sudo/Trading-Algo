@@ -14,6 +14,14 @@ Two flavours of every hot indicator:
 
 Wilder's smoothing (RSI/ATR/ADX) is the EMA with α = 1/n (``adjust=False``),
 the standard fast approximation used across charting platforms.
+
+**Range-based indicators refuse close-only bars.** ``true_range`` and
+``donchian`` (and therefore ``atr``/``adx``, built on them) raise
+`bar_quality.CloseOnlyBarsError` when the high/low they are given have no range
+at all — on such data they do not fail, they quietly compute a *different
+statistic under the same name*. The guard is at the primitives so no consumer can
+forget to ask; `bar_quality.allow_close_only()` is the explicit opt-in. Costs one
+vectorized comparison per call. Measurements: `bar_quality.py`.
 """
 from __future__ import annotations
 
@@ -21,6 +29,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from .bar_quality import require_series_true_range
 
 _EPS = 1e-12
 
@@ -73,6 +83,9 @@ def donchian(high: pd.Series, low: pd.Series, window: int
              ) -> tuple[pd.Series, pd.Series]:
     """Donchian channel (upper, lower) computed on bars *strictly before* the
     current one — shifted by 1 so a breakout test never peeks at its own bar."""
+    # On close-only bars this silently becomes a channel of CLOSES — strictly
+    # narrower than the true high/low channel, so breakouts fire early and often.
+    require_series_true_range(high, low, "donchian()")
     upper = high.rolling(window).max().shift(1)
     lower = low.rolling(window).min().shift(1)
     return upper, lower
@@ -82,6 +95,11 @@ def donchian(high: pd.Series, low: pd.Series, window: int
 # True-range family
 # ---------------------------------------------------------------------------
 def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    # The one choke point for the whole range family: `atr` and `adx` are built
+    # on this, so guarding here covers them (and anything added later) without
+    # three copies of the check. With high == low the formula degenerates to
+    # |Δclose| — a real number, half the size, under the same name.
+    require_series_true_range(high, low, "true_range() / ATR / ADX")
     prev_close = close.shift(1)
     return pd.concat([
         high - low,
