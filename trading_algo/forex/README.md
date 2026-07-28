@@ -307,6 +307,16 @@ the survivors into `champions_{account}.json`. `engine.py --champions` then
 folds that roster into the live `AgentPool` alongside (or instead of) the
 hand-written agents, so a bred agent is a drop-in the same way `--ml` is.
 
+Both dashboards read the swarm through `swarm_view.summary()` — the terminal's
+**SWARM tab** (FX books only) and the classic FX page's swarm section — so the
+two screens cannot disagree. It reports the *gate verdict*, not just the roster:
+an empty roster is one of `cohort_overfit` (batch PBO over `champions.PBO_MAX`)
+or `none_cleared` (nobody reached `champions.DSR_MIN` on the hold-out), never a
+blank panel that reads as "the breeder never ran". It also states whether the
+roster is actually voting — `--champions` is opt-in, so a promoted champion can
+sit on disk untraded, and the persisted decision book (champion agents name
+themselves `champ:<gid>`) is what settles it.
+
 ```bash
 # --- Swarm: evolutionary agent population (offline breeder) ---
 python -m trading_algo.forex.evolve --account matt --synthetic --generations 12 --pop 40   # breed
