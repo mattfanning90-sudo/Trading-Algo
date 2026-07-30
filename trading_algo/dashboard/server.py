@@ -9,6 +9,7 @@ Routes
     /api/overview           all paper books rolled up (offline-safe)
     /api/account/<KEY>      one book — equity or FX, by display key
     /api/backtest/<KEY>     cached backtest results for that book's kind
+    /api/swarm/<KEY>        FX books: bred population, gate verdict, roster
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import api, backtest_store, fx_api, meta, overview, registry
+from . import api, backtest_store, fx_api, meta, overview, registry, swarm
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -111,6 +112,14 @@ def make_handler(account: str, synthetic: bool):
                         self._json(404, {"error": f"no account '{key}'"})
                     else:
                         self._json(200, backtest_store.load_backtest(
+                            entry["kind"], entry["account"]))
+                elif path.startswith("/api/swarm/"):
+                    key = path[len("/api/swarm/"):]
+                    entry = registry.resolve(key)
+                    if entry is None:
+                        self._json(404, {"error": f"no account '{key}'"})
+                    else:
+                        self._json(200, swarm.build_swarm(
                             entry["kind"], entry["account"]))
                 else:
                     self._json(404, {"error": "unknown endpoint"})

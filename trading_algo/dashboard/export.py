@@ -24,7 +24,7 @@ import json
 import os
 import re
 
-from . import api, backtest_store, fx_api, meta, overview, registry
+from . import api, backtest_store, fx_api, meta, overview, registry, swarm
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 _CSS_LINK = '<link rel="stylesheet" href="styles.css" />'
@@ -121,6 +121,7 @@ def build_payloads(account: str, synthetic: bool) -> tuple[dict, str]:
         f"/api/account/{key}": page,
         f"/api/backtest/{key}": backtest_store.load_backtest(
             entry["kind"], entry["account"]),
+        f"/api/swarm/{key}": swarm.build_swarm(entry["kind"], entry["account"]),
     }
     if entry["kind"] == "equity":
         payloads["/api/state"] = page          # legacy path, kept for compat
@@ -145,6 +146,8 @@ def build_payloads_site(synthetic: bool) -> dict:
             continue
         payloads[f"/api/account/{key}"] = page
         payloads[f"/api/backtest/{key}"] = backtest_store.load_backtest(
+            entry["kind"], entry["account"])
+        payloads[f"/api/swarm/{key}"] = swarm.build_swarm(
             entry["kind"], entry["account"])
         baked.append(key)
     m["accounts"] = [a for a in m["accounts"] if a["key"] in baked]

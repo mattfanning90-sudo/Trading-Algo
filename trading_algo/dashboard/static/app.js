@@ -31,6 +31,7 @@ const S = {
   overview: null,
   pages: {},                // key -> account payload
   backtests: {},            // key -> backtest payload
+  swarms: {},               // key -> swarm payload (FX books; lazy, tab-opened)
   errors: {},               // key -> error string
   candles: null,            // optional real OHLC dropped in as candles.json
   isExport: !!(window.__EXPORT_ACCOUNT__ || window.__EXPORT_ALL__),
@@ -246,6 +247,15 @@ async function ensureBacktest(key) {
   catch (e) { S.backtests[key] = { available: false, _error: true }; }
 }
 
+/* The evolution log only changes when the monthly breeder runs, so the swarm is
+   fetched once on first open rather than riding the 5-second account poll. */
+async function ensureSwarm(key) {
+  const cur = S.swarms[key];
+  if (cur && !cur._error) return;             // cache successes, retry errors
+  try { S.swarms[key] = await loadJSON('/api/swarm/' + key); }
+  catch (e) { S.swarms[key] = { available: false, _error: true }; }
+}
+
 function accounts() { return (S.meta && S.meta.accounts) || []; }
 function accountEntry(key) {
   return accounts().find(a => a.key === key) || null;
@@ -286,7 +296,11 @@ function headerHTML(page) {
     return `<span class="hv-dim" data-act="acct" data-arg="${esc(a.key)}" style="font-size:9px;letter-spacing:.1em;padding:4px 10px;border:1px solid ${on ? '#2a4a2c' : '#262626'};color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-radius:2px;cursor:pointer;user-select:none">${esc(a.label)}</span>`;
   }).join('');
 
-  const tabs = ['OVERVIEW', 'POSITIONS', 'BACKTEST', 'METHOD'].map(label => {
+  /* SWARM is an FX-book screen: the evolutionary layer breeds FX agents, and
+     an equity sleeve has no population to show. */
+  const tabKeys = ['OVERVIEW', 'POSITIONS', 'BACKTEST', 'METHOD'];
+  if (page && page.kind === 'fx') tabKeys.push('SWARM');
+  const tabs = tabKeys.map(label => {
     const on = S.tab === label;
     return `<span class="hv-dim" data-act="tab" data-arg="${label}" style="padding:13px 18px;color:${on ? PALE : DIM};background:${on ? '#12200f' : 'transparent'};border-right:1px solid #262626;border-bottom:2px solid ${on ? G : 'transparent'};cursor:pointer;user-select:none">${label}</span>`;
   }).join('');
@@ -3222,6 +3236,205 @@ function agentMethodHTML(page) {
   </div>`;
 }
 
+/* ============================== SWARM ================================== */
+/* An archetype is an IDENTITY, not an outcome, so it gets the categorical ramp
+   and never the P&L green/red — a "trend" genome painted #7ee787 on this screen
+   would read as "this one made money", which the payload does not claim. */
+const ARCH_COLOR = { trend: '#9db5a0', breakout: '#8a7433', meanrev: '#c9e8cc',
+                     momentum: '#4a9c55', '?': '#3d543f' };
+const archColor = a => ARCH_COLOR[a] || ARCH_COLOR['?'];
+
+/* The gate rejecting everything is the system WORKING, so a bare roster is amber
+   (a state to know about), never red (a failure). */
+const SWARM_VERDICT = {
+  promoted:       { label: 'CHAMPIONS PROMOTED', color: G },
+  none_cleared:   { label: 'NOTHING PROMOTED · DSR BAR NOT CLEARED', color: AMB },
+  cohort_overfit: { label: 'NOTHING PROMOTED · COHORT JUDGED OVERFIT', color: AMB },
+  gate_not_run:   { label: 'BRED · PROMOTION GATE NOT RUN', color: AMB },
+  no_log:         { label: 'NO SWARM BRED FOR THIS BOOK', color: DIM },
+  not_applicable: { label: 'SWARM NOT APPLICABLE TO THIS BOOK', color: DIM },
+};
+
+const swarmNum = (v, dp = 3) => (v == null || !isFinite(+v)) ? '—' : num(v, dp);
+
+function swarmFitnessHTML(gens) {
+  if (gens.length < 2) {
+    return `<div style="padding:22px 18px;font-size:11px;color:${DIM}">— A SINGLE GENERATION HAS NO TRAJECTORY TO PLOT.</div>`;
+  }
+  const best = gens.map(g => +g.best), med = gens.map(g => +g.median);
+  const lo = Math.min(...best, ...med), hi = Math.max(...best, ...med);
+  const rng = (hi - lo) || 1;
+  const Y = v => (10 + (1 - (v - lo) / rng) * 160).toFixed(1);
+  const X = i => ((i / (gens.length - 1)) * 1200).toFixed(1);
+  const pts = vals => vals.map((v, i) => X(i) + ',' + Y(v)).join(' ');
+  /* Fitness crosses zero, and "above/below zero" is the whole read — draw the
+     axis rather than leaving the eye to guess where it sits. */
+  const zeroLine = (lo <= 0 && hi >= 0)
+    ? `<line x1="0" y1="${Y(0)}" x2="1200" y2="${Y(0)}" stroke="#2a4a2c" stroke-width="1" stroke-dasharray="4 4"></line>` : '';
+  /* The end labels are anchored, not centred: translateX(-50%) on the first
+     one hangs half of "G0" off the left edge of the panel. */
+  const ticks = gens.map((g, i) => {
+    if (!(i === 0 || i === gens.length - 1 || i % 3 === 0)) return '';
+    const at = i === 0 ? 'left:18px'
+      : i === gens.length - 1 ? 'right:18px'
+        : `left:${(i / (gens.length - 1)) * 100}%;transform:translateX(-50%)`;
+    return `<span style="position:absolute;${at}">G${g.gen}</span>`;
+  }).join('');
+  return `
+    <svg viewBox="0 0 1200 180" preserveAspectRatio="none" style="width:100%;height:180px;display:block">
+      ${zeroLine}
+      <polyline points="${pts(med)}" fill="none" stroke="${DIM}" stroke-width="1.4" stroke-dasharray="5 4"></polyline>
+      <polyline points="${pts(best)}" fill="none" stroke="#4a9c55" stroke-width="2"></polyline>
+    </svg>
+    <div style="position:relative;height:14px;font-size:9px;color:${FAINT};margin-top:2px">${ticks}</div>`;
+}
+
+function swarmLineageHTML(lin) {
+  const nodes = lin.nodes || [], edges = lin.edges || [];
+  if (!nodes.length) return `<div style="padding:22px 18px;font-size:11px;color:${DIM}">— NO LINEAGE RECORDED.</div>`;
+  const maxGen = Math.max(1, ...nodes.map(n => n.gen || 0));
+  const pos = {};
+  for (const n of nodes) {
+    /* Deterministic vertical slot from the content-addressed gid: the same
+       genome lands in the same place on every render, so the picture is stable
+       across reloads instead of reshuffling like a random scatter. */
+    const h = (parseInt(String(n.gid).slice(0, 4), 16) || 0) / 65535;
+    pos[n.gid] = { x: ((n.gen || 0) + 0.5) / (maxGen + 1) * 1200, y: 12 + h * 216 };
+  }
+  const edgeSvg = edges.map(([p, c]) => {
+    const a = pos[p], b = pos[c];
+    if (!a || !b) return '';
+    return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="#1a1a1a" stroke-width="0.6"></line>`;
+  }).join('');
+  const nodeSvg = nodes.map(n => {
+    const p = pos[n.gid], s = n.alive ? 4 : 2.4;
+    return `<rect x="${(p.x - s / 2).toFixed(1)}" y="${(p.y - s / 2).toFixed(1)}" width="${s}" height="${s}" fill="${n.alive ? G : archColor(n.archetype)}" opacity="${n.alive ? 1 : 0.5}"></rect>`;
+  }).join('');
+  const trimmed = lin.truncated
+    ? `<div style="font-size:9px;color:${AMB};padding:6px 18px">SHOWING THE ${num(nodes.length, 0)} FITTEST OF ${num(lin.total_nodes, 0)} GENOMES — EVERY LIVE CHAMPION IS INCLUDED.</div>` : '';
+  return `
+    <svg viewBox="0 0 1200 240" preserveAspectRatio="none" style="width:100%;height:240px;display:block">${edgeSvg}${nodeSvg}</svg>
+    <div style="display:flex;gap:14px;padding:8px 18px;font-size:9px;color:${DIM};flex-wrap:wrap">
+      <span style="color:${PALE}">← GENERATION 0${'&nbsp;'.repeat(2)}·${'&nbsp;'.repeat(2)}GENERATION ${maxGen} →</span>
+      <span><span style="display:inline-block;width:7px;height:7px;background:${G}"></span> IN THE LIVE ROSTER</span>
+      ${Object.keys(ARCH_COLOR).filter(k => k !== '?').map(k =>
+        `<span><span style="display:inline-block;width:6px;height:6px;background:${archColor(k)};opacity:.5"></span> ${k.toUpperCase()}</span>`).join('')}
+    </div>${trimmed}`;
+}
+
+function swarmRosterHTML(sw) {
+  if (sw.roster.length) {
+    const rows = sw.roster.map(r => `
+      <div style="display:grid;grid-template-columns:90px 1fr 90px;padding:9px 18px;border-bottom:1px solid #1a1a1a;font-size:10px">
+        <span style="color:${archColor(r.archetype)}">${esc(r.gid)}</span>
+        <span style="color:${TXT}">${esc(r.label)}</span>
+        <span style="text-align:right;color:${PALE}">${r.dsr != null ? 'DSR ' + num(r.dsr, 2) : '—'}</span>
+      </div>`).join('');
+    return `<div style="display:grid;grid-template-columns:90px 1fr 90px;padding:7px 18px;font-size:9px;color:${DIM};letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>GID</span><span>GENOME</span><span style="text-align:right">HOLD-OUT</span></div>${rows}`;
+  }
+  /* The banner already carries the verdict sentence; this card adds the counts
+     behind it rather than repeating the prose. */
+  const g = sw.gate || {};
+  const line = (k, v, color) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a1a1a"><span style="color:${DIM}">${k}</span><span style="color:${color || TXT}">${v}</span></div>`;
+  return `<div style="padding:14px 18px;font-size:10px">
+      <div style="color:${AMB};font-size:11px;margin-bottom:10px">NO CHAMPIONS IN THIS BOOK'S ROSTER.</div>
+      ${line('FINALISTS JUDGED', num(g.finalists || 0, 0))}
+      ${line(`CLEARED DSR ≥ ${num(g.dsr_min, 2)}`, num(g.passed || 0, 0), g.passed ? G : AMB)}
+      ${line('BATCH PBO / CEILING', `${g.pbo != null ? num(g.pbo, 2) : '—'} / ${num(g.pbo_max, 2)}`,
+             (g.pbo != null && g.pbo > g.pbo_max) ? AMB : TXT)}
+      <div style="color:${DIM};line-height:1.8;margin-top:12px">THE GATE RE-SCORES FINALISTS ON A HOLD-OUT THE SEARCH NEVER SAW. AN EMPTY ROSTER IS A VERDICT, NOT A MISSING RUN.</div>
+    </div>`;
+}
+
+function swarmHTML(page) {
+  const sw = S.swarms[S.account];
+  if (!sw) return '<div class="boot">LOADING SWARM…</div>';
+  if (sw._error) return `<div style="padding:26px 18px;font-size:11px;color:${AMB}">— SWARM STATE UNAVAILABLE FOR THIS BOOK.</div>`;
+
+  const gate = sw.gate || {};
+  const v = SWARM_VERDICT[gate.code] || SWARM_VERDICT.no_log;
+  const gens = sw.generations || [];
+  const bred = sw.n_trials || 0;
+
+  if (!sw.available) {
+    const cmd = sw.applicable === false
+      ? '' : `<div style="font-size:10px;color:${DIM};margin-top:12px">BREED ONE WITH <span style="color:${G}">python -m trading_algo.forex.evolve --account ${esc(page.account)}</span></div>`;
+    return `<div data-screen="swarm"><div style="padding:26px 18px">
+      <div style="font-size:11px;color:${v.color};letter-spacing:.12em">■ ${v.label}</div>
+      <div style="font-size:11px;color:${TXT};margin-top:10px;line-height:1.9">${esc(gate.reason || '').toUpperCase()}</div>${cmd}</div></div>`;
+  }
+
+  /* The live-wiring strip: a promoted roster still has to be switched on with
+     `engine --champions`, so a roster on disk is NOT evidence it is trading.
+     The persisted decision book is — champion votes name themselves champ:<gid>. */
+  const liveTxt = sw.champions_live === true
+    ? `<span style="color:${G}">CHAMPION VOTES PRESENT IN THE LIVE DECISION BOOK</span>`
+    : sw.champions_live === false
+      ? `<span style="color:${AMB}">NOT VOTING IN THE LIVE BOOK</span> — THE ENGINE'S CHAMPION POOL IS OPT-IN (<span style="color:${TXT}">engine --once --champions</span>); THIS BOOK'S LAST RUN USED THE CORE AGENTS ONLY.`
+      : `<span style="color:${DIM}">NO DECISIONS RECORDED YET — CANNOT TELL WHETHER CHAMPIONS ARE VOTING.</span>`;
+
+  const missRows = (sw.top_finalists || []).map(f => `
+    <div style="display:grid;grid-template-columns:90px 1fr 90px 90px 80px;padding:8px 18px;border-bottom:1px solid #1a1a1a;font-size:10px">
+      <span style="color:${archColor(f.archetype)}">${esc(f.gid)}</span>
+      <span style="color:${TXT}">${esc(f.label)}</span>
+      <span style="text-align:right;color:${PALE}">${swarmNum(f.fitness)}</span>
+      <span style="text-align:right;color:${DIM}">${swarmNum(f.sharpe_pp)}</span>
+      <span style="text-align:right;color:${f.promoted ? G : DIM}">${f.promoted ? 'PROMOTED' : (f.dsr != null ? 'DSR ' + num(f.dsr, 2) : '—')}</span>
+    </div>`).join('');
+
+  const maxArch = Math.max(1, ...(sw.archetypes || []).map(a => a.count));
+  const archBars = (sw.archetypes || []).map(a => `
+    <div style="display:grid;grid-template-columns:90px 1fr 40px;align-items:center;gap:10px;padding:5px 0;font-size:10px">
+      <span style="color:${TXT}">${esc(a.name.toUpperCase())}</span>
+      <span style="background:#121212;height:10px;display:block"><span style="display:block;height:10px;width:${(a.count / maxArch) * 100}%;background:${archColor(a.name)}"></span></span>
+      <span style="text-align:right;color:${DIM}">${num(a.count, 0)}</span>
+    </div>`).join('');
+
+  const holdout = sw.holdout_frac != null ? num(sw.holdout_frac * 100, 0) + '%' : '—';
+
+  return `
+  <div data-screen="swarm">
+    <div style="padding:16px 18px;border-bottom:1px solid #262626;background:#0d0d0d">
+      <div style="font-size:11px;color:${v.color};letter-spacing:.12em">■ ${v.label}</div>
+      <div style="font-size:11px;color:${TXT};margin-top:8px;line-height:1.9">${esc(gate.reason || '').toUpperCase()}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid #262626">
+      ${kpiCell('GENOMES BRED', num(bred, 0), PALE, 'DISTINCT · THE DSR DEFLATION N')}
+      ${kpiCell('GENERATIONS', num(gens.length, 0), PALE, `HOLD-OUT ${holdout} OF HISTORY`)}
+      ${kpiCell('FINALISTS', num(gate.finalists || 0, 0), PALE, 'SENT TO THE GATE')}
+      ${kpiCell('CLEARED DSR', num(gate.passed || 0, 0), (gate.passed ? G : AMB), `BAR: DSR ≥ ${num(gate.dsr_min, 2)}`)}
+      ${kpiCell('IN ROSTER', num(gate.promoted || 0, 0), (gate.promoted ? G : AMB), 'LIVE CHAMPIONS')}
+      ${kpiCell('PBO', gate.pbo != null ? num(gate.pbo, 2) : '—', (gate.pbo != null && gate.pbo > gate.pbo_max) ? AMB : PALE, `CEILING ${num(gate.pbo_max, 2)}`, true)}
+    </div>
+    <div style="padding:10px 18px;border-bottom:1px solid #262626;font-size:10px;color:${DIM};line-height:1.8">■ LIVE WIRING · ${liveTxt}</div>
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;border-bottom:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${PALE};letter-spacing:.14em">■ FITNESS BY GENERATION <span style="color:${DIM}">· <span style="color:#4a9c55">BEST</span> VS <span style="color:${DIM}">MEDIAN</span> · SEARCH FITNESS, IN-SAMPLE</span></div>
+        <div style="padding:12px 0 4px">${swarmFitnessHTML(gens)}</div>
+      </div>
+      <div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${PALE};letter-spacing:.14em">■ CHAMPION ROSTER</div>
+        ${swarmRosterHTML(sw)}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;border-bottom:1px solid #262626">
+      <div style="border-right:1px solid #262626">
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${PALE};letter-spacing:.14em">■ BEST FINALISTS <span style="color:${DIM}">· RANKED BY SEARCH FITNESS — NOT A HOLD-OUT RESULT, AND NOT A PERFORMANCE CLAIM</span></div>
+        <div style="display:grid;grid-template-columns:90px 1fr 90px 90px 80px;padding:7px 18px;font-size:9px;color:${DIM};letter-spacing:.12em;border-bottom:1px solid #1a1a1a"><span>GID</span><span>GENOME</span><span style="text-align:right">FITNESS</span><span style="text-align:right">SHARPE/PP</span><span style="text-align:right">GATE</span></div>
+        ${missRows || `<div style="padding:22px 18px;font-size:11px;color:${DIM}">— NO FINALISTS RECORDED.</div>`}
+      </div>
+      <div>
+        <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${PALE};letter-spacing:.14em">■ FINAL POPULATION MIX</div>
+        <div style="padding:12px 18px">${archBars || `<div style="font-size:11px;color:${DIM}">— NO POPULATION RECORDED.</div>`}</div>
+      </div>
+    </div>
+    <div>
+      <div style="padding:10px 18px;border-bottom:1px solid #1a1a1a;font-size:9px;color:${PALE};letter-spacing:.14em">■ LINEAGE · EVERY GENOME THE BREEDER EVALUATED, BY BIRTH GENERATION</div>
+      ${swarmLineageHTML(sw.lineage || {})}
+    </div>
+  </div>`;
+}
+
 /* ====================== SMALL (micro) screens ========================== */
 function smallOverviewHTML(page) {
   const k = page.kpis;
@@ -3377,6 +3590,7 @@ function contentHTML() {
     if (S.tab === 'POSITIONS') return agentPositionsHTML(page) + fxLedgerHTML(page);
     if (S.tab === 'BACKTEST') return agentBacktestHTML(page);
     if (S.tab === 'METHOD') return agentMethodHTML(page);
+    if (S.tab === 'SWARM') return swarmHTML(page);
     return agentKpisHTML(page) + agentCurveAttrHTML(page)
       + fxBookHTML(page) + chartSectionHTML(page);
   }
@@ -3420,10 +3634,17 @@ async function setAccount(key) {
   S.account = key;
   S.tfOpen = false;
   S.candleIdx = null;
-  if (S.account === 'ALL' && S.tab === 'BACKTEST') S.tab = 'OVERVIEW';
+  if (S.account === 'ALL' && (S.tab === 'BACKTEST' || S.tab === 'SWARM')) S.tab = 'OVERVIEW';
   render();                      // paint immediately (loading state)
   await ensurePage(key);
   if (key !== 'ALL' && S.tab === 'BACKTEST') await ensureBacktest(key);
+  if (key !== 'ALL' && S.tab === 'SWARM') {
+    /* SWARM only exists on FX books. Carrying the tab onto an equity sleeve
+       would leave the header with no lit tab and the body silently on
+       OVERVIEW — drop back explicitly instead. */
+    if ((S.pages[key] || {}).kind === 'fx') await ensureSwarm(key);
+    else S.tab = 'OVERVIEW';
+  }
   render();
 }
 
@@ -3439,6 +3660,7 @@ document.addEventListener('click', async e => {
     S.tab = arg; S.tfOpen = false; S.candleIdx = null;
     render();
     if (arg === 'BACKTEST' && S.account !== 'ALL') { await ensureBacktest(S.account); render(); }
+    if (arg === 'SWARM' && S.account !== 'ALL') { await ensureSwarm(S.account); render(); }
     return;
   }
   if (act === 'range') { S.range = arg; render(); return; }
