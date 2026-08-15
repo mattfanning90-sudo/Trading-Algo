@@ -113,10 +113,20 @@ jobs:
       # detect-secrets: fail on a NEW secret not already in the committed
       # baseline. Until a .secrets.baseline is committed this scans to seed one
       # and stays report-only (there is nothing to diff against yet).
+      # `state/` is EXCLUDED, and deliberately: it is machine-written paper-book
+      # state, and the swarm breeder stamps every genome with a 10-hex sha1
+      # content id (genome.py). detect-secrets reads those as "Hex High Entropy
+      # String", so each monthly breed introduced a fresh crop of false
+      # positives — this gate has been red on main since 2026-07-28 for exactly
+      # that reason. The directory cannot be baselined either: it is rewritten
+      # by the schedulers every day, so any baseline is stale within hours.
+      # Nothing under state/ is a credential (equity, positions, fills, genome
+      # hashes); real secrets reach this repo through Actions secrets, and
+      # every path that is not generated data stays in scope.
       - name: detect-secrets gate (fail on a NEW secret not in the baseline)
         run: |
           if [ -f .secrets.baseline ]; then
-            git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
+            git ls-files -z ':!state/' | xargs -0 detect-secrets-hook --baseline .secrets.baseline
           else
             echo "No .secrets.baseline committed yet — scanning to establish one."
             detect-secrets scan > .secrets.baseline
