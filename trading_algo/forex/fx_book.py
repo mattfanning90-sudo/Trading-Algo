@@ -42,6 +42,7 @@ from . import fx_data_quality
 from . import fxconv
 from . import marks
 from . import pairs
+from . import position_policy
 from . import sessions
 from .agents import AgentPool
 from .fx_config import FXParams, profile
@@ -298,25 +299,18 @@ def init_defaults(synthetic: bool, force: bool = False) -> None:
 # Daily run
 # ---------------------------------------------------------------------------
 def _apply_band(positions: dict[str, float], target: pd.Series,
-                p: FXParams, frozen: set[str] | None = None) -> dict[str, float]:
-    """No-churn band: keep current weight unless the target moves by >= min_delta.
+                p: FXParams, frozen: set[str] | None = None,
+                bars_held: dict[str, int] | None = None,
+                force_flat: bool = False) -> dict[str, float]:
+    """Settle targets into the book to hold, via the shared position policy.
 
-    `frozen` names are held at their CURRENT weight regardless of target. They are
-    absent from `target` (trimmed from the candidate universe upstream), and
-    without this they would read as target 0.0 and be flattened — i.e. the book
-    would "sell" on a venue that is closed. Holding through the shut session is
-    what actually happens to a real position.
+    The rule itself (no-churn band, entry/exit hysteresis, minimum hold) lives in
+    `position_policy.settle` — the ONE copy the backtester also runs, so live and
+    simulated turnover cannot drift apart. This wrapper only adds the live book's
+    dust filter.
     """
-    frozen = frozen or set()
-    new: dict[str, float] = {}
-    keys = set(positions) | set(target.index)
-    for k in keys:
-        cur = positions.get(k, 0.0)
-        if k in frozen:
-            new[k] = cur
-            continue
-        tgt = float(target.get(k, 0.0))
-        new[k] = cur if abs(tgt - cur) < p.rebalance_min_delta else tgt
+    new = position_policy.settle(positions, target, p, bars_held=bars_held,
+                                 frozen=frozen, force_flat=force_flat)
     return {k: v for k, v in new.items() if abs(v) > _DUST}
 
 
@@ -549,15 +543,15 @@ def _run_once_locked(account: str, synthetic: bool = False,
         with acknowledge():
             target, rationale = explain.decide_and_explain(panel, p, pool=pool)
         rationale = _stamp_bar_quality(rationale, dq.close_only)
-    if halted:
-        # Even the drawdown breaker cannot sell on a venue that is shut: flatten
-        # everything tradable now, and hold the rest until its session reopens
-        # (the next run flattens them, since the breaker stays on through the
-        # cooldown). Without this the book books an impossible flattening fill.
-        new_positions = {s: w for s, w in positions.items()
-                         if s in shut and abs(w) > _DUST}
-    else:
-        new_positions = _apply_band(positions, target, p, frozen=shut)
+    # Even the drawdown breaker cannot sell on a venue that is shut: `frozen`
+    # outranks `force_flat`, so shut names are held until their session reopens
+    # (the breaker stays on through the cooldown, so the next run flattens them).
+    # Without that the book books an impossible flattening fill.
+    ages = {k: int(v) for k, v in (state.get("bars_held") or {}).items()}
+    new_positions = _apply_band(positions, target, p, frozen=shut,
+                                bars_held=ages, force_flat=halted)
+    state["bars_held"] = position_policy.advance_ages(
+        positions, new_positions, ages, dust=_DUST)
 
     # --- turnover cost (cross half the spread on each weight change) -------
     cost_frac = 0.0

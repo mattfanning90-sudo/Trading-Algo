@@ -73,6 +73,20 @@ class FXParams(RiskParams):
     include_carry: bool = True         # apply overnight swap/financing
     bar: str = "1d"                    # informational: intended data bar interval
 
+    # --- Holding policy (see position_policy.py) ---------------------------
+    # Entry/exit hysteresis. A single threshold makes a target hovering at the
+    # boundary open and close repeatedly, paying half the spread each way; the
+    # GAP between these two is what stops that. `entry_threshold` is the |weight|
+    # needed to OPEN (or to reverse onto the other side); `exit_threshold` is the
+    # |weight| at or below which an open position is closed. Must satisfy
+    # exit <= entry. Both 0.0 = off (plain no-churn band, the prior behaviour).
+    entry_threshold: float = 0.0
+    exit_threshold: float = 0.0
+    # Bars a fresh position is protected from being CLOSED, so a signal gets the
+    # chance to resolve instead of being cut as noise. A target sign reversal and
+    # the drawdown breaker both override it — those are risk events, not churn.
+    min_hold_bars: int = 0
+
     # --- Data capability: what to do with CLOSE-ONLY bars ------------------
     # Some real sources publish one price per bar and no range at all (the ECB
     # daily fixing behind `frankfurter_data`), and ADX/ATR/Donchian silently
@@ -114,6 +128,19 @@ class FXParams(RiskParams):
         # Frozen dataclass: validate only, never assign. A bad policy name must
         # fail at construction, not degrade to a default nobody chose.
         bar_quality.check_policy(self.close_only_signals)
+        # exit > entry inverts the hysteresis into a machine that opens on weak
+        # conviction and closes on strong — silently the opposite of the intent,
+        # and invisible in the metrics until the spread bill arrives.
+        if self.exit_threshold > self.entry_threshold:
+            raise ValueError(
+                f"exit_threshold ({self.exit_threshold}) must be <= "
+                f"entry_threshold ({self.entry_threshold}): the exit band sits "
+                f"INSIDE the entry band, otherwise a position closes on more "
+                f"conviction than it took to open")
+        if min(self.entry_threshold, self.exit_threshold) < 0:
+            raise ValueError("entry_threshold / exit_threshold must be >= 0")
+        if self.min_hold_bars < 0:
+            raise ValueError("min_hold_bars must be >= 0")
 
     @property
     def cooldown(self) -> Cooldown:

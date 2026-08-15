@@ -21,6 +21,7 @@ import pandas as pd
 from . import fx_strategy
 from . import fxconv
 from . import marks
+from . import position_policy
 from .agents import AgentPool
 from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
 from .fx_data import closes
@@ -56,6 +57,7 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
     aud_rets = (1.0 + rets) * audq_ratio - 1.0
 
     held = pd.Series(0.0, index=pairs)
+    ages: dict[str, int] = {}          # bars each open position has been held
     equity = [float(initial_capital)]
     daily: list[float] = []
     turnover_log: list[float] = []
@@ -77,10 +79,15 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         target = pd.Series(0.0, index=pairs) if halted else weights.loc[d].reindex(pairs).fillna(0.0)
         price_d = px.loc[d]
 
-        # No-churn band: only move a pair when the target shifts enough to matter.
-        diff = target - held
-        move = diff.where(diff.abs() >= p.rebalance_min_delta, 0.0)
-        held = held + move
+        # Target -> position, through the SAME policy the live book uses
+        # (no-churn band + entry/exit hysteresis + minimum hold). `halted` is a
+        # forced flatten, which by design outranks the holding rules.
+        prev = held
+        held = pd.Series(position_policy.settle(
+            held.to_dict(), target, p, bars_held=ages, force_flat=halted),
+            dtype=float).reindex(pairs).fillna(0.0)
+        ages = position_policy.advance_ages(prev.to_dict(), held.to_dict(), ages)
+        move = held - prev
 
         # Turnover cost: half the dealing spread per unit weight moved.
         cost = 0.0
