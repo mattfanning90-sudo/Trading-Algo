@@ -21,6 +21,7 @@ import pandas as pd
 from . import fx_strategy
 from . import fxconv
 from . import marks
+from . import position_policy
 from .agents import AgentPool
 from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
 from .fx_data import closes
@@ -34,9 +35,24 @@ def _sign(x: float) -> int:
 
 def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
                  pool: AgentPool | None = None,
-                 initial_capital: float = 5_000.0) -> dict:
-    """Simulate the multi-agent FX book over `panel`. Returns curves + metrics."""
-    weights = fx_strategy.target_weights_history(panel, p, pool=pool)
+                 initial_capital: float = 5_000.0,
+                 weights: pd.DataFrame | None = None) -> dict:
+    """Simulate the multi-agent FX book over `panel`. Returns curves + metrics.
+
+    `weights` supplies a PRE-COMPUTED target-weight history instead of deriving
+    it from the panel. This exists for one caller — `policy_sweep`, which varies
+    only the holding-policy knobs (entry/exit thresholds, minimum hold, churn
+    band). None of those feed `target_weights_history`; they are applied after
+    it, in `position_policy`. So the weights are genuinely identical across such
+    a grid and recomputing the agent pass per combination is pure waste.
+
+    It is NOT a general escape hatch: pass a frame derived from anything other
+    than this panel under this `p` and you have silently left the one weight
+    function behind (invariant #3) — and a frame built with future information
+    would break no-lookahead (#1) with nothing here able to detect it.
+    """
+    if weights is None:
+        weights = fx_strategy.target_weights_history(panel, p, pool=pool)
     if weights.empty or len(weights) < 3:
         raise ValueError("not enough history to backtest")
 
@@ -56,6 +72,7 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
     aud_rets = (1.0 + rets) * audq_ratio - 1.0
 
     held = pd.Series(0.0, index=pairs)
+    ages: dict[str, int] = {}          # bars each open position has been held
     equity = [float(initial_capital)]
     daily: list[float] = []
     turnover_log: list[float] = []
@@ -77,10 +94,15 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         target = pd.Series(0.0, index=pairs) if halted else weights.loc[d].reindex(pairs).fillna(0.0)
         price_d = px.loc[d]
 
-        # No-churn band: only move a pair when the target shifts enough to matter.
-        diff = target - held
-        move = diff.where(diff.abs() >= p.rebalance_min_delta, 0.0)
-        held = held + move
+        # Target -> position, through the SAME policy the live book uses
+        # (no-churn band + entry/exit hysteresis + minimum hold). `halted` is a
+        # forced flatten, which by design outranks the holding rules.
+        prev = held
+        held = pd.Series(position_policy.settle(
+            held.to_dict(), target, p, bars_held=ages, force_flat=halted),
+            dtype=float).reindex(pairs).fillna(0.0)
+        ages = position_policy.advance_ages(prev.to_dict(), held.to_dict(), ages)
+        move = held - prev
 
         # Turnover cost: half the dealing spread per unit weight moved.
         cost = 0.0

@@ -1,0 +1,87 @@
+name: FX Holding-Policy Sweep (manual)
+
+# Chooses the entry/exit hysteresis and minimum-hold values for the FX books.
+#
+# This is manual and CI-only on purpose: picking live trading parameters needs
+# REAL market data, and the sandboxes these agents run in cannot reach Yahoo
+# (403 at the proxy). Synthetic data is a pipeline test, never a basis for live
+# settings — invariant #5 — so the sweep runs here, where the same feed the
+# paper books trade on is actually reachable.
+#
+# It changes NOTHING on its own: the results are printed and uploaded as an
+# artifact, and adopting them is a separate, reviewed commit to fx_config.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Risk profile to sweep"
+        type: choice
+        options: [balanced, conservative, aggressive, intraday]
+        default: balanced
+      bar:
+        description: "Bar interval override (blank = the profile's own; 60m for daytrader)"
+        type: string
+        default: ""
+      train:
+        description: "Train fraction (rest is held out)"
+        type: string
+        default: "0.7"
+      quick:
+        description: "Tiny grid (smoke test)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-policy-sweep-${{ inputs.profile }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: trading_algo/forex/.cache
+          key: fx-parquet-${{ github.run_id }}
+          restore-keys: fx-parquet-
+      - name: Sweep the holding policy
+        run: |
+          python -m trading_algo.forex.policy_sweep \
+            --profile "${{ inputs.profile }}" \
+            --train "${{ inputs.train }}" \
+            ${{ inputs.bar != '' && format('--bar {0}', inputs.bar) || '' }} \
+            ${{ inputs.quick && '--quick' || '' }} \
+            --json "sweep_${{ inputs.profile }}.json" | tee sweep.txt
+      - name: Summarise on the run page
+        if: always()
+        run: |
+          {
+            echo '## FX holding-policy sweep — `${{ inputs.profile }}`'
+            echo
+            echo 'Fit on the train slice, every row re-scored on the untouched remainder.'
+            echo 'Ranked by the WORST Sharpe in each combination'"'"'s neighbourhood, so a'
+            echo 'plateau beats an isolated peak. Adopting a row is a separate commit.'
+            echo
+            echo '```'
+            cat sweep.txt || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: fx-policy-sweep-${{ inputs.profile }}
+          path: |
+            sweep_${{ inputs.profile }}.json
+            sweep.txt
+          if-no-files-found: warn

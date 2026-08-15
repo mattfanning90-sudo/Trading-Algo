@@ -25,6 +25,12 @@ from .agents import Agent, default_agents
 
 STATE_DIR = None      # test hook; None -> fx_book.STATE_DIR
 
+# The gate's two bars, named once. The dashboards report the verdict against
+# these numbers, so a promotion threshold that lived only in a default argument
+# would let the screen claim a bar the gate no longer applies.
+DSR_MIN = 0.95        # Deflated-Sharpe floor a genome must clear individually
+PBO_MAX = 0.5         # batch PBO above this bins the WHOLE cohort as overfit
+
 
 def _state_dir() -> str:
     from . import fx_book
@@ -55,7 +61,7 @@ def champions_agents(account: str) -> list[Agent]:
 
 
 def gate(finalists: list[gm.Genome], holdout_panel: dict, p, n_trials: int, *,
-         dsr_min: float = 0.95, pbo_max: float = 0.5,
+         dsr_min: float = DSR_MIN, pbo_max: float = PBO_MAX,
          sr_variance: float | None = None) -> tuple[list[tuple[gm.Genome, float]], float]:
     rets = {g.gid: evolve.genome_returns(g, holdout_panel, p) for g in finalists}
     mat = pd.DataFrame(rets).dropna()
@@ -101,8 +107,8 @@ def apply_rotation(prev: list[gm.Genome], passed: list[gm.Genome], *,
 
 
 def promote(account: str, *, synthetic: bool, profile_name: str,
-            rotation_cap: int = 2, top_k: int = 6, dsr_min: float = 0.95,
-            pbo_max: float = 0.5) -> dict:
+            rotation_cap: int = 2, top_k: int = 6, dsr_min: float = DSR_MIN,
+            pbo_max: float = PBO_MAX) -> dict:
     from . import fx_config as cfg
     log = evolve.read_log(account)
     if log is None:

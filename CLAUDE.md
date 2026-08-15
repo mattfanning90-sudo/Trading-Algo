@@ -63,7 +63,8 @@ It reuses this project's principles (no lookahead, costs always on, one shared
   and it runs after every scheduled paper run
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
-  OVERVIEW/POSITIONS/BACKTEST/METHOD tabs, FIFO closed-trades ledger,
+  OVERVIEW/POSITIONS/BACKTEST/METHOD tabs (+ SWARM on FX books), FIFO
+  closed-trades ledger,
   agent-vote decision book, candlestick pair charts. Equity and FX books are at
   **parity in money terms** — both show net P&L (realised/open), costs, a
   drawdown chart, an open book at cost basis, a full fill blotter and a FIFO
