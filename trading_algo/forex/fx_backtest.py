@@ -35,9 +35,24 @@ def _sign(x: float) -> int:
 
 def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
                  pool: AgentPool | None = None,
-                 initial_capital: float = 5_000.0) -> dict:
-    """Simulate the multi-agent FX book over `panel`. Returns curves + metrics."""
-    weights = fx_strategy.target_weights_history(panel, p, pool=pool)
+                 initial_capital: float = 5_000.0,
+                 weights: pd.DataFrame | None = None) -> dict:
+    """Simulate the multi-agent FX book over `panel`. Returns curves + metrics.
+
+    `weights` supplies a PRE-COMPUTED target-weight history instead of deriving
+    it from the panel. This exists for one caller — `policy_sweep`, which varies
+    only the holding-policy knobs (entry/exit thresholds, minimum hold, churn
+    band). None of those feed `target_weights_history`; they are applied after
+    it, in `position_policy`. So the weights are genuinely identical across such
+    a grid and recomputing the agent pass per combination is pure waste.
+
+    It is NOT a general escape hatch: pass a frame derived from anything other
+    than this panel under this `p` and you have silently left the one weight
+    function behind (invariant #3) — and a frame built with future information
+    would break no-lookahead (#1) with nothing here able to detect it.
+    """
+    if weights is None:
+        weights = fx_strategy.target_weights_history(panel, p, pool=pool)
     if weights.empty or len(weights) < 3:
         raise ValueError("not enough history to backtest")
 
