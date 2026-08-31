@@ -63,13 +63,15 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
     dates = weights.index
 
     # AUD account: translate each pair's quote-currency return into AUD (see
-    # fxconv). audq_ratioₜ = aud_per_quoteₜ / aud_per_quoteₜ₋₁ per pair; the AUD
-    # return of a pair over a bar is (1+pair_ret)*ratio − 1. Falls back to the raw
+    # fxconv for the derivation). audq_ratioₜ = aud_per_quoteₜ / aud_per_quoteₜ₋₁
+    # per pair; only the P&L translates, so the AUD return of a pair over a bar is
+    # pair_ret * ratio — routed through marks.aud_return so this cannot re-fork
+    # from the book's scalar marks.position_contribution. Falls back to the raw
     # return wherever the AUD/quote rate isn't derivable from the panel.
     audq = fxconv.aud_per_quote_frame(px, [specs[s].quote for s in pairs])
     audq_pair = pd.DataFrame({s: audq[specs[s].quote] for s in pairs})
     audq_ratio = (audq_pair / audq_pair.shift(1)).reindex(columns=pairs).fillna(1.0)
-    aud_rets = (1.0 + rets) * audq_ratio - 1.0
+    aud_rets = marks.aud_return(rets, audq_ratio)
 
     held = pd.Series(0.0, index=pairs)
     ages: dict[str, int] = {}          # bars each open position has been held

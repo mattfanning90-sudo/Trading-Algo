@@ -25,37 +25,50 @@ def _state(trades):
 
 
 def test_blotter_pnl_includes_aud_translation():
-    """EURUSD flat, AUD strengthens 0.66->0.70: a long USD-quoted position LOSES
-    in AUD — the blotter must show it (it used to show 0.00)."""
+    """EURUSD +1% while AUD strengthens 0.66->0.70: the blotter must translate
+    the 1% earned in USD at AUD-per-USD over the same interval (0.66/0.70), not
+    report the raw 1% and not report 0.00."""
     st = _state([{"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
                   "delta_weight": 1.0, "target_weight": 1.0, "price": 1.08}])
-    txn = dashboard._transactions(st, _panel())
+    txn = dashboard._transactions(st, _panel(eur=(1.08, 1.08 * 1.01)))
     pnl = txn["rows"][0]["pnl"]
-    assert pnl == pytest.approx(5_000 * (0.66 / 0.70 - 1.0), rel=1e-3)   # ≈ -285.71
-    assert pnl < -280
+    assert pnl == pytest.approx(5_000 * 0.01 * (0.66 / 0.70), rel=1e-3)   # ≈ +47.14
+    assert 0.0 < pnl < 5_000 * 0.01     # translated down from the raw 1%
 
 
-def test_blotter_audusd_trade_matches_book_convention():
-    """A long AUDUSD position marks to ~0 in AUD terms when only AUDUSD moves
-    (the pair gain IS the currency move) — book convention, blotter must agree."""
+def test_blotter_flat_pair_earns_nothing():
+    """A pair that did not move earns nothing however far AUD/USD travelled —
+    a margin book owns no notional to revalue (see fxconv's derivation)."""
+    st = _state([{"date": "2025-01-02", "pair": "EURUSD", "side": "BUY",
+                  "delta_weight": 1.0, "target_weight": 1.0, "price": 1.08}])
+    txn = dashboard._transactions(st, _panel())         # EURUSD flat, AUD 0.66->0.70
+    assert txn["rows"][0]["pnl"] == pytest.approx(0.0, abs=0.02)
+
+
+def test_blotter_audusd_trade_earns_on_the_currency_move():
+    """A long AUDUSD IS a bet on AUD, and an AUD-denominated book must book it.
+    The old mark made AUDUSD's translation factor exactly 1/r, cancelling the
+    position to a hard 0.00 for ever; long 1.0 at 0.66 into 0.70 now earns
+    5,000 * (0.04/0.70) ≈ +285.71."""
     st = _state([{"date": "2025-01-02", "pair": "AUDUSD", "side": "BUY",
                   "delta_weight": 1.0, "target_weight": 1.0, "price": 0.66}])
     txn = dashboard._transactions(st, _panel())
-    assert txn["rows"][0]["pnl"] == pytest.approx(0.0, abs=0.02)
+    pnl = txn["rows"][0]["pnl"]
+    assert pnl == pytest.approx(5_000 * (0.70 / 0.66 - 1.0) * (0.66 / 0.70), rel=1e-3)
+    assert pnl > 280
 
 
 def test_blotter_out_of_window_trade_uses_hub_closes():
     """A trade OLDER than the bounded display panel must keep its real AUD
-    translation via the injected hub closes — not the old fxf=1.0 fallback
-    (which produced pnl 0.0 here)."""
+    translation via the injected hub closes — not an fxf=1.0 fallback."""
     st = _state([{"date": "2024-06-01", "pair": "EURUSD", "side": "BUY",
                   "delta_weight": 1.0, "target_weight": 1.0, "price": 1.08}])
     hub = pd.DataFrame({"AUDUSD": [0.66, 0.70]},
                        index=pd.to_datetime(["2024-06-01", "2025-01-03"]))
-    txn = dashboard._transactions(st, _panel(), hub_closes=hub)
+    txn = dashboard._transactions(st, _panel(eur=(1.08, 1.08 * 1.01)), hub_closes=hub)
     pnl = txn["rows"][0]["pnl"]
-    assert pnl == pytest.approx(5_000 * (0.66 / 0.70 - 1.0), rel=1e-3)   # ≈ -285.71
-    assert pnl < -280
+    assert pnl == pytest.approx(5_000 * 0.01 * (0.66 / 0.70), rel=1e-3)   # ≈ +47.14
+    assert pnl < 5_000 * 0.01           # strictly translated, not the raw 1%
 
 
 def test_blotter_rejects_corrupt_negative_rate():
