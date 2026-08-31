@@ -16,6 +16,12 @@ nothing is flagged (it returns the base eligibility unchanged, including None).
 Checks, as-of a rebalance date:
   * dead price     — latest close is NaN / <= 0, or too little history to trade
   * staleness      — the last N closes are identical (a frozen / stuck feed)
+  * near-frozen    — the feed still ticks, but over almost no distinct levels AND
+                     at an implausibly low volatility (a degraded/rounded feed).
+                     This one matters disproportionately: inverse-vol weighting
+                     rewards low measured vol, so a dead feed earns the LARGEST
+                     weight and drags the sleeve's vol estimate down far enough
+                     to pull maximum vol-target leverage in behind it.
   * gap            — too many missing prints in the trailing window
   * impossible move — a 1-day return beyond a region-aware threshold (a likely
                       unadjusted split/spike); flagged conservatively since there
@@ -35,6 +41,14 @@ from . import config as cfg
 STALE_DAYS = 5          # this many identical consecutive closes -> stale
 GAP_WINDOW = 20         # trailing rows examined for gaps
 MAX_GAP_DAYS = 3        # more than this many missing prints in the window -> drop
+# Near-frozen feed: BOTH conditions must hold. Either one alone misfires on real
+# instruments — a low-priced stock on a coarse tick grid repeats closes while
+# genuinely moving, and a short-duration bond ETF is calm but prints a fresh
+# close every day. Measured across the live ASX/US/FTSE universes (246 names),
+# the conjunction flags only feeds that are actually degraded.
+FROZEN_WINDOW = 63      # trailing valid closes examined (matches vol_lookback)
+FROZEN_DISTINCT = 0.5   # distinct closes below this share of the window, AND...
+FROZEN_VOL = 0.05       # ...annualised vol below this -> the feed is dead
 # Fallback "impossible move" threshold for a region record that does not carry
 # its own `jump_threshold` (e.g. a duck-typed object in a test). The real per-
 # region values now live on the Region record (regions.py): 0.50 default,
@@ -68,7 +82,11 @@ def _jump_threshold(region) -> float:
 # yields too few valid prints inside it falls back to its full history (see
 # `_valid_tail`), which is what makes this identical to a full scan rather than
 # merely equivalent.
-_SCAN_WINDOW = max(GAP_WINDOW, (STALE_DAYS + 1) * 4, 40)
+# FROZEN_WINDOW gets HEADROOM, not an exact fit: the block is a fixed slice of
+# rows, so sizing it to exactly FROZEN_WINDOW means one missing print leaves a
+# single valid close too few and the frozen check silently never runs — for
+# every name, not just the gapped one.
+_SCAN_WINDOW = max(GAP_WINDOW, (STALE_DAYS + 1) * 4, FROZEN_WINDOW * 2, 40)
 
 
 def _valid_tail(block: np.ndarray, col: pd.Series, upto: int) -> np.ndarray:
@@ -128,6 +146,18 @@ def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:
         if len(tail) >= STALE_DAYS + 1 and float(tail.max() - tail.min()) == 0.0:
             report.flag(t, f"stale ({STALE_DAYS}+ unchanged closes)")
             continue
+
+        # near-frozen: barely any distinct closes AND implausibly low vol.
+        if len(valid) >= FROZEN_WINDOW:
+            win = valid[-FROZEN_WINDOW:]
+            if win.min() > 0:
+                distinct = len(np.unique(win)) / len(win)
+                if distinct < FROZEN_DISTINCT:
+                    vol = float(np.std(np.diff(win) / win[:-1], ddof=1)) * np.sqrt(252)
+                    if vol < FROZEN_VOL:
+                        report.flag(t, f"near-frozen ({distinct:.0%} distinct "
+                                       f"closes, {vol:.1%} vol)")
+                        continue
 
         # gap: too many missing prints in the trailing window
         missing = int(n_missing[j])

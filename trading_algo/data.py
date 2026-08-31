@@ -143,6 +143,13 @@ def load_region(region: Region, start: str, end: str | None = None,
     index_px = df[region.index_ticker]
     prices = df[[c for c in df.columns if c != region.index_ticker]]
     prices = prices * region.price_scale
+    # `load_prices` drops all-NaN rows across the COMBINED frame, so a session
+    # where only the regime index printed survives here as an all-NaN universe
+    # row. Every trailing signal read off it is NaN — realised vol above all —
+    # so the sleeve returns no targets and liquidates to cash on a day nothing
+    # was actually wrong. A day with no tradeable price is not a session.
+    # The index keeps its own calendar; callers reindex it onto `prices`.
+    prices = prices.dropna(how="all")
     return prices, index_px
 
 

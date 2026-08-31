@@ -1,9 +1,11 @@
 """Backlog F14: market-data provider fallback."""
+import numpy as np
 import pandas as pd
 import pytest
 
 from trading_algo import config as cfg
 from trading_algo import data
+from trading_algo.regions import get_region
 
 
 def _fake_loader(tickers, start, end):
@@ -66,3 +68,28 @@ def test_primary_success_skips_fallback(monkeypatch):
     monkeypatch.setattr(cfg, "DATA_FALLBACK_SOURCE", "fake")
     data.load_prices(["ONLY"], "2020-01-01", use_cache=False)
     assert called["fb"] is False, "fallback must not run when the primary succeeds"
+
+
+def test_load_region_drops_rows_where_only_the_index_printed(monkeypatch):
+    """A day the index printed but no stock did is not a tradeable session.
+
+    `load_prices` drops all-NaN rows across the COMBINED frame, so a row
+    carrying only the regime index survives into `prices` as an all-NaN row.
+    Every trailing signal read off that row is then NaN — realised vol most of
+    all — so the sleeve produces no targets and silently liquidates to cash on
+    a day nothing was actually wrong with it.
+    """
+    region = get_region("FTSE")
+    idx = pd.bdate_range("2024-01-01", periods=4)
+    frame = pd.DataFrame(
+        {region.universe[0]: [100.0, 101.0, 102.0, np.nan],
+         region.universe[1]: [50.0, 51.0, 52.0, np.nan],
+         region.index_ticker: [7000.0, 7010.0, 7020.0, 7030.0]},
+        index=idx)
+    monkeypatch.setattr(data, "load_prices", lambda *a, **k: frame)
+
+    prices, index_px = data.load_region(region, "2024-01-01")
+
+    assert prices.index[-1] == idx[2], "the index-only row must not be the as-of date"
+    assert prices.notna().any(axis=1).all(), "no all-NaN rows survive"
+    assert len(index_px) == 4, "the index series itself keeps its own calendar"

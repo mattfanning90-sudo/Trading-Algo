@@ -69,3 +69,29 @@ def test_value_blend_compute_targets(synth_asx, asx_region):
     assert (w >= 0).all()
     # value blend changes selection vs pure momentum (not guaranteed identical)
     assert len(w) <= p.top_n
+
+
+def test_vol_target_floors_implausibly_calm_names():
+    """A degraded feed must not buy the whole sleeve extra leverage.
+
+    `vol_target` scales the book by target_vol / estimated_vol, so a name whose
+    measured volatility is implausibly low understates the estimate and pulls
+    the sleeve UP toward `max_vol_scale`. That is the larger half of the same
+    defect the sizing floor exists for: the concentration effect hits one name,
+    this one levers everything.
+    """
+    w = pd.Series({"A": 0.25, "B": 0.25, "C": 0.25, "D": 0.25})
+    dead = pd.Series({"A": 0.005, "B": 0.30, "C": 0.30, "D": 0.30})
+    floored = pd.Series({"A": P.min_vol, "B": 0.30, "C": 0.30, "D": 0.30})
+
+    pd.testing.assert_series_equal(strategy.vol_target(w, dead, P),
+                                   strategy.vol_target(w, floored, P))
+
+
+def test_vol_target_still_responds_to_real_volatility():
+    """Above the floor, a calmer book must still receive more leverage."""
+    w = pd.Series({"A": 0.25, "B": 0.25, "C": 0.25, "D": 0.25})
+    calm = pd.Series({k: 0.10 for k in w.index})
+    wild = pd.Series({k: 0.40 for k in w.index})
+
+    assert strategy.vol_target(w, calm, P).sum() > strategy.vol_target(w, wild, P).sum()

@@ -135,3 +135,84 @@ def test_paper_freezes_held_flagged_name(us):
     paper_trade.rebalance_sleeve(us, sleeve2, pd.Series(dtype=float), px,
                                  "2026-06-01", [])
     assert "AAA" not in sleeve2["positions"]
+
+
+# --- near-frozen feeds ------------------------------------------------------
+def _frozen_series(n=80, levels=(5.835, 5.840), run=3):
+    """A feed that technically ticks but carries almost no information: it
+    oscillates between a couple of levels every `run` bars. Never trips the
+    staleness check (no STALE_DAYS+1 identical closes in a row)."""
+    vals = [levels[(i // run) % len(levels)] for i in range(n)]
+    return np.array(vals, dtype=float)
+
+
+def test_near_frozen_feed_is_flagged(ftse):
+    """A price that barely moves must not reach the weighter.
+
+    Inverse-vol weighting rewards low measured volatility, so a degraded feed
+    earns the LARGEST position and, because it drags the sleeve's vol estimate
+    down, the maximum vol-target leverage on top. The staleness check only sees
+    exactly-identical runs, so an oscillating dead feed walks straight through.
+    """
+    idx = pd.bdate_range("2023-01-02", periods=80)
+    df = pd.DataFrame({
+        "GOOD": 100 * (1 + 0.02 * np.sin(np.arange(80) / 3.0)),
+        "FROZEN": _frozen_series(80),
+    }, index=idx)
+
+    report = data_quality.assess(df, ftse, df.index[-1])
+
+    assert "FROZEN" in report.excluded
+    assert "near-frozen" in report.reasons["FROZEN"]
+    assert "GOOD" not in report.excluded
+
+
+def test_low_volatility_but_moving_feed_is_not_flagged(us):
+    """A genuinely calm instrument (a short-duration bond ETF) is not a broken
+    feed: its closes still change every day. Only the conjunction of 'barely any
+    distinct closes' AND 'implausibly low vol' means the data is dead."""
+    idx = pd.bdate_range("2023-01-02", periods=80)
+    rng = np.random.default_rng(7)
+    # ~3% annualised: every close distinct, just a very calm instrument
+    steps = rng.normal(0, 0.03 / np.sqrt(252), 80)
+    df = pd.DataFrame({"BOND": 100 * np.exp(np.cumsum(steps))}, index=idx)
+
+    report = data_quality.assess(df, us, df.index[-1])
+
+    assert report.excluded == set()
+
+
+def test_coarse_tick_but_volatile_feed_is_not_flagged(us):
+    """A low-priced stock on a coarse tick grid repeats closes often, but it is
+    genuinely moving. Volatility is what separates it from a dead feed."""
+    idx = pd.bdate_range("2023-01-02", periods=80)
+    rng = np.random.default_rng(3)
+    walk = 3.0 + np.cumsum(rng.choice([-0.02, 0.02], size=80))
+    df = pd.DataFrame({"PENNY": np.round(walk, 2)}, index=idx)
+
+    report = data_quality.assess(df, us, df.index[-1])
+
+    assert report.excluded == set()
+
+
+def test_near_frozen_feed_is_flagged_despite_a_gap(ftse):
+    """The frozen check must survive a hole in the feed.
+
+    The trailing scan window is read as a fixed block, so if it is sized exactly
+    to the frozen window a single missing print leaves one valid close too few
+    and the check silently never runs — for every name. It needs headroom.
+    """
+    n = 200
+    idx = pd.bdate_range("2023-01-02", periods=n)
+    frozen = _frozen_series(n)
+    df = pd.DataFrame({
+        "GOOD": 100 * (1 + 0.02 * np.sin(np.arange(n) / 3.0)),
+        "FROZEN": frozen,
+    }, index=idx)
+    # one missing print, outside the gap window so only the frozen check applies
+    df.iloc[-30, df.columns.get_loc("FROZEN")] = np.nan
+
+    report = data_quality.assess(df, ftse, df.index[-1])
+
+    assert "FROZEN" in report.excluded
+    assert "near-frozen" in report.reasons["FROZEN"]

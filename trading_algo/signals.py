@@ -30,21 +30,48 @@ def value_score(prices: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
 
 
 def stock_trend_ok(prices: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    """True where price is above its trend moving average."""
-    ma = prices.rolling(p.stock_trend_ma).mean()
-    return prices > ma
+    """True where price is above its trend moving average.
+
+    Carries the last known close over gaps first — see `index_risk_on` for why.
+    Forward-filling is causal (it only ever reuses a past print) and it is NOT
+    the defence against a permanently dead feed: `data_quality` owns that, and
+    removes such names from the candidate set before they reach here.
+    """
+    px = prices.ffill()
+    ma = px.rolling(p.stock_trend_ma).mean()
+    return px > ma
 
 
 def index_risk_on(index_prices: pd.Series, p: StrategyParams) -> pd.Series:
-    """Regime filter: risk-on only when the index is above its trend MA."""
-    ma = index_prices.rolling(p.index_trend_ma).mean()
-    return index_prices > ma
+    """Regime filter: risk-on only when the index is above its trend MA.
+
+    The last known close is carried over gaps BEFORE the rolling mean. Without
+    that, one missing print makes every window containing it NaN, and since
+    `price > NaN` is False the sleeve reads risk-off — and stays there for the
+    next `index_trend_ma` bars, reporting a legitimate-looking 'regime-off'
+    while the index sits comfortably above its trend. A missing print is an
+    absence of news, not a bearish signal.
+    """
+    px = index_prices.ffill()
+    ma = px.rolling(p.index_trend_ma).mean()
+    return px > ma
 
 
 def realised_vol(prices: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     """Annualised trailing realised volatility per asset."""
     rets = prices.pct_change(fill_method=None)
     return rets.rolling(p.vol_lookback).std() * np.sqrt(252)
+
+
+def sizing_vol(vols: pd.Series, p: StrategyParams) -> pd.Series:
+    """Volatilities as used for POSITION SIZING: floored at `p.min_vol`, with
+    unusable (zero / missing) readings dropped.
+
+    Kept separate from `realised_vol`, which stays an honest measurement — the
+    floor is a sizing judgement ("we do not believe any equity is calmer than
+    this"), not a claim about what the market did.
+    """
+    return vols.replace(0, np.nan).dropna().clip(lower=p.min_vol)
 
 
 def select_portfolio(scores: pd.Series, trend_ok: pd.Series,
@@ -69,7 +96,7 @@ def select_portfolio(scores: pd.Series, trend_ok: pd.Series,
     if metric.empty:
         return pd.Series(dtype=float)
     picks = metric.nlargest(min(p.top_n, len(metric))).index
-    inv_vol = 1.0 / vols.reindex(picks).replace(0, np.nan).dropna()
+    inv_vol = 1.0 / sizing_vol(vols.reindex(picks), p)
     if inv_vol.empty:
         return pd.Series(dtype=float)
 
@@ -86,7 +113,7 @@ def _leg_weights(names, vols: pd.Series, p: StrategyParams, sign: float) -> pd.S
     """Inverse-vol weights for one leg (long or short), normalised to sum to
     `sign` (±1) before the book-level vol targeting scales it. Returns an empty
     Series if no name has a usable vol."""
-    inv_vol = 1.0 / vols.reindex(names).replace(0, np.nan).dropna()
+    inv_vol = 1.0 / sizing_vol(vols.reindex(names), p)
     if inv_vol.empty:
         return pd.Series(dtype=float)
     w = inv_vol / inv_vol.sum()

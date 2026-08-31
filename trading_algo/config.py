@@ -124,6 +124,13 @@ class StrategyParams(RiskParams):
     #  max_vol_scale are inherited from RiskParams with the equity defaults.)
     top_n: int = 10                 # hold top N momentum names
     max_weight: float = 0.15        # single-name cap
+    # Sizing floor on measured volatility. Inverse-vol weighting gives the
+    # LARGEST position to the lowest measured vol, so a degraded price feed —
+    # one that barely ticks — attracts the most capital precisely because its
+    # data is broken. `data_quality` removes such names outright; this is the
+    # backstop for whatever slips through. No liquid equity realises less than
+    # this, so it never binds on a healthy name.
+    min_vol: float = 0.05           # annualised; vols below this size as if here
 
     # --- Long/short (market-neutral) mode ----------------------------------
     # Off by default → the classic long-only book (unchanged). When on,
