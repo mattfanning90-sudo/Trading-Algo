@@ -18,30 +18,32 @@
     "SOLUSD"
   ],
   "initial_capital": 10000.0,
-  "equity": 9337.477542975997,
+  "equity": 9325.986819293317,
   "positions": {
-    "GBPUSD": -0.25,
-    "NZDUSD": -0.25,
-    "USDJPY": -0.00466,
-    "BTCUSD": -0.03188,
-    "USDCAD": 0.06317,
-    "AUDUSD": -0.25,
+    "USDCAD": 0.25,
     "SOLUSD": -0.03419,
-    "ETHUSD": -0.03394
+    "GBPUSD": -0.25,
+    "AUDUSD": -0.25,
+    "BTCUSD": -0.03188,
+    "EURUSD": -0.25,
+    "USDJPY": -0.00466,
+    "NZDUSD": -0.25,
+    "USDCHF": 0.19374,
+    "ETHUSD": 0.05
   },
   "last_close": {
-    "EURUSD": 1.156738042831421,
-    "GBPUSD": 1.3503477573394775,
-    "USDJPY": 154.0189971923828,
-    "AUDUSD": 0.7153075933456421,
-    "USDCAD": 1.3874399662017822,
-    "USDCHF": 0.8183000087738037,
-    "NZDUSD": 0.5784693360328674,
-    "BTCUSD": 77641.453125,
-    "ETHUSD": 2515.1298828125,
-    "SOLUSD": 101.20999908447266
+    "EURUSD": 1.154334545135498,
+    "GBPUSD": 1.34865403175354,
+    "USDJPY": 154.61000061035156,
+    "AUDUSD": 0.7133176326751709,
+    "USDCAD": 1.3894000053405762,
+    "USDCHF": 0.8170700073242188,
+    "NZDUSD": 0.577500581741333,
+    "BTCUSD": 77915.953125,
+    "ETHUSD": 2515.780029296875,
+    "SOLUSD": 101.80000305175781
   },
-  "last_bar_date": "2026-09-14 04:00",
+  "last_bar_date": "2026-09-14 10:00",
   "peak_equity": 10147.005958390579,
   "risk_halted": false,
   "halt_cooldown": 0,
@@ -65671,6 +65673,126 @@
         "donchian_lo": 0.8161,
         "ann_vol": 0.02336
       }
+    },
+    {
+      "date": "2026-09-14 10:00",
+      "pair": "ETHUSD",
+      "side": "BUY",
+      "delta_weight": 0.0839,
+      "target_weight": 0.05,
+      "price": 2515.78003,
+      "aud_per_quote": 1.4019,
+      "why": "LONG ETHUSD at 2515.8, sized to 5% of equity (signed weight +0.05). Net ensemble tilt +0.50. Driven by: Momentum +0.91. Leaning against: breakout -1.00, meanrev -0.22. Evidence: EMA10 is above EMA40 (ADX 19, ranging); RSI 55; 24d momentum +1.8%. Realised vol 37%; the vol-target + per-pair cap set the final size.",
+      "regime": "ranging",
+      "agents": {
+        "trend": 0.0,
+        "breakout": -1.0,
+        "meanrev": -0.215,
+        "momentum": 0.913,
+        "carry": 0.0
+      },
+      "indicators": {
+        "price": 2515.78003,
+        "ema_fast": 2513.00789,
+        "ema_slow": 2507.47743,
+        "adx": 18.5856,
+        "rsi": 54.71857,
+        "roc": 0.01811,
+        "bb_z": 0.75035,
+        "donchian_hi": 2533.3999,
+        "donchian_lo": 2465.44995,
+        "ann_vol": 0.37073
+      }
+    },
+    {
+      "date": "2026-09-14 10:00",
+      "pair": "EURUSD",
+      "side": "SELL",
+      "delta_weight": -0.25,
+      "target_weight": -0.25,
+      "price": 1.15433,
+      "aud_per_quote": 1.4019,
+      "why": "SHORT EURUSD at 1.1543, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.83. Driven by: Breakout -1.00, Momentum -0.99, Trend -0.91. Evidence: EMA10 is below EMA40 (ADX 77, trending); RSI 11; 24d momentum -0.5%; price -1.6\u03c3 from its Bollinger mean. Realised vol 4%; the vol-target + per-pair cap set the final size.",
+      "regime": "trending",
+      "agents": {
+        "trend": -0.907,
+        "breakout": -1.0,
+        "meanrev": 0.0,
+        "momentum": -0.989,
+        "carry": 0.05
+      },
+      "indicators": {
+        "price": 1.15433,
+        "ema_fast": 1.15601,
+        "ema_slow": 1.15857,
+        "adx": 76.81049,
+        "rsi": 11.08982,
+        "roc": -0.00508,
+        "bb_z": -1.64813,
+        "donchian_hi": 1.16023,
+        "donchian_lo": 1.1538,
+        "ann_vol": 0.03663
+      }
+    },
+    {
+      "date": "2026-09-14 10:00",
+      "pair": "USDCAD",
+      "side": "BUY",
+      "delta_weight": 0.1868,
+      "target_weight": 0.25,
+      "price": 1.3894,
+      "aud_per_quote": 1.008997,
+      "why": "LONG USDCAD at 1.3894, sized to 25% of equity (signed weight +0.25). Net ensemble tilt +0.61. Driven by: Breakout +1.00, Momentum +0.99, Trend +0.46. Evidence: EMA10 is above EMA40 (ADX 55, trending); RSI 81; 24d momentum +0.2%; price +2.1\u03c3 from its Bollinger mean. Realised vol 3%; the vol-target + per-pair cap set the final size.",
+      "regime": "trending",
+      "agents": {
+        "trend": 0.458,
+        "breakout": 1.0,
+        "meanrev": -0.0,
+        "momentum": 0.993,
+        "carry": 0.225
+      },
+      "indicators": {
+        "price": 1.3894,
+        "ema_fast": 1.38831,
+        "ema_slow": 1.38726,
+        "adx": 55.38109,
+        "rsi": 81.48,
+        "roc": 0.0018,
+        "bb_z": 2.09114,
+        "donchian_hi": 1.39022,
+        "donchian_lo": 1.386,
+        "ann_vol": 0.02661
+      }
+    },
+    {
+      "date": "2026-09-14 10:00",
+      "pair": "USDCHF",
+      "side": "BUY",
+      "delta_weight": 0.1937,
+      "target_weight": 0.1937,
+      "price": 0.81707,
+      "aud_per_quote": 1.715765,
+      "why": "LONG USDCHF at 0.81707, sized to 19% of equity (signed weight +0.19). Net ensemble tilt +0.43. Driven by: Breakout +1.00, Momentum +0.74, Carry +0.50. Evidence: EMA10 is above EMA40 (ADX 52, trending); RSI 49; 24d momentum +0.1%. Realised vol 6%; the vol-target + per-pair cap set the final size.",
+      "regime": "trending",
+      "agents": {
+        "trend": 0.469,
+        "breakout": 1.0,
+        "meanrev": 0.0,
+        "momentum": 0.739,
+        "carry": 0.5
+      },
+      "indicators": {
+        "price": 0.81707,
+        "ema_fast": 0.8177,
+        "ema_slow": 0.81677,
+        "adx": 51.87404,
+        "rsi": 49.43574,
+        "roc": 0.00119,
+        "bb_z": -0.05147,
+        "donchian_hi": 0.81952,
+        "donchian_lo": 0.8161,
+        "ann_vol": 0.05758
+      }
     }
   ],
   "equity_history": [
@@ -67921,339 +68043,329 @@
     [
       "2026-09-14 04:00",
       9337.48
+    ],
+    [
+      "2026-09-14 10:00",
+      9325.99
     ]
   ],
   "decisions": {
     "EURUSD": {
-      "weight": 0.0,
-      "tilt": 0.0,
+      "weight": -0.25,
+      "tilt": -0.8341,
       "regime": "trending",
       "agents": {
-        "trend": -0.806,
+        "trend": -0.907,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.999,
+        "momentum": -0.989,
         "carry": 0.05
       },
       "indicators": {
-        "price": 1.15674,
-        "ema_fast": 1.1587,
-        "ema_slow": 1.1598,
-        "adx": 64.33188,
-        "rsi": 1.28613,
-        "roc": -0.00301,
-        "bb_z": -2.83809,
+        "price": 1.15433,
+        "ema_fast": 1.15601,
+        "ema_slow": 1.15857,
+        "adx": 76.81049,
+        "rsi": 11.08982,
+        "roc": -0.00508,
+        "bb_z": -1.64813,
         "donchian_hi": 1.16023,
-        "donchian_lo": 1.15727,
-        "ann_vol": 0.02325
+        "donchian_lo": 1.1538,
+        "ann_vol": 0.03663
       },
-      "text": "No position in EURUSD: the agents' net view (tilt +0.00) was too weak/conflicted to clear the no-trade band."
+      "text": "SHORT EURUSD at 1.1543, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.83. Driven by: Breakout -1.00, Momentum -0.99, Trend -0.91. Evidence: EMA10 is below EMA40 (ADX 77, trending); RSI 11; 24d momentum -0.5%; price -1.6\u03c3 from its Bollinger mean. Realised vol 4%; the vol-target + per-pair cap set the final size."
     },
     "GBPUSD": {
       "weight": -0.25,
-      "tilt": -0.9388,
+      "tilt": -0.9144,
       "regime": "trending",
       "agents": {
-        "trend": -0.718,
+        "trend": -0.751,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.997,
+        "momentum": -0.988,
         "carry": 0.1
       },
       "indicators": {
-        "price": 1.35035,
-        "ema_fast": 1.35168,
-        "ema_slow": 1.35246,
-        "adx": 50.39924,
-        "rsi": 2.85468,
-        "roc": -0.00188,
-        "bb_z": -2.5685,
+        "price": 1.34865,
+        "ema_fast": 1.34979,
+        "ema_slow": 1.35159,
+        "adx": 67.63258,
+        "rsi": 15.83161,
+        "roc": -0.00313,
+        "bb_z": -1.57897,
         "donchian_hi": 1.35289,
-        "donchian_lo": 1.35038,
-        "ann_vol": 0.01512
+        "donchian_lo": 1.34747,
+        "ann_vol": 0.02769
       },
-      "text": "SHORT GBPUSD at 1.3503, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.94. Driven by: Breakout -1.00, Momentum -1.00, Trend -0.72. Leaning against: carry +0.10. Evidence: EMA10 is below EMA40 (ADX 50, trending); price broke the 20-bar low; RSI 3; 24d momentum -0.2%; price -2.6\u03c3 from its Bollinger mean. Realised vol 2%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT GBPUSD at 1.3487, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.91. Driven by: Breakout -1.00, Momentum -0.99, Trend -0.75. Leaning against: carry +0.10. Evidence: EMA10 is below EMA40 (ADX 68, trending); RSI 16; 24d momentum -0.3%; price -1.6\u03c3 from its Bollinger mean. Realised vol 3%; the vol-target + per-pair cap set the final size."
     },
     "USDJPY": {
       "weight": 0.0,
       "tilt": 0.0,
       "regime": "trending",
       "agents": {
-        "trend": 0.154,
+        "trend": 0.468,
         "breakout": 1.0,
         "meanrev": -0.0,
-        "momentum": 0.992,
+        "momentum": 0.991,
         "carry": 0.5
       },
       "indicators": {
-        "price": 154.019,
-        "ema_fast": 153.78532,
-        "ema_slow": 153.64689,
-        "adx": 45.80418,
-        "rsi": 78.44675,
-        "roc": 0.00303,
-        "bb_z": 2.13733,
-        "donchian_hi": 154.14101,
+        "price": 154.61,
+        "ema_fast": 154.2587,
+        "ema_slow": 153.8465,
+        "adx": 54.52481,
+        "rsi": 89.0887,
+        "roc": 0.00688,
+        "bb_z": 1.79538,
+        "donchian_hi": 154.612,
         "donchian_lo": 153.368,
-        "ann_vol": 0.0509
+        "ann_vol": 0.06106
       },
       "text": "No position in USDJPY: the agents' net view (tilt +0.00) was too weak/conflicted to clear the no-trade band."
     },
     "AUDUSD": {
       "weight": -0.25,
-      "tilt": -0.8969,
+      "tilt": -0.8706,
       "regime": "trending",
       "agents": {
-        "trend": -0.78,
+        "trend": -0.851,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.975,
+        "momentum": -0.988,
         "carry": 0.175
       },
       "indicators": {
-        "price": 0.71531,
-        "ema_fast": 0.71585,
-        "ema_slow": 0.71679,
-        "adx": 44.06217,
-        "rsi": 25.3263,
-        "roc": -0.00272,
-        "bb_z": -1.41796,
+        "price": 0.71332,
+        "ema_fast": 0.71425,
+        "ema_slow": 0.71599,
+        "adx": 54.26045,
+        "rsi": 20.07922,
+        "roc": -0.00549,
+        "bb_z": -1.46366,
         "donchian_hi": 0.71726,
-        "donchian_lo": 0.71439,
-        "ann_vol": 0.05307
+        "donchian_lo": 0.71276,
+        "ann_vol": 0.06275
       },
-      "text": "SHORT AUDUSD at 0.71531, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.90. Driven by: Breakout -1.00, Momentum -0.97, Trend -0.78. Leaning against: carry +0.17. Evidence: EMA10 is below EMA40 (ADX 44, trending); RSI 25; 24d momentum -0.3%; price -1.4\u03c3 from its Bollinger mean. Realised vol 5%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT AUDUSD at 0.71332, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.87. Driven by: Breakout -1.00, Momentum -0.99, Trend -0.85. Leaning against: carry +0.17. Evidence: EMA10 is below EMA40 (ADX 54, trending); RSI 20; 24d momentum -0.5%; price -1.5\u03c3 from its Bollinger mean. Realised vol 6%; the vol-target + per-pair cap set the final size."
     },
     "USDCAD": {
-      "weight": 0.0632,
-      "tilt": 0.207,
+      "weight": 0.25,
+      "tilt": 0.6111,
       "regime": "trending",
       "agents": {
-        "trend": 0.285,
+        "trend": 0.458,
         "breakout": 1.0,
         "meanrev": -0.0,
-        "momentum": 0.999,
+        "momentum": 0.993,
         "carry": 0.225
       },
       "indicators": {
-        "price": 1.38744,
-        "ema_fast": 1.38706,
-        "ema_slow": 1.38677,
-        "adx": 61.2835,
-        "rsi": 81.47128,
-        "roc": 0.00039,
-        "bb_z": 3.02715,
-        "donchian_hi": 1.38752,
+        "price": 1.3894,
+        "ema_fast": 1.38831,
+        "ema_slow": 1.38726,
+        "adx": 55.38109,
+        "rsi": 81.48,
+        "roc": 0.0018,
+        "bb_z": 2.09114,
+        "donchian_hi": 1.39022,
         "donchian_lo": 1.386,
-        "ann_vol": 0.00535
+        "ann_vol": 0.02661
       },
-      "text": "LONG USDCAD at 1.3874, sized to 6% of equity (signed weight +0.06). Net ensemble tilt +0.21. Driven by: Breakout +1.00, Momentum +1.00, Trend +0.28. Evidence: EMA10 is above EMA40 (ADX 61, trending); RSI 81; 24d momentum +0.0%; price +3.0\u03c3 from its Bollinger mean. Realised vol 1%; the vol-target + per-pair cap set the final size."
+      "text": "LONG USDCAD at 1.3894, sized to 25% of equity (signed weight +0.25). Net ensemble tilt +0.61. Driven by: Breakout +1.00, Momentum +0.99, Trend +0.46. Evidence: EMA10 is above EMA40 (ADX 55, trending); RSI 81; 24d momentum +0.2%; price +2.1\u03c3 from its Bollinger mean. Realised vol 3%; the vol-target + per-pair cap set the final size."
     },
     "USDCHF": {
-      "weight": 0.0,
-      "tilt": 0.0,
+      "weight": 0.1937,
+      "tilt": 0.4315,
       "regime": "trending",
       "agents": {
-        "trend": 0.797,
+        "trend": 0.469,
         "breakout": 1.0,
-        "meanrev": -0.0,
-        "momentum": 0.996,
+        "meanrev": 0.0,
+        "momentum": 0.739,
         "carry": 0.5
       },
       "indicators": {
-        "price": 0.8183,
-        "ema_fast": 0.81726,
-        "ema_slow": 0.81634,
-        "adx": 61.71255,
-        "rsi": 98.24099,
-        "roc": 0.0027,
-        "bb_z": 2.28985,
-        "donchian_hi": 0.81834,
+        "price": 0.81707,
+        "ema_fast": 0.8177,
+        "ema_slow": 0.81677,
+        "adx": 51.87404,
+        "rsi": 49.43574,
+        "roc": 0.00119,
+        "bb_z": -0.05147,
+        "donchian_hi": 0.81952,
         "donchian_lo": 0.8161,
-        "ann_vol": 0.02336
+        "ann_vol": 0.05758
       },
-      "text": "No position in USDCHF: the agents' net view (tilt +0.00) was too weak/conflicted to clear the no-trade band."
+      "text": "LONG USDCHF at 0.81707, sized to 19% of equity (signed weight +0.19). Net ensemble tilt +0.43. Driven by: Breakout +1.00, Momentum +0.74, Carry +0.50. Evidence: EMA10 is above EMA40 (ADX 52, trending); RSI 49; 24d momentum +0.1%. Realised vol 6%; the vol-target + per-pair cap set the final size."
     },
     "NZDUSD": {
       "weight": -0.25,
-      "tilt": -0.9151,
+      "tilt": -0.9056,
       "regime": "trending",
       "agents": {
-        "trend": -0.89,
+        "trend": -0.909,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.995,
+        "momentum": -0.984,
         "carry": 0.225
       },
       "indicators": {
-        "price": 0.57847,
-        "ema_fast": 0.57993,
-        "ema_slow": 0.58111,
-        "adx": 49.9009,
-        "rsi": 2.42409,
-        "roc": -0.00544,
-        "bb_z": -2.20693,
+        "price": 0.5775,
+        "ema_fast": 0.5784,
+        "ema_slow": 0.58027,
+        "adx": 61.98493,
+        "rsi": 16.51011,
+        "roc": -0.0071,
+        "bb_z": -1.37728,
         "donchian_hi": 0.58197,
-        "donchian_lo": 0.5783,
-        "ann_vol": 0.04883
+        "donchian_lo": 0.57693,
+        "ann_vol": 0.05871
       },
-      "text": "SHORT NZDUSD at 0.57847, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.92. Driven by: Breakout -1.00, Momentum -0.99, Trend -0.89. Leaning against: carry +0.22. Evidence: EMA10 is below EMA40 (ADX 50, trending); RSI 2; 24d momentum -0.5%; price -2.2\u03c3 from its Bollinger mean. Realised vol 5%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT NZDUSD at 0.5775, sized to 25% of equity (signed weight -0.25). Net ensemble tilt -0.91. Driven by: Breakout -1.00, Momentum -0.98, Trend -0.91. Leaning against: carry +0.22. Evidence: EMA10 is below EMA40 (ADX 62, trending); RSI 17; 24d momentum -0.7%; price -1.4\u03c3 from its Bollinger mean. Realised vol 6%; the vol-target + per-pair cap set the final size."
     },
     "BTCUSD": {
-      "weight": -0.0319,
-      "tilt": -0.2965,
+      "weight": -0.0208,
+      "tilt": -0.2071,
       "regime": "ranging",
       "agents": {
         "trend": 0.0,
         "breakout": 1.0,
-        "meanrev": -0.415,
-        "momentum": 0.859,
+        "meanrev": -0.362,
+        "momentum": 0.98,
         "carry": 0.0
       },
       "indicators": {
-        "price": 77641.45312,
-        "ema_fast": 77275.04701,
-        "ema_slow": 77189.67567,
-        "adx": 19.25383,
-        "rsi": 62.62076,
-        "roc": 0.00588,
-        "bb_z": 1.70132,
-        "donchian_hi": 77828.75781,
-        "donchian_lo": 76355.34375,
-        "ann_vol": 0.26223
+        "price": 77915.95312,
+        "ema_fast": 77667.80176,
+        "ema_slow": 77347.61216,
+        "adx": 18.99976,
+        "rsi": 62.21098,
+        "roc": 0.01686,
+        "bb_z": 1.39656,
+        "donchian_hi": 78335.50781,
+        "donchian_lo": 76357.92969,
+        "ann_vol": 0.27206
       },
-      "text": "SHORT BTCUSD at 77641, sized to 3% of equity (signed weight -0.03). Net ensemble tilt -0.30. Driven by: Mean-reversion -0.41. Leaning against: breakout +1.00, momentum +0.86. Evidence: EMA10 is above EMA40 (ADX 19, ranging); RSI 63; 24d momentum +0.6%; price +1.7\u03c3 from its Bollinger mean. Realised vol 26%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT BTCUSD at 77916, sized to 2% of equity (signed weight -0.02). Net ensemble tilt -0.21. Driven by: Mean-reversion -0.36. Leaning against: breakout +1.00, momentum +0.98. Evidence: EMA10 is above EMA40 (ADX 19, ranging); RSI 62; 24d momentum +1.7%; price +1.4\u03c3 from its Bollinger mean. Realised vol 27%; the vol-target + per-pair cap set the final size."
     },
     "ETHUSD": {
-      "weight": -0.0339,
-      "tilt": -0.3157,
+      "weight": 0.05,
+      "tilt": 0.4987,
       "regime": "ranging",
       "agents": {
-        "trend": -0.0,
+        "trend": 0.0,
         "breakout": -1.0,
-        "meanrev": -0.366,
-        "momentum": -0.207,
+        "meanrev": -0.215,
+        "momentum": 0.913,
         "carry": 0.0
       },
       "indicators": {
-        "price": 2515.12988,
-        "ema_fast": 2501.26779,
-        "ema_slow": 2503.89013,
-        "adx": 18.78131,
-        "rsi": 56.65343,
-        "roc": -0.00181,
-        "bb_z": 1.41821,
-        "donchian_hi": 2518.78003,
-        "donchian_lo": 2462.31006,
-        "ann_vol": 0.43515
+        "price": 2515.78003,
+        "ema_fast": 2513.00789,
+        "ema_slow": 2507.47743,
+        "adx": 18.5856,
+        "rsi": 54.71857,
+        "roc": 0.01811,
+        "bb_z": 0.75035,
+        "donchian_hi": 2533.3999,
+        "donchian_lo": 2465.44995,
+        "ann_vol": 0.37073
       },
-      "text": "SHORT ETHUSD at 2515.1, sized to 3% of equity (signed weight -0.03). Net ensemble tilt -0.32. Driven by: Breakout -1.00, Mean-reversion -0.37, Momentum -0.21. Evidence: EMA10 is below EMA40 (ADX 19, ranging); RSI 57; 24d momentum -0.2%; price +1.4\u03c3 from its Bollinger mean. Realised vol 44%; the vol-target + per-pair cap set the final size."
+      "text": "LONG ETHUSD at 2515.8, sized to 5% of equity (signed weight +0.05). Net ensemble tilt +0.50. Driven by: Momentum +0.91. Leaning against: breakout -1.00, meanrev -0.22. Evidence: EMA10 is above EMA40 (ADX 19, ranging); RSI 55; 24d momentum +1.8%. Realised vol 37%; the vol-target + per-pair cap set the final size."
     },
     "SOLUSD": {
-      "weight": -0.0342,
-      "tilt": -0.3181,
+      "weight": -0.0292,
+      "tilt": -0.2917,
       "regime": "ranging",
       "agents": {
-        "trend": -0.0,
+        "trend": 0.0,
         "breakout": -1.0,
-        "meanrev": -0.312,
-        "momentum": -0.507,
+        "meanrev": -0.328,
+        "momentum": 0.933,
         "carry": 0.0
       },
       "indicators": {
-        "price": 101.21,
-        "ema_fast": 100.61782,
-        "ema_slow": 100.85544,
-        "adx": 17.20266,
-        "rsi": 54.65986,
-        "roc": -0.00482,
-        "bb_z": 1.15331,
-        "donchian_hi": 101.58,
+        "price": 101.8,
+        "ema_fast": 101.31607,
+        "ema_slow": 101.03701,
+        "adx": 17.56659,
+        "rsi": 59.08013,
+        "roc": 0.02291,
+        "bb_z": 1.22593,
+        "donchian_hi": 102.31,
         "donchian_lo": 98.96,
-        "ann_vol": 0.50073
+        "ann_vol": 0.46179
       },
-      "text": "SHORT SOLUSD at 101.21, sized to 3% of equity (signed weight -0.03). Net ensemble tilt -0.32. Driven by: Breakout -1.00, Momentum -0.51, Mean-reversion -0.31. Evidence: EMA10 is below EMA40 (ADX 17, ranging); RSI 55; 24d momentum -0.5%; price +1.2\u03c3 from its Bollinger mean. Realised vol 50%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT SOLUSD at 101.8, sized to 3% of equity (signed weight -0.03). Net ensemble tilt -0.29. Driven by: Breakout -1.00, Mean-reversion -0.33. Leaning against: momentum +0.93. Evidence: EMA10 is above EMA40 (ADX 18, ranging); RSI 59; 24d momentum +2.3%; price +1.2\u03c3 from its Bollinger mean. Realised vol 46%; the vol-target + per-pair cap set the final size."
     }
   },
   "daily": {
-    "date": "2026-09-14 04:00",
-    "start_equity": 9332.82,
-    "end_equity": 9337.48,
-    "pnl_pct": 0.000795,
-    "carry_pct": -2e-06,
-    "cost_pct": -0.000294,
-    "net_pct": 0.000499,
-    "net_aud": 4.65,
+    "date": "2026-09-14 10:00",
+    "start_equity": 9337.48,
+    "end_equity": 9325.99,
+    "pnl_pct": -0.001098,
+    "carry_pct": -8e-06,
+    "cost_pct": -0.000125,
+    "net_pct": -0.001231,
+    "net_aud": -11.49,
     "by_pair": [
       {
-        "pair": "BTCUSD",
-        "weight": 0.0461,
-        "move": 0.005061,
-        "fx": 0.002726,
-        "contrib": 0.00036
-      },
-      {
-        "pair": "USDCAD",
-        "weight": 0.1058,
-        "move": 0.000389,
-        "fx": 0.002335,
-        "contrib": 0.000288
+        "pair": "GBPUSD",
+        "weight": -0.25,
+        "move": -0.001254,
+        "fx": 0.00279,
+        "contrib": -0.000383
       },
       {
         "pair": "SOLUSD",
-        "weight": 0.0492,
-        "move": -0.006089,
-        "fx": 0.002726,
-        "contrib": -0.000166
+        "weight": -0.0342,
+        "move": 0.00583,
+        "fx": 0.00279,
+        "contrib": -0.000295
       },
       {
         "pair": "NZDUSD",
-        "weight": -0.0481,
-        "move": -0.005438,
-        "fx": 0.002726,
-        "contrib": 0.000131
+        "weight": -0.25,
+        "move": -0.001675,
+        "fx": 0.00279,
+        "contrib": -0.000278
+      },
+      {
+        "pair": "BTCUSD",
+        "weight": -0.0319,
+        "move": 0.003535,
+        "fx": 0.00279,
+        "contrib": -0.000202
+      },
+      {
+        "pair": "USDCAD",
+        "weight": 0.0632,
+        "move": 0.001413,
+        "fx": 0.001375,
+        "contrib": 0.000176
       },
       {
         "pair": "ETHUSD",
-        "weight": 0.0181,
-        "move": 0.002299,
-        "fx": 0.002726,
-        "contrib": 9.1e-05
-      },
-      {
-        "pair": "USDCHF",
-        "weight": 0.0331,
-        "move": 0.002696,
-        "fx": 3e-05,
-        "contrib": 9e-05
+        "weight": -0.0339,
+        "move": 0.000258,
+        "fx": 0.00279,
+        "contrib": -0.000103
       },
       {
         "pair": "USDJPY",
         "weight": -0.0047,
-        "move": 0.003028,
-        "fx": -0.000302,
+        "move": 0.003837,
+        "fx": -0.001043,
         "contrib": -1.3e-05
       },
       {
-        "pair": "GBPUSD",
-        "weight": 0.0078,
-        "move": -0.001877,
-        "fx": 0.002726,
-        "contrib": 7e-06
-      },
-      {
-        "pair": "EURUSD",
-        "weight": -0.0238,
-        "move": -0.003007,
-        "fx": 0.002726,
-        "contrib": 7e-06
-      },
-      {
         "pair": "AUDUSD",
-        "weight": 0.008,
-        "move": -0.002718,
-        "fx": 0.002726,
-        "contrib": 0.0
+        "weight": -0.25,
+        "move": -0.002782,
+        "fx": 0.00279,
+        "contrib": -0.0
       }
     ],
     "halted": false
@@ -68261,79 +68373,81 @@
   "data_quality": {
     "excluded": [],
     "reasons": {},
-    "date": "2026-09-14 04:00",
+    "date": "2026-09-14 10:00",
     "close_only": [],
     "close_only_policy": "refuse"
   },
   "cumulative": {
     "from": "2026-07-26 04:00",
     "start_equity": 9742.658878069826,
-    "price_pnl": -135.05029647802104,
-    "carry": -2.5174514841338533,
-    "cost": 267.61358713172257,
+    "price_pnl": -145.3032240231018,
+    "carry": -2.5877899477880275,
+    "cost": 268.7810448056682,
     "by_pair": {
       "ETHUSD": {
-        "pnl": 24.233143822716606,
+        "pnl": 23.26689170181804,
         "carry": 0.0,
-        "cost": 72.4075208868561
+        "cost": 73.34108800727994
       },
       "NZDUSD": {
-        "pnl": -52.00885753427259,
-        "carry": -0.8621192054438606,
+        "pnl": -54.60086738889345,
+        "carry": -0.8974884029322344,
         "cost": 19.249825974621913
       },
       "USDCAD": {
-        "pnl": -1.8524340669853614,
-        "carry": -0.5378210032342262,
-        "cost": 5.584420090469426
+        "pnl": -0.20691855469971654,
+        "carry": -0.5367596665886912,
+        "cost": 5.647130333267311
       },
       "AUDUSD": {
         "pnl": 3.2463816250877642e-12,
-        "carry": -0.47798336834441896,
+        "carry": -0.5025275119223931,
         "cost": 9.446578934837648
       },
       "BTCUSD": {
-        "pnl": -36.59511698088834,
+        "pnl": -38.48093334311258,
         "carry": 0.0,
         "cost": 43.470611539483244
       },
       "USDCHF": {
         "pnl": -24.489871808456446,
         "carry": 1.101800783330649,
-        "cost": 9.603764632281024
+        "cost": 9.714344090875858
       },
       "GBPUSD": {
-        "pnl": -12.946788380650572,
-        "carry": -0.49312142205476567,
+        "pnl": -16.522898319225774,
+        "carry": -0.5039394734729861,
         "cost": 6.017698431428777
       },
       "SOLUSD": {
-        "pnl": -5.587597067790563,
+        "pnl": -8.344463495391034,
         "carry": 0.0,
         "cost": 93.01384537925163
       },
       "EURUSD": {
         "pnl": 22.51454238852821,
         "carry": -0.6622248183356134,
-        "cost": 4.45774889637628
+        "cost": 4.5183497485053685
       },
       "USDJPY": {
-        "pnl": -48.31731685022503,
-        "carry": -0.5859824500516103,
+        "pnl": -48.4387052036721,
+        "carry": -0.5866508578667512,
         "cost": 4.361572366116661
       }
     },
-    "to": "2026-09-14 04:00",
-    "bars": 394
+    "to": "2026-09-14 10:00",
+    "bars": 395
   },
   "bars_held": {
-    "GBPUSD": 0,
-    "NZDUSD": 27,
-    "USDJPY": 5,
-    "BTCUSD": 0,
-    "USDCAD": 17,
-    "AUDUSD": 0,
-    "SOLUSD": 0,
+    "USDCAD": 18,
+    "SOLUSD": 1,
+    "GBPUSD": 1,
+    "AUDUSD": 1,
+    "BTCUSD": 1,
+    "EURUSD": 0,
+    "USDJPY": 6,
+    "NZDUSD": 28,
+    "USDCHF": 0,
     "ETHUSD": 0
   }
 }
