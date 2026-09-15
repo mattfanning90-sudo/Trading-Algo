@@ -265,21 +265,25 @@ The spec is deliberately larger than one sitting. The order is driven by risk,
 not by convenience — the gate lands before anything is allowed to learn its way
 into a live book.
 
-**Phase 0 — find out why realised outcomes run 6σ below chance.** Blocking.
-The books' own trade ledgers say every agent has NEGATIVE information coefficient
-against what actually happened, with an aggregate hit rate of ~44.6% over 2,984
-trades — roughly 6 standard deviations below chance — and the books do *worse* in
-`trending` regimes (42.3%) than `ranging` (48.7%), which is backwards for
-ADX-gated trend and breakout agents. Full evidence:
-[REALISED_TRADE_EVIDENCE.md](../../research/REALISED_TRADE_EVIDENCE.md).
+**Phase 0 — understand the trending-regime underperformance.** NOT blocking.
 
-Six independently-designed agents do not all land on the same side of zero by
-chance. Until that is explained, every later phase optimises a pipeline that may
-be systematically misaligned — and worse, the loop would faithfully promote
-whichever challenger best exploits the defect, making it permanent and far harder
-to find. Two candidates are distinguishable with data already on disk: the
-holding-period confound (re-score the same trades over a fixed forward horizon)
-and a sign/alignment error (replay trades by hand from stored indicators).
+*Revised: the original Phase 0 was written around a ~6σ below-chance hit rate
+across every agent. That finding was a measurement artifact — flat
+forward-filled bars were scored as misses, and 36% of FX trades land on one. See
+[REALISED_TRADE_EVIDENCE.md §0](../../research/REALISED_TRADE_EVIDENCE.md).*
+
+Corrected, the agents perform at or near chance and there is no systematic
+misalignment to find. One narrower finding survives: the books hit 44.7% in
+`trending` regimes (−3.9σ) against 51.3% in `ranging` (+0.7σ), and `trend` is
+the weakest single agent at 44.9%. The trend and breakout agents are ADX-gated
+specifically to act only in trending conditions, and that is where the books do
+worst.
+
+Worth understanding before a learning loop is built on a regime gate that may be
+mislabelling its own conditions — but it does not block Phase 1, and the −3.9σ
+carries a multiple-comparison discount (six agents, two regimes). Every trade
+stores the ADX reading that produced its regime label, so this is answerable
+from data on disk.
 
 **Phase 1 — close the open door.** `promotion.py` with the floor, and the ML
 loader reading it. Nothing may reach a live book without clearing the floor.
@@ -301,10 +305,10 @@ monotonic.
 **Phase 4 — visibility.** The LEARNING dashboard panel. Last because the loop is
 correct without it, and wrong-but-visible is not better than wrong.
 
-Phase 0 blocks everything: its outcome may change what Phases 2–3 should even
-be. Phase 1 is independently valuable and shippable regardless — a floor that
-refuses net-negative models is correct whatever Phase 0 finds. Phases 2–4 each
-assume the phase before.
+Phase 0 is investigation, not a blocker — it informs Phase 2's agent work rather
+than gating it. Phase 1 is independently valuable and shippable now: a floor that
+refuses net-negative models is correct regardless of anything else here. Phases
+2–4 each assume the phase before.
 
 ## 14. Testing strategy
 
