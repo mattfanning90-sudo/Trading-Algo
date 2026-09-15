@@ -85,6 +85,73 @@ class StandardScaler:
 
 
 # ---------------------------------------------------------------------------
+# The net-portfolio-Sharpe objective (turnover priced INSIDE the loss)
+# ---------------------------------------------------------------------------
+def _net_portfolio_returns(w, r, idx):
+    """Per-timestamp portfolio return, net of turnover. Shared by loss and grad
+    so the two can never disagree about the forward pass."""
+    w = w.reshape(-1)
+    r = r.reshape(-1)
+    prev_w = np.where(idx.prev >= 0, w[idx.prev], 0.0)   # opening from flat costs
+    row = w * r - idx.cost * np.abs(w - prev_w)
+    total = np.bincount(idx.group, weights=row, minlength=idx.n_groups)
+    return total / idx.group_size
+
+
+def sharpe_net_loss(w, r, idx, ann):
+    """Negative annualised Sharpe of the NET portfolio return series.
+
+    Aggregates positions per timestamp into one portfolio return, charges the
+    half-spread on every position change, then takes mean/std OVER TIME. The
+    previous objective took the Sharpe of a pooled (pair, timestamp) scatter,
+    which is a different quantity and not the one a portfolio earns.
+    """
+    N = _net_portfolio_returns(w, r, idx)
+    sigma = np.sqrt(N.var() + _EPS)
+    return float(-ann * N.mean() / sigma)
+
+
+def sharpe_net_grad(w, r, idx, ann):
+    """dL/dw for `sharpe_net_loss`, shape as `w`.
+
+    With N_t the net portfolio return at timestamp t, L = -ann * mean(N)/std(N):
+
+        dL/dN_t = -ann / (T*sigma) * (1 - mu*(N_t - mu)/sigma^2)
+
+    and each row i feeds N_{g(i)} with weight 1/group_size. Row i's own term is
+    w_i*r_i - c_i*|w_i - w_prev(i)|, giving r_i - c_i*sign(w_i - w_prev(i)).
+
+    But w_i ALSO appears in the next row's turnover term -c_j*|w_j - w_i| with
+    j = nxt(i), which lands at a DIFFERENT timestamp and so is scaled by that
+    timestamp's dL/dN. Differentiating it w.r.t. w_i gives +c_j*sign(w_j - w_i).
+    Both paths are here; omitting the second yields a gradient that is wrong but
+    trains happily toward the wrong thing.
+
+    sign() is the standard subgradient at the |.| kink, with sign(0) = 0 —
+    holding a position exactly costs nothing and has no preferred direction.
+    """
+    shape = w.shape
+    w = np.asarray(w, dtype=float).reshape(-1)
+    r = np.asarray(r, dtype=float).reshape(-1)
+    N = _net_portfolio_returns(w, r, idx)
+    T = idx.n_groups
+    mu, var = N.mean(), N.var()
+    sigma = np.sqrt(var + _EPS)
+    dN = -ann / (T * sigma) * (1.0 - mu * (N - mu) / (var + _EPS))   # (T,)
+
+    prev_w = np.where(idx.prev >= 0, w[idx.prev], 0.0)
+    own = r - idx.cost * np.sign(w - prev_w)
+    g = dN[idx.group] / idx.group_size[idx.group] * own
+
+    # second path: w_i appears in the NEXT row's |w_next - w_i| term
+    has_next = idx.nxt >= 0
+    j = idx.nxt[has_next]
+    g[has_next] += (dN[idx.group[j]] / idx.group_size[idx.group[j]]
+                    * idx.cost[j] * np.sign(w[j] - w[has_next]))
+    return g.reshape(shape)
+
+
+# ---------------------------------------------------------------------------
 # Multilayer perceptron
 # ---------------------------------------------------------------------------
 @dataclass
@@ -104,6 +171,19 @@ class MLP:
                        in Lim–Zohren–Roberts (Deep Momentum Networks, 2019) and
                        Moody–Saffell (1998). For this task `y` is the forward
                        return, and `predict` returns a signal in [-1, 1].
+                     "sharpe_net" (tanh position out of width 1; loss = −Sharpe
+                       of the per-timestamp PORTFOLIO return, net of the
+                       half-spread charged on every position change). Requires
+                       `panel_index` describing the training rows. Unlike
+                       "sharpe" the loss is not row-separable: the model can
+                       learn which moves are worth paying for instead of
+                       trading an edge away.
+
+    `panel_index`  : `panel_index.PanelIndex` for the rows passed to `fit` —
+                     required by, and only used by, task="sharpe_net". It is
+                     keyed on ROW POSITION, so that task trains full-batch in
+                     the original row order (enforced in `fit`).
+    `ann`          : annualisation factor for the Sharpe objectives.
     """
     layer_sizes: list[int]
     hidden_act: str = "relu"
@@ -111,6 +191,8 @@ class MLP:
     l2: float = 1e-4
     dropout: float = 0.0
     seed: int = 0
+    panel_index: object | None = field(default=None, repr=False)
+    ann: float = float(np.sqrt(252.0))
     W: list[np.ndarray] = field(default_factory=list)
     b: list[np.ndarray] = field(default_factory=list)
     _mW: list[np.ndarray] = field(default_factory=list, repr=False)
@@ -153,9 +235,16 @@ class MLP:
             return z
         if self.task == "binary":
             return _sigmoid(z)
-        if self.task == "sharpe":
+        if self.task in ("sharpe", "sharpe_net"):
             return _tanh(z)            # output is a position in [-1, 1]
         return _softmax(z)
+
+    def _panel(self):
+        if self.panel_index is None:
+            raise ValueError(
+                "task='sharpe_net' needs a panel_index describing these rows "
+                "(build one with panel_index.build_panel_index)")
+        return self.panel_index
 
     def _out_grad(self, out, y):
         """Pre-activation gradient at the output layer for the data loss.
@@ -165,6 +254,9 @@ class MLP:
         the Sharpe ratio of position·forward_return and the output tanh.
         """
         n = out.shape[0]
+        if self.task == "sharpe_net":
+            dpos = sharpe_net_grad(out, y, self._panel(), self.ann)
+            return dpos * (1.0 - out * out)    # chain through tanh
         if self.task == "sharpe":
             r = y                              # forward returns (n, 1)
             pnl = out * r
@@ -211,6 +303,8 @@ class MLP:
             pnl = out * y
             sigma = np.sqrt(pnl.var() + _EPS)
             data = -(pnl.mean() / sigma) * np.sqrt(252.0)   # negative Sharpe
+        elif self.task == "sharpe_net":
+            data = sharpe_net_loss(out, y, self._panel(), self.ann)
         else:
             p = np.clip(out, _EPS, 1 - _EPS)
             data = -np.mean(np.sum(y * np.log(p), axis=1))
@@ -273,8 +367,24 @@ class MLP:
             X_val = np.asarray(X_val, dtype=float)
             y_val = self._prep_y(y_val)
 
+        # The net-portfolio objective is a property of the WHOLE panel, and
+        # `panel_index` addresses that panel by row position. A shuffled or
+        # partial batch would group the wrong rows into a timestamp and charge
+        # turnover against the wrong bar — silently, and still trainable.
+        whole_panel = self.task == "sharpe_net"
+        if whole_panel:
+            self._panel()
+            if batch_size < n:
+                raise ValueError(
+                    "task='sharpe_net' must train full-batch: pass "
+                    f"batch_size >= {n} so the batch matches panel_index")
+            if has_val:
+                raise ValueError(
+                    "task='sharpe_net' validation rows need their own panel "
+                    "index; self.panel_index describes the training rows only")
+
         for epoch in range(epochs):
-            order = rng.permutation(n)
+            order = np.arange(n) if whole_panel else rng.permutation(n)
             for start in range(0, n, batch_size):
                 idx = order[start:start + batch_size]
                 out, cache = self._forward(X[idx], train=True, rng=rng)
@@ -307,7 +417,7 @@ class MLP:
         return out
 
     def predict_proba(self, X) -> np.ndarray:
-        if self.task in ("regression", "sharpe"):
+        if self.task in ("regression", "sharpe", "sharpe_net"):
             raise ValueError("predict_proba is for classification tasks")
         return self.predict(X)
 
