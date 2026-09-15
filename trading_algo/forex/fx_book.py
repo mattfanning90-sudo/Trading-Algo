@@ -103,12 +103,12 @@ def ml_pool(models_dir: str | None = None) -> "AgentPool":
     # books for weeks. See forex/promotion.py.
     ok, reason = promotion.clears_floor((bundle.meta or {}).get("evaluation"))
     if not ok:
+        # Printed, not alerted. A refusal is the gate working correctly, and it
+        # will recur on every run until the model is retrained — alerting daily
+        # that nothing is wrong is how a channel gets muted, and then the next
+        # real alert is invisible. `verify` covers the persistent-problem case.
         print(f"  ⛔ deep-learning agent REFUSED — {reason}")
         print("  (using the 5 technical agents only)")
-        notifications.notify(
-            "ml_refused",
-            f"neural agent refused by the promotion floor: {reason}",
-            level="alert", model=path, reason=reason)
         return AgentPool(max_workers=1)
 
     print(f"  using deep-learning agent from {path} ({reason})")

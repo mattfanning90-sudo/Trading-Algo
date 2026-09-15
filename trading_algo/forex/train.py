@@ -24,6 +24,7 @@ import os
 import numpy as np
 
 from . import fx_config as cfg
+from . import promotion
 from . import fx_data, ml_agent
 from .fx_config import profile
 from .ml_agent import ModelBundle
@@ -99,6 +100,12 @@ def record_evaluation(path: str, metrics: dict | None, *,
                       "note": "synthetic run — pipeline test only, never a grade"}
     else:
         m = metrics or {}
+        if m.get("Sharpe") is None:
+            # Nothing was graded this run (e.g. --no-ml). Writing an empty grade
+            # would overwrite a passing one and demote a working model because of
+            # a reporting flag, so leave whatever is there alone. A grade is only
+            # ever replaced by another real grade.
+            return
         evaluation = {"sharpe": m.get("Sharpe"), "dsr": m.get("DSR"),
                       "cagr": m.get("CAGR"), "max_dd": m.get("MaxDD")}
     evaluation["graded_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -137,16 +144,22 @@ def main(argv: list[str] | None = None) -> None:
     # Stamp the grade onto the model so the promotion floor can read it. Until
     # this existed the score lived only here, and `ml_pool` loaded whatever was
     # on disk — which is how a -0.62 Sharpe model traded the live books.
+    #
+    # `--no-ml` skips the ML strategies entirely, so there is NO grade this run.
+    # Stamping an empty one would overwrite a previously passing grade with
+    # nothing and silently demote a working model, so leave the model untouched.
     neural_path = os.path.join(args.models_dir, "neural_sharpe.json")
-    record_evaluation(neural_path, res["metrics"].get("neural_oos"),
-                      synthetic=args.synthetic)
-    from . import promotion
-    ok, reason = promotion.clears_floor(
-        ml_agent.ModelBundle.load(neural_path).meta.get("evaluation")
-        if os.path.exists(neural_path) else None)
-    print(f"\nPromotion floor: {'PASS' if ok else 'REFUSED'} — {reason}")
-    if not ok:
-        print("  The live books will run the 5 technical agents only.")
+    if args.no_ml:
+        print("\n--no-ml: the model was not graded this run; its existing grade stands.")
+    else:
+        record_evaluation(neural_path, res["metrics"].get("neural_oos"),
+                          synthetic=args.synthetic)
+        ok, reason = promotion.clears_floor(
+            ml_agent.ModelBundle.load(neural_path).meta.get("evaluation")
+            if os.path.exists(neural_path) else None)
+        print(f"\nPromotion floor: {'PASS' if ok else 'REFUSED'} — {reason}")
+        if not ok:
+            print("  The live books will run the 5 technical agents only.")
     if args.out:
         with open(args.out, "w") as f:
             f.write("# FX deep-learning walk-forward report\n")

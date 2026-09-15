@@ -204,3 +204,21 @@ def test_synthetic_runs_never_stamp_a_passing_grade(tmp_path):
 
     ok, _ = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
     assert not ok, "a synthetic grade must never clear the floor"
+
+
+def test_an_empty_grade_never_overwrites_a_passing_one(tmp_path):
+    """Grading with nothing must leave an existing grade alone.
+
+    `--no-ml` skips the ML strategies, so `res["metrics"]["neural_oos"]` is
+    absent. Stamping that as a grade would write all-None over a passing score
+    and silently demote a working model — a downgrade caused by a reporting
+    flag, not by any change in the model.
+    """
+    from trading_algo.forex import promotion, train
+    _graded_bundle(tmp_path, {"sharpe": 0.8, "dsr": 0.97})
+    path = str(tmp_path / "models" / "neural_sharpe.json")
+
+    train.record_evaluation(path, None)
+
+    ok, reason = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
+    assert ok, f"the passing grade must survive: {reason}"
