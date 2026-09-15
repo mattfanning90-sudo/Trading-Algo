@@ -475,14 +475,14 @@ def test_blotter_prefers_stored_aud_per_quote():
                      dict(base, aud_per_quote=-1.0)]}    # corrupt stamp
     txn = dashboard._transactions(st, panel)
     rows = list(reversed(txn["rows"]))                  # back to write order
-    # stored path: 0.2 * ((1.10/1.00) * (1.25/4.0) - 1) * 5000 = -656.25
-    assert rows[0]["pnl"] == pytest.approx(-656.25, abs=0.01)
-    # reconstruction path: factor = 1.25/2.0 = 0.625 -> -312.50 for all three
-    recon = 0.2 * ((1.10 / 1.00) * (1.25 / 2.0) - 1.0) * 5_000.0
+    # stored path: 0.2 * (1.25/4.0) * (1.10/1.00 - 1) * 5000 = +31.25
+    assert rows[0]["pnl"] == pytest.approx(31.25, abs=0.01)
+    # reconstruction path: factor = 1.25/2.0 = 0.625 -> +62.50 for all three
+    recon = 0.2 * (1.25 / 2.0) * (1.10 / 1.00 - 1.0) * 5_000.0
     for r in rows[1:]:
         assert r["pnl"] == pytest.approx(recon, abs=0.01)
     # ...and the two genuinely differ: the stored value took precedence
-    assert abs(rows[0]["pnl"] - recon) > 100
+    assert abs(rows[0]["pnl"] - recon) > 25
 
 
 def test_blotter_stored_factor_guarded_when_now_side_underivable():

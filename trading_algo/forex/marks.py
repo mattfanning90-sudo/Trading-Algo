@@ -77,12 +77,30 @@ def trade_cost(delta_w: float, pair: Pair, price: float | None, equity: float) -
 def position_contribution(w: float, px_entry: float, px_now: float,
                           fx_factor: float) -> float:
     """P&L contribution of a signed weight held entry -> now, as a fraction of
-    equity: ``w * ((px_now / px_entry) * fx_factor - 1.0)``.
+    equity: ``w * fx_factor * (px_now / px_entry - 1.0)``.
 
     ``fx_factor`` is the AUD/quote translation over the same interval
     (``fxconv.conversion_factor``; 1.0 when not derivable).
+
+    Only the *P&L* translates at FX, not the notional — see the derivation in
+    ``fxconv``. This book is a margin book (leveraged, two-sided, vol-targeted):
+    a weight is a synthetic long/short, not AUD cash converted into the quote
+    currency, so the position's notional is never an AUD/quote exposure you own.
+    Marking it as one — ``w * (r*f - 1)``, the formula this used to carry —
+    adds a spurious ``w * (f - 1)``: an unhedged AUD/quote exposure of the full
+    gross notional on every pair, and, for AUDUSD itself, exact cancellation
+    (quote == USD makes ``f == 1/r``), so an AUDUSD leg booked precisely 0.0 for
+    ever while still paying the spread.
     """
-    return w * ((px_now / px_entry) * fx_factor - 1.0)
+    return w * fx_factor * (px_now / px_entry - 1.0)
+
+
+def aud_return(rets, fx_ratio):
+    """Vectorised twin of :func:`position_contribution` for the panel backtests:
+    a per-bar quote-currency return becomes an AUD return as ``rets *
+    fx_ratio``. Same model, one definition — feed per-bar returns and the
+    per-bar ``aud_per_quote`` ratio (see ``fxconv.aud_per_quote_frame``)."""
+    return rets * fx_ratio
 
 
 def trade_mark(delta_w: float, px_entry: float, px_now: float, fx_factor: float,

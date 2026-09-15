@@ -59,15 +59,44 @@ def test_cost_bad_price_guard():
     assert marks.trade_cost(0.3, pr, float("nan"), 10_000.0) == 0.0
 
 
-def test_trade_mark_matches_legacy():
-    # legacy book mark: contrib = w * ((now / entry) * fxf - 1.0)
+def test_position_contribution_translates_pnl_not_notional():
+    # Margin book: contrib = w * fxf * (now/entry - 1). Only the P&L converts.
     assert marks.position_contribution(0.2, 1.05, 1.08, 0.98) == pytest.approx(
-        0.2 * ((1.08 / 1.05) * 0.98 - 1.0))
+        0.2 * 0.98 * (1.08 / 1.05 - 1.0))
     assert marks.trade_mark(-0.15, 150.0, 148.0, 1.01, 10_000.0) == pytest.approx(
-        -0.15 * ((148.0 / 150.0) * 1.01 - 1.0) * 10_000.0)
+        -0.15 * 1.01 * (148.0 / 150.0 - 1.0) * 10_000.0)
     # trade_mark is exactly position_contribution scaled into account currency
     assert marks.trade_mark(0.3, 1.0, 1.1, 1.0, 2_000.0) == pytest.approx(
         marks.position_contribution(0.3, 1.0, 1.1, 1.0) * 2_000.0)
+    # A flat pair earns nothing regardless of the FX move: no notional exposure.
+    assert marks.position_contribution(0.4, 1.10, 1.10, 1.07) == pytest.approx(0.0)
+
+
+def test_audusd_position_earns_when_audusd_moves():
+    """The bug this formula replaced: for AUDUSD the quote IS USD, so the AUD
+    translation factor is exactly 1/r and the old ``w*(r*f-1)`` cancelled to a
+    hard 0.0 on every bar — an AUDUSD leg could never earn while still paying
+    the spread. A short AUDUSD must profit when AUD falls against USD."""
+    entry, now = 0.6600, 0.6534                 # AUD/USD falls 1%
+    r = now / entry
+    fxf = 1.0 / r                               # aud_per_USD rises as AUD falls
+    contrib = marks.position_contribution(-0.25, entry, now, fxf)
+    assert contrib == pytest.approx(-0.25 * (1.0 - 1.0 / r))
+    assert contrib > 0.0
+    assert contrib == pytest.approx(0.0025, rel=5e-2)   # ≈ +0.25% of equity
+    # ...and the long side loses the mirror amount.
+    assert marks.position_contribution(0.25, entry, now, fxf) == pytest.approx(-contrib)
+
+
+def test_aud_return_is_the_vectorised_twin():
+    """The panel backtests must not re-fork the scalar formula."""
+    rets = pd.Series([0.01, -0.02, 0.0])
+    ratio = pd.Series([1.005, 0.995, 1.01])
+    got = marks.aud_return(rets, ratio)
+    for i in range(len(rets)):
+        entry, now = 1.0, 1.0 + rets[i]
+        assert got[i] == pytest.approx(
+            marks.position_contribution(1.0, entry, now, ratio[i]))
 
 
 def test_fx_book_routes_through_marks_only():

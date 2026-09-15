@@ -362,3 +362,73 @@ def test_staleness_gate_flags_old_bars_but_not_weekends():
     # A bar two full weeks old is unambiguously stale.
     old = pd.Timestamp("2026-07-06")
     assert pt._is_stale(region, old, now=mon) is True
+
+
+def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch):
+    """A sleeve whose holdings have no price must not be valued at cash-only.
+
+    This is what forced the live `full` book into liquidation on 2026-08-27: the
+    FTSE price row carried no usable closes, `sleeve_equity_local` silently
+    dropped all ten holdings and returned CASH only (£4,175 instead of £17,129),
+    and nothing marked the valuation incomplete — `_is_stale` checks the bar's
+    DATE, not whether it contains prices. The breaker read a −26% book, tripped,
+    and liquidated three sleeves on a loss that never happened.
+
+    Unpriced holdings must be treated exactly like a stale bar: skip the sleeve,
+    mark the valuation incomplete, leave the breaker and history untouched.
+    """
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)             # open positions
+    before = pt.load_state(account)
+    assert any(s["positions"] for s in before["sleeves"].values()), "need holdings"
+    equity_rows = len(before["equity_history"])
+    trades = len(before["trades"])
+
+    real = pt.latest_region_data
+
+    def blank_last_row(region, synthetic):
+        """Same bar date, but every close on it is missing — the live failure."""
+        prices, index_px = real(region, synthetic)
+        prices = prices.copy()
+        prices.iloc[-1] = float("nan")
+        return prices, index_px
+
+    monkeypatch.setattr(pt, "latest_region_data", blank_last_row)
+    pt.run_daily(account, synthetic=True)
+
+    after = pt.load_state(account)
+    assert after["risk_halted"] is False, "breaker must not trip on an unpriced book"
+    assert len(after["equity_history"]) == equity_rows, "no phantom equity row"
+    assert len(after["trades"]) == trades, "must not trade off unpriced holdings"
+
+
+def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch):
+    """A single permanently-unpriced name must not sit the sleeve out forever.
+
+    Guards the fix above from over-reaching: a delisted holding never prices
+    again, so skipping the sleeve whenever ANY holding is unpriced would freeze
+    it for good. Only a TOTAL blackout — nothing we hold has a price — is an
+    outage worth sitting out.
+    """
+    pt.init_account(account, capital=300_000, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    region = next(k for k, s in state["sleeves"].items() if s["positions"])
+    dead = sorted(state["sleeves"][region]["positions"])[0]
+
+    real = pt.latest_region_data
+
+    def one_dead_name(reg, synthetic):
+        prices, index_px = real(reg, synthetic)
+        prices = prices.copy()
+        if dead in prices.columns:
+            prices.loc[prices.index[-1], dead] = float("nan")
+        return prices, index_px
+
+    monkeypatch.setattr(pt, "latest_region_data", one_dead_name)
+    pt.run_daily(account, synthetic=True)
+
+    after = pt.load_state(account)
+    assert after["sleeves"][region]["last_status"]["status"] != "unpriced", \
+        "one dead name must not sit the whole sleeve out"
+    assert after["risk_halted"] is False

@@ -131,15 +131,28 @@ def test_flip_through_zero_splits_the_close_and_reopens():
 
 
 def test_aud_translation_uses_the_stored_execution_stamp():
-    """Price flat but AUD/quote up 10% → the AUD book still made money, because
-    the position was held in the quote currency (fxconv's convention)."""
+    """The stamped aud_per_quote scales the P&L actually earned: a +10% move on
+    a 0.10 weight of a 1,000 AUD book earns 10 AUD in USD, and each USD is worth
+    10% more AUD by the exit, so the realised AUD gain is 11.00 — versus 10.00
+    for the same fills with no stamp (next test)."""
+    trades = [_t("2026-01-01", "EURUSD", 0.10, 1.00, apq=1.00),
+              _t("2026-01-02", "EURUSD", -0.10, 1.10, apq=1.10, target=0.0)]
+    state = _state(trades, history=[["2026-01-01", 1000.0]])
+    equity_on, _ = fx_pnl.equity_lookup(state)
+    _, realized = fx_pnl.build_lots(trades, equity_on)
+    assert realized[0]["gross"] == pytest.approx(11.0)
+    assert realized[0]["fx_known"] is True
+
+
+def test_flat_price_earns_nothing_however_far_fx_moved():
+    """The margin-book property, at the ledger level: no pair move, no P&L. The
+    old mark booked +10 AUD here on a notional the book never owned."""
     trades = [_t("2026-01-01", "EURUSD", 0.10, 1.00, apq=1.00),
               _t("2026-01-02", "EURUSD", -0.10, 1.00, apq=1.10, target=0.0)]
     state = _state(trades, history=[["2026-01-01", 1000.0]])
     equity_on, _ = fx_pnl.equity_lookup(state)
     _, realized = fx_pnl.build_lots(trades, equity_on)
-    assert realized[0]["gross"] == pytest.approx(10.0)
-    assert realized[0]["fx_known"] is True
+    assert realized[0]["gross"] == pytest.approx(0.0)
 
 
 def test_unstamped_trade_falls_back_to_price_move_only_and_is_flagged():

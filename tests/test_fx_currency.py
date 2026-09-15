@@ -61,9 +61,9 @@ def _one_bar_panel(eurusd, audusd, date="2025-01-02"):
     return {"EURUSD": mk(eurusd), "AUDUSD": mk(audusd)}
 
 
-def _seed_halted_long(tmp_path, monkeypatch, audusd_now):
-    """A halted book holding 1.0 EURUSD; marks one flat-price bar where AUDUSD
-    moves. Halted => no rebalance, so we isolate the FX translation of the mark."""
+def _seed_halted_long(tmp_path, monkeypatch, audusd_now, eurusd_now=1.08):
+    """A halted book holding 1.0 EURUSD; marks one bar. Halted => no rebalance,
+    so we isolate the mark itself (pair move x AUD translation)."""
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
     fx_book.init_account("c", 5_000, "balanced")
     st = fx_book.load_state("c")
@@ -73,32 +73,45 @@ def _seed_halted_long(tmp_path, monkeypatch, audusd_now):
                "peak_equity": 5_000.0, "risk_halted": True, "halt_cooldown": 5})
     fx_book.save_state("c", st)
     monkeypatch.setattr(fx_book, "_panel",
-                        lambda *a, **k: _one_bar_panel(1.08, audusd_now))
+                        lambda *a, **k: _one_bar_panel(eurusd_now, audusd_now))
     fx_book.run_once("c", pool=AgentPool(max_workers=1))
     return fx_book.load_state("c")["equity"]
 
 
-def test_book_marks_pnl_in_aud(tmp_path, monkeypatch):
-    # EURUSD flat; AUD strengthens 0.66->0.70 => a long USD-quoted book loses ~5.7%
-    # in AUD even though the pair didn't move.
+def test_flat_pair_has_no_aud_exposure(tmp_path, monkeypatch):
+    """A margin book holds a synthetic long/short, not AUD converted into the
+    quote currency — so a pair that did not move earns nothing no matter what
+    AUD/USD did. The old ``w*(r*f-1)`` mark booked a ~5.7% loss here, which is
+    the P&L of a notional the book never owned (see fxconv's derivation)."""
     eq_fx = _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.70)
-    assert eq_fx == pytest.approx(5_000 * (0.66 / 0.70), rel=2e-3)
-    assert eq_fx < 4_900
+    assert eq_fx == pytest.approx(5_000, rel=2e-3)
 
 
 def test_book_flat_fx_is_unchanged(tmp_path, monkeypatch):
-    # Same setup but AUDUSD unchanged => equity ~flat (pair didn't move either).
+    # Nothing moved at all => equity flat.
     eq_flat = _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.66)
     assert eq_flat == pytest.approx(5_000, rel=2e-3)
 
 
+def test_aud_translation_scales_a_real_pair_move(tmp_path, monkeypatch):
+    """The FX factor scales the P&L that was actually earned. EURUSD +1% earns
+    1% in USD; AUD/USD falling 0.66->0.6534 makes each USD worth ~1.01 AUD more,
+    so the AUD gain is 1% * (0.66/0.6534) ≈ 1.010%."""
+    eq = _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.6534,
+                           eurusd_now=1.08 * 1.01)
+    expected = 5_000 * (1.0 + 0.01 * (0.66 / 0.6534))
+    assert eq == pytest.approx(expected, rel=2e-3)
+    assert eq > 5_050   # strictly more than the unconverted 1%
+
+
 def test_daily_snapshot_attributes_pnl(tmp_path, monkeypatch):
     """run_once records a daily P&L snapshot attributing the move to each position."""
-    _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.70)   # AUD up: long USD-quoted loses
+    _seed_halted_long(tmp_path, monkeypatch, audusd_now=0.70,
+                      eurusd_now=1.08 * 0.99)      # pair down 1% => long loses
     dy = fx_book.load_state("c")["daily"]
     assert dy["date"] == "2025-01-02"
     assert dy["net_aud"] < 0 and dy["net_pct"] < 0
     eur = next(c for c in dy["by_pair"] if c["pair"] == "EURUSD")
-    # pair was flat; the loss is the AUD/USD translation on the held long
-    assert eur["move"] == pytest.approx(0.0, abs=1e-6)
-    assert eur["contrib"] == pytest.approx(0.66 / 0.70 - 1, rel=1e-3)
+    assert eur["move"] == pytest.approx(-0.01, rel=1e-3)
+    # the -1% pair move, translated at AUD-per-USD over the same bar (0.66/0.70)
+    assert eur["contrib"] == pytest.approx(-0.01 * (0.66 / 0.70), rel=1e-3)

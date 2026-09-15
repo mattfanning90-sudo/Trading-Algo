@@ -52,10 +52,15 @@ def vol_target(weights: pd.Series, vols: pd.Series, p: StrategyParams) -> pd.Ser
     where ρ = `avg_correlation`. The book is then scaled by
     target_vol / est_vol, capped at `max_vol_scale`, and finally de-levered so
     gross exposure never exceeds `max_gross`.
+
+    Vols are floored at `p.min_vol` first (`signals.sizing_vol`): an
+    implausibly calm reading understates the estimate and levers the WHOLE
+    sleeve up toward `max_vol_scale`, which is a bigger error than the
+    concentration one the same floor prevents in the weighting.
     """
     if weights.empty:
         return weights
-    wv = (weights * vols.reindex(weights.index)).dropna()
+    wv = (weights * sig.sizing_vol(vols.reindex(weights.index), p)).dropna()
     if wv.empty:
         return pd.Series(dtype=float)
 

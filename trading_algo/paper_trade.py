@@ -263,6 +263,25 @@ def sleeve_equity_local(sleeve: dict, px: pd.Series) -> float:
     return sleeve["cash"] + holdings
 
 
+def unpriced_holdings(sleeve: dict, px: pd.Series) -> list[str]:
+    """Held names with no usable price on this bar.
+
+    `sleeve_equity_local` skips them, so a sleeve whose holdings are ALL
+    unpriced silently marks at cash only — an invented collapse indistinguishable
+    from a real loss. Callers must check this before trusting the valuation; the
+    caller that matters is the daily run, which otherwise feeds the number
+    straight to the drawdown breaker.
+    """
+    out = []
+    for t, sh in sleeve["positions"].items():
+        if not sh:
+            continue
+        price = px.get(t)
+        if price is None or price != price:       # missing or NaN
+            out.append(t)
+    return out
+
+
 def rebalance_allocations(sleeves: dict, snap: dict[str, float],
                           allocations: dict[str, float],
                           px_by_region: dict[str, pd.Series],
@@ -592,6 +611,48 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             _record_sleeve_status(sleeve, today, "cash:stale-data")
             all_valued = False
             continue
+
+        # A bar can be fresh by DATE and still carry no usable close for what we
+        # HOLD. `sleeve_equity_local` skips unpriced positions, so the sleeve
+        # would mark at cash only — an invented collapse that reads exactly like
+        # a real loss and goes straight to the drawdown breaker. This is what
+        # liquidated the live `full` book on 2026-08-27: FTSE marked £4,175
+        # instead of £17,129 and tripped a 25% stop that had not been breached.
+        # Treat it like a stale bar: don't trade, don't mark, valuation is
+        # incomplete. The status carries no "cash:" prefix because the sleeve is
+        # NOT flat — it holds positions we merely cannot price, and calling it
+        # flat would start `flat_since` and raise a false idle-sleeve finding.
+        unpriced = unpriced_holdings(sleeve, px_today)
+        if unpriced:
+            held = sum(1 for sh in sleeve["positions"].values() if sh)
+            blackout = len(unpriced) == held      # nothing we hold has a price
+            shown = ", ".join(sorted(unpriced)[:5])
+            more = f" +{len(unpriced) - 5} more" if len(unpriced) > 5 else ""
+            print(f"  [{k}] ⚠ {len(unpriced)}/{held} held name(s) unpriced on "
+                  f"{today} ({shown}{more}) — "
+                  f"{'skipping trade & mark' if blackout else 'valuation untrusted'}.")
+            notifications.notify(
+                "unpriced_holdings",
+                f"[{account}] {k}: {len(unpriced)} of {held} held name(s) have no "
+                f"price on {today}; the sleeve would mark at cash only, so this "
+                f"run's valuation is not trusted for the drawdown breaker",
+                level="alert", account=account, region=k, last_bar=today,
+                unpriced=sorted(unpriced), blackout=blackout)
+            # Either way the total is untrustworthy, so the breaker and the
+            # equity history must not act on it.
+            all_valued = False
+            if blackout:
+                # A total blackout is a feed outage — trading would be sized off
+                # cash-only equity, which is exactly how the live FTSE sleeve
+                # liquidated at £4,175 instead of £17,129. Sit the run out. The
+                # status carries no "cash:" prefix because the sleeve is NOT flat
+                # (it holds positions we cannot price); calling it flat would
+                # start `flat_since` and raise a false idle-sleeve finding.
+                _record_sleeve_status(sleeve, today, "unpriced")
+                continue
+            # A PARTIAL gap is usually one name going dark for good (a delisting),
+            # not an outage. Skipping the sleeve on that would freeze it forever,
+            # so keep trading — only the valuation is held back.
 
         px_by_region[k] = px_today
         report_date = max(report_date, today)

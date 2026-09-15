@@ -1,17 +1,34 @@
 """Translate each pair's quote-currency P&L into the AUD account currency.
 
 The paper books and backtest are **AUD-denominated**, but a pair's price moves in
-its QUOTE currency — EURUSD in USD, USDJPY in JPY, BTCUSD in USD. To trade a pair
-from an AUD account you first convert AUD into that quote currency, so moves in
-AUD/quote are part of your real P&L. Treating every open position as held in its
-quote currency, the AUD return of a signed weight ``w`` over a bar is::
+its QUOTE currency — EURUSD in USD, USDJPY in JPY, BTCUSD in USD. A position's
+P&L is therefore earned in the quote currency and must be translated into AUD at
+the rate prevailing when it is earned.
 
-    w * [ (price_now / price_last) * (aud_per_quote_now / aud_per_quote_last) - 1 ]
+Derivation. Let ``E`` be AUD equity, ``w`` a signed weight, ``p`` the pair price
+(quote per base) and ``a`` the AUD-per-quote rate. Sizing to ``w`` means holding
+``N`` base units worth ``w*E`` in AUD at entry, i.e. ``N * p0 * a0 = w*E``. Over
+the bar the position's value in the QUOTE currency moves by ``N*p0*(r-1)`` where
+``r = p1/p0``. Converting that P&L at the new rate ``a1``::
 
-i.e. the pair move AND the quote→AUD move, both on the position's notional; idle
-cash stays in AUD. (Shorts are treated as quote-currency-denominated — a documented
-convention; for G10/crypto longs the first-order term is the AUD/USD move, which is
-exactly what an AUD trader feels.)
+    P&L_AUD = a1 * N * p0 * (r - 1) = w * E * f * (r - 1),   f = a1 / a0
+
+so the AUD return of the weight is::
+
+    w * f * (price_now / price_last - 1)
+
+**Only the P&L translates at FX, not the notional.** This is a margin book —
+leveraged, two-sided, vol-targeted — so a weight is a synthetic long base /
+short quote, not AUD cash converted into the quote currency; idle cash stays in
+AUD and the notional is never an AUD/quote exposure you own.
+
+The tempting alternative, ``w * (r*f - 1)``, models a *fully-funded* holding
+(convert AUD in, buy, convert out) and differs by a spurious ``w * (f - 1)``.
+That term is an unhedged AUD/quote exposure equal to the full gross notional on
+every pair — and for AUDUSD, whose quote IS USD, ``f`` is exactly ``1/r``, so
+the whole expression collapses to zero and an AUDUSD leg can never earn anything
+while still paying the spread on every rebalance. ``marks.position_contribution``
+is the one implementation; ``marks.aud_return`` is its vectorised twin.
 
 AUD-per-quote rates are derived from the FX majors already in the panel, with
 **AUDUSD as the hub** — no extra data needed for the standard FX book (which holds
