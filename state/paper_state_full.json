@@ -1026,11 +1026,11 @@
     ],
     [
       "2026-08-27",
-      74552.44
+      99086.23
     ],
     [
       "2026-08-28",
-      74325.61
+      98819.82
     ],
     [
       "2026-09-01",
@@ -1360,13 +1360,13 @@
       "date": "2026-08-27",
       "ASX": 33333.33,
       "US": 33308.21,
-      "FTSE": 7910.89
+      "FTSE": 32444.69
     },
     {
       "date": "2026-08-28",
       "ASX": 33333.33,
       "US": 33100.82,
-      "FTSE": 7891.45
+      "FTSE": 32385.67
     },
     {
       "date": "2026-09-01",
@@ -1435,10 +1435,38 @@
     "GBP": 1.893222369233981
   },
   "peak_equity_base": 101086.63942856641,
-  "risk_halted": true,
+  "risk_halted": false,
   "group": "CORE",
   "param_overrides": {},
   "schema_version": 2,
-  "halt_cooldown": 10,
-  "halt_last_day": "2026-09-14"
+  "halt_cooldown": 0,
+  "corrections": [
+    {
+      "applied": "2026-09-15T21:15:33Z",
+      "reason": "FTSE sleeve marked at cash only on an all-NaN price row; the breaker tripped on the resulting phantom -26.2% drawdown",
+      "method": "holdings replayed from the trade ledger and marked at the real closes (since backfilled); FX rate taken from the same day's stored sleeve value",
+      "rows": [
+        {
+          "date": "2026-08-27",
+          "equity_was": 74552.44,
+          "equity_now": 99086.23,
+          "ftse_was": 7910.89,
+          "ftse_now": 32444.69
+        },
+        {
+          "date": "2026-08-28",
+          "equity_was": 74325.61,
+          "equity_now": 98819.82,
+          "ftse_was": 7891.45,
+          "ftse_now": 32385.67
+        }
+      ],
+      "breaker": {
+        "risk_halted_was": true,
+        "risk_halted_now": false,
+        "true_drawdown_from_peak": -0.0224
+      },
+      "fixed_by": "PR #93 \u2014 valuation now refuses an unpriced book"
+    }
+  ]
 }
