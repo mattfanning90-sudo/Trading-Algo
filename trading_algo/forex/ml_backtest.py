@@ -91,7 +91,8 @@ def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
 
 def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
                       epochs=150) -> pd.DataFrame:
-    X, y, t, pairs, cols = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
+    X, y, t, pairs, cols, vols = ml_agent.pooled_dataset(panel, p, label="sharpe",
+                                                         horizon=1)
     if len(X) == 0:
         return pd.DataFrame()
     preds = walk_forward_predict(
@@ -111,7 +112,7 @@ def meta_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
     rets = closes(panel).pct_change(fill_method=None)
     tilts = ensemble.ensemble_tilts(sig, rets, p)
 
-    X, y, t, pairs, cols = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
+    X, y, t, pairs, cols, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(X) == 0:
         return tilts
     prob = walk_forward_predict(

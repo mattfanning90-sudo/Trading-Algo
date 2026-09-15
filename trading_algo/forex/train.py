@@ -59,7 +59,7 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     out = {}
 
-    Xn, yn, _, _, cols_n = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
+    Xn, yn, _, _, cols_n, _ = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
     if len(Xn):
         bundle = _train_bundle(Xn, yn, cols_n, "sharpe", _sharpe_factory, seeds,
                                {"epochs": 200, "batch_size": 100000, "lr": 1e-2})
@@ -68,7 +68,7 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
         out["neural"] = path
         print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples) -> {path}")
 
-    Xm, ym, _, _, cols_m = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
+    Xm, ym, _, _, cols_m, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(Xm):
         bundle = _train_bundle(Xm, ym, cols_m, "binary", _meta_factory, seeds,
                                {"epochs": 150, "batch_size": 64, "lr": 1e-3})

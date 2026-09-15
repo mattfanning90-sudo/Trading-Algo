@@ -9,7 +9,7 @@ from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
 from trading_algo.forex.ml_agent import ModelBundle, NeuralAgent, pooled_dataset
 from trading_algo.forex.nn import MLP, StandardScaler
-from trading_algo.forex.pairs import get_pair
+from trading_algo.forex.pairs import DEFAULT_UNIVERSE, get_pair
 
 
 @pytest.fixture
@@ -20,6 +20,17 @@ def panel():
 @pytest.fixture
 def params():
     return profile("balanced")
+
+
+@pytest.fixture
+def mixed_panel():
+    """FX majors + crypto — the universe the model is actually trained on.
+
+    The `panel` fixture above is FX-only, so it cannot show the imbalance the
+    vol-normalised target exists to fix: crypto's ~4x volatility is precisely
+    what makes a raw forward-return target lopsided.
+    """
+    return synthetic_panel(list(DEFAULT_UNIVERSE), start="2017-01-01", end="2023-01-01")
 
 
 # ---- features ------------------------------------------------------------
@@ -45,17 +56,41 @@ def test_triple_barrier_labels_binary(panel):
 
 # ---- pooled dataset ------------------------------------------------------
 def test_pooled_dataset_sharpe(panel, params):
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="sharpe", horizon=1)
-    assert len(X) == len(y) == len(t) == len(pairs)
+    X, y, t, pairs, cols, vols = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    assert len(X) == len(y) == len(t) == len(pairs) == len(vols)
     assert X.shape[1] == len(cols)
     assert np.isfinite(X).all()
     assert set(np.unique(pairs)) <= {"EURUSD", "USDJPY"}
 
 
 def test_pooled_dataset_meta_is_binary(panel, params):
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="meta", horizon=1)
+    X, y, t, pairs, cols, _ = pooled_dataset(panel, params, label="meta", horizon=1)
     assert "tilt" in cols and any(c.startswith("ag_") for c in cols)
     assert set(np.unique(y)).issubset({0.0, 1.0})
+
+
+def test_pooled_target_is_vol_normalised(mixed_panel):
+    """Crypto moves ~4x harder than FX. With a raw forward-return target it is
+    24% of the rows but 96.3% of the squared target the loss sees, so the model
+    is trained almost entirely on the instruments the technical agents were
+    measured to be WORST on. Normalising by trailing vol makes each instrument
+    contribute in proportion to its row count."""
+    p = profile("balanced")
+    X, y, times, pairs, cols, vols = pooled_dataset(mixed_panel, p, label="sharpe",
+                                                    horizon=1)
+
+    tot = float((y ** 2).sum())
+    crypto = [s for s in set(pairs)
+              if getattr(get_pair(s), "asset_class", "fx") == "crypto"]
+    mask = np.isin(pairs, crypto)
+    share_rows = mask.mean()
+    share_signal = float((y[mask] ** 2).sum()) / tot
+
+    assert abs(share_signal - share_rows) < 0.15, (
+        f"crypto is {share_rows:.0%} of rows but {share_signal:.0%} of the "
+        f"signal — the target is not vol-normalised")
+    assert len(vols) == len(y)
+    assert (vols > 0).all()
 
 
 # ---- model bundle --------------------------------------------------------
@@ -82,7 +117,7 @@ def test_neural_agent_flat_without_model(panel, params):
 
 def test_neural_agent_signal_in_range_and_causal(panel, params):
     # tiny trained bundle on the pooled set
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    X, y, t, pairs, cols, _ = pooled_dataset(panel, params, label="sharpe", horizon=1)
     scaler = StandardScaler().fit(X)
     m = MLP([len(cols), 8, 1], task="sharpe", seed=0)
     m.fit(scaler.transform(X), y.reshape(-1, 1), epochs=20, batch_size=100000, lr=1e-2)
