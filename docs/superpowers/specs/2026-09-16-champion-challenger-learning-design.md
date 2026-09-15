@@ -70,11 +70,35 @@ Measured during the diagnosis, all reproducible:
   One model across all three would be learning three different games at once —
   the same pooling error that produced the crypto problem, one level up.
 - **D3 — Promotion needs three things** (§5): an absolute floor, a paired
-  relative win, and forward confirmation. Not one of them alone.
-- **D4 — Qualify offline, confirm forward.** A mined hold-out cannot be the
-  final word (§2). Forward shadow performance is the only evidence that cannot
-  be selected against, because it does not exist when the choice is made. This
-  mirrors the equity side's `MIN_PROMOTION_REBALANCES`.
+  relative win, and a fresh hold-out priced for multiple testing. Not one alone.
+- **D4 — Fresh hold-out, priced for multiple testing. NOT forward confirmation.**
+  *Revised 2026-09-16 after measurement; the original decision was wrong.*
+
+  Forward shadow confirmation was proposed because the swarm's hold-out has been
+  selected against 1,272 times (§2). But shadow evidence was then measured on the
+  real panel, and it does not accumulate fast enough to be usable:
+
+  | shadow length | picks the genuinely better model |
+  |---|---|
+  | 20 days | 53.9% |
+  | 60 days | 58.2% |
+  | 250 days | 68.7% |
+  | 500 days | 75.7% |
+
+  Split by effect size, a challenger that is realistically better — a 0.05–0.5
+  annualised Sharpe gap — is identified only **63% of the time after 500 trading
+  days**. A 20-day shadow is 3.9 points better than a coin flip: not a filter,
+  a formality that manufactures false confidence.
+
+  So forward confirmation is **dropped**. The hold-out remains the arbiter, but
+  the mining is fixed rather than routed around: a **fresh slice per cycle** that
+  no challenger has been selected against, and the number of challengers
+  evaluated is **counted into the Deflated Sharpe**, so repeated evaluation is
+  paid for instead of ignored.
+
+  A short shadow may still run as a **sanity check** — catching a challenger that
+  breaks outright in live conditions, which short windows *can* detect reliably —
+  but never as evidence of superiority, which they cannot.
 - **D5 — "No champion" is a supported state.** When nothing clears the floor the
   lane runs the five hand-written technical agents and no learned component.
   `NeuralAgent` already returns a flat signal with no bundle, so this is today's
@@ -91,8 +115,8 @@ Measured during the diagnosis, all reproducible:
 | module | responsibility |
 |---|---|
 | `forex/lanes.py` | lane registry: which books, bars, universe, model path per lane |
-| `forex/promotion.py` | the ONE gate: floor + paired test + shadow confirmation |
-| `forex/shadow.py` | shadow books — run a challenger forward without capital |
+| `forex/promotion.py` | the ONE gate: floor + paired test + DSR-deflated fresh hold-out |
+| `forex/shadow.py` | *optional, phase 3+*: liveness sanity check only — never promotion evidence (D4) |
 
 `champions.py` and the ML loader both call `promotion.py`. That is the point:
 one gate, two consumers, no second copy of the rule (the FX analogue of
@@ -102,13 +126,14 @@ invariant #3).
 
 ```
                     ┌──────────── per lane ────────────┐
-   history ──► train challenger ──► qualify (offline)  │
+   history ──► train challenger ──► floor (net > 0, costs on)
                                           │ pass       │
                                           ▼            │
-                                    shadow book  ◄─── live bars, no capital
-                                          │ N periods  │
+                                 paired vs incumbent   │
+                                          │ pass       │
                                           ▼            │
-                                  confirm vs incumbent │
+                            fresh hold-out, DSR-deflated
+                                   by challengers tried │
                                           │ pass       │
                                           ▼            │
                                     PROMOTE ──► live roster / model
@@ -127,13 +152,14 @@ A challenger is promoted only when **all three** hold:
    challenger's per-period return differences must be positive with significance
    (bootstrap on the paired difference series). Paired, because an unpaired
    Sharpe comparison across different windows is mostly a noise draw.
-3. **Forward confirmation.** The challenger must hold conditions 1 and 2 across
-   a shadow period of `SHADOW_PERIODS` live bars before promotion.
+3. **Priced for multiple testing.** Scored on a **fresh hold-out slice** the
+   challenger has never been selected against, with the number of challengers
+   evaluated this cycle deflating the result (`validation.deflated_sharpe_ratio`).
+   A hold-out reused across cycles is training data; see D4.
 
-`SHADOW_PERIODS` defaults to **20 trading days** for the daily lanes. This is a
-judgement, not a measurement, and it is the most consequential number in the
-design: too short promotes noise, too long and the loop never improves anything.
-It is a lane constant so it is cheap to change.
+There is no forward-confirmation requirement — it was measured and rejected (D4).
+A short shadow run remains available as a liveness sanity check, never as
+evidence of superiority.
 
 Costs are on in every number (invariant #2). `strategy_returns` already charges
 the half-spread per unit turnover and is the shared scorer.
@@ -213,9 +239,10 @@ with its reason. A loop whose decisions are invisible is a loop nobody trusts.
   runs technical-only indefinitely. That is a *success* of the gate, not a
   failure — it is what should have been happening for the last several weeks.
   The design must not be judged by whether it promotes anything.
-- **Shadow periods cost time.** 20 days per candidate means at most ~12
-  promotions a year per lane. Deliberate: the alternative is promoting on mined
-  evidence.
+- **A fresh hold-out per cycle consumes history.** Each cycle spends a slice that
+  can never be reused for selection. With ~22 years after the data expansion this
+  is affordable for years, but it is a finite budget and the lane must track how
+  much remains.
 - **Three lanes means three times the multiple testing.** Each lane's gate is
   independent, so running three lanes triples the chance of a lucky pass. The
   paired bootstrap in §5.2 must account for the number of challengers evaluated
@@ -238,6 +265,22 @@ The spec is deliberately larger than one sitting. The order is driven by risk,
 not by convenience — the gate lands before anything is allowed to learn its way
 into a live book.
 
+**Phase 0 — find out why realised outcomes run 6σ below chance.** Blocking.
+The books' own trade ledgers say every agent has NEGATIVE information coefficient
+against what actually happened, with an aggregate hit rate of ~44.6% over 2,984
+trades — roughly 6 standard deviations below chance — and the books do *worse* in
+`trending` regimes (42.3%) than `ranging` (48.7%), which is backwards for
+ADX-gated trend and breakout agents. Full evidence:
+[REALISED_TRADE_EVIDENCE.md](../../research/REALISED_TRADE_EVIDENCE.md).
+
+Six independently-designed agents do not all land on the same side of zero by
+chance. Until that is explained, every later phase optimises a pipeline that may
+be systematically misaligned — and worse, the loop would faithfully promote
+whichever challenger best exploits the defect, making it permanent and far harder
+to find. Two candidates are distinguishable with data already on disk: the
+holding-period confound (re-score the same trades over a fixed forward horizon)
+and a sign/alignment error (replay trades by hand from stored indicators).
+
 **Phase 1 — close the open door.** `promotion.py` with the floor, and the ML
 loader reading it. Nothing may reach a live book without clearing the floor.
 This alone stops the −0.62 model trading and is worth shipping on its own; every
@@ -250,15 +293,18 @@ expansion (crosses + history from 2003-12; verified available). Report the
 train/validation gap before and after, so §12's "more data helps" is checked
 rather than assumed.
 
-**Phase 3 — the loop.** `lanes.py`, `shadow.py`, paired relative test, forward
-confirmation, `fx-learn.yml`, and `fx-paper.yml` reading the promoted incumbent
-instead of `--ml`. This is what makes improvement monotonic.
+**Phase 3 — the loop.** `lanes.py`, the paired relative test, the fresh-hold-out
+budget and its trial-count deflation, `fx-learn.yml`, and `fx-paper.yml` reading
+the promoted incumbent instead of `--ml`. This is what makes improvement
+monotonic.
 
 **Phase 4 — visibility.** The LEARNING dashboard panel. Last because the loop is
 correct without it, and wrong-but-visible is not better than wrong.
 
-Phase 1 is independently valuable and independently shippable. Phases 2–4 each
-assume the phase before it.
+Phase 0 blocks everything: its outcome may change what Phases 2–3 should even
+be. Phase 1 is independently valuable and shippable regardless — a floor that
+refuses net-negative models is correct whatever Phase 0 finds. Phases 2–4 each
+assume the phase before.
 
 ## 14. Testing strategy
 
@@ -271,8 +317,10 @@ Offline and deterministic (CI has no network), using committed fixtures:
   exact scenario the floor exists for and is pinned as a test.
 - **Paired, not unpaired.** Two series with identical means but different
   windows must not register as a win.
-- **Shadow cannot be short-circuited.** A challenger that qualifies offline is
-  not promoted until `SHADOW_PERIODS` have elapsed.
+- **A reused hold-out is refused.** Scoring a challenger against a slice that a
+  previous cycle already selected against must raise, not silently pass.
+- **The trial count actually deflates.** Evaluating 50 challengers must produce a
+  strictly higher bar than evaluating 5, on identical returns.
 - **"No champion" is a working state.** With no bundle, the lane produces the
   same signals as the five technical agents alone — bit-for-bit.
 - **Synthetic refuses to promote** (invariant #5).
