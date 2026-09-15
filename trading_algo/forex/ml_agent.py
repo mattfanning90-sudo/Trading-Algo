@@ -156,7 +156,9 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
 
     Returns (X, y, time_index, pair_index, feature_cols, trailing_vol), all NaN
     rows dropped. `trailing_vol` is the annualised 20-bar realised vol aligned to
-    the returned rows.
+    the returned rows, and is strictly positive for every returned row on every
+    label — a dead (forward-filled) price stretch is dropped, not handed back
+    with a zero or NaN vol.
     """
     from . import indicators as ind
 
@@ -191,6 +193,16 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
             feats = feats[side.notna()]          # only where the primary fired
             y = y[side.notna()]
         X, y = features.align_xy(feats, y)
+        # `vols > 0` is a contract on EVERY label, so enforce it explicitly rather
+        # than relying on the sharpe target's division to drop dead-price rows.
+        # The meta target never touches vol, and such a row still clears align_xy:
+        # build_features keeps the literal 0.0 in `vol_20`, and `bb_z` survives on
+        # a floating-point residual in the level std. Without this it is returned
+        # with a NaN vol — exactly the dead-price row verify.py hunts.
+        v = vol.reindex(X.index)
+        keep = (v > 0).to_numpy()                    # NaN and 0.0 -> False
+        if not keep.all():
+            X, y, v = X[keep], y[keep], v[keep]
         if len(X) == 0:
             continue
         if cols is None:
@@ -199,7 +211,7 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
         ys.append(y.to_numpy())
         ts.append(X.index.to_numpy())
         ps.append(np.full(len(X), sym))
-        vs.append(vol.reindex(X.index).to_numpy())
+        vs.append(v.to_numpy())
 
     if not Xs:
         return (np.empty((0, 0)), np.empty(0), np.empty(0), np.empty(0), [],

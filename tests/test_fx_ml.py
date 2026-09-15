@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from trading_algo.forex import features, ml_backtest
+from trading_algo.forex import indicators as ind
 from trading_algo.forex.agents import PairContext
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
@@ -71,10 +72,11 @@ def test_pooled_dataset_meta_is_binary(panel, params):
 
 def test_pooled_target_is_vol_normalised(mixed_panel):
     """Crypto moves ~4x harder than FX. With a raw forward-return target it is
-    24% of the rows but 96.3% of the squared target the loss sees, so the model
-    is trained almost entirely on the instruments the technical agents were
-    measured to be WORST on. Normalising by trailing vol makes each instrument
-    contribute in proportion to its row count."""
+    30% of this fixture's rows but 92% of the squared target the loss sees, so
+    the model is trained almost entirely on the instruments the technical agents
+    were measured to be WORST on. (Same imbalance on the live panel, which has
+    a shorter crypto history: 24% of rows, 96.3% of the signal.) Normalising by
+    trailing vol makes each instrument contribute in proportion to its rows."""
     p = profile("balanced")
     X, y, times, pairs, cols, vols = pooled_dataset(mixed_panel, p, label="sharpe",
                                                     horizon=1)
@@ -91,6 +93,38 @@ def test_pooled_target_is_vol_normalised(mixed_panel):
         f"signal — the target is not vol-normalised")
     assert len(vols) == len(y)
     assert (vols > 0).all()
+
+
+def test_pooled_vols_are_positive_on_every_label(params):
+    """A forward-filled dead price must never leak a NaN into `vols`.
+
+    Trailing vol is exactly 0.0 across a dead stretch and `pooled_dataset` maps
+    that to NaN. On the sharpe branch those rows drop out on their own, because
+    the target divides by vol. The meta target never touches vol, and the row
+    survives `align_xy`: `build_features` keeps the literal 0.0 in its `vol_20`
+    column, and `bb_z` survives on a ~1e-8 floating-point residual in the level
+    std. Without an explicit guard that row is returned carrying `vols = NaN`.
+    verify.py exists to hunt dead-price rows; the dataset must not manufacture
+    them. `vols > 0` is a contract of pooled_dataset on EVERY label.
+    """
+    panel = synthetic_panel(["EURUSD", "USDJPY", "BTCUSD"],
+                            start="2017-01-01", end="2023-01-01")
+    bars = panel["EURUSD"]
+    lo, n = 800, 60                 # past the 504-bar value_z warm-up, or the rows
+    dead = float(bars["close"].iloc[lo])      # drop for an unrelated reason
+    bars.iloc[lo:lo + n, :] = dead
+
+    # Guard the guard: if the construction stops producing exactly-zero vol the
+    # assertions below would pass vacuously.
+    assert (ind.realized_vol(bars["close"], 20) == 0.0).any(), \
+        "fixture no longer produces a dead-price stretch — the test is vacuous"
+
+    for label in ("sharpe", "meta"):
+        X, y, t, pairs, cols, vols = pooled_dataset(panel, params, label=label,
+                                                    horizon=1)
+        assert len(vols) == len(y) == len(X)
+        assert np.isfinite(vols).all(), f"{label}: NaN vol survived a dead price"
+        assert (vols > 0).all(), f"{label}: non-positive vol in the returned rows"
 
 
 # ---- model bundle --------------------------------------------------------
