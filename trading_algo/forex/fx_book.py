@@ -88,14 +88,31 @@ def save_state(account: str, state: dict) -> None:
 def ml_pool(models_dir: str | None = None) -> "AgentPool":
     """Build an AgentPool that includes the trained NeuralAgent if a model exists,
     else the five technical agents only. Lets paper trading opt into the DL layer."""
+    from . import promotion
     from .ml_agent import ModelBundle, default_neural_agents
     md = models_dir or os.path.join(os.path.dirname(__file__), "models")
     path = os.path.join(md, "neural_sharpe.json")
-    if os.path.exists(path):
-        print(f"  using deep-learning agent from {path}")
-        return AgentPool(default_neural_agents(ModelBundle.load(path)), max_workers=1)
-    print("  (no trained model found — using the 5 technical agents only)")
-    return AgentPool(max_workers=1)
+    if not os.path.exists(path):
+        print("  (no trained model found — using the 5 technical agents only)")
+        return AgentPool(max_workers=1)
+
+    bundle = ModelBundle.load(path)
+    # The model carries its own out-of-sample grade; this is the one place that
+    # reads it. Without this check a model is trusted for being the most recent
+    # file on disk, which is how a measured -0.62 Sharpe agent traded the live
+    # books for weeks. See forex/promotion.py.
+    ok, reason = promotion.clears_floor((bundle.meta or {}).get("evaluation"))
+    if not ok:
+        print(f"  ⛔ deep-learning agent REFUSED — {reason}")
+        print("  (using the 5 technical agents only)")
+        notifications.notify(
+            "ml_refused",
+            f"neural agent refused by the promotion floor: {reason}",
+            level="alert", model=path, reason=reason)
+        return AgentPool(max_workers=1)
+
+    print(f"  using deep-learning agent from {path} ({reason})")
+    return AgentPool(default_neural_agents(bundle), max_workers=1)
 
 
 _ML_POOL: AgentPool | None = None

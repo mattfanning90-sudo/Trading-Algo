@@ -241,3 +241,41 @@ def test_verify_all_reads_the_real_books_without_crashing():
         for f in findings:
             assert f.level in (verify.ERROR, verify.WARN, verify.INFO)
             assert f.message
+
+
+# --- ERROR findings must reach the alert channel ----------------------------
+def test_error_findings_are_sent_to_the_alert_channel(monkeypatch):
+    """An audit nobody reads is not an audit.
+
+    `verify` already caught `never-traded: sleeve ASX` every day for 52 days and
+    the FTSE cash discrepancy on the day of the phantom loss. Both went only to
+    the GitHub run summary, which nobody opens. ERROR findings must route through
+    the same `notifications` channel the drawdown breaker uses.
+    """
+    from trading_algo import notifications
+    sent = []
+    monkeypatch.setattr(notifications, "notify",
+                        lambda ev, msg, **kw: sent.append((ev, msg, kw)))
+    findings = {"equity:full": [
+        verify.Finding(verify.ERROR, "equity:full", "never-traded", "sleeve ASX never traded"),
+        verify.Finding(verify.WARN, "equity:full", "idle-sleeve", "in cash 52 days"),
+    ]}
+
+    verify.alert_on_errors(findings)
+
+    assert len(sent) == 1, "exactly one alert — errors only, warnings stay quiet"
+    ev, msg, kw = sent[0]
+    assert "never-traded" in msg
+    assert kw.get("level") == "alert"
+
+
+def test_a_clean_audit_sends_nothing(monkeypatch):
+    """No findings must mean no alert, or the channel becomes noise and is muted."""
+    from trading_algo import notifications
+    sent = []
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: sent.append(a))
+
+    verify.alert_on_errors({"equity:full": [
+        verify.Finding(verify.WARN, "equity:full", "idle-sleeve", "in cash")]})
+
+    assert sent == []

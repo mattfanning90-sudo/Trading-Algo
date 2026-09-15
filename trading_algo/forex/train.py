@@ -18,6 +18,7 @@ artifacts.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import os
 
 import numpy as np
@@ -77,6 +78,34 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     return out
 
 
+def record_evaluation(path: str, metrics: dict | None, *,
+                      synthetic: bool = False) -> None:
+    """Stamp a saved bundle with the out-of-sample grade the promotion gate reads.
+
+    Training saves the model and the walk-forward comparison grades it afterwards,
+    so the score used to live only in stdout and a markdown report — nowhere the
+    loader could see it. `forex.promotion.clears_floor` reads what this writes, so
+    without this the gate would (safely but uselessly) refuse every model forever.
+
+    A SYNTHETIC run records that it was synthetic and no Sharpe, which the floor
+    treats as ungraded. Invariant #5: synthetic numbers are a pipeline test, never
+    performance — and they must never be able to promote a model.
+    """
+    if not os.path.exists(path):
+        return
+    bundle = ml_agent.ModelBundle.load(path)
+    if synthetic:
+        evaluation = {"synthetic": True,
+                      "note": "synthetic run — pipeline test only, never a grade"}
+    else:
+        m = metrics or {}
+        evaluation = {"sharpe": m.get("Sharpe"), "dsr": m.get("DSR"),
+                      "cagr": m.get("CAGR"), "max_dd": m.get("MaxDD")}
+    evaluation["graded_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    bundle.meta["evaluation"] = evaluation
+    bundle.save(path)
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Train + evaluate the FX deep-learning layer")
     ap.add_argument("--synthetic", action="store_true", help="offline synthetic data")
@@ -104,6 +133,20 @@ def main(argv: list[str] | None = None) -> None:
     res = run_ml_backtest(panel, p, include_ml=not args.no_ml, n_folds=args.folds)
     report = format_report(res)
     print(report)
+
+    # Stamp the grade onto the model so the promotion floor can read it. Until
+    # this existed the score lived only here, and `ml_pool` loaded whatever was
+    # on disk — which is how a -0.62 Sharpe model traded the live books.
+    neural_path = os.path.join(args.models_dir, "neural_sharpe.json")
+    record_evaluation(neural_path, res["metrics"].get("neural_oos"),
+                      synthetic=args.synthetic)
+    from . import promotion
+    ok, reason = promotion.clears_floor(
+        ml_agent.ModelBundle.load(neural_path).meta.get("evaluation")
+        if os.path.exists(neural_path) else None)
+    print(f"\nPromotion floor: {'PASS' if ok else 'REFUSED'} — {reason}")
+    if not ok:
+        print("  The live books will run the 5 technical agents only.")
     if args.out:
         with open(args.out, "w") as f:
             f.write("# FX deep-learning walk-forward report\n")
