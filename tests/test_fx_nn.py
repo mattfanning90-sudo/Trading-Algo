@@ -120,3 +120,68 @@ def test_early_stopping_restores_best():
     m.fit(X, y, X_val=Xv, y_val=yv, epochs=500, patience=10, lr=3e-3)
     # converged to a sane validation accuracy
     assert ((m.predict(Xv) > 0.5) == yv).mean() >= 0.8
+
+
+# --- panel index: row bookkeeping for the cost-aware objective -----------------
+
+def test_panel_index_links_rows_within_each_pair():
+    """The cost term needs to know each row's predecessor in its OWN pair's
+    timeline, and the portfolio return needs rows grouped by timestamp. Two
+    pairs interleaved in time must not link to each other."""
+    from trading_algo.forex.panel_index import build_panel_index
+    times = np.array(["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-02"],
+                     dtype="datetime64[D]")
+    pairs = np.array(["EURUSD", "GBPUSD", "EURUSD", "GBPUSD"])
+    vols = np.array([0.10, 0.20, 0.10, 0.20])
+    idx = build_panel_index(times, pairs, vols, {"EURUSD": 0.001, "GBPUSD": 0.002})
+
+    assert idx.n_groups == 2
+    assert list(idx.group) == [0, 0, 1, 1]
+    assert list(idx.group_size) == [2.0, 2.0]
+    assert list(idx.prev) == [-1, -1, 0, 1]       # row 2 follows row 0 (both EURUSD)
+    assert list(idx.nxt) == [2, 3, -1, -1]
+    assert idx.cost[0] == pytest.approx(0.001 / 0.10)
+    assert idx.cost[1] == pytest.approx(0.002 / 0.20)
+
+
+def test_panel_index_links_by_time_not_row_position():
+    """`pooled_dataset` concatenates per symbol, so rows are NOT globally
+    time-sorted. The predecessor must be the previous row in the pair's own
+    TIMELINE, whatever order the rows arrive in — charging turnover against the
+    wrong bar would price a trade that never happened. A pair present at only one
+    timestamp has no neighbour in either direction."""
+    from trading_algo.forex.panel_index import build_panel_index
+    # EURUSD rows arrive out of order: Jan-02, Jan-01, Jan-03. GBPUSD appears once.
+    times = np.array(["2024-01-02", "2024-01-01", "2024-01-03", "2024-01-01"],
+                     dtype="datetime64[D]")
+    pairs = np.array(["EURUSD", "EURUSD", "EURUSD", "GBPUSD"])
+    vols = np.array([0.10, 0.10, 0.10, 0.20])
+    idx = build_panel_index(times, pairs, vols, {"EURUSD": 0.001, "GBPUSD": 0.002})
+
+    # groups are keyed on the timestamp, not the row order
+    assert idx.n_groups == 3
+    assert list(idx.group) == [1, 0, 2, 0]        # Jan-01 -> 0, Jan-02 -> 1, Jan-03 -> 2
+    assert list(idx.group_size) == [2.0, 1.0, 1.0]
+    # chronological EURUSD chain is row 1 -> row 0 -> row 2
+    assert list(idx.prev) == [1, -1, 0, -1]
+    assert list(idx.nxt) == [2, 0, -1, -1]
+    # the lone GBPUSD row links to nothing in either direction
+    assert idx.prev[3] == -1 and idx.nxt[3] == -1
+
+
+def test_panel_index_cost_is_zero_when_it_cannot_be_priced():
+    """Belt-and-braces for callers that build an index from something other than
+    `pooled_dataset` (which already guarantees vols > 0): an unknown pair and a
+    non-positive vol must charge nothing rather than emit NaN/inf, which would
+    poison the whole batch's loss."""
+    from trading_algo.forex.panel_index import build_panel_index
+    times = np.array(["2024-01-01", "2024-01-02", "2024-01-03"],
+                     dtype="datetime64[D]")
+    pairs = np.array(["EURUSD", "EURUSD", "XAUUSD"])
+    vols = np.array([0.10, 0.0, 0.20])           # row 1 has a dead-price vol
+    idx = build_panel_index(times, pairs, vols, {"EURUSD": 0.001})
+
+    assert np.isfinite(idx.cost).all()
+    assert idx.cost[0] == pytest.approx(0.01)
+    assert idx.cost[1] == 0.0                     # vol <= 0 -> uncharged, not inf
+    assert idx.cost[2] == 0.0                     # pair absent from half_spreads
