@@ -23,6 +23,7 @@ import functools
 import os
 
 import numpy as np
+import pandas as pd
 
 from . import fx_config as cfg
 from . import promotion
@@ -127,9 +128,16 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
                 must see its block in one batch, and `PanelIndex` addresses that
                 batch positionally, so the fit rows and the validation rows each
                 need their own.
+
+                The cost statistic is cut off at the block's OWN last bar, so it
+                really is drawn from the history the index describes. The panel
+                runs a few bars past the last training row (the label needs a
+                forward return), and `px.index.max()` quietly handed every block
+                those extra bars as well.
                 """
-                return build_panel_index(tn[rows], pn[rows], vn[rows],
-                                         _half_spreads(px, upto=px.index.max()))
+                t_rows = tn[rows]
+                return build_panel_index(t_rows, pn[rows], vn[rows],
+                                         _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
 
             n_fit = int(fit_mask.sum())
             bundle = _train_bundle(

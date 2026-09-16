@@ -602,3 +602,48 @@ def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_pat
     assert (np.searchsorted(uniq, val_t.min())
             - np.searchsorted(uniq, fit_t.max())) > gap, "fit block is not purged"
     assert len(fit_t) + len(val_t) < len(X), "the purge dropped no rows at all"
+
+
+def test_deployed_block_cost_statistic_sees_only_its_own_history(trending_panel, params,
+                                                                 tmp_path, monkeypatch):
+    """Each deployed block's cost statistic is drawn from ITS OWN history.
+
+    `train_models` cut the half-spread mean at `px.index.max()` — the last bar in
+    the PANEL — while the last training row is earlier (the label needs a forward
+    return, so the final bars carry no row at all). The code claimed the
+    statistic came from the same history as the index it is attached to, and it
+    did not. Not a graded leak: it reaches the model only as a cost coefficient,
+    never a label or a return. But the walk-forward already cuts every block at
+    its own last bar, and the deployed fit is supposed to follow the same recipe,
+    so claim and code should agree.
+    """
+    from trading_algo.forex import marks, train
+    from trading_algo.forex.fx_data import closes
+
+    px = closes(trending_panel)
+    whole = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+             for s in px.columns}
+
+    seen, real = [], train.build_panel_index
+
+    def spy(times, pairs_, vols, half_spreads):
+        seen.append((pd.Timestamp(max(times)), dict(half_spreads)))
+        return real(times, pairs_, vols, half_spreads)
+
+    monkeypatch.setattr(train, "build_panel_index", spy)
+    train.train_models(trending_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    assert len(seen) == 2, "one index for the fit block, one for the validation block"
+    for upto, hs in seen:
+        assert upto < px.index.max(), (
+            "fixture broke: a block reaching the panel's last bar cannot show this")
+        for s in px.columns:
+            expect = float(marks.half_spread_fraction(get_pair(s),
+                                                      px.loc[:upto, s]).mean())
+            assert hs[s] == pytest.approx(expect, rel=1e-12), (
+                "a block's cost statistic must be drawn from its own history only")
+    # Not vacuous: on this ramp the whole-panel statistic is materially different
+    # for the fit block, so the assertion above genuinely discriminates the two.
+    fit_hs = seen[0][1]
+    assert any(abs(fit_hs[s] - whole[s]) > 0.05 * whole[s] for s in px.columns), \
+        "fixture no longer separates the prefix statistic from the whole-panel one"
