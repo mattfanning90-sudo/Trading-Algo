@@ -45,7 +45,16 @@ class SupportsFitPredict(Protocol):
 
     Was `Callable[[], object]`, which said nothing: mypy then rejected every
     `.fit`/`.predict` call on the result.
+
+    `panel_index` is part of the contract because `walk_forward_predict` ASSIGNS
+    it whenever an `index_factory` is supplied — a model used that way must
+    accept per-fold row bookkeeping. Declaring it here is what lets a type
+    checker hold us to that, instead of the walk-forward quietly assuming more
+    about the model than its own interface promises. Models that never see an
+    `index_factory` simply leave it at its default.
     """
+
+    panel_index: Any
 
     def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: Any) -> Any: ...
 
