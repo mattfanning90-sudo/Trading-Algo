@@ -92,15 +92,24 @@ def _meta_factory(n_feat: int, seed: int = 0):
                        l2=1e-2, dropout=0.3, seed=seed)
 
 
-def _half_spreads(px: pd.DataFrame) -> dict[str, float]:
-    """Mean half-spread per symbol, as a fraction of price.
+def _half_spreads(px: pd.DataFrame, upto) -> dict[str, float]:
+    """Mean half-spread per symbol over the history ending at `upto`.
 
     The cost coefficient of every `PanelIndex`. It comes from
     `marks.half_spread_fraction` — the one definition every cost path in the
     project derives from (invariant #2) — so the model's notion of a trade's
     cost cannot fork from the book's.
+
+    `upto` has no default on purpose. Half-spread is
+    `0.5 * spread_pips * pip / price`, so this is a statistic OF THE PRICE PATH,
+    and taken over the whole panel it is measured partly on the test folds and on
+    every bar after them. It reaches the model only through the cost coefficient
+    — never a label, never a return — so the magnitude is small, but invariant #1
+    admits no small violations. Making the cutoff explicit means a caller must
+    say what history it is entitled to rather than silently getting all of it.
     """
-    return {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+    hist = px.loc[:upto]
+    return {s: float(marks.half_spread_fraction(get_pair(s), hist[s]).mean())
             for s in px.columns}
 
 
@@ -161,12 +170,18 @@ def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=5, min_train=400,
     if len(X) == 0:
         return pd.DataFrame()
     px = closes(panel)
-    spreads = _half_spreads(px)
 
     def index_factory(rows):
-        """Index ONE block of rows, addressed to its own positions."""
+        """Index ONE block of rows, addressed to its own positions.
+
+        The cost statistic is cut off at the block's own last bar (invariant #1):
+        a whole-panel mean would be measured partly on the test folds this index
+        exists to keep the model away from.
+        """
         rows = np.asarray(rows)
-        return build_panel_index(t[rows], pairs[rows], vols[rows], spreads)
+        t_rows = t[rows]
+        return build_panel_index(t_rows, pairs[rows], vols[rows],
+                                 _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
 
     preds = walk_forward_predict(
         X, y, t, _sharpe_factory(len(cols), seed, cost_aware=True), n_folds=n_folds,

@@ -85,7 +85,9 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
         # so the index spans exactly those rows and the cost statistic is drawn
         # from the same history. `sharpe_net` must see them in one batch: the
         # index addresses them by position.
-        idx = build_panel_index(tn, pn, vn, _half_spreads(closes(panel)))
+        px = closes(panel)
+        idx = build_panel_index(tn, pn, vn,
+                                _half_spreads(px, upto=px.index.max()))
         bundle = _train_bundle(Xn, yn, cols_n, "sharpe_net",
                                functools.partial(_sharpe_factory, cost_aware=True),
                                seeds,

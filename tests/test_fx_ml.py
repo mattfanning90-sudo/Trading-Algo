@@ -453,3 +453,64 @@ def test_train_models_ships_the_objective_it_is_graded_on(short_panel, params, t
     # The bundle still predicts a position, and still round-trips through JSON.
     X = np.zeros((3, len(bundle.feature_cols)))
     assert np.abs(bundle.predict(X)).max() <= 1.0 + 1e-9
+
+
+# ---- invariant #1: even the cost statistic may only see the past ------------
+@pytest.fixture
+def trending_panel():
+    """Two pairs on a strong deterministic uptrend.
+
+    `half_spread_fraction` is `0.5 * spread_pips * pip / price`, so it is a
+    function of the price LEVEL. On a flat path a prefix mean and the whole-panel
+    mean are nearly identical and a leak is unmeasurable; a ramp makes the two
+    plainly different, which is what lets this test fail when it should.
+    """
+    pnl = synthetic_panel(["EURUSD", "USDJPY"], start="2017-01-01", end="2023-01-01")
+    out = {}
+    for sym, bars in pnl.items():
+        ramp = np.linspace(1.0, 4.0, len(bars))
+        bars = bars.copy()
+        for c in ("open", "high", "low", "close"):
+            bars[c] = bars[c].to_numpy() * ramp
+        out[sym] = bars
+    return out
+
+
+def test_fold_cost_statistic_sees_only_that_block_s_own_history(trending_panel, params,
+                                                                monkeypatch):
+    """The half-spread statistic feeding every fold's `PanelIndex.cost` was a
+    WHOLE-PANEL mean — computed over `px[s]` including the test folds and every
+    bar after them, then handed to each fold. It touches only the cost
+    coefficient, never a label or a return, so the effect is small; but invariant
+    #1 (no lookahead) is a global constraint of this system, and "small" is not a
+    defence. Each block gets the statistic of the history it is entitled to see.
+    """
+    from trading_algo.forex import marks
+    from trading_algo.forex.fx_data import closes
+
+    px = closes(trending_panel)
+    whole = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+             for s in px.columns}
+
+    seen, real = [], ml_backtest.build_panel_index
+
+    def spy(times, pairs, vols, half_spreads):
+        seen.append((pd.Timestamp(max(times)), dict(half_spreads)))
+        return real(times, pairs, vols, half_spreads)
+
+    monkeypatch.setattr(ml_backtest, "build_panel_index", spy)
+    ml_backtest.neural_oos_signal(trending_panel, params, n_folds=3, min_train=200,
+                                  epochs=2, seeds=1)
+
+    assert seen, "the walk-forward must index at least one block"
+    for upto, hs in seen:
+        for s in px.columns:
+            expect = float(marks.half_spread_fraction(get_pair(s),
+                                                      px.loc[:upto, s]).mean())
+            assert hs[s] == pytest.approx(expect, rel=1e-12), (
+                "a block's cost statistic must be drawn from its own history only")
+    # Not vacuous: on this panel the whole-panel statistic is materially
+    # different, so the assertion above genuinely discriminates the two.
+    assert any(abs(hs[s] - whole[s]) > 0.05 * whole[s]
+               for _, hs in seen for s in px.columns), \
+        "fixture no longer separates the prefix statistic from the whole-panel one"
