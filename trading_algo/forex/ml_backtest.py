@@ -70,8 +70,19 @@ def _annual_metrics(ret: pd.Series, n_trials: int, sr_variance: float) -> dict:
 # ---------------------------------------------------------------------------
 # Walk-forward neural / meta signal panels
 # ---------------------------------------------------------------------------
-def _sharpe_factory(n_feat: int, seed: int = 0):
-    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh", task="sharpe",
+def _sharpe_factory(n_feat: int, seed: int = 0, *, cost_aware: bool = False):
+    """Build the walk-forward's neural model; everything but the objective is
+    held identical so the two can be compared on the same folds.
+
+    `cost_aware=True` selects the net-of-turnover portfolio objective. That one
+    also needs a `panel_index` describing the rows of the fold it is about to
+    train on, which this factory cannot know — so it deliberately leaves the
+    attribute `None` for the caller to fill in per fold. No placeholder: `fit`
+    refuses by name while the index is None, and that loud failure is the only
+    thing standing between a forgotten fold and a silently meaningless loss.
+    """
+    task = "sharpe_net" if cost_aware else "sharpe"
+    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh", task=task,
                        l2=1e-3, dropout=0.1, seed=seed)
 
 

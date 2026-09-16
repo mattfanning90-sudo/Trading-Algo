@@ -178,6 +178,61 @@ def test_run_ml_backtest_rule_based(panel, params):
     assert "Probability of Backtest Overfitting" in ml_backtest.format_report(res)
 
 
+# ---- the model factory behind the walk-forward ---------------------------
+def _small_panel_index(n_rows):
+    """An irregular (pair, timestamp) index covering exactly `n_rows` rows."""
+    from trading_algo.forex.panel_index import build_panel_index
+    times, pairs, t = [], [], 0
+    while len(times) < n_rows:
+        for sym in (["A", "B", "C"] if t % 2 == 0 else ["A", "B"]):
+            if len(times) == n_rows:
+                break
+            times.append(t); pairs.append(sym)
+        t += 1
+    return build_panel_index(np.array(times), np.array(pairs),
+                             np.full(n_rows, 0.2),
+                             {"A": 0.001, "B": 0.002, "C": 0.003})
+
+
+def test_sharpe_factory_defaults_to_the_pooled_objective():
+    """Default stays the legacy row-separable objective, so the cost-aware one
+    can be switched on deliberately and the two compared like for like."""
+    make = ml_backtest._sharpe_factory(4)
+    m = make()
+    assert m.task == "sharpe"
+    assert m.layer_sizes[0] == 4 and m.layer_sizes[-1] == 1
+    assert make() is not m                  # a fresh model per fold
+
+
+def test_sharpe_factory_takes_seed_positionally():
+    """`neural_oos_signal` calls `_sharpe_factory(len(cols))` positionally; any
+    new argument must go AFTER seed or that call silently changes meaning."""
+    assert ml_backtest._sharpe_factory(4, 7)().seed == 7
+
+
+def test_sharpe_factory_cost_aware_builds_the_net_objective():
+    """`cost_aware=True` selects the net-of-turnover portfolio objective."""
+    m = ml_backtest._sharpe_factory(4, 0, cost_aware=True)()
+    assert m.task == "sharpe_net"
+    assert m.layer_sizes[0] == 4 and m.layer_sizes[-1] == 1
+
+
+def test_sharpe_factory_leaves_the_panel_index_unset_so_a_miss_is_loud():
+    """The index describes the rows of ONE fold, which the factory cannot know,
+    so the walk-forward fills it per fold. Shipping `None` rather than a
+    placeholder is the whole point: a fold that never fills it fails by name."""
+    m = ml_backtest._sharpe_factory(4, 0, cost_aware=True)()
+    assert m.panel_index is None
+    X = np.random.default_rng(0).normal(size=(12, 4))
+    y = np.random.default_rng(1).normal(size=(12, 1))
+    with pytest.raises(ValueError, match="panel_index"):
+        m.fit(X, y, epochs=1, batch_size=12)
+
+    m.panel_index = _small_panel_index(12)   # what the walk-forward will do
+    m.fit(X, y, epochs=2, batch_size=12, lr=1e-2)
+    assert np.abs(m.predict(X)).max() <= 1.0 + 1e-9
+
+
 def test_neural_oos_signal_runs(panel, params):
     sigp = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
                                          epochs=15)

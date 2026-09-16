@@ -305,6 +305,26 @@ def test_sharpe_net_requires_a_panel_index():
         m._loss(m._forward(X)[0], y)
 
 
+def test_sharpe_net_fit_refuses_without_a_panel_index():
+    """Fitting with no panel index must be a loud, NAMED failure and must leave
+    the weights untouched.
+
+    `ml_backtest._sharpe_factory(..., cost_aware=True)` deliberately builds the
+    model with `panel_index=None` for the walk-forward to fill in per fold. That
+    is only safe while this holds: a caller that forgets to fill it gets a
+    ValueError naming the attribute it left out, and an untrained model —
+    never one that quietly scored something other than the net portfolio."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(16, 5))
+    y = rng.normal(size=(16, 1))
+    m = MLP([5, 4, 1], hidden_act="tanh", task="sharpe_net", seed=0)
+    before = [w.copy() for w in m.W]
+    with pytest.raises(ValueError, match="panel_index"):
+        m.fit(X, y, epochs=1, batch_size=16)
+    for w0, w1 in zip(before, m.W):          # refused, not partially trained
+        assert np.array_equal(w0, w1)
+
+
 def test_sharpe_net_refuses_shuffled_or_partial_batches():
     """`panel_index` is keyed on ROW POSITION, so a shuffled or partial batch
     would charge turnover against the wrong bar — silently. Training must be
