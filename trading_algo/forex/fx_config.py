@@ -219,7 +219,10 @@ def profile_names() -> list[str]:
 ACCOUNT_CURRENCY = "AUD"             # paper-book equity + reporting currency
 FX_RISK_FREE = 0.035                 # AUD cash benchmark for metrics (RBA-ish)
 DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
-START = "2015-01-01"                 # default backtest start
+# Yahoo carries the FX majors from 2003-12-01 (EURGBP from 1999); verified
+# 2026-09-16. Training started 2015 against that, and the neural layer overfits
+# at 24k rows — history is the cheapest data there is.
+START = "2003-12-01"                 # default backtest start
 
 # Ready-to-run paper books, each an isolated state file with its own capital,
 # risk profile, universe, bar cadence and DATA SOURCE. Add more here or via the

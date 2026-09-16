@@ -4,10 +4,12 @@ import pytest
 from trading_algo.forex import pairs
 
 
-def test_default_universe_is_majors_plus_crypto():
+def test_default_universe_is_majors_plus_crypto_plus_crosses():
     assert pairs.DEFAULT_UNIVERSE == ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
                                       "USDCAD", "USDCHF", "NZDUSD",
-                                      "BTCUSD", "ETHUSD", "SOLUSD"]
+                                      "BTCUSD", "ETHUSD", "SOLUSD",
+                                      "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
+                                      "AUDNZD", "EURAUD"]
 
 
 def test_crypto_pairs_registered():
@@ -114,3 +116,28 @@ def test_resolve_universe_rejects_typos_and_empty():
         pairs.resolve_universe("EURUSD,NOTAPAIR")
     with pytest.raises(ValueError):
         pairs.resolve_universe(",")
+
+
+# ---------------------------------------------------------------------------
+# Training universe / history (task 7: data expansion)
+# ---------------------------------------------------------------------------
+def test_default_universe_includes_the_registered_crosses():
+    """Six FX crosses are registered, priced, and were never used for training.
+
+    The model overfits (train Sharpe 3.5 vs validation 0.67) and more data is the
+    textbook remedy -- but they are combinations of the majors, so their marginal
+    information is well below their row count. That caveat belongs in the
+    evaluation, not in a decision to exclude them.
+    """
+    for sym in pairs.CROSSES:
+        assert sym in pairs.DEFAULT_UNIVERSE, f"{sym} is registered but never trained on"
+    assert len(pairs.DEFAULT_UNIVERSE) == 16
+
+
+def test_start_covers_the_verified_yahoo_history():
+    """Training started 2015 against history Yahoo actually carries from
+    2003-12-01 (EURGBP from 1999); verified 2026-09-16. Roughly 4x the rows for
+    a model whose train/validation gap is 3.5 vs 0.67."""
+    from trading_algo.forex import fx_config
+
+    assert fx_config.START == "2003-12-01"

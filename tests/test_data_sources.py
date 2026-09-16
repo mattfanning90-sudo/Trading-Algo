@@ -379,7 +379,9 @@ def test_routing_never_sends_crypto_to_the_fiat_only_source():
     Frankfurter is fiat-only and ccxt has no EURUSD — neither can take the list."""
     opt_in = {**feeds.ROUTES, "fx": ("frankfurter", "yahoo")}
     groups, unroutable = feeds.plan_routes(pairs.DEFAULT_UNIVERSE, opt_in)
-    assert groups["frankfurter"] == list(pairs.PAIRS)
+    fx_legs = [s for s in pairs.DEFAULT_UNIVERSE
+               if pairs.get_pair(s).asset_class == "fx"]
+    assert groups["frankfurter"] == fx_legs
     assert groups["crypto"] == list(pairs.CRYPTO)
     assert unroutable == {}
 

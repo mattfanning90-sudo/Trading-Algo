@@ -35,8 +35,11 @@ from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_strategy import compute_targets
 from trading_algo.forex.pairs import DEFAULT_UNIVERSE, get_pair
 
-FX_LEGS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"]
-CRYPTO_LEGS = ["BTCUSD", "ETHUSD", "SOLUSD"]
+# Derived from the registry, not spelled out: the routing assertions below are
+# about WHICH PROVIDER gets which asset class, so they must keep holding when the
+# default universe grows (it has — the six G10 crosses joined it).
+FX_LEGS = [s for s in DEFAULT_UNIVERSE if get_pair(s).asset_class == "fx"]
+CRYPTO_LEGS = [s for s in DEFAULT_UNIVERSE if get_pair(s).asset_class == "crypto"]
 
 
 # ---------------------------------------------------------------------------
