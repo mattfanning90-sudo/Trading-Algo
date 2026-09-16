@@ -45,6 +45,28 @@ GRADED_PATIENCE = 25
 GRADED_VAL_FRAC = 0.2
 GRADED_EMBARGO = 5
 
+# Which OBJECTIVE that recipe grades and `train.train_models` deploys. One
+# switch, read by both, because a grade earned by one objective must never be
+# stamped on an artefact fitted with the other.
+#
+# This is a STATED CHOICE, and the honest version of it is uncomfortable: the
+# cost-aware arm MEASURED WORSE than the plain Sharpe objective it replaced
+# (net out-of-sample Sharpe −1.41 vs −1.16;
+# `docs/research/COST_AWARE_OBJECTIVE_RESULT.md`). It is kept anyway because
+# that comparison is not a verdict on the objective — the crypto half-spread in
+# `pairs.py` is a constant DOLLAR amount, so three crypto columns carry 87% of
+# the cost term this loss descends, and the features carry no asset-class
+# identity for the network to isolate them with. Price crypto at FX scale inside
+# the loss and the two arms are the same to within noise (§4). Neither arm's net
+# Sharpe is anywhere near zero, and `promotion.clears_floor` refuses both, so
+# nothing trades on this either way today.
+#
+# Flipping this to False would revert the deployed objective to the legacy
+# `sharpe` loss. That is the repo owner's call, not a silent cleanup. The real
+# prerequisite is fixing the crypto spread model in `pairs.py`; only then can
+# the cost-aware objective be evaluated on its merits at all.
+DEPLOYED_COST_AWARE = True
+
 
 # ---------------------------------------------------------------------------
 # Turn a signal panel into an equal-weight, cost-aware daily return series
@@ -99,9 +121,16 @@ def _sharpe_factory(n_feat: int, seed: int = 0, *, cost_aware: bool = False):
     refuses by name while the index is None, and that loud failure is the only
     thing standing between a forgotten fold and a silently meaningless loss.
     """
-    task = "sharpe_net" if cost_aware else "sharpe"
-    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh", task=task,
+    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh",
+                       task=sharpe_task(cost_aware),
                        l2=1e-3, dropout=0.1, seed=seed)
+
+
+def sharpe_task(cost_aware: bool) -> str:
+    """`MLP.task` for the two Sharpe objectives — the one place that mapping
+    lives, so `train.train_models` can name the DEPLOYED bundle's task from the
+    same switch the walk-forward grades with."""
+    return "sharpe_net" if cost_aware else "sharpe"
 
 
 def _meta_factory(n_feat: int, seed: int = 0):
@@ -203,7 +232,8 @@ def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=GRADED_EMBARGO,
                                  _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
 
     preds = walk_forward_predict(
-        X, y, t, _sharpe_factory(len(cols), seed, cost_aware=True), n_folds=n_folds,
+        X, y, t, _sharpe_factory(len(cols), seed, cost_aware=DEPLOYED_COST_AWARE),
+        n_folds=n_folds,
         label_horizon=1, embargo=embargo, min_train=min_train,
         index_factory=index_factory, val_frac=val_frac,
         # batch_size: "sharpe_net" must see the whole block at once, since the

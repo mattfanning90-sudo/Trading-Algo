@@ -42,7 +42,7 @@ from .pairs import get_pair
 # ---------------------------------------------------------------------------
 @dataclass
 class ModelBundle:
-    task: str                       # "sharpe" | "binary"
+    task: str                       # "sharpe" | "sharpe_net" | "binary"
     feature_cols: list[str]
     models: list[MLP]
     scaler: StandardScaler

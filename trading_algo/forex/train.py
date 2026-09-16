@@ -31,10 +31,10 @@ from . import fx_data, ml_agent
 from .fx_config import profile
 from .fx_data import closes
 from .ml_agent import ModelBundle
-from .ml_backtest import (GRADED_EMBARGO, GRADED_EPOCHS, GRADED_LR,
-                          GRADED_PATIENCE, GRADED_VAL_FRAC, _half_spreads,
-                          _meta_factory, _sharpe_factory, format_report,
-                          run_ml_backtest)
+from .ml_backtest import (DEPLOYED_COST_AWARE, GRADED_EMBARGO, GRADED_EPOCHS,
+                          GRADED_LR, GRADED_PATIENCE, GRADED_VAL_FRAC,
+                          _half_spreads, _meta_factory, _sharpe_factory,
+                          format_report, run_ml_backtest, sharpe_task)
 from .nn import StandardScaler
 from .panel_index import build_panel_index
 from .pairs import DEFAULT_UNIVERSE
@@ -100,11 +100,12 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     out = {}
 
     # The DEPLOYED artefact must be the objective the grade describes. The
-    # walk-forward (`ml_backtest.neural_oos_signal`) grades the cost-aware
-    # `sharpe_net` model, `record_evaluation` stamps that grade onto THIS bundle
-    # and `promotion.clears_floor` reads it to decide whether the model may
-    # trade. Ship the legacy `sharpe` model here and the gate would let one
-    # model trade on a different model's number.
+    # walk-forward (`ml_backtest.neural_oos_signal`) grades whichever objective
+    # `ml_backtest.DEPLOYED_COST_AWARE` selects, `record_evaluation` stamps that
+    # grade onto THIS bundle and `promotion.clears_floor` reads it to decide
+    # whether the model may trade. Ship a different objective here and the gate
+    # would let one model trade on a different model's number — hence the one
+    # switch, read in both places.
     Xn, yn, tn, pn, cols_n, vn = ml_agent.pooled_dataset(panel, p, label="sharpe",
                                                         horizon=1)
     if len(Xn):
@@ -146,13 +147,19 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
                 return build_panel_index(t_rows, pn[rows], vn[rows],
                                          _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
 
-            factory = functools.partial(_sharpe_factory, cost_aware=True)
+            # Same switch the walk-forward grades with, so the artefact cannot
+            # carry an objective the grade does not describe. Which objective
+            # that is, and why it is still this one, is stated at
+            # `ml_backtest.DEPLOYED_COST_AWARE`.
+            factory = functools.partial(_sharpe_factory,
+                                        cost_aware=DEPLOYED_COST_AWARE)
+            deployed_task = sharpe_task(DEPLOYED_COST_AWARE)
             n_fit, n_val = int(fit_mask.sum()), int(val_mask.sum())
 
             # Stage 1 — the PROBE. The held-out block's only job is to say WHEN
             # to stop; these weights are thrown away.
             probe = _train_bundle(
-                Xn[fit_mask], yn[fit_mask], cols_n, "sharpe_net", factory, seeds,
+                Xn[fit_mask], yn[fit_mask], cols_n, deployed_task, factory, seeds,
                 {"epochs": GRADED_EPOCHS, "batch_size": n_fit, "lr": GRADED_LR,
                  "patience": GRADED_PATIENCE},
                 panel_index=index_for(fit_mask),
@@ -172,7 +179,7 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
             # book trades into.
             all_rows = np.ones(len(Xn), dtype=bool)
             bundle = _train_bundle(
-                Xn, yn, cols_n, "sharpe_net", factory, seeds,
+                Xn, yn, cols_n, deployed_task, factory, seeds,
                 {"batch_size": len(Xn), "lr": GRADED_LR},
                 panel_index=index_for(all_rows), epochs_per_seed=epochs)
             bundle.meta.update({
