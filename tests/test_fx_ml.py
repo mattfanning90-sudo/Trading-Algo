@@ -396,3 +396,27 @@ def test_neural_oos_signal_asks_for_a_validation_split_and_early_stopping(
     assert seen["fit_kwargs"]["patience"] >= 1
     assert seen["index_factory"] is not None
     assert seen["fit_kwargs"]["batch_size"] >= 10 ** 6    # sharpe_net is full-batch
+
+
+# ---- the grade itself must not be a single draw ----------------------------
+def test_neural_oos_signal_is_seed_ensembled(panel, params):
+    """A single seed is a single draw.
+
+    `_sharpe_factory` defaulted to seed=0, so every out-of-sample number ever
+    reported for this model — including the -0.62 Sharpe that let it trade the
+    live books — came from one initialisation with unmeasured variance.
+    Production already seed-ensembles the DEPLOYED bundle (`ModelBundle` averages
+    several seeds); the grade describing it must be averaged the same way.
+    """
+    one = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                        epochs=5, seeds=1)
+    three = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                          epochs=5, seeds=3)
+    assert not one.empty and not three.empty
+    assert one.shape == three.shape
+    # Averaging is only meaningful if the seeds differ: a "3-seed" run that
+    # reproduced seed 0 exactly would be the same single draw wearing a label.
+    assert not np.allclose(one.fillna(0).to_numpy(), three.fillna(0).to_numpy()), \
+        "averaging three seeds must not reproduce a single seed exactly"
+    # ...and the ensemble must not quietly lose coverage: same tested rows.
+    assert (one.notna().to_numpy() == three.notna().to_numpy()).all()

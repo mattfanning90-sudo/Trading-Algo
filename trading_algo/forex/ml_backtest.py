@@ -102,8 +102,34 @@ def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
 
 
 def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
-                      epochs=400, val_frac=0.2) -> pd.DataFrame:
-    """Walk-forward signal from the NET-of-turnover portfolio objective.
+                      epochs=400, val_frac=0.2, seeds=3) -> pd.DataFrame:
+    """Seed-ensembled walk-forward signal from the net-of-turnover objective.
+
+    `_sharpe_factory` defaulted to seed=0, so every out-of-sample number ever
+    reported for this model — including the -0.62 Sharpe that let it trade the
+    live books — was a SINGLE DRAW of a high-variance training process, with the
+    variance never measured. The deployed artefact has always been a seed
+    ensemble (`ModelBundle` averages several `MLP`s); grading one draw and
+    shipping an average judges the artefact by a model nobody deploys.
+
+    So the grade is averaged the same way the artefact is: `seeds` independent
+    walk-forward runs, identical in every respect but the initialisation,
+    averaged into one signal panel. The fold geometry does not depend on the
+    seed, so every run marks the same rows out-of-sample and the average keeps
+    exactly their coverage.
+    """
+    frames = [_neural_oos_once(panel, p, seed=s, n_folds=n_folds, embargo=embargo,
+                               min_train=min_train, epochs=epochs, val_frac=val_frac)
+              for s in range(max(1, int(seeds)))]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    return sum(frames) / len(frames)
+
+
+def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=5, min_train=400,
+                     epochs=400, val_frac=0.2) -> pd.DataFrame:
+    """ONE walk-forward pass at a single initialisation. See `neural_oos_signal`.
 
     Two things this has to get right and nothing downstream can check:
 
@@ -132,7 +158,7 @@ def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
         return build_panel_index(t[rows], pairs[rows], vols[rows], spreads)
 
     preds = walk_forward_predict(
-        X, y, t, _sharpe_factory(len(cols), cost_aware=True), n_folds=n_folds,
+        X, y, t, _sharpe_factory(len(cols), seed, cost_aware=True), n_folds=n_folds,
         label_horizon=1, embargo=embargo, min_train=min_train,
         index_factory=index_factory, val_frac=val_frac,
         # batch_size: "sharpe_net" must see the whole block at once, since the
