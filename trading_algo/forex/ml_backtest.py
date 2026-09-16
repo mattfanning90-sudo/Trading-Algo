@@ -92,6 +92,18 @@ def _meta_factory(n_feat: int, seed: int = 0):
                        l2=1e-2, dropout=0.3, seed=seed)
 
 
+def _half_spreads(px: pd.DataFrame) -> dict[str, float]:
+    """Mean half-spread per symbol, as a fraction of price.
+
+    The cost coefficient of every `PanelIndex`. It comes from
+    `marks.half_spread_fraction` — the one definition every cost path in the
+    project derives from (invariant #2) — so the model's notion of a trade's
+    cost cannot fork from the book's.
+    """
+    return {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+            for s in px.columns}
+
+
 def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
              index: pd.Index, columns) -> pd.DataFrame:
     df = pd.DataFrame(index=index, columns=list(columns), dtype=float)
@@ -149,8 +161,7 @@ def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=5, min_train=400,
     if len(X) == 0:
         return pd.DataFrame()
     px = closes(panel)
-    spreads = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
-               for s in panel}
+    spreads = _half_spreads(px)
 
     def index_factory(rows):
         """Index ONE block of rows, addressed to its own positions."""

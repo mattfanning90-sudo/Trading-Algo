@@ -420,3 +420,36 @@ def test_neural_oos_signal_is_seed_ensembled(panel, params):
         "averaging three seeds must not reproduce a single seed exactly"
     # ...and the ensemble must not quietly lose coverage: same tested rows.
     assert (one.notna().to_numpy() == three.notna().to_numpy()).all()
+
+
+# ---- the artefact on disk and the grade describing it are ONE objective -----
+@pytest.fixture
+def short_panel():
+    """Two pairs, just past the feature warm-up — small enough to train fast."""
+    return synthetic_panel(["EURUSD", "USDJPY"], start="2020-01-01", end="2023-01-01")
+
+
+def test_train_models_ships_the_objective_it_is_graded_on(short_panel, params, tmp_path):
+    """The shipped bundle must be the model the promotion gate's number describes.
+
+    `run_ml_backtest` -> `neural_oos_signal` grades the COST-AWARE objective
+    (`sharpe_net`), `record_evaluation` stamps that grade onto the saved bundle,
+    and `promotion.clears_floor` reads it to decide whether the model may trade.
+    If `train_models` builds the legacy row-separable `sharpe` model, the gate
+    lets one model trade on a different model's grade.
+
+    Training at all is itself the proof the index is right: `sharpe_net`'s `fit`
+    refuses by name without a `panel_index`, and `_check_panel` refuses one whose
+    row count does not match the rows being fit.
+    """
+    from trading_algo.forex import train
+
+    graded = ml_backtest._sharpe_factory(4, 0, cost_aware=True)().task
+    out = train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    bundle = ModelBundle.load(out["neural"])
+    assert bundle.task == graded, "the artefact is a different objective from the grade"
+    assert all(m.task == graded for m in bundle.models)
+    # The bundle still predicts a position, and still round-trips through JSON.
+    X = np.zeros((3, len(bundle.feature_cols)))
+    assert np.abs(bundle.predict(X)).max() <= 1.0 + 1e-9

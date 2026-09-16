@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import functools
 import os
 
 import numpy as np
@@ -27,9 +28,12 @@ from . import fx_config as cfg
 from . import promotion
 from . import fx_data, ml_agent
 from .fx_config import profile
+from .fx_data import closes
 from .ml_agent import ModelBundle
-from .ml_backtest import _meta_factory, _sharpe_factory, format_report, run_ml_backtest
+from .ml_backtest import (_half_spreads, _meta_factory, _sharpe_factory,
+                          format_report, run_ml_backtest)
 from .nn import StandardScaler
+from .panel_index import build_panel_index
 from .pairs import DEFAULT_UNIVERSE
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
@@ -41,14 +45,23 @@ def _load(symbols, synthetic):
     return fx_data.load_panel(symbols, cfg.START, use_cache=True)
 
 
-def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs) -> ModelBundle:
-    """Fit a seed-ensembled bundle on ALL rows (scaler fit once on the same rows)."""
+def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
+                  panel_index=None) -> ModelBundle:
+    """Fit a seed-ensembled bundle on ALL rows (scaler fit once on the same rows).
+
+    `panel_index` is the row bookkeeping the cost-aware objective needs. Every
+    seed fits the SAME rows, so one index serves them all (`PanelIndex` is
+    frozen). `MLP.fit` refuses by name if the objective needs one and it is
+    missing, or if its row count disagrees with the rows being fit.
+    """
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
     y = np.asarray(y, dtype=float).reshape(-1, 1)
     models = []
     for s in range(seeds):
         m = factory(len(cols), s)()    # factory(n_feat, seed) -> (lambda -> MLP)
+        if panel_index is not None:
+            m.panel_index = panel_index
         m.fit(Xs, y, **fit_kwargs)
         models.append(m)
     return ModelBundle(task=task, feature_cols=cols, models=models, scaler=scaler,
@@ -59,10 +72,25 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     out = {}
 
-    Xn, yn, _, _, cols_n, _ = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
+    # The DEPLOYED artefact must be the objective the grade describes. The
+    # walk-forward (`ml_backtest.neural_oos_signal`) grades the cost-aware
+    # `sharpe_net` model, `record_evaluation` stamps that grade onto THIS bundle
+    # and `promotion.clears_floor` reads it to decide whether the model may
+    # trade. Ship the legacy `sharpe` model here and the gate would let one
+    # model trade on a different model's number.
+    Xn, yn, tn, pn, cols_n, vn = ml_agent.pooled_dataset(panel, p, label="sharpe",
+                                                        horizon=1)
     if len(Xn):
-        bundle = _train_bundle(Xn, yn, cols_n, "sharpe", _sharpe_factory, seeds,
-                               {"epochs": 200, "batch_size": 100000, "lr": 1e-2})
+        # This bundle is fit on ALL rows by design (it is the frozen live model),
+        # so the index spans exactly those rows and the cost statistic is drawn
+        # from the same history. `sharpe_net` must see them in one batch: the
+        # index addresses them by position.
+        idx = build_panel_index(tn, pn, vn, _half_spreads(closes(panel)))
+        bundle = _train_bundle(Xn, yn, cols_n, "sharpe_net",
+                               functools.partial(_sharpe_factory, cost_aware=True),
+                               seeds,
+                               {"epochs": 200, "batch_size": len(Xn), "lr": 1e-2},
+                               panel_index=idx)
         path = os.path.join(models_dir, "neural_sharpe.json")
         bundle.save(path)
         out["neural"] = path
