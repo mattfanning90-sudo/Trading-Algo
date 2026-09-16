@@ -44,6 +44,8 @@ import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
+from . import notifications
+
 # Levels, most severe first.
 ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
 _RANK = {ERROR: 0, WARN: 1, INFO: 2}
@@ -543,12 +545,45 @@ def _render(results: dict[str, list[Finding]]) -> str:
     return "\n".join(lines)
 
 
+def alert_on_errors(results: dict[str, list[Finding]]) -> int:
+    """Route ERROR findings through the shared notification channel.
+
+    The audit has been right and unread. `never-traded: sleeve ASX` fired every
+    day for 52 days; the FTSE cash discrepancy fired on the very day the book was
+    liquidated on a phantom loss. Both went only to the GitHub step summary, which
+    is a page somebody has to choose to open.
+
+    This sends ERRORs — and only ERRORs — to `notifications.notify`, the same
+    channel the drawdown breaker uses. WARN and INFO stay quiet on purpose: a
+    channel that fires on everything gets muted, and then the next real error is
+    invisible again.
+
+    Returns the number of errors alerted on, so callers can report it.
+    """
+    errors = [f for fs in results.values() for f in fs if f.level == ERROR]
+    if not errors:
+        return 0
+    by_book: dict[str, list[str]] = {}
+    for f in errors:
+        by_book.setdefault(f.book, []).append(f"{f.code}: {f.message}")
+    lines = [f"{book} — " + "; ".join(msgs) for book, msgs in sorted(by_book.items())]
+    notifications.notify(
+        "audit_errors",
+        f"live-book audit found {len(errors)} error(s) across "
+        f"{len(by_book)} book(s): " + " | ".join(lines),
+        level="alert", errors=len(errors), books=sorted(by_book),
+        codes=sorted({f.code for f in errors}))
+    return len(errors)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--account", help="verify a single book")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 if any ERROR finding fired")
+    ap.add_argument("--no-alert", action="store_true",
+                    help="do not send ERROR findings to the notification channel")
     args = ap.parse_args(argv)
 
     results = verify_all(args.account)
@@ -559,6 +594,11 @@ def main(argv: list[str] | None = None) -> int:
         print(_render(results))
 
     errors = sum(1 for fs in results.values() for f in fs if f.level == ERROR)
+    # Send ERRORs to the shared channel. Deliberately NOT gated on --strict: a
+    # scheduled run must not have to opt in to being told its books are broken,
+    # and failing the job after the trade has happened would not undo it anyway.
+    if not args.no_alert:
+        alert_on_errors(results)
     return 1 if (args.strict and errors) else 0
 
 

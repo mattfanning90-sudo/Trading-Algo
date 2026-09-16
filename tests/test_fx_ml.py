@@ -114,3 +114,111 @@ def test_neural_oos_signal_runs(panel, params):
                                          epochs=15)
     assert set(sigp.columns) == {"EURUSD", "USDJPY"}
     assert sigp.abs().max().max() <= 1.0 + 1e-9
+
+
+# --- the promotion floor: a model must clear its own grade to trade ----------
+def _graded_bundle(tmp_path, grade):
+    """A minimal saved bundle whose meta carries (or omits) an OOS grade."""
+    from trading_algo.forex.nn import MLP, StandardScaler
+    cols = [f"f{i}" for i in range(4)]
+    m = MLP([4, 3, 1], task="sharpe", seed=0)
+    m.fit(np.zeros((12, 4)), np.zeros((12, 1)), epochs=1, batch_size=12)
+    meta = {"seeds": 1, "n_samples": 12}
+    if grade is not None:
+        meta["evaluation"] = grade
+    b = ModelBundle("sharpe", cols, [m], StandardScaler().fit(np.zeros((12, 4))), meta)
+    d = tmp_path / "models"
+    d.mkdir(exist_ok=True)
+    b.save(str(d / "neural_sharpe.json"))
+    return str(d)
+
+
+def test_ml_pool_refuses_a_model_that_failed_its_own_grade(tmp_path):
+    """A model whose recorded out-of-sample Sharpe is negative must not trade.
+
+    This is the defect that let a measured -0.62 Sharpe / DSR 0.00 model trade
+    the live books for weeks: `train.py` graded it honestly every week and
+    `ml_pool` loaded it regardless, because nothing connected the grade to the
+    decision. champions.py gates rigorously and promotes nothing; the ML path
+    gated nothing and promoted everything.
+    """
+    from trading_algo.forex import fx_book
+    md = _graded_bundle(tmp_path, {"sharpe": -0.62, "dsr": 0.0})
+
+    pool = fx_book.ml_pool(models_dir=md)
+
+    assert not any(a.name == "neural" for a in pool.agents), \
+        "a model that failed its own grade must not reach the pool"
+    assert len(pool.agents) == 5, "falls back to the five technical agents"
+
+
+def test_ml_pool_refuses_an_ungraded_model(tmp_path):
+    """No recorded grade means it was never evaluated — that is not a pass."""
+    from trading_algo.forex import fx_book
+    md = _graded_bundle(tmp_path, None)
+
+    pool = fx_book.ml_pool(models_dir=md)
+
+    assert not any(a.name == "neural" for a in pool.agents)
+
+
+def test_ml_pool_accepts_a_model_that_cleared_the_floor(tmp_path):
+    """The gate must not be a blanket refusal — a passing model still trades."""
+    from trading_algo.forex import fx_book
+    md = _graded_bundle(tmp_path, {"sharpe": 0.8, "dsr": 0.97})
+
+    pool = fx_book.ml_pool(models_dir=md)
+
+    assert any(a.name == "neural" for a in pool.agents)
+
+
+def test_training_stamps_the_grade_onto_the_saved_model(tmp_path):
+    """The grade must travel WITH the model, or the gate can never pass.
+
+    `train_models` saves the bundle and `run_ml_backtest` grades it afterwards,
+    so the score lived only in stdout and a markdown report. A gate that reads
+    `meta["evaluation"]` would refuse every model forever — correct, but useless.
+    """
+    from trading_algo.forex import promotion, train
+    _graded_bundle(tmp_path, None)               # saved, ungraded
+    path = str(tmp_path / "models" / "neural_sharpe.json")
+    assert not promotion.clears_floor(ModelBundle.load(path).meta.get("evaluation"))[0]
+
+    train.record_evaluation(path, {"Sharpe": 0.8, "DSR": 0.97, "CAGR": 0.04})
+
+    ok, reason = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
+    assert ok, reason
+
+
+def test_synthetic_runs_never_stamp_a_passing_grade(tmp_path):
+    """Invariant #5: synthetic numbers are a pipeline test, never performance.
+
+    A synthetic run must not be able to promote a model, however good its
+    fabricated Sharpe looks.
+    """
+    from trading_algo.forex import promotion, train
+    _graded_bundle(tmp_path, None)
+    path = str(tmp_path / "models" / "neural_sharpe.json")
+
+    train.record_evaluation(path, {"Sharpe": 9.9, "DSR": 1.0}, synthetic=True)
+
+    ok, _ = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
+    assert not ok, "a synthetic grade must never clear the floor"
+
+
+def test_an_empty_grade_never_overwrites_a_passing_one(tmp_path):
+    """Grading with nothing must leave an existing grade alone.
+
+    `--no-ml` skips the ML strategies, so `res["metrics"]["neural_oos"]` is
+    absent. Stamping that as a grade would write all-None over a passing score
+    and silently demote a working model — a downgrade caused by a reporting
+    flag, not by any change in the model.
+    """
+    from trading_algo.forex import promotion, train
+    _graded_bundle(tmp_path, {"sharpe": 0.8, "dsr": 0.97})
+    path = str(tmp_path / "models" / "neural_sharpe.json")
+
+    train.record_evaluation(path, None)
+
+    ok, reason = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
+    assert ok, f"the passing grade must survive: {reason}"
