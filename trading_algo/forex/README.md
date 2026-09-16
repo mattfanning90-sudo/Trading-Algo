@@ -75,12 +75,17 @@ python -m trading_algo.forex.dashboard --all --out-dir public   # one html per b
 python -m trading_algo.forex.dashboard --account matt -o matt.html
 ```
 
-## Universe (FX majors + crypto)
+## Universe (FX majors + crosses + crypto)
 
-The default universe is the seven FX majors **plus the three major cryptos**
-(`BTCUSD`, `ETHUSD`, `SOLUSD`, via Yahoo `BTC-USD` etc.). Crypto trades 24/7, has
-no spot swap, and runs far hotter than G10 FX — the volatility-targeting risk
-layer sizes it down automatically, so it slots into the same agents/ensemble/book
+The default universe is **16 symbols**: the seven FX majors, the **six G10
+crosses** (`EURGBP`, `EURJPY`, `GBPJPY`, `AUDJPY`, `AUDNZD`, `EURAUD`) and the
+three major cryptos (`BTCUSD`, `ETHUSD`, `SOLUSD`, via Yahoo `BTC-USD` etc.).
+A cross is a combination of two majors, so it adds rows faster than it adds
+information — `pairs.py` says so at the registry and
+`docs/research/COST_AWARE_OBJECTIVE_RESULT.md` §7.3 measures it (the panel is
+roughly five to six independent bets, not sixteen). Crypto trades 24/7, has no
+spot swap, and runs far hotter than G10 FX — the volatility-targeting risk layer
+sizes it down automatically, so it slots into the same agents/ensemble/book
 unchanged. Existing books pick up newly-added instruments on their next run.
 
 **Locally** (if your machine has internet) the same runs as a daemon:

@@ -53,14 +53,21 @@ binary direction-classification:
   IEEE TNN 2001): the **differential Sharpe ratio** as a differentiable utility;
   position-output beats MSE-forecasting.
 
-**Decision.** `MLP` has a first-class **`task="sharpe"`**: a `tanh` position
-output trained on `loss = −Sharpe(positionₜ · forward_returnₜ)`. The output-layer
-gradient is derived analytically and pinned by a finite-difference gradient check
-(`tests/test_fx_nn.py`). The `NeuralAgent` uses this — it emits a position in
-[−1, 1] exactly like the five technical agents, so it drops straight into the
-ensemble. (Turnover regularization is handled by the cost-aware backtest and the
-no-churn band rather than inside the loss, to keep the loss convex-ish and
-gradient-checkable.)
+**Decision.** `MLP` has two first-class Sharpe objectives, both a `tanh` position
+output with an analytically-derived gradient pinned by a finite-difference check
+(`tests/test_fx_nn.py`): **`task="sharpe"`**, trained on
+`loss = −Sharpe(positionₜ · forward_returnₜ)`, and **`task="sharpe_net"`**, which
+is the Sharpe of the *portfolio* return series *net of turnover cost* — the same
+half-spread the book is charged (invariant #2), so the penalty is inside the loss
+rather than only in the scorer. The deployed bundle and the graded walk-forward
+both use `sharpe_net` (`ml_backtest.DEPLOYED_COST_AWARE`). That was measured, and
+the result is a null recorded in `docs/research/COST_AWARE_OBJECTIVE_RESULT.md`:
+net out-of-sample Sharpe does not cross zero under either objective, and the
+cost-aware arm has not yet been evaluated on a sound cost model — the crypto
+spread in `pairs.py` is a constant dollar amount and dominates its loss. The
+`NeuralAgent` uses this — it emits a position in [−1, 1] exactly like the five
+technical agents, so it drops straight into the ensemble. (The no-churn band
+still applies on top, in the book.)
 
 ## 3. Features: few, economically grounded, leakage-safe
 
@@ -87,8 +94,11 @@ each walk-forward fold's training rows only (`walkforward.py`).
 asset-pricing nets (Gu–Kelly–Xiu) exploit far more data than per-series models —
 critical when per-series signal is tiny.
 
-**Decision.** `ml_agent.pooled_dataset` stacks all seven pairs into one training
-set; the carry feature lets the single model distinguish pairs cross-sectionally.
+**Decision.** `ml_agent.pooled_dataset` stacks the whole registered universe
+— 16 symbols: 7 FX majors, 6 G10 crosses, 3 cryptos — into one training set; the
+carry feature lets the single model distinguish pairs cross-sectionally. It is
+the *only* pair-identifying feature, which matters when the loss carries a cost
+term the columns do not share equally (COST_AWARE_OBJECTIVE_RESULT.md §4).
 Seed-ensembling (several MLPs from different inits, averaged) cuts the
 high-variance of NN training (`ModelBundle`).
 
