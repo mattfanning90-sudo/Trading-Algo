@@ -52,10 +52,30 @@ class SupportsFitPredict(Protocol):
     def predict(self, X: np.ndarray) -> np.ndarray: ...
 
 
-def _validation_split(train_mask: np.ndarray, row_pos: np.ndarray,
-                      val_frac: float, gap: int
-                      ) -> tuple[np.ndarray, np.ndarray | None]:
-    """Split a fold's training rows into (fit, validation) blocks.
+def row_positions(time_index) -> np.ndarray:
+    """Each row's index into the sorted unique timestamps of `time_index`.
+
+    Rows of a pooled panel share timestamps across pairs, and every split in this
+    module is made on TIMESTAMPS, never on row positions — so the purge, the
+    embargo and the validation block all measure distance in these units. Public
+    because `train.py` splits the deployed fit the same way and must count in the
+    same units to do it (one implementation, not two that can drift).
+    """
+    times = pd.Index(time_index)
+    uniq = np.array(sorted(times.unique()))
+    pos = {t: i for i, t in enumerate(uniq)}
+    return np.array([pos[t] for t in times])
+
+
+def validation_split(train_mask: np.ndarray, row_pos: np.ndarray,
+                     val_frac: float, gap: int
+                     ) -> tuple[np.ndarray, np.ndarray | None]:
+    """Split a block of training rows into (fit, validation) blocks.
+
+    Public, and used twice: once per walk-forward fold below, and once by
+    `train.train_models` for the DEPLOYED bundle. The artefact that trades must
+    be fit the way the grade gating it was earned, so the two cannot be allowed
+    to hold separate copies of this geometry.
 
     The validation block is the LAST `val_frac` of the training window's
     timestamps: contiguous and later, never a random sample. The objective these
@@ -118,10 +138,8 @@ def walk_forward_predict(X: np.ndarray, y: np.ndarray, time_index: np.ndarray,
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float).reshape(-1, 1)
-    times = pd.Index(time_index)
-    uniq = np.array(sorted(times.unique()))
-    pos = {t: i for i, t in enumerate(uniq)}
-    row_pos = np.array([pos[t] for t in times])         # each row's unique-time index
+    uniq = np.array(sorted(pd.Index(time_index).unique()))
+    row_pos = row_positions(time_index)                 # each row's unique-time index
     preds = np.full(len(X), np.nan)
     fit_kwargs = fit_kwargs or {}
     gap = label_horizon + embargo
@@ -134,7 +152,7 @@ def walk_forward_predict(X: np.ndarray, y: np.ndarray, time_index: np.ndarray,
         if rolling is not None:
             train_mask &= row_pos >= (cutoff - rolling)
         test_mask = (row_pos >= a) & (row_pos < b)
-        fit_mask, val_mask = _validation_split(train_mask, row_pos, val_frac, gap)
+        fit_mask, val_mask = validation_split(train_mask, row_pos, val_frac, gap)
         if fit_mask.sum() < min_train or test_mask.sum() == 0:
             continue
         if val_frac > 0.0 and val_mask is None:

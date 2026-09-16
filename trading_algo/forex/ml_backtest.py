@@ -30,6 +30,23 @@ from .walkforward import walk_forward_predict
 
 
 # ---------------------------------------------------------------------------
+# THE GRADED RECIPE
+# ---------------------------------------------------------------------------
+# The neural model is not graded as a number in isolation — it is graded as a
+# number produced by a PROCEDURE, and `promotion.clears_floor` gates the live
+# books on that grade. So `train.train_models` fits the DEPLOYED bundle with
+# these same knobs: same epochs, same learning rate, same purged contiguous
+# validation slice, same early-stopping patience. Named once here rather than
+# retyped there, because a divergence would let the gate promote an artefact
+# trained harder than the one the grade describes.
+GRADED_EPOCHS = 400
+GRADED_LR = 1e-2
+GRADED_PATIENCE = 25
+GRADED_VAL_FRAC = 0.2
+GRADED_EMBARGO = 5
+
+
+# ---------------------------------------------------------------------------
 # Turn a signal panel into an equal-weight, cost-aware daily return series
 # ---------------------------------------------------------------------------
 def strategy_returns(panel: dict[str, pd.DataFrame], signal_panel: pd.DataFrame,
@@ -122,8 +139,9 @@ def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
     return df
 
 
-def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
-                      epochs=400, val_frac=0.2, seeds=3) -> pd.DataFrame:
+def neural_oos_signal(panel, p, *, n_folds=6, embargo=GRADED_EMBARGO, min_train=400,
+                      epochs=GRADED_EPOCHS, val_frac=GRADED_VAL_FRAC,
+                      seeds=3) -> pd.DataFrame:
     """Seed-ensembled walk-forward signal from the net-of-turnover objective.
 
     `_sharpe_factory` defaulted to seed=0, so every out-of-sample number ever
@@ -148,8 +166,9 @@ def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
     return sum(frames) / len(frames)
 
 
-def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=5, min_train=400,
-                     epochs=400, val_frac=0.2) -> pd.DataFrame:
+def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=GRADED_EMBARGO,
+                     min_train=400, epochs=GRADED_EPOCHS,
+                     val_frac=GRADED_VAL_FRAC) -> pd.DataFrame:
     """ONE walk-forward pass at a single initialisation. See `neural_oos_signal`.
 
     Two things this has to get right and nothing downstream can check:
@@ -190,8 +209,8 @@ def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=5, min_train=400,
         # batch_size: "sharpe_net" must see the whole block at once, since the
         # index addresses it positionally. patience only bites because val_frac
         # gives the fold a validation block to score.
-        fit_kwargs={"epochs": epochs, "batch_size": 10 ** 9, "lr": 1e-2,
-                    "patience": 25})
+        fit_kwargs={"epochs": epochs, "batch_size": 10 ** 9, "lr": GRADED_LR,
+                    "patience": GRADED_PATIENCE})
     return _scatter(preds, t, pairs, px.index, px.columns)
 
 

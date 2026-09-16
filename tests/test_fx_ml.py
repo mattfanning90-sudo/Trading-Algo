@@ -514,3 +514,91 @@ def test_fold_cost_statistic_sees_only_that_block_s_own_history(trending_panel, 
     assert any(abs(hs[s] - whole[s]) > 0.05 * whole[s]
                for _, hs in seen for s in px.columns), \
         "fixture no longer separates the prefix statistic from the whole-panel one"
+
+
+# ---- the DEPLOYED artefact must follow the recipe its GRADE describes -------
+def _graded_request(panel, params, monkeypatch):
+    """What the walk-forward asks of `fit` — i.e. what the grade DESCRIBES.
+
+    Captured rather than spelled out, so this test cannot pass by two hardcoded
+    copies of a number agreeing with each other while both have drifted from the
+    walk-forward. `walk_forward_predict` is stubbed out, so nothing trains.
+    """
+    seen: dict = {}
+
+    def stub(X, y, t, factory, **kw):
+        seen.update(kw)
+        return np.full(len(X), np.nan)
+
+    monkeypatch.setattr(ml_backtest, "walk_forward_predict", stub)
+    ml_backtest.neural_oos_signal(panel, params, seeds=1)
+    monkeypatch.undo()
+    return seen
+
+
+def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_path,
+                                                    monkeypatch):
+    """The shipped bundle must be fit the way its own grade was earned.
+
+    `promotion.clears_floor` gates the live books on the GRADE, and that grade is
+    not just a number — it is a number produced by a PROCEDURE: a contiguous,
+    later validation slice purged out of the training rows, with early stopping
+    against it. `train_models` fit the deployed bundle for 200 epochs with no
+    validation block at all, so `patience` could not bite and the artefact
+    trained to convergence on every row it had. The gate would then promote a
+    model MORE OVERFIT than its own grade claims — on a model whose measured
+    train/validation Sharpe gap is 3.5 vs 0.67.
+    """
+    from trading_algo.forex import train
+
+    graded = _graded_request(short_panel, params, monkeypatch)
+
+    fits, real_fit = [], MLP.fit
+
+    def spy_fit(self, X, y, **kw):
+        if self.task == "sharpe_net":
+            fits.append((self, len(X), dict(kw)))
+        return real_fit(self, X, y, **kw)
+
+    blocks, real_index = [], train.build_panel_index
+
+    def spy_index(times, pairs_, vols, half_spreads):
+        blocks.append(np.asarray(times))
+        return real_index(times, pairs_, vols, half_spreads)
+
+    monkeypatch.setattr(MLP, "fit", spy_fit)
+    monkeypatch.setattr(train, "build_panel_index", spy_index)
+    train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    assert fits, "the deployed bundle must fit the cost-aware objective"
+    for model, n_fit, kw in fits:
+        # 1. Early stopping is LIVE. `patience` alone does nothing: `fit`
+        #    early-stops only when a validation block is supplied.
+        assert kw.get("X_val") is not None and len(kw["X_val"]), \
+            "the deployed fit has no validation block, so patience cannot bite"
+        assert kw.get("y_val") is not None
+        # 2. The validation rows get their OWN index. `self.panel_index`
+        #    addresses the FIT rows by position; reusing it would score early
+        #    stopping on rows grouped into the wrong timestamps.
+        vidx = kw.get("val_panel_index")
+        assert vidx is not None and len(vidx.group) == len(kw["X_val"])
+        assert len(model.panel_index.group) == n_fit
+        # 3. Same knobs the grade was earned with — captured, not retyped.
+        assert kw["epochs"] == graded["fit_kwargs"]["epochs"]
+        assert kw["patience"] == graded["fit_kwargs"]["patience"]
+        assert kw["lr"] == graded["fit_kwargs"]["lr"]
+
+    # 4. Geometry: the validation block is a CONTIGUOUS, LATER slice of the
+    #    training timestamps, purged from the fit rows by label_horizon+embargo.
+    X, _, t, *_ = pooled_dataset(short_panel, params, label="sharpe", horizon=1)
+    uniq = np.array(sorted(set(t)))
+    assert len(blocks) == 2, "one index for the fit block, one for the validation block"
+    fit_t, val_t = blocks
+    assert fit_t.max() < val_t.min(), "the validation block must be strictly later"
+    n_val = len(set(val_t))
+    assert sorted(set(val_t)) == list(uniq[-n_val:]), "not a contiguous trailing slice"
+    assert 0 < n_val < len(uniq)
+    gap = 1 + graded["embargo"]                       # label_horizon + embargo
+    assert (np.searchsorted(uniq, val_t.min())
+            - np.searchsorted(uniq, fit_t.max())) > gap, "fit block is not purged"
+    assert len(fit_t) + len(val_t) < len(X), "the purge dropped no rows at all"

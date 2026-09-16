@@ -30,11 +30,14 @@ from . import fx_data, ml_agent
 from .fx_config import profile
 from .fx_data import closes
 from .ml_agent import ModelBundle
-from .ml_backtest import (_half_spreads, _meta_factory, _sharpe_factory,
-                          format_report, run_ml_backtest)
+from .ml_backtest import (GRADED_EMBARGO, GRADED_EPOCHS, GRADED_LR,
+                          GRADED_PATIENCE, GRADED_VAL_FRAC, _half_spreads,
+                          _meta_factory, _sharpe_factory, format_report,
+                          run_ml_backtest)
 from .nn import StandardScaler
 from .panel_index import build_panel_index
 from .pairs import DEFAULT_UNIVERSE
+from .walkforward import row_positions, validation_split
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 
@@ -46,26 +49,42 @@ def _load(symbols, synthetic):
 
 
 def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
-                  panel_index=None) -> ModelBundle:
-    """Fit a seed-ensembled bundle on ALL rows (scaler fit once on the same rows).
+                  panel_index=None, X_val=None, y_val=None,
+                  val_panel_index=None) -> ModelBundle:
+    """Fit a seed-ensembled bundle on the FIT rows (scaler fit on those rows).
 
     `panel_index` is the row bookkeeping the cost-aware objective needs. Every
     seed fits the SAME rows, so one index serves them all (`PanelIndex` is
     frozen). `MLP.fit` refuses by name if the objective needs one and it is
     missing, or if its row count disagrees with the rows being fit.
+
+    `X_val`/`y_val` turn early stopping on. The scaler is fit on the FIT rows
+    only and then applied to the validation rows, exactly as the walk-forward
+    does it: the block early stopping trusts must be scored on statistics it did
+    not help produce. The persisted scaler is the one the live model runs with,
+    so it must be the one the model was fit under.
     """
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
     y = np.asarray(y, dtype=float).reshape(-1, 1)
+    kwargs = dict(fit_kwargs)
+    n_val = 0
+    if X_val is not None and y_val is not None and len(X_val):
+        n_val = int(len(X_val))
+        kwargs["X_val"] = scaler.transform(np.asarray(X_val, dtype=float))
+        kwargs["y_val"] = np.asarray(y_val, dtype=float).reshape(-1, 1)
+        if val_panel_index is not None:
+            kwargs["val_panel_index"] = val_panel_index
     models = []
     for s in range(seeds):
         m = factory(len(cols), s)()    # factory(n_feat, seed) -> (lambda -> MLP)
         if panel_index is not None:
             m.panel_index = panel_index
-        m.fit(Xs, y, **fit_kwargs)
+        m.fit(Xs, y, **kwargs)
         models.append(m)
     return ModelBundle(task=task, feature_cols=cols, models=models, scaler=scaler,
-                       meta={"seeds": seeds, "n_samples": int(len(X))})
+                       meta={"seeds": seeds, "n_samples": int(len(X)),
+                             "n_held_out": n_val})
 
 
 def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
@@ -81,22 +100,51 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     Xn, yn, tn, pn, cols_n, vn = ml_agent.pooled_dataset(panel, p, label="sharpe",
                                                         horizon=1)
     if len(Xn):
-        # This bundle is fit on ALL rows by design (it is the frozen live model),
-        # so the index spans exactly those rows and the cost statistic is drawn
-        # from the same history. `sharpe_net` must see them in one batch: the
-        # index addresses them by position.
+        # The DEPLOYED fit must follow the recipe the GRADE describes, not merely
+        # carry the graded objective. `ml_backtest` grades this model on folds
+        # that hold out a purged, contiguous, later validation slice and early-stop
+        # against it; fitting the shipped bundle to convergence on every row would
+        # hand `promotion.clears_floor` a grade earned under one procedure and an
+        # artefact produced by a laxer one — a model MORE overfit than its own
+        # number claims. Same split helper as the walk-forward, same knobs.
         px = closes(panel)
-        idx = build_panel_index(tn, pn, vn,
-                                _half_spreads(px, upto=px.index.max()))
-        bundle = _train_bundle(Xn, yn, cols_n, "sharpe_net",
-                               functools.partial(_sharpe_factory, cost_aware=True),
-                               seeds,
-                               {"epochs": 200, "batch_size": len(Xn), "lr": 1e-2},
-                               panel_index=idx)
-        path = os.path.join(models_dir, "neural_sharpe.json")
-        bundle.save(path)
-        out["neural"] = path
-        print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples) -> {path}")
+        row_pos = row_positions(tn)
+        gap = 1 + GRADED_EMBARGO                     # label_horizon + embargo
+        fit_mask, val_mask = validation_split(
+            np.ones(len(Xn), dtype=bool), row_pos, GRADED_VAL_FRAC, gap)
+        if val_mask is None:
+            # Too little history to give a block up. Training blind here is the
+            # exact failure this is guarding, and such a panel grades nothing
+            # either (every fold would be skipped), so ship no model at all and
+            # let the promotion floor refuse for want of a grade.
+            print("  NeuralAgent bundle SKIPPED — too little history for a "
+                  "purged validation block; an unvalidated fit is not shippable.")
+        else:
+            def index_for(rows):
+                """Index ONE block, addressed to its own row positions.
+
+                Same contract as the walk-forward's `index_factory`: `sharpe_net`
+                must see its block in one batch, and `PanelIndex` addresses that
+                batch positionally, so the fit rows and the validation rows each
+                need their own.
+                """
+                return build_panel_index(tn[rows], pn[rows], vn[rows],
+                                         _half_spreads(px, upto=px.index.max()))
+
+            n_fit = int(fit_mask.sum())
+            bundle = _train_bundle(
+                Xn[fit_mask], yn[fit_mask], cols_n, "sharpe_net",
+                functools.partial(_sharpe_factory, cost_aware=True), seeds,
+                {"epochs": GRADED_EPOCHS, "batch_size": n_fit, "lr": GRADED_LR,
+                 "patience": GRADED_PATIENCE},
+                panel_index=index_for(fit_mask),
+                X_val=Xn[val_mask], y_val=yn[val_mask],
+                val_panel_index=index_for(val_mask))
+            path = os.path.join(models_dir, "neural_sharpe.json")
+            bundle.save(path)
+            out["neural"] = path
+            print(f"  trained NeuralAgent bundle ({seeds} seeds, {n_fit} samples, "
+                  f"{int(val_mask.sum())} held out for early stopping) -> {path}")
 
     Xm, ym, _, _, cols_m, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(Xm):
