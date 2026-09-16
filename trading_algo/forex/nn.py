@@ -246,6 +246,19 @@ class MLP:
                 "(build one with panel_index.build_panel_index)")
         return self.panel_index
 
+    @staticmethod
+    def _check_panel(idx, n, what):
+        """A panel index is addressed by ROW POSITION, so one built for different
+        rows is not an error anywhere downstream — it just groups the wrong rows
+        into a timestamp and charges turnover against a bar that is not in this
+        batch. Counting rows is the only cheap check that catches it."""
+        rows = len(idx.group)
+        if rows != n:
+            raise ValueError(
+                f"the {what} panel_index describes {rows} rows but the {what} set "
+                f"has {n}: build the index from THESE rows — every walk-forward "
+                "fold trains on a subset and needs its own")
+
     def _out_grad(self, out, y):
         """Pre-activation gradient at the output layer for the data loss.
 
@@ -292,7 +305,11 @@ class MLP:
         return a, cache
 
     # -- loss --------------------------------------------------------------
-    def _loss(self, out, y):
+    def _loss(self, out, y, panel=None):
+        """Data loss + L2. `panel` overrides `self.panel_index` for the net
+        portfolio objective: a validation block is a DIFFERENT panel — its own
+        timestamps, its own predecessors — and must be scored against its own
+        index, never the training one."""
         n = out.shape[0]
         if self.task == "regression":
             data = 0.5 * np.mean((out - y) ** 2)
@@ -304,7 +321,8 @@ class MLP:
             sigma = np.sqrt(pnl.var() + _EPS)
             data = -(pnl.mean() / sigma) * np.sqrt(252.0)   # negative Sharpe
         elif self.task == "sharpe_net":
-            data = sharpe_net_loss(out, y, self._panel(), self.ann)
+            data = sharpe_net_loss(out, y, self._panel() if panel is None else panel,
+                                   self.ann)
         else:
             p = np.clip(out, _EPS, 1 - _EPS)
             data = -np.mean(np.sum(y * np.log(p), axis=1))
@@ -356,7 +374,13 @@ class MLP:
         return y
 
     def fit(self, X, y, *, epochs=200, batch_size=64, lr=1e-3,
-            X_val=None, y_val=None, patience=20, verbose=False) -> "MLP":
+            X_val=None, y_val=None, val_panel_index=None, patience=20,
+            verbose=False) -> "MLP":
+        """Train by mini-batch Adam. Supplying `X_val`/`y_val` turns on early
+        stopping (`patience` epochs without improvement) and restores the
+        best-scoring weights; `patience` alone does nothing. For
+        task="sharpe_net" the validation rows need `val_panel_index`, their own
+        index — `self.panel_index` describes the training rows only."""
         X = np.asarray(X, dtype=float)
         y = self._prep_y(y)
         rng = np.random.default_rng(self.seed)
@@ -373,15 +397,18 @@ class MLP:
         # turnover against the wrong bar — silently, and still trainable.
         whole_panel = self.task == "sharpe_net"
         if whole_panel:
-            self._panel()
+            self._check_panel(self._panel(), n, "training")
             if batch_size < n:
                 raise ValueError(
                     "task='sharpe_net' must train full-batch: pass "
                     f"batch_size >= {n} so the batch matches panel_index")
             if has_val:
-                raise ValueError(
-                    "task='sharpe_net' validation rows need their own panel "
-                    "index; self.panel_index describes the training rows only")
+                if val_panel_index is None:
+                    raise ValueError(
+                        "task='sharpe_net' validation rows need their own panel "
+                        "index; self.panel_index describes the training rows only "
+                        "— pass val_panel_index")
+                self._check_panel(val_panel_index, len(X_val), "validation")
 
         for epoch in range(epochs):
             order = np.arange(n) if whole_panel else rng.permutation(n)
@@ -392,7 +419,8 @@ class MLP:
                 self._adam_step(gW, gb, lr)
 
             if has_val:
-                vloss = self._loss(self._forward(X_val)[0], y_val)
+                vloss = self._loss(self._forward(X_val)[0], y_val,
+                                   panel=val_panel_index)
                 if vloss < best_loss - 1e-6:
                     best_loss, wait = vloss, 0
                     best_state = ([w.copy() for w in self.W], [b.copy() for b in self.b])

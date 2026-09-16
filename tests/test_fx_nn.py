@@ -354,3 +354,75 @@ def test_sharpe_net_trains_in_original_row_order():
     m.fit(X, y, epochs=60, batch_size=16, lr=1e-2)
     after = m._loss(m._forward(X)[0], y)
     assert after < before
+
+
+def test_sharpe_net_panel_index_must_describe_the_training_rows():
+    """The WHOLE-panel index passes the `is None` check and then mis-addresses
+    every row: `group` names timestamps these rows do not hold and `prev` points
+    past the end of the batch. Each walk-forward fold trains on a subset, so the
+    only cheap thing that can catch a stale index is the row count."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(16, 5))
+    y = rng.normal(size=(16, 1))
+    m = MLP([5, 4, 1], hidden_act="tanh", task="sharpe_net", seed=0,
+            panel_index=_panel_of(40))            # an index for a bigger panel
+    before = [w.copy() for w in m.W]
+    with pytest.raises(ValueError, match="describes 40 rows"):
+        m.fit(X, y, epochs=1, batch_size=16)
+    for w0, w1 in zip(before, m.W):               # refused, not partially trained
+        assert np.array_equal(w0, w1)
+
+
+def test_sharpe_net_validation_needs_an_index_of_its_own_rows():
+    """Validation rows are a different panel — their own timestamps, their own
+    predecessors. Without an index of their own they cannot be scored at all;
+    with the wrong one they are scored against rows that are not there."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(16, 5)); y = rng.normal(size=(16, 1))
+    Xv = rng.normal(size=(8, 5)); yv = rng.normal(size=(8, 1))
+    m = MLP([5, 4, 1], hidden_act="tanh", task="sharpe_net", seed=0,
+            panel_index=_panel_of(16))
+    with pytest.raises(ValueError, match="panel index"):
+        m.fit(X, y, epochs=1, batch_size=16, X_val=Xv, y_val=yv)
+    with pytest.raises(ValueError, match="describes 16 rows"):
+        m.fit(X, y, epochs=1, batch_size=16, X_val=Xv, y_val=yv,
+              val_panel_index=_panel_of(16))
+    m.fit(X, y, epochs=2, batch_size=16, lr=1e-2, X_val=Xv, y_val=yv,
+          val_panel_index=_panel_of(8))           # sized to the validation rows
+    assert np.abs(m.predict(Xv)).max() <= 1.0 + 1e-9
+
+
+def test_early_stopping_fires_and_restores_the_best_weights():
+    """`fit` has implemented early stopping since it was written and nothing had
+    ever used it: no caller passed a validation set, so `patience` was inert and
+    training ran blind for every epoch it was given. Here it must actually stop
+    short and leave the best-scoring weights in place, not the last ones."""
+    rng = np.random.default_rng(0)
+    n, nv, epochs = 24, 12, 300
+    X = rng.normal(size=(n, 5)); y = rng.normal(size=(n, 1))
+    Xv = rng.normal(size=(nv, 5)); yv = rng.normal(size=(nv, 1))
+    vidx = _panel_of(nv)
+    m = MLP([5, 8, 1], hidden_act="tanh", task="sharpe_net", l2=0.0, seed=0,
+            panel_index=_panel_of(n))
+
+    val_losses, steps = [], []
+    real_loss, real_step = m._loss, m._adam_step
+
+    def spy_loss(out, y_, panel=None):
+        v = real_loss(out, y_, panel=panel)
+        val_losses.append(v)
+        return v
+
+    def spy_step(*a, **kw):
+        steps.append(1)
+        return real_step(*a, **kw)
+
+    m._loss, m._adam_step = spy_loss, spy_step
+    m.fit(X, y, epochs=epochs, batch_size=n, lr=1e-2, X_val=Xv, y_val=yv,
+          val_panel_index=vidx, patience=5)
+    m._loss, m._adam_step = real_loss, real_step
+
+    assert len(steps) < epochs, "patience must stop training short of `epochs`"
+    assert len(val_losses) == len(steps), "the validation loss is scored each epoch"
+    final = real_loss(m._forward(Xv)[0], yv, panel=vidx)
+    assert final == pytest.approx(min(val_losses), abs=1e-9), "best weights restored"

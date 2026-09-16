@@ -346,3 +346,53 @@ def test_an_empty_grade_never_overwrites_a_passing_one(tmp_path):
 
     ok, reason = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
     assert ok, f"the passing grade must survive: {reason}"
+
+
+# ---- the walk-forward actually trains the cost-aware objective --------------
+def test_neural_oos_signal_trains_the_cost_aware_objective(panel, params, monkeypatch):
+    """Each fold's index must describe THAT FOLD's rows. A whole-panel index
+    satisfies every guard the factory can offer and then mis-addresses every row
+    — silently. A fold always holds fewer rows than the panel, so assert it."""
+    X, *_ = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    built, real = [], ml_backtest._sharpe_factory
+
+    def spy(n_feat, seed=0, **kw):
+        make = real(n_feat, seed, **kw)
+
+        def make_one():
+            m = make()
+            built.append((m, kw))
+            return m
+        return make_one
+
+    monkeypatch.setattr(ml_backtest, "_sharpe_factory", spy)
+    sig = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                        epochs=5)
+    assert built, "the walk-forward must build a model per fold"
+    for m, kw in built:
+        assert kw.get("cost_aware") is True
+        assert m.task == "sharpe_net"
+        assert m.panel_index is not None                  # filled in per fold
+        assert 0 < len(m.panel_index.group) < len(X)      # this fold, not the panel
+        assert (m.panel_index.cost > 0).all()             # costs always on
+    assert len({len(m.panel_index.group) for m, _ in built}) > 1, "expanding window"
+    assert not sig.dropna(how="all").empty
+
+
+def test_neural_oos_signal_asks_for_a_validation_split_and_early_stopping(
+        panel, params, monkeypatch):
+    """`patience` alone does nothing: `fit` only early-stops when a validation
+    set is supplied. The walk-forward carves one out of the fold's training rows,
+    so the request must carry both."""
+    seen, real = {}, ml_backtest.walk_forward_predict
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ml_backtest, "walk_forward_predict", spy)
+    ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200, epochs=3)
+    assert seen["val_frac"] > 0
+    assert seen["fit_kwargs"]["patience"] >= 1
+    assert seen["index_factory"] is not None
+    assert seen["fit_kwargs"]["batch_size"] >= 10 ** 6    # sharpe_net is full-batch

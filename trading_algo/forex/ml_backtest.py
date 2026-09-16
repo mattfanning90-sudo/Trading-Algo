@@ -25,6 +25,7 @@ from .fx_config import FX_RISK_FREE, FXParams
 from .fx_data import closes
 from .nn import MLP
 from .pairs import get_pair
+from .panel_index import build_panel_index
 from .walkforward import walk_forward_predict
 
 
@@ -101,16 +102,44 @@ def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
 
 
 def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
-                      epochs=150) -> pd.DataFrame:
+                      epochs=400, val_frac=0.2) -> pd.DataFrame:
+    """Walk-forward signal from the NET-of-turnover portfolio objective.
+
+    Two things this has to get right and nothing downstream can check:
+
+    * **The index is per fold.** `walk_forward_predict` fits on a subset of rows,
+      and `PanelIndex` is addressed by row position, so the index must be built
+      from that subset. The whole-panel one would pass every guard and then group
+      the wrong rows into a timestamp — a plausible number from a meaningless
+      objective. Hence `index_factory`, which the walk-forward calls per block.
+    * **Costs in the model's own units.** `idx.cost` is the half-spread divided by
+      the same trailing vol the target was normalised by (`panel_index`), so the
+      loss weighs a trade's cost against the return it is actually competing with.
+      The half-spread itself comes from `marks.half_spread_fraction`, the one
+      definition every cost path in the project derives from (invariant #2).
+    """
     X, y, t, pairs, cols, vols = ml_agent.pooled_dataset(panel, p, label="sharpe",
                                                          horizon=1)
     if len(X) == 0:
         return pd.DataFrame()
-    preds = walk_forward_predict(
-        X, y, t, _sharpe_factory(len(cols)), n_folds=n_folds, label_horizon=1,
-        embargo=embargo, min_train=min_train,
-        fit_kwargs={"epochs": epochs, "batch_size": 100000, "lr": 1e-2})
     px = closes(panel)
+    spreads = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+               for s in panel}
+
+    def index_factory(rows):
+        """Index ONE block of rows, addressed to its own positions."""
+        rows = np.asarray(rows)
+        return build_panel_index(t[rows], pairs[rows], vols[rows], spreads)
+
+    preds = walk_forward_predict(
+        X, y, t, _sharpe_factory(len(cols), cost_aware=True), n_folds=n_folds,
+        label_horizon=1, embargo=embargo, min_train=min_train,
+        index_factory=index_factory, val_frac=val_frac,
+        # batch_size: "sharpe_net" must see the whole block at once, since the
+        # index addresses it positionally. patience only bites because val_frac
+        # gives the fold a validation block to score.
+        fit_kwargs={"epochs": epochs, "batch_size": 10 ** 9, "lr": 1e-2,
+                    "patience": 25})
     return _scatter(preds, t, pairs, px.index, px.columns)
 
 
