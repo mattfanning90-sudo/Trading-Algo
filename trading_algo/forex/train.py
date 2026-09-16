@@ -51,7 +51,7 @@ def _load(symbols, synthetic):
 
 def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
                   panel_index=None, X_val=None, y_val=None,
-                  val_panel_index=None) -> ModelBundle:
+                  val_panel_index=None, epochs_per_seed=None) -> ModelBundle:
     """Fit a seed-ensembled bundle on the FIT rows (scaler fit on those rows).
 
     `panel_index` is the row bookkeeping the cost-aware objective needs. Every
@@ -64,6 +64,10 @@ def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
     does it: the block early stopping trusts must be scored on statistics it did
     not help produce. The persisted scaler is the one the live model runs with,
     so it must be the one the model was fit under.
+
+    `epochs_per_seed` gives seed s its own epoch count — the one early stopping
+    chose for THAT initialisation on a probe fit. Seeds stop at different points,
+    so one shared number would under- or over-train most of the ensemble.
     """
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
@@ -81,7 +85,10 @@ def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
         m = factory(len(cols), s)()    # factory(n_feat, seed) -> (lambda -> MLP)
         if panel_index is not None:
             m.panel_index = panel_index
-        m.fit(Xs, y, **kwargs)
+        per_seed = dict(kwargs)
+        if epochs_per_seed is not None:
+            per_seed["epochs"] = int(epochs_per_seed[s])
+        m.fit(Xs, y, **per_seed)
         models.append(m)
     return ModelBundle(task=task, feature_cols=cols, models=models, scaler=scaler,
                        meta={"seeds": seeds, "n_samples": int(len(X)),
@@ -139,20 +146,45 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
                 return build_panel_index(t_rows, pn[rows], vn[rows],
                                          _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
 
-            n_fit = int(fit_mask.sum())
-            bundle = _train_bundle(
-                Xn[fit_mask], yn[fit_mask], cols_n, "sharpe_net",
-                functools.partial(_sharpe_factory, cost_aware=True), seeds,
+            factory = functools.partial(_sharpe_factory, cost_aware=True)
+            n_fit, n_val = int(fit_mask.sum()), int(val_mask.sum())
+
+            # Stage 1 — the PROBE. The held-out block's only job is to say WHEN
+            # to stop; these weights are thrown away.
+            probe = _train_bundle(
+                Xn[fit_mask], yn[fit_mask], cols_n, "sharpe_net", factory, seeds,
                 {"epochs": GRADED_EPOCHS, "batch_size": n_fit, "lr": GRADED_LR,
                  "patience": GRADED_PATIENCE},
                 panel_index=index_for(fit_mask),
                 X_val=Xn[val_mask], y_val=yn[val_mask],
                 val_panel_index=index_for(val_mask))
+            # Each seed stops at its own point, so each refits at its own count.
+            # `best_epochs_` is None only if early stopping never recorded a best
+            # (a non-finite validation loss) — then the cap is all we know.
+            epochs = [GRADED_EPOCHS if m.best_epochs_ is None else m.best_epochs_
+                      for m in probe.models]
+
+            # Stage 2 — the ARTEFACT. Give the held-out block back and refit on
+            # EVERY row for the epoch count the block endorsed. Validation picks
+            # the stopping point; the shipped model uses all the data. Stopping
+            # at stage 1 would ship a model fit only through the first 80% of
+            # history — blind to the most recent regime, which is the part a live
+            # book trades into.
+            all_rows = np.ones(len(Xn), dtype=bool)
+            bundle = _train_bundle(
+                Xn, yn, cols_n, "sharpe_net", factory, seeds,
+                {"batch_size": len(Xn), "lr": GRADED_LR},
+                panel_index=index_for(all_rows), epochs_per_seed=epochs)
+            bundle.meta.update({
+                "fit_epochs": epochs,
+                "epoch_choice": {"probe_rows": n_fit, "held_out_rows": n_val,
+                                 "cap": GRADED_EPOCHS, "patience": GRADED_PATIENCE},
+            })
             path = os.path.join(models_dir, "neural_sharpe.json")
             bundle.save(path)
             out["neural"] = path
-            print(f"  trained NeuralAgent bundle ({seeds} seeds, {n_fit} samples, "
-                  f"{int(val_mask.sum())} held out for early stopping) -> {path}")
+            print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples, "
+                  f"epochs {epochs} chosen on {n_val} held-out rows) -> {path}")
 
     Xm, ym, _, _, cols_m, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(Xm):

@@ -548,6 +548,11 @@ def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_pat
     trained to convergence on every row it had. The gate would then promote a
     model MORE OVERFIT than its own grade claims — on a model whose measured
     train/validation Sharpe gap is 3.5 vs 0.67.
+
+    This covers the PROBE — the held-out fit that chooses the stopping epoch, and
+    so the part that must match the graded procedure knob for knob. What the
+    shipped artefact then does with that epoch count is
+    `test_the_deployed_artefact_is_refit_on_the_most_recent_rows`.
     """
     from trading_algo.forex import train
 
@@ -571,7 +576,9 @@ def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_pat
     train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
 
     assert fits, "the deployed bundle must fit the cost-aware objective"
-    for model, n_fit, kw in fits:
+    probes = [f for f in fits if f[2].get("X_val") is not None]
+    assert probes, "no held-out fit at all — nothing chooses the stopping epoch"
+    for model, n_fit, kw in probes:
         # 1. Early stopping is LIVE. `patience` alone does nothing: `fit`
         #    early-stops only when a validation block is supplied.
         assert kw.get("X_val") is not None and len(kw["X_val"]), \
@@ -592,16 +599,22 @@ def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_pat
     #    training timestamps, purged from the fit rows by label_horizon+embargo.
     X, _, t, *_ = pooled_dataset(short_panel, params, label="sharpe", horizon=1)
     uniq = np.array(sorted(set(t)))
-    assert len(blocks) == 2, "one index for the fit block, one for the validation block"
-    fit_t, val_t = blocks
+    assert len(blocks) == 3, ("one index for the probe's fit block, one for its "
+                             "validation block, one for the refit on all rows")
+    fit_t, val_t, all_t = blocks
     assert fit_t.max() < val_t.min(), "the validation block must be strictly later"
     n_val = len(set(val_t))
     assert sorted(set(val_t)) == list(uniq[-n_val:]), "not a contiguous trailing slice"
     assert 0 < n_val < len(uniq)
+    # ...and it is the graded FRACTION, not merely some trailing slice: a
+    # deployed-side val_frac of its own would otherwise pass everything above.
+    assert n_val == min(max(1, round(graded["val_frac"] * len(uniq))), len(uniq) - 1), \
+        "the deployed split holds out a different fraction from the graded one"
     gap = 1 + graded["embargo"]                       # label_horizon + embargo
     assert (np.searchsorted(uniq, val_t.min())
             - np.searchsorted(uniq, fit_t.max())) > gap, "fit block is not purged"
     assert len(fit_t) + len(val_t) < len(X), "the purge dropped no rows at all"
+    assert len(all_t) == len(X), "the refit block is not every row"
 
 
 def test_deployed_block_cost_statistic_sees_only_its_own_history(trending_panel, params,
@@ -633,7 +646,8 @@ def test_deployed_block_cost_statistic_sees_only_its_own_history(trending_panel,
     monkeypatch.setattr(train, "build_panel_index", spy)
     train.train_models(trending_panel, params, seeds=1, models_dir=str(tmp_path))
 
-    assert len(seen) == 2, "one index for the fit block, one for the validation block"
+    assert len(seen) == 3, ("one index for the probe's fit block, one for its "
+                           "validation block, one for the refit on all rows")
     for upto, hs in seen:
         assert upto < px.index.max(), (
             "fixture broke: a block reaching the panel's last bar cannot show this")
@@ -647,3 +661,75 @@ def test_deployed_block_cost_statistic_sees_only_its_own_history(trending_panel,
     fit_hs = seen[0][1]
     assert any(abs(fit_hs[s] - whole[s]) > 0.05 * whole[s] for s in px.columns), \
         "fixture no longer separates the prefix statistic from the whole-panel one"
+
+
+def test_the_deployed_artefact_is_refit_on_the_most_recent_rows(short_panel, params,
+                                                                tmp_path, monkeypatch):
+    """Validation picks the stopping point; the SHIPPED model uses all the data.
+
+    Holding the last fifth of timestamps out of the deployed fit made the
+    artefact comply with the graded procedure and go blind: at START=2003 the
+    shipped model would be fit only through ~2021, and 2022's hiking cycle would
+    reach it solely as an early-stopping block. That is not a model worth
+    trading.
+
+    So the held-out block DETERMINES the epoch count and is then given back: a
+    fresh fit on every row, for exactly the number of epochs early stopping
+    chose. The artefact still follows the graded procedure — early-stopped, not
+    an arbitrary 200 — without being blind to the most recent history.
+    """
+    from trading_algo.forex import train
+
+    X, _, t, *_ = pooled_dataset(short_panel, params, label="sharpe", horizon=1)
+    last_row_ts = max(t)
+
+    kept, times_of, real_index = [], {}, train.build_panel_index
+
+    def spy_index(times, pairs_, vols, half_spreads):
+        idx = real_index(times, pairs_, vols, half_spreads)
+        kept.append(idx)                      # keep alive: keyed on id()
+        times_of[id(idx)] = np.asarray(times)
+        return idx
+
+    fits, real_fit = [], MLP.fit
+
+    def spy_fit(self, Xf, y, **kw):
+        out = real_fit(self, Xf, y, **kw)
+        if self.task == "sharpe_net":
+            fits.append({"model": self, "n": len(Xf), "kw": dict(kw),
+                         "times": times_of.get(id(self.panel_index))})
+        return out
+
+    monkeypatch.setattr(train, "build_panel_index", spy_index)
+    monkeypatch.setattr(MLP, "fit", spy_fit)
+    out = train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    probes = [f for f in fits if f["kw"].get("X_val") is not None]
+    finals = [f for f in fits if f["kw"].get("X_val") is None]
+    assert probes, "the stopping epoch must still be chosen on a held-out block"
+    assert finals, ("the deployed artefact is never refit on all rows — it has "
+                    "never seen the most recent fifth of history")
+
+    # 1. The deployed fit saw EVERY row, including the latest timestamp.
+    for f in finals:
+        assert f["n"] == len(X), "the deployed fit is not on all rows"
+        assert f["times"] is not None
+        assert f["times"].max() == last_row_ts, \
+            "the deployed fit never reaches the most recent training row"
+
+    # 2. The weights on disk are the REFIT ones, not the held-out probe's.
+    bundle = ModelBundle.load(out["neural"])
+    shipped, final_m, probe_m = bundle.models[0], finals[-1]["model"], probes[-1]["model"]
+    assert all(np.allclose(a, b) for a, b in zip(shipped.W, final_m.W)), \
+        "the shipped weights are not the ones fit on all rows"
+    assert not all(np.allclose(a, b) for a, b in zip(shipped.W, probe_m.W)), \
+        "the shipped weights are the probe's — the refit changed nothing"
+
+    # 3. ...for the epoch count early stopping actually chose, not the cap.
+    chosen = probe_m.best_epochs_
+    assert chosen is not None, "early stopping recorded no best epoch"
+    assert chosen < ml_backtest.GRADED_EPOCHS, \
+        "fixture no longer early-stops, so 'the chosen epoch' is just the cap"
+    assert finals[-1]["kw"]["epochs"] == chosen, \
+        "the refit ran to the cap, not to the epoch the validation block chose"
+    assert bundle.meta.get("fit_epochs") == [chosen]

@@ -184,6 +184,16 @@ class MLP:
                      keyed on ROW POSITION, so that task trains full-batch in
                      the original row order (enforced in `fit`).
     `ann`          : annualisation factor for the Sharpe objectives.
+
+    `best_epochs_` : READ-ONLY, set by `fit`. The number of epochs whose weights
+                     early stopping restored — i.e. the epoch count this run
+                     actually chose, which is <= `epochs` and is NOT the cap
+                     unless the cap was reached. `None` when no validation set
+                     was supplied (nothing early-stopped, so nothing was chosen).
+                     Exists so a caller can refit on more rows for exactly the
+                     number of epochs a held-out block endorsed, rather than
+                     inferring it. Not serialised: it describes a training run,
+                     not the network.
     """
     layer_sizes: list[int]
     hidden_act: str = "relu"
@@ -200,6 +210,7 @@ class MLP:
     _mb: list[np.ndarray] = field(default_factory=list, repr=False)
     _vb: list[np.ndarray] = field(default_factory=list, repr=False)
     _t: int = field(default=0, repr=False)
+    best_epochs_: int | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if not self.W:
@@ -380,12 +391,17 @@ class MLP:
         stopping (`patience` epochs without improvement) and restores the
         best-scoring weights; `patience` alone does nothing. For
         task="sharpe_net" the validation rows need `val_panel_index`, their own
-        index — `self.panel_index` describes the training rows only."""
+        index — `self.panel_index` describes the training rows only.
+
+        Records `best_epochs_`: how many epochs produced the restored weights, so
+        a caller can refit on other rows for the count this block endorsed."""
         X = np.asarray(X, dtype=float)
         y = self._prep_y(y)
         rng = np.random.default_rng(self.seed)
         n = X.shape[0]
         best_loss, best_state, wait = np.inf, None, 0
+        best_epochs = None
+        self.best_epochs_ = None
         has_val = X_val is not None and y_val is not None
         if has_val:
             X_val = np.asarray(X_val, dtype=float)
@@ -423,6 +439,7 @@ class MLP:
                                    panel=val_panel_index)
                 if vloss < best_loss - 1e-6:
                     best_loss, wait = vloss, 0
+                    best_epochs = epoch + 1          # epochs run to reach this state
                     best_state = ([w.copy() for w in self.W], [b.copy() for b in self.b])
                 else:
                     wait += 1
@@ -437,6 +454,7 @@ class MLP:
 
         if best_state is not None:
             self.W, self.b = best_state
+            self.best_epochs_ = best_epochs
         return self
 
     def predict(self, X) -> np.ndarray:
