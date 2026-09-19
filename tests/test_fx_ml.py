@@ -4,12 +4,13 @@ import pandas as pd
 import pytest
 
 from trading_algo.forex import features, ml_backtest
+from trading_algo.forex import indicators as ind
 from trading_algo.forex.agents import PairContext
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
 from trading_algo.forex.ml_agent import ModelBundle, NeuralAgent, pooled_dataset
 from trading_algo.forex.nn import MLP, StandardScaler
-from trading_algo.forex.pairs import get_pair
+from trading_algo.forex.pairs import DEFAULT_UNIVERSE, get_pair
 
 
 @pytest.fixture
@@ -20,6 +21,17 @@ def panel():
 @pytest.fixture
 def params():
     return profile("balanced")
+
+
+@pytest.fixture
+def mixed_panel():
+    """FX majors + crypto — the universe the model is actually trained on.
+
+    The `panel` fixture above is FX-only, so it cannot show the imbalance the
+    vol-normalised target exists to fix: crypto's ~4x volatility is precisely
+    what makes a raw forward-return target lopsided.
+    """
+    return synthetic_panel(list(DEFAULT_UNIVERSE), start="2017-01-01", end="2023-01-01")
 
 
 # ---- features ------------------------------------------------------------
@@ -45,17 +57,74 @@ def test_triple_barrier_labels_binary(panel):
 
 # ---- pooled dataset ------------------------------------------------------
 def test_pooled_dataset_sharpe(panel, params):
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="sharpe", horizon=1)
-    assert len(X) == len(y) == len(t) == len(pairs)
+    X, y, t, pairs, cols, vols = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    assert len(X) == len(y) == len(t) == len(pairs) == len(vols)
     assert X.shape[1] == len(cols)
     assert np.isfinite(X).all()
     assert set(np.unique(pairs)) <= {"EURUSD", "USDJPY"}
 
 
 def test_pooled_dataset_meta_is_binary(panel, params):
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="meta", horizon=1)
+    X, y, t, pairs, cols, _ = pooled_dataset(panel, params, label="meta", horizon=1)
     assert "tilt" in cols and any(c.startswith("ag_") for c in cols)
     assert set(np.unique(y)).issubset({0.0, 1.0})
+
+
+def test_pooled_target_is_vol_normalised(mixed_panel):
+    """Crypto moves ~4x harder than FX. With a raw forward-return target it is
+    30% of this fixture's rows but 92% of the squared target the loss sees, so
+    the model is trained almost entirely on the instruments the technical agents
+    were measured to be WORST on. (Same imbalance on the live panel, which has
+    a shorter crypto history: 24% of rows, 96.3% of the signal.) Normalising by
+    trailing vol makes each instrument contribute in proportion to its rows."""
+    p = profile("balanced")
+    X, y, times, pairs, cols, vols = pooled_dataset(mixed_panel, p, label="sharpe",
+                                                    horizon=1)
+
+    tot = float((y ** 2).sum())
+    crypto = [s for s in set(pairs)
+              if getattr(get_pair(s), "asset_class", "fx") == "crypto"]
+    mask = np.isin(pairs, crypto)
+    share_rows = mask.mean()
+    share_signal = float((y[mask] ** 2).sum()) / tot
+
+    assert abs(share_signal - share_rows) < 0.15, (
+        f"crypto is {share_rows:.0%} of rows but {share_signal:.0%} of the "
+        f"signal — the target is not vol-normalised")
+    assert len(vols) == len(y)
+    assert (vols > 0).all()
+
+
+def test_pooled_vols_are_positive_on_every_label(params):
+    """A forward-filled dead price must never leak a NaN into `vols`.
+
+    Trailing vol is exactly 0.0 across a dead stretch and `pooled_dataset` maps
+    that to NaN. On the sharpe branch those rows drop out on their own, because
+    the target divides by vol. The meta target never touches vol, and the row
+    survives `align_xy`: `build_features` keeps the literal 0.0 in its `vol_20`
+    column, and `bb_z` survives on a ~1e-8 floating-point residual in the level
+    std. Without an explicit guard that row is returned carrying `vols = NaN`.
+    verify.py exists to hunt dead-price rows; the dataset must not manufacture
+    them. `vols > 0` is a contract of pooled_dataset on EVERY label.
+    """
+    panel = synthetic_panel(["EURUSD", "USDJPY", "BTCUSD"],
+                            start="2017-01-01", end="2023-01-01")
+    bars = panel["EURUSD"]
+    lo, n = 800, 60                 # past the 504-bar value_z warm-up, or the rows
+    dead = float(bars["close"].iloc[lo])      # drop for an unrelated reason
+    bars.iloc[lo:lo + n, :] = dead
+
+    # Guard the guard: if the construction stops producing exactly-zero vol the
+    # assertions below would pass vacuously.
+    assert (ind.realized_vol(bars["close"], 20) == 0.0).any(), \
+        "fixture no longer produces a dead-price stretch — the test is vacuous"
+
+    for label in ("sharpe", "meta"):
+        X, y, t, pairs, cols, vols = pooled_dataset(panel, params, label=label,
+                                                    horizon=1)
+        assert len(vols) == len(y) == len(X)
+        assert np.isfinite(vols).all(), f"{label}: NaN vol survived a dead price"
+        assert (vols > 0).all(), f"{label}: non-positive vol in the returned rows"
 
 
 # ---- model bundle --------------------------------------------------------
@@ -82,7 +151,7 @@ def test_neural_agent_flat_without_model(panel, params):
 
 def test_neural_agent_signal_in_range_and_causal(panel, params):
     # tiny trained bundle on the pooled set
-    X, y, t, pairs, cols = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    X, y, t, pairs, cols, _ = pooled_dataset(panel, params, label="sharpe", horizon=1)
     scaler = StandardScaler().fit(X)
     m = MLP([len(cols), 8, 1], task="sharpe", seed=0)
     m.fit(scaler.transform(X), y.reshape(-1, 1), epochs=20, batch_size=100000, lr=1e-2)
@@ -107,6 +176,61 @@ def test_run_ml_backtest_rule_based(panel, params):
         assert {"Sharpe", "PSR", "DSR"} <= set(m)
         assert 0.0 <= m["PSR"] <= 1.0
     assert "Probability of Backtest Overfitting" in ml_backtest.format_report(res)
+
+
+# ---- the model factory behind the walk-forward ---------------------------
+def _small_panel_index(n_rows):
+    """An irregular (pair, timestamp) index covering exactly `n_rows` rows."""
+    from trading_algo.forex.panel_index import build_panel_index
+    times, pairs, t = [], [], 0
+    while len(times) < n_rows:
+        for sym in (["A", "B", "C"] if t % 2 == 0 else ["A", "B"]):
+            if len(times) == n_rows:
+                break
+            times.append(t); pairs.append(sym)
+        t += 1
+    return build_panel_index(np.array(times), np.array(pairs),
+                             np.full(n_rows, 0.2),
+                             {"A": 0.001, "B": 0.002, "C": 0.003})
+
+
+def test_sharpe_factory_defaults_to_the_pooled_objective():
+    """Default stays the legacy row-separable objective, so the cost-aware one
+    can be switched on deliberately and the two compared like for like."""
+    make = ml_backtest._sharpe_factory(4)
+    m = make()
+    assert m.task == "sharpe"
+    assert m.layer_sizes[0] == 4 and m.layer_sizes[-1] == 1
+    assert make() is not m                  # a fresh model per fold
+
+
+def test_sharpe_factory_takes_seed_positionally():
+    """`neural_oos_signal` calls `_sharpe_factory(len(cols))` positionally; any
+    new argument must go AFTER seed or that call silently changes meaning."""
+    assert ml_backtest._sharpe_factory(4, 7)().seed == 7
+
+
+def test_sharpe_factory_cost_aware_builds_the_net_objective():
+    """`cost_aware=True` selects the net-of-turnover portfolio objective."""
+    m = ml_backtest._sharpe_factory(4, 0, cost_aware=True)()
+    assert m.task == "sharpe_net"
+    assert m.layer_sizes[0] == 4 and m.layer_sizes[-1] == 1
+
+
+def test_sharpe_factory_leaves_the_panel_index_unset_so_a_miss_is_loud():
+    """The index describes the rows of ONE fold, which the factory cannot know,
+    so the walk-forward fills it per fold. Shipping `None` rather than a
+    placeholder is the whole point: a fold that never fills it fails by name."""
+    m = ml_backtest._sharpe_factory(4, 0, cost_aware=True)()
+    assert m.panel_index is None
+    X = np.random.default_rng(0).normal(size=(12, 4))
+    y = np.random.default_rng(1).normal(size=(12, 1))
+    with pytest.raises(ValueError, match="panel_index"):
+        m.fit(X, y, epochs=1, batch_size=12)
+
+    m.panel_index = _small_panel_index(12)   # what the walk-forward will do
+    m.fit(X, y, epochs=2, batch_size=12, lr=1e-2)
+    assert np.abs(m.predict(X)).max() <= 1.0 + 1e-9
 
 
 def test_neural_oos_signal_runs(panel, params):
@@ -222,3 +346,390 @@ def test_an_empty_grade_never_overwrites_a_passing_one(tmp_path):
 
     ok, reason = promotion.clears_floor(ModelBundle.load(path).meta["evaluation"])
     assert ok, f"the passing grade must survive: {reason}"
+
+
+# ---- the walk-forward actually trains the cost-aware objective --------------
+def test_neural_oos_signal_trains_the_cost_aware_objective(panel, params, monkeypatch):
+    """Each fold's index must describe THAT FOLD's rows. A whole-panel index
+    satisfies every guard the factory can offer and then mis-addresses every row
+    — silently. A fold always holds fewer rows than the panel, so assert it."""
+    X, *_ = pooled_dataset(panel, params, label="sharpe", horizon=1)
+    built, real = [], ml_backtest._sharpe_factory
+
+    def spy(n_feat, seed=0, **kw):
+        make = real(n_feat, seed, **kw)
+
+        def make_one():
+            m = make()
+            built.append((m, kw))
+            return m
+        return make_one
+
+    monkeypatch.setattr(ml_backtest, "_sharpe_factory", spy)
+    sig = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                        epochs=5)
+    assert built, "the walk-forward must build a model per fold"
+    for m, kw in built:
+        assert kw.get("cost_aware") is True
+        assert m.task == "sharpe_net"
+        assert m.panel_index is not None                  # filled in per fold
+        assert 0 < len(m.panel_index.group) < len(X)      # this fold, not the panel
+        assert (m.panel_index.cost > 0).all()             # costs always on
+    assert len({len(m.panel_index.group) for m, _ in built}) > 1, "expanding window"
+    assert not sig.dropna(how="all").empty
+
+
+def test_neural_oos_signal_asks_for_a_validation_split_and_early_stopping(
+        panel, params, monkeypatch):
+    """`patience` alone does nothing: `fit` only early-stops when a validation
+    set is supplied. The walk-forward carves one out of the fold's training rows,
+    so the request must carry both."""
+    seen, real = {}, ml_backtest.walk_forward_predict
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ml_backtest, "walk_forward_predict", spy)
+    ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200, epochs=3)
+    assert seen["val_frac"] > 0
+    assert seen["fit_kwargs"]["patience"] >= 1
+    assert seen["index_factory"] is not None
+    assert seen["fit_kwargs"]["batch_size"] >= 10 ** 6    # sharpe_net is full-batch
+
+
+# ---- the grade itself must not be a single draw ----------------------------
+def test_neural_oos_signal_is_seed_ensembled(panel, params):
+    """A single seed is a single draw.
+
+    `_sharpe_factory` defaulted to seed=0, so every out-of-sample number ever
+    reported for this model — including the -0.62 Sharpe that let it trade the
+    live books — came from one initialisation with unmeasured variance.
+    Production already seed-ensembles the DEPLOYED bundle (`ModelBundle` averages
+    several seeds); the grade describing it must be averaged the same way.
+    """
+    one = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                        epochs=5, seeds=1)
+    three = ml_backtest.neural_oos_signal(panel, params, n_folds=3, min_train=200,
+                                          epochs=5, seeds=3)
+    assert not one.empty and not three.empty
+    assert one.shape == three.shape
+    # Averaging is only meaningful if the seeds differ: a "3-seed" run that
+    # reproduced seed 0 exactly would be the same single draw wearing a label.
+    assert not np.allclose(one.fillna(0).to_numpy(), three.fillna(0).to_numpy()), \
+        "averaging three seeds must not reproduce a single seed exactly"
+    # ...and the ensemble must not quietly lose coverage: same tested rows.
+    assert (one.notna().to_numpy() == three.notna().to_numpy()).all()
+
+
+# ---- the artefact on disk and the grade describing it are ONE objective -----
+@pytest.fixture
+def short_panel():
+    """Two pairs, just past the feature warm-up — small enough to train fast."""
+    return synthetic_panel(["EURUSD", "USDJPY"], start="2020-01-01", end="2023-01-01")
+
+
+def test_train_models_ships_the_objective_it_is_graded_on(short_panel, params, tmp_path):
+    """The shipped bundle must be the model the promotion gate's number describes.
+
+    `run_ml_backtest` -> `neural_oos_signal` grades the COST-AWARE objective
+    (`sharpe_net`), `record_evaluation` stamps that grade onto the saved bundle,
+    and `promotion.clears_floor` reads it to decide whether the model may trade.
+    If `train_models` builds the legacy row-separable `sharpe` model, the gate
+    lets one model trade on a different model's grade.
+
+    Training at all is itself the proof the index is right: `sharpe_net`'s `fit`
+    refuses by name without a `panel_index`, and `_check_panel` refuses one whose
+    row count does not match the rows being fit.
+    """
+    from trading_algo.forex import train
+
+    graded = ml_backtest._sharpe_factory(4, 0, cost_aware=True)().task
+    out = train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    bundle = ModelBundle.load(out["neural"])
+    assert bundle.task == graded, "the artefact is a different objective from the grade"
+    assert all(m.task == graded for m in bundle.models)
+    # The bundle still predicts a position, and still round-trips through JSON.
+    X = np.zeros((3, len(bundle.feature_cols)))
+    assert np.abs(bundle.predict(X)).max() <= 1.0 + 1e-9
+
+
+# ---- invariant #1: even the cost statistic may only see the past ------------
+@pytest.fixture
+def trending_panel():
+    """Two pairs on a strong deterministic uptrend.
+
+    `half_spread_fraction` is `0.5 * spread_pips * pip / price`, so it is a
+    function of the price LEVEL. On a flat path a prefix mean and the whole-panel
+    mean are nearly identical and a leak is unmeasurable; a ramp makes the two
+    plainly different, which is what lets this test fail when it should.
+    """
+    pnl = synthetic_panel(["EURUSD", "USDJPY"], start="2017-01-01", end="2023-01-01")
+    out = {}
+    for sym, bars in pnl.items():
+        ramp = np.linspace(1.0, 4.0, len(bars))
+        bars = bars.copy()
+        for c in ("open", "high", "low", "close"):
+            bars[c] = bars[c].to_numpy() * ramp
+        out[sym] = bars
+    return out
+
+
+def test_fold_cost_statistic_sees_only_that_block_s_own_history(trending_panel, params,
+                                                                monkeypatch):
+    """The half-spread statistic feeding every fold's `PanelIndex.cost` was a
+    WHOLE-PANEL mean — computed over `px[s]` including the test folds and every
+    bar after them, then handed to each fold. It touches only the cost
+    coefficient, never a label or a return, so the effect is small; but invariant
+    #1 (no lookahead) is a global constraint of this system, and "small" is not a
+    defence. Each block gets the statistic of the history it is entitled to see.
+    """
+    from trading_algo.forex import marks
+    from trading_algo.forex.fx_data import closes
+
+    px = closes(trending_panel)
+    whole = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+             for s in px.columns}
+
+    seen, real = [], ml_backtest.build_panel_index
+
+    def spy(times, pairs, vols, half_spreads):
+        seen.append((pd.Timestamp(max(times)), dict(half_spreads)))
+        return real(times, pairs, vols, half_spreads)
+
+    monkeypatch.setattr(ml_backtest, "build_panel_index", spy)
+    ml_backtest.neural_oos_signal(trending_panel, params, n_folds=3, min_train=200,
+                                  epochs=2, seeds=1)
+
+    assert seen, "the walk-forward must index at least one block"
+    for upto, hs in seen:
+        for s in px.columns:
+            expect = float(marks.half_spread_fraction(get_pair(s),
+                                                      px.loc[:upto, s]).mean())
+            assert hs[s] == pytest.approx(expect, rel=1e-12), (
+                "a block's cost statistic must be drawn from its own history only")
+    # Not vacuous: on this panel the whole-panel statistic is materially
+    # different, so the assertion above genuinely discriminates the two.
+    assert any(abs(hs[s] - whole[s]) > 0.05 * whole[s]
+               for _, hs in seen for s in px.columns), \
+        "fixture no longer separates the prefix statistic from the whole-panel one"
+
+
+# ---- the DEPLOYED artefact must follow the recipe its GRADE describes -------
+def _graded_request(panel, params, monkeypatch):
+    """What the walk-forward asks of `fit` — i.e. what the grade DESCRIBES.
+
+    Captured rather than spelled out, so this test cannot pass by two hardcoded
+    copies of a number agreeing with each other while both have drifted from the
+    walk-forward. `walk_forward_predict` is stubbed out, so nothing trains.
+    """
+    seen: dict = {}
+
+    def stub(X, y, t, factory, **kw):
+        seen.update(kw)
+        return np.full(len(X), np.nan)
+
+    monkeypatch.setattr(ml_backtest, "walk_forward_predict", stub)
+    ml_backtest.neural_oos_signal(panel, params, seeds=1)
+    monkeypatch.undo()
+    return seen
+
+
+def test_the_deployed_fit_follows_the_graded_recipe(short_panel, params, tmp_path,
+                                                    monkeypatch):
+    """The shipped bundle must be fit the way its own grade was earned.
+
+    `promotion.clears_floor` gates the live books on the GRADE, and that grade is
+    not just a number — it is a number produced by a PROCEDURE: a contiguous,
+    later validation slice purged out of the training rows, with early stopping
+    against it. `train_models` fit the deployed bundle for 200 epochs with no
+    validation block at all, so `patience` could not bite and the artefact
+    trained to convergence on every row it had. The gate would then promote a
+    model MORE OVERFIT than its own grade claims — on a model whose measured
+    train/validation Sharpe gap is 3.5 vs 0.67.
+
+    This covers the PROBE — the held-out fit that chooses the stopping epoch, and
+    so the part that must match the graded procedure knob for knob. What the
+    shipped artefact then does with that epoch count is
+    `test_the_deployed_artefact_is_refit_on_the_most_recent_rows`.
+    """
+    from trading_algo.forex import train
+
+    graded = _graded_request(short_panel, params, monkeypatch)
+
+    fits, real_fit = [], MLP.fit
+
+    def spy_fit(self, X, y, **kw):
+        if self.task == "sharpe_net":
+            fits.append((self, len(X), dict(kw)))
+        return real_fit(self, X, y, **kw)
+
+    blocks, real_index = [], train.build_panel_index
+
+    def spy_index(times, pairs_, vols, half_spreads):
+        blocks.append(np.asarray(times))
+        return real_index(times, pairs_, vols, half_spreads)
+
+    monkeypatch.setattr(MLP, "fit", spy_fit)
+    monkeypatch.setattr(train, "build_panel_index", spy_index)
+    train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    assert fits, "the deployed bundle must fit the cost-aware objective"
+    probes = [f for f in fits if f[2].get("X_val") is not None]
+    assert probes, "no held-out fit at all — nothing chooses the stopping epoch"
+    for model, n_fit, kw in probes:
+        # 1. Early stopping is LIVE. `patience` alone does nothing: `fit`
+        #    early-stops only when a validation block is supplied.
+        assert kw.get("X_val") is not None and len(kw["X_val"]), \
+            "the deployed fit has no validation block, so patience cannot bite"
+        assert kw.get("y_val") is not None
+        # 2. The validation rows get their OWN index. `self.panel_index`
+        #    addresses the FIT rows by position; reusing it would score early
+        #    stopping on rows grouped into the wrong timestamps.
+        vidx = kw.get("val_panel_index")
+        assert vidx is not None and len(vidx.group) == len(kw["X_val"])
+        assert len(model.panel_index.group) == n_fit
+        # 3. Same knobs the grade was earned with — captured, not retyped.
+        assert kw["epochs"] == graded["fit_kwargs"]["epochs"]
+        assert kw["patience"] == graded["fit_kwargs"]["patience"]
+        assert kw["lr"] == graded["fit_kwargs"]["lr"]
+
+    # 4. Geometry: the validation block is a CONTIGUOUS, LATER slice of the
+    #    training timestamps, purged from the fit rows by label_horizon+embargo.
+    X, _, t, *_ = pooled_dataset(short_panel, params, label="sharpe", horizon=1)
+    uniq = np.array(sorted(set(t)))
+    assert len(blocks) == 3, ("one index for the probe's fit block, one for its "
+                             "validation block, one for the refit on all rows")
+    fit_t, val_t, all_t = blocks
+    assert fit_t.max() < val_t.min(), "the validation block must be strictly later"
+    n_val = len(set(val_t))
+    assert sorted(set(val_t)) == list(uniq[-n_val:]), "not a contiguous trailing slice"
+    assert 0 < n_val < len(uniq)
+    # ...and it is the graded FRACTION, not merely some trailing slice: a
+    # deployed-side val_frac of its own would otherwise pass everything above.
+    assert n_val == min(max(1, round(graded["val_frac"] * len(uniq))), len(uniq) - 1), \
+        "the deployed split holds out a different fraction from the graded one"
+    gap = 1 + graded["embargo"]                       # label_horizon + embargo
+    assert (np.searchsorted(uniq, val_t.min())
+            - np.searchsorted(uniq, fit_t.max())) > gap, "fit block is not purged"
+    assert len(fit_t) + len(val_t) < len(X), "the purge dropped no rows at all"
+    assert len(all_t) == len(X), "the refit block is not every row"
+
+
+def test_deployed_block_cost_statistic_sees_only_its_own_history(trending_panel, params,
+                                                                 tmp_path, monkeypatch):
+    """Each deployed block's cost statistic is drawn from ITS OWN history.
+
+    `train_models` cut the half-spread mean at `px.index.max()` — the last bar in
+    the PANEL — while the last training row is earlier (the label needs a forward
+    return, so the final bars carry no row at all). The code claimed the
+    statistic came from the same history as the index it is attached to, and it
+    did not. Not a graded leak: it reaches the model only as a cost coefficient,
+    never a label or a return. But the walk-forward already cuts every block at
+    its own last bar, and the deployed fit is supposed to follow the same recipe,
+    so claim and code should agree.
+    """
+    from trading_algo.forex import marks, train
+    from trading_algo.forex.fx_data import closes
+
+    px = closes(trending_panel)
+    whole = {s: float(marks.half_spread_fraction(get_pair(s), px[s]).mean())
+             for s in px.columns}
+
+    seen, real = [], train.build_panel_index
+
+    def spy(times, pairs_, vols, half_spreads):
+        seen.append((pd.Timestamp(max(times)), dict(half_spreads)))
+        return real(times, pairs_, vols, half_spreads)
+
+    monkeypatch.setattr(train, "build_panel_index", spy)
+    train.train_models(trending_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    assert len(seen) == 3, ("one index for the probe's fit block, one for its "
+                           "validation block, one for the refit on all rows")
+    for upto, hs in seen:
+        assert upto < px.index.max(), (
+            "fixture broke: a block reaching the panel's last bar cannot show this")
+        for s in px.columns:
+            expect = float(marks.half_spread_fraction(get_pair(s),
+                                                      px.loc[:upto, s]).mean())
+            assert hs[s] == pytest.approx(expect, rel=1e-12), (
+                "a block's cost statistic must be drawn from its own history only")
+    # Not vacuous: on this ramp the whole-panel statistic is materially different
+    # for the fit block, so the assertion above genuinely discriminates the two.
+    fit_hs = seen[0][1]
+    assert any(abs(fit_hs[s] - whole[s]) > 0.05 * whole[s] for s in px.columns), \
+        "fixture no longer separates the prefix statistic from the whole-panel one"
+
+
+def test_the_deployed_artefact_is_refit_on_the_most_recent_rows(short_panel, params,
+                                                                tmp_path, monkeypatch):
+    """Validation picks the stopping point; the SHIPPED model uses all the data.
+
+    Holding the last fifth of timestamps out of the deployed fit made the
+    artefact comply with the graded procedure and go blind: at START=2003 the
+    shipped model would be fit only through ~2021, and 2022's hiking cycle would
+    reach it solely as an early-stopping block. That is not a model worth
+    trading.
+
+    So the held-out block DETERMINES the epoch count and is then given back: a
+    fresh fit on every row, for exactly the number of epochs early stopping
+    chose. The artefact still follows the graded procedure — early-stopped, not
+    an arbitrary 200 — without being blind to the most recent history.
+    """
+    from trading_algo.forex import train
+
+    X, _, t, *_ = pooled_dataset(short_panel, params, label="sharpe", horizon=1)
+    last_row_ts = max(t)
+
+    kept, times_of, real_index = [], {}, train.build_panel_index
+
+    def spy_index(times, pairs_, vols, half_spreads):
+        idx = real_index(times, pairs_, vols, half_spreads)
+        kept.append(idx)                      # keep alive: keyed on id()
+        times_of[id(idx)] = np.asarray(times)
+        return idx
+
+    fits, real_fit = [], MLP.fit
+
+    def spy_fit(self, Xf, y, **kw):
+        out = real_fit(self, Xf, y, **kw)
+        if self.task == "sharpe_net":
+            fits.append({"model": self, "n": len(Xf), "kw": dict(kw),
+                         "times": times_of.get(id(self.panel_index))})
+        return out
+
+    monkeypatch.setattr(train, "build_panel_index", spy_index)
+    monkeypatch.setattr(MLP, "fit", spy_fit)
+    out = train.train_models(short_panel, params, seeds=1, models_dir=str(tmp_path))
+
+    probes = [f for f in fits if f["kw"].get("X_val") is not None]
+    finals = [f for f in fits if f["kw"].get("X_val") is None]
+    assert probes, "the stopping epoch must still be chosen on a held-out block"
+    assert finals, ("the deployed artefact is never refit on all rows — it has "
+                    "never seen the most recent fifth of history")
+
+    # 1. The deployed fit saw EVERY row, including the latest timestamp.
+    for f in finals:
+        assert f["n"] == len(X), "the deployed fit is not on all rows"
+        assert f["times"] is not None
+        assert f["times"].max() == last_row_ts, \
+            "the deployed fit never reaches the most recent training row"
+
+    # 2. The weights on disk are the REFIT ones, not the held-out probe's.
+    bundle = ModelBundle.load(out["neural"])
+    shipped, final_m, probe_m = bundle.models[0], finals[-1]["model"], probes[-1]["model"]
+    assert all(np.allclose(a, b) for a, b in zip(shipped.W, final_m.W)), \
+        "the shipped weights are not the ones fit on all rows"
+    assert not all(np.allclose(a, b) for a, b in zip(shipped.W, probe_m.W)), \
+        "the shipped weights are the probe's — the refit changed nothing"
+
+    # 3. ...for the epoch count early stopping actually chose, not the cap.
+    chosen = probe_m.best_epochs_
+    assert chosen is not None, "early stopping recorded no best epoch"
+    assert chosen < ml_backtest.GRADED_EPOCHS, \
+        "fixture no longer early-stops, so 'the chosen epoch' is just the cap"
+    assert finals[-1]["kw"]["epochs"] == chosen, \
+        "the refit ran to the cap, not to the epoch the validation block chose"
+    assert bundle.meta.get("fit_epochs") == [chosen]

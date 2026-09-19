@@ -35,7 +35,7 @@ def test_multi_asset_universe_composition():
     assert "AUDUSD" in u                                 # AUD hub / currency overlay
     assert "EURUSD" not in u and "BTCUSD" not in u       # no FX majors / crypto
     # the default FX book universe is untouched
-    assert pairs.DEFAULT_UNIVERSE == [*pairs.PAIRS, *pairs.CRYPTO]
+    assert pairs.DEFAULT_UNIVERSE == [*pairs.PAIRS, *pairs.CRYPTO, *pairs.CROSSES]
 
 
 # --- config-driven book creation ---------------------------------------------
@@ -45,7 +45,7 @@ def test_init_defaults_creates_all_four_books(isolated):
     day = fx_book.load_state("daytrader")
     assert day["initial_capital"] == 10_000.0            # the $10k funding
     assert day["profile"] == "intraday" and day["bar"] == "60m"
-    assert day["symbols"] == pairs.DEFAULT_UNIVERSE      # FX+crypto, day cadence
+    assert day["symbols"] == pairs.DEFAULT_UNIVERSE      # FX+crypto+crosses, day cadence
     ma = fx_book.load_state("multiasset")
     assert ma["initial_capital"] == 10_000.0
     assert ma["bar"] == "1d" and ma["universe_locked"] is True

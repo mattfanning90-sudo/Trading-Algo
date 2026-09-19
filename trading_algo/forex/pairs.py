@@ -82,7 +82,11 @@ CRYPTO: dict[str, Pair] = {
     "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0, "crypto"),
 }
 
-# Extra crosses available but off by default — flip into DEFAULT_UNIVERSE to use.
+# The six G10 crosses. In the default universe: they are registered, priced and
+# carry the same verified history as the majors, and the neural layer needs rows
+# (its measured train/validation Sharpe gap is 3.5 vs 0.67). Honest caveat for
+# any evaluation that uses them — a cross is a combination of two majors, so the
+# marginal INFORMATION they add is well below the marginal row count.
 CROSSES: dict[str, Pair] = {
     "EURGBP": Pair("EURGBP", "EUR", "GBP", "EURGBP=X", 0.0001, 0.9, -0.08, -0.15),
     "EURJPY": Pair("EURJPY", "EUR", "JPY", "EURJPY=X", 0.01, 1.2, 0.35, -0.75),
@@ -119,8 +123,9 @@ BONDS: dict[str, Pair] = {
 
 ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES, **BONDS}
 
-# Default tradable universe: the seven FX majors plus the three major cryptos.
-DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
+# Default tradable universe: the seven FX majors, the three major cryptos and
+# the six G10 crosses.
+DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO, *CROSSES]
 
 # A liquid US-equity universe for the Alpaca / OpenBB feeds (off by default).
 EQUITY_UNIVERSE: list[str] = list(EQUITIES)
@@ -133,9 +138,9 @@ MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
 
 # Named universe presets, so tools (research, backtest, paper) can select a
 # tradable set by name instead of hardcoding one. Extend by adding a key here.
-#   default        : the seven FX majors + the three major cryptos (live default)
+#   default        : the seven FX majors + three cryptos + six crosses (live)
 #   majors         : the seven FX majors only
-#   fx / majors+crosses : all G10 FX — majors plus the six dormant crosses
+#   fx / majors+crosses : all G10 FX — majors plus the six crosses, no crypto
 #   crosses        : the six crosses on their own
 #   crypto         : the three cryptos on their own
 #   equity / bond  : the US-equity / bond-ETF pseudo-pairs

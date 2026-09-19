@@ -42,7 +42,7 @@ from .pairs import get_pair
 # ---------------------------------------------------------------------------
 @dataclass
 class ModelBundle:
-    task: str                       # "sharpe" | "binary"
+    task: str                       # "sharpe" | "sharpe_net" | "binary"
     feature_cols: list[str]
     models: list[MLP]
     scaler: StandardScaler
@@ -143,15 +143,22 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
                    label: str = "sharpe", horizon: int = 1,
                    include_agents: bool = False, pt_mult: float = 1.5,
                    sl_mult: float = 1.0, max_h: int = 10
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+                              list[str], np.ndarray]:
     """Assemble a pooled (all pairs) training set.
 
-    label="sharpe": y is the forward `horizon`-bar return (NeuralAgent target).
+    label="sharpe": y is the forward `horizon`-bar return divided by trailing
+                    realised vol (NeuralAgent target). Raw returns would let
+                    the highest-vol instruments own the pooled Sharpe loss.
     label="meta"  : y is the triple-barrier outcome of the ensemble's side
                     (MetaLabeler target); features include the agent signals and
                     the ensemble tilt.
 
-    Returns (X, y, time_index, pair_index, feature_cols), all NaN rows dropped.
+    Returns (X, y, time_index, pair_index, feature_cols, trailing_vol), all NaN
+    rows dropped. `trailing_vol` is the annualised 20-bar realised vol aligned to
+    the returned rows, and is strictly positive for every returned row on every
+    label — a dead (forward-filled) price stretch is dropped, not handed back
+    with a zero or NaN vol.
     """
     from . import indicators as ind
 
@@ -164,14 +171,19 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
         rets = closes(panel).pct_change(fill_method=None)
         tilts = ensemble.ensemble_tilts(sig_panel, rets, p)
 
-    Xs, ys, ts, ps = [], [], [], []
+    Xs, ys, ts, ps, vs = [], [], [], [], []
     cols: list[str] | None = None
     for sym, bars in panel.items():
         ag = sig_panel[sym] if (sig_panel is not None) else None
         feats = features.build_features(bars, agent_signals=ag, pair=get_pair(sym))
+        vol = ind.realized_vol(bars["close"], 20).replace(0.0, np.nan)
         if label == "sharpe":
-            y = bars["close"].pct_change(horizon, fill_method=None).shift(-horizon)
-        else:  # meta
+            raw = bars["close"].pct_change(horizon, fill_method=None).shift(-horizon)
+            # Vol-normalised: the downstream risk layer scales positions ~1/vol,
+            # so this is what the live book actually earns, and it stops the
+            # highest-vol instruments dominating the loss.
+            y = (raw / vol).replace([np.inf, -np.inf], np.nan)
+        else:  # meta — triple-barrier labels are already scale-free
             assert tilts is not None  # label == "meta" always populates tilts above
             side = np.sign(tilts[sym]).replace(0.0, np.nan)
             atr = ind.atr(bars["high"], bars["low"], bars["close"], p.atr_window)
@@ -181,6 +193,16 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
             feats = feats[side.notna()]          # only where the primary fired
             y = y[side.notna()]
         X, y = features.align_xy(feats, y)
+        # `vols > 0` is a contract on EVERY label, so enforce it explicitly rather
+        # than relying on the sharpe target's division to drop dead-price rows.
+        # The meta target never touches vol, and such a row still clears align_xy:
+        # build_features keeps the literal 0.0 in `vol_20`, and `bb_z` survives on
+        # a floating-point residual in the level std. Without this it is returned
+        # with a NaN vol — exactly the dead-price row verify.py hunts.
+        v = vol.reindex(X.index)
+        keep = (v > 0).to_numpy()                    # NaN and 0.0 -> False
+        if not keep.all():
+            X, y, v = X[keep], y[keep], v[keep]
         if len(X) == 0:
             continue
         if cols is None:
@@ -189,9 +211,11 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
         ys.append(y.to_numpy())
         ts.append(X.index.to_numpy())
         ps.append(np.full(len(X), sym))
+        vs.append(v.to_numpy())
 
     if not Xs:
-        return np.empty((0, 0)), np.empty(0), np.empty(0), np.empty(0), []
+        return (np.empty((0, 0)), np.empty(0), np.empty(0), np.empty(0), [],
+                np.empty(0))
     assert cols is not None  # non-empty Xs means the first iteration set cols
     return (np.vstack(Xs), np.concatenate(ys), np.concatenate(ts),
-            np.concatenate(ps), cols)
+            np.concatenate(ps), cols, np.concatenate(vs))

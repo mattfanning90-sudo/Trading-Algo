@@ -19,18 +19,26 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import functools
 import os
 
 import numpy as np
+import pandas as pd
 
 from . import fx_config as cfg
 from . import promotion
 from . import fx_data, ml_agent
 from .fx_config import profile
+from .fx_data import closes
 from .ml_agent import ModelBundle
-from .ml_backtest import _meta_factory, _sharpe_factory, format_report, run_ml_backtest
+from .ml_backtest import (DEPLOYED_COST_AWARE, GRADED_EMBARGO, GRADED_EPOCHS,
+                          GRADED_LR, GRADED_PATIENCE, GRADED_VAL_FRAC,
+                          _half_spreads, _meta_factory, _sharpe_factory,
+                          format_report, run_ml_backtest, sharpe_task)
 from .nn import StandardScaler
+from .panel_index import build_panel_index
 from .pairs import DEFAULT_UNIVERSE
+from .walkforward import row_positions, validation_split
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 
@@ -41,34 +49,151 @@ def _load(symbols, synthetic):
     return fx_data.load_panel(symbols, cfg.START, use_cache=True)
 
 
-def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs) -> ModelBundle:
-    """Fit a seed-ensembled bundle on ALL rows (scaler fit once on the same rows)."""
+def _train_bundle(X, y, cols, task, factory, seeds, fit_kwargs, *,
+                  panel_index=None, X_val=None, y_val=None,
+                  val_panel_index=None, epochs_per_seed=None) -> ModelBundle:
+    """Fit a seed-ensembled bundle on the FIT rows (scaler fit on those rows).
+
+    `panel_index` is the row bookkeeping the cost-aware objective needs. Every
+    seed fits the SAME rows, so one index serves them all (`PanelIndex` is
+    frozen). `MLP.fit` refuses by name if the objective needs one and it is
+    missing, or if its row count disagrees with the rows being fit.
+
+    `X_val`/`y_val` turn early stopping on. The scaler is fit on the FIT rows
+    only and then applied to the validation rows, exactly as the walk-forward
+    does it: the block early stopping trusts must be scored on statistics it did
+    not help produce. The persisted scaler is the one the live model runs with,
+    so it must be the one the model was fit under.
+
+    `epochs_per_seed` gives seed s its own epoch count — the one early stopping
+    chose for THAT initialisation on a probe fit. Seeds stop at different points,
+    so one shared number would under- or over-train most of the ensemble.
+    """
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
     y = np.asarray(y, dtype=float).reshape(-1, 1)
+    kwargs = dict(fit_kwargs)
+    n_val = 0
+    if X_val is not None and y_val is not None and len(X_val):
+        n_val = int(len(X_val))
+        kwargs["X_val"] = scaler.transform(np.asarray(X_val, dtype=float))
+        kwargs["y_val"] = np.asarray(y_val, dtype=float).reshape(-1, 1)
+        if val_panel_index is not None:
+            kwargs["val_panel_index"] = val_panel_index
     models = []
     for s in range(seeds):
         m = factory(len(cols), s)()    # factory(n_feat, seed) -> (lambda -> MLP)
-        m.fit(Xs, y, **fit_kwargs)
+        if panel_index is not None:
+            m.panel_index = panel_index
+        per_seed = dict(kwargs)
+        if epochs_per_seed is not None:
+            per_seed["epochs"] = int(epochs_per_seed[s])
+        m.fit(Xs, y, **per_seed)
         models.append(m)
     return ModelBundle(task=task, feature_cols=cols, models=models, scaler=scaler,
-                       meta={"seeds": seeds, "n_samples": int(len(X))})
+                       meta={"seeds": seeds, "n_samples": int(len(X)),
+                             "n_held_out": n_val})
 
 
 def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     out = {}
 
-    Xn, yn, _, _, cols_n = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
+    # The DEPLOYED artefact must be the objective the grade describes. The
+    # walk-forward (`ml_backtest.neural_oos_signal`) grades whichever objective
+    # `ml_backtest.DEPLOYED_COST_AWARE` selects, `record_evaluation` stamps that
+    # grade onto THIS bundle and `promotion.clears_floor` reads it to decide
+    # whether the model may trade. Ship a different objective here and the gate
+    # would let one model trade on a different model's number — hence the one
+    # switch, read in both places.
+    Xn, yn, tn, pn, cols_n, vn = ml_agent.pooled_dataset(panel, p, label="sharpe",
+                                                        horizon=1)
     if len(Xn):
-        bundle = _train_bundle(Xn, yn, cols_n, "sharpe", _sharpe_factory, seeds,
-                               {"epochs": 200, "batch_size": 100000, "lr": 1e-2})
-        path = os.path.join(models_dir, "neural_sharpe.json")
-        bundle.save(path)
-        out["neural"] = path
-        print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples) -> {path}")
+        # The DEPLOYED fit must follow the recipe the GRADE describes, not merely
+        # carry the graded objective. `ml_backtest` grades this model on folds
+        # that hold out a purged, contiguous, later validation slice and early-stop
+        # against it; fitting the shipped bundle to convergence on every row would
+        # hand `promotion.clears_floor` a grade earned under one procedure and an
+        # artefact produced by a laxer one — a model MORE overfit than its own
+        # number claims. Same split helper as the walk-forward, same knobs.
+        px = closes(panel)
+        row_pos = row_positions(tn)
+        gap = 1 + GRADED_EMBARGO                     # label_horizon + embargo
+        fit_mask, val_mask = validation_split(
+            np.ones(len(Xn), dtype=bool), row_pos, GRADED_VAL_FRAC, gap)
+        if val_mask is None:
+            # Too little history to give a block up. Training blind here is the
+            # exact failure this is guarding, and such a panel grades nothing
+            # either (every fold would be skipped), so ship no model at all and
+            # let the promotion floor refuse for want of a grade.
+            print("  NeuralAgent bundle SKIPPED — too little history for a "
+                  "purged validation block; an unvalidated fit is not shippable.")
+        else:
+            def index_for(rows):
+                """Index ONE block, addressed to its own row positions.
 
-    Xm, ym, _, _, cols_m = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
+                Same contract as the walk-forward's `index_factory`: `sharpe_net`
+                must see its block in one batch, and `PanelIndex` addresses that
+                batch positionally, so the fit rows and the validation rows each
+                need their own.
+
+                The cost statistic is cut off at the block's OWN last bar, so it
+                really is drawn from the history the index describes. The panel
+                runs a few bars past the last training row (the label needs a
+                forward return), and `px.index.max()` quietly handed every block
+                those extra bars as well.
+                """
+                t_rows = tn[rows]
+                return build_panel_index(t_rows, pn[rows], vn[rows],
+                                         _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
+
+            # Same switch the walk-forward grades with, so the artefact cannot
+            # carry an objective the grade does not describe. Which objective
+            # that is, and why it is still this one, is stated at
+            # `ml_backtest.DEPLOYED_COST_AWARE`.
+            factory = functools.partial(_sharpe_factory,
+                                        cost_aware=DEPLOYED_COST_AWARE)
+            deployed_task = sharpe_task(DEPLOYED_COST_AWARE)
+            n_fit, n_val = int(fit_mask.sum()), int(val_mask.sum())
+
+            # Stage 1 — the PROBE. The held-out block's only job is to say WHEN
+            # to stop; these weights are thrown away.
+            probe = _train_bundle(
+                Xn[fit_mask], yn[fit_mask], cols_n, deployed_task, factory, seeds,
+                {"epochs": GRADED_EPOCHS, "batch_size": n_fit, "lr": GRADED_LR,
+                 "patience": GRADED_PATIENCE},
+                panel_index=index_for(fit_mask),
+                X_val=Xn[val_mask], y_val=yn[val_mask],
+                val_panel_index=index_for(val_mask))
+            # Each seed stops at its own point, so each refits at its own count.
+            # `best_epochs_` is None only if early stopping never recorded a best
+            # (a non-finite validation loss) — then the cap is all we know.
+            epochs = [GRADED_EPOCHS if m.best_epochs_ is None else m.best_epochs_
+                      for m in probe.models]
+
+            # Stage 2 — the ARTEFACT. Give the held-out block back and refit on
+            # EVERY row for the epoch count the block endorsed. Validation picks
+            # the stopping point; the shipped model uses all the data. Stopping
+            # at stage 1 would ship a model fit only through the first 80% of
+            # history — blind to the most recent regime, which is the part a live
+            # book trades into.
+            all_rows = np.ones(len(Xn), dtype=bool)
+            bundle = _train_bundle(
+                Xn, yn, cols_n, deployed_task, factory, seeds,
+                {"batch_size": len(Xn), "lr": GRADED_LR},
+                panel_index=index_for(all_rows), epochs_per_seed=epochs)
+            bundle.meta.update({
+                "fit_epochs": epochs,
+                "epoch_choice": {"probe_rows": n_fit, "held_out_rows": n_val,
+                                 "cap": GRADED_EPOCHS, "patience": GRADED_PATIENCE},
+            })
+            path = os.path.join(models_dir, "neural_sharpe.json")
+            bundle.save(path)
+            out["neural"] = path
+            print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples, "
+                  f"epochs {epochs} chosen on {n_val} held-out rows) -> {path}")
+
+    Xm, ym, _, _, cols_m, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(Xm):
         bundle = _train_bundle(Xm, ym, cols_m, "binary", _meta_factory, seeds,
                                {"epochs": 150, "batch_size": 64, "lr": 1e-3})

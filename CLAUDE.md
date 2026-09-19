@@ -102,8 +102,9 @@ python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + aut
 pytest -q                                           # full suite (equity + FX/ML)
 ```
 
-The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP with a
-Sharpe-ratio loss, Hedge ensemble, meta-labeling, purged walk-forward,
+The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP whose loss is
+the Sharpe of the portfolio return series net of turnover cost, `sharpe_net`,
+Hedge ensemble, meta-labeling, purged walk-forward,
 Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
 It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
 

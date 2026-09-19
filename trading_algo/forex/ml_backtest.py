@@ -25,7 +25,47 @@ from .fx_config import FX_RISK_FREE, FXParams
 from .fx_data import closes
 from .nn import MLP
 from .pairs import get_pair
+from .panel_index import build_panel_index
 from .walkforward import walk_forward_predict
+
+
+# ---------------------------------------------------------------------------
+# THE GRADED RECIPE
+# ---------------------------------------------------------------------------
+# The neural model is not graded as a number in isolation — it is graded as a
+# number produced by a PROCEDURE, and `promotion.clears_floor` gates the live
+# books on that grade. So `train.train_models` fits the DEPLOYED bundle with
+# these same knobs: same epochs, same learning rate, same purged contiguous
+# validation slice, same early-stopping patience. Named once here rather than
+# retyped there, because a divergence would let the gate promote an artefact
+# trained harder than the one the grade describes.
+GRADED_EPOCHS = 400
+GRADED_LR = 1e-2
+GRADED_PATIENCE = 25
+GRADED_VAL_FRAC = 0.2
+GRADED_EMBARGO = 5
+
+# Which OBJECTIVE that recipe grades and `train.train_models` deploys. One
+# switch, read by both, because a grade earned by one objective must never be
+# stamped on an artefact fitted with the other.
+#
+# This is a STATED CHOICE, and the honest version of it is uncomfortable: the
+# cost-aware arm MEASURED WORSE than the plain Sharpe objective it replaced
+# (net out-of-sample Sharpe −1.41 vs −1.16;
+# `docs/research/COST_AWARE_OBJECTIVE_RESULT.md`). It is kept anyway because
+# that comparison is not a verdict on the objective — the crypto half-spread in
+# `pairs.py` is a constant DOLLAR amount, so three crypto columns carry 87% of
+# the cost term this loss descends, and the features carry no asset-class
+# identity for the network to isolate them with. Price crypto at FX scale inside
+# the loss and the two arms are the same to within noise (§4). Neither arm's net
+# Sharpe is anywhere near zero, and `promotion.clears_floor` refuses both, so
+# nothing trades on this either way today.
+#
+# Flipping this to False would revert the deployed objective to the legacy
+# `sharpe` loss. That is the repo owner's call, not a silent cleanup. The real
+# prerequisite is fixing the crypto spread model in `pairs.py`; only then can
+# the cost-aware objective be evaluated on its merits at all.
+DEPLOYED_COST_AWARE = True
 
 
 # ---------------------------------------------------------------------------
@@ -70,14 +110,53 @@ def _annual_metrics(ret: pd.Series, n_trials: int, sr_variance: float) -> dict:
 # ---------------------------------------------------------------------------
 # Walk-forward neural / meta signal panels
 # ---------------------------------------------------------------------------
-def _sharpe_factory(n_feat: int, seed: int = 0):
-    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh", task="sharpe",
+def _sharpe_factory(n_feat: int, seed: int = 0, *, cost_aware: bool = False):
+    """Build the walk-forward's neural model; everything but the objective is
+    held identical so the two can be compared on the same folds.
+
+    `cost_aware=True` selects the net-of-turnover portfolio objective. That one
+    also needs a `panel_index` describing the rows of the fold it is about to
+    train on, which this factory cannot know — so it deliberately leaves the
+    attribute `None` for the caller to fill in per fold. No placeholder: `fit`
+    refuses by name while the index is None, and that loud failure is the only
+    thing standing between a forgotten fold and a silently meaningless loss.
+    """
+    return lambda: MLP([n_feat, 32, 1], hidden_act="tanh",
+                       task=sharpe_task(cost_aware),
                        l2=1e-3, dropout=0.1, seed=seed)
+
+
+def sharpe_task(cost_aware: bool) -> str:
+    """`MLP.task` for the two Sharpe objectives — the one place that mapping
+    lives, so `train.train_models` can name the DEPLOYED bundle's task from the
+    same switch the walk-forward grades with."""
+    return "sharpe_net" if cost_aware else "sharpe"
 
 
 def _meta_factory(n_feat: int, seed: int = 0):
     return lambda: MLP([n_feat, 32, 16, 1], hidden_act="relu", task="binary",
                        l2=1e-2, dropout=0.3, seed=seed)
+
+
+def _half_spreads(px: pd.DataFrame, upto) -> dict[str, float]:
+    """Mean half-spread per symbol over the history ending at `upto`.
+
+    The cost coefficient of every `PanelIndex`. It comes from
+    `marks.half_spread_fraction` — the one definition every cost path in the
+    project derives from (invariant #2) — so the model's notion of a trade's
+    cost cannot fork from the book's.
+
+    `upto` has no default on purpose. Half-spread is
+    `0.5 * spread_pips * pip / price`, so this is a statistic OF THE PRICE PATH,
+    and taken over the whole panel it is measured partly on the test folds and on
+    every bar after them. It reaches the model only through the cost coefficient
+    — never a label, never a return — so the magnitude is small, but invariant #1
+    admits no small violations. Making the cutoff explicit means a caller must
+    say what history it is entitled to rather than silently getting all of it.
+    """
+    hist = px.loc[:upto]
+    return {s: float(marks.half_spread_fraction(get_pair(s), hist[s]).mean())
+            for s in px.columns}
 
 
 def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
@@ -89,16 +168,79 @@ def _scatter(preds: np.ndarray, times: np.ndarray, pairs: np.ndarray,
     return df
 
 
-def neural_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
-                      epochs=150) -> pd.DataFrame:
-    X, y, t, pairs, cols = ml_agent.pooled_dataset(panel, p, label="sharpe", horizon=1)
+def neural_oos_signal(panel, p, *, n_folds=6, embargo=GRADED_EMBARGO, min_train=400,
+                      epochs=GRADED_EPOCHS, val_frac=GRADED_VAL_FRAC,
+                      seeds=3) -> pd.DataFrame:
+    """Seed-ensembled walk-forward signal from the net-of-turnover objective.
+
+    `_sharpe_factory` defaulted to seed=0, so every out-of-sample number ever
+    reported for this model — including the -0.62 Sharpe that let it trade the
+    live books — was a SINGLE DRAW of a high-variance training process, with the
+    variance never measured. The deployed artefact has always been a seed
+    ensemble (`ModelBundle` averages several `MLP`s); grading one draw and
+    shipping an average judges the artefact by a model nobody deploys.
+
+    So the grade is averaged the same way the artefact is: `seeds` independent
+    walk-forward runs, identical in every respect but the initialisation,
+    averaged into one signal panel. The fold geometry does not depend on the
+    seed, so every run marks the same rows out-of-sample and the average keeps
+    exactly their coverage.
+    """
+    frames = [_neural_oos_once(panel, p, seed=s, n_folds=n_folds, embargo=embargo,
+                               min_train=min_train, epochs=epochs, val_frac=val_frac)
+              for s in range(max(1, int(seeds)))]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    return sum(frames) / len(frames)
+
+
+def _neural_oos_once(panel, p, *, seed=0, n_folds=6, embargo=GRADED_EMBARGO,
+                     min_train=400, epochs=GRADED_EPOCHS,
+                     val_frac=GRADED_VAL_FRAC) -> pd.DataFrame:
+    """ONE walk-forward pass at a single initialisation. See `neural_oos_signal`.
+
+    Two things this has to get right and nothing downstream can check:
+
+    * **The index is per fold.** `walk_forward_predict` fits on a subset of rows,
+      and `PanelIndex` is addressed by row position, so the index must be built
+      from that subset. The whole-panel one would pass every guard and then group
+      the wrong rows into a timestamp — a plausible number from a meaningless
+      objective. Hence `index_factory`, which the walk-forward calls per block.
+    * **Costs in the model's own units.** `idx.cost` is the half-spread divided by
+      the same trailing vol the target was normalised by (`panel_index`), so the
+      loss weighs a trade's cost against the return it is actually competing with.
+      The half-spread itself comes from `marks.half_spread_fraction`, the one
+      definition every cost path in the project derives from (invariant #2).
+    """
+    X, y, t, pairs, cols, vols = ml_agent.pooled_dataset(panel, p, label="sharpe",
+                                                         horizon=1)
     if len(X) == 0:
         return pd.DataFrame()
-    preds = walk_forward_predict(
-        X, y, t, _sharpe_factory(len(cols)), n_folds=n_folds, label_horizon=1,
-        embargo=embargo, min_train=min_train,
-        fit_kwargs={"epochs": epochs, "batch_size": 100000, "lr": 1e-2})
     px = closes(panel)
+
+    def index_factory(rows):
+        """Index ONE block of rows, addressed to its own positions.
+
+        The cost statistic is cut off at the block's own last bar (invariant #1):
+        a whole-panel mean would be measured partly on the test folds this index
+        exists to keep the model away from.
+        """
+        rows = np.asarray(rows)
+        t_rows = t[rows]
+        return build_panel_index(t_rows, pairs[rows], vols[rows],
+                                 _half_spreads(px, upto=pd.Timestamp(t_rows.max())))
+
+    preds = walk_forward_predict(
+        X, y, t, _sharpe_factory(len(cols), seed, cost_aware=DEPLOYED_COST_AWARE),
+        n_folds=n_folds,
+        label_horizon=1, embargo=embargo, min_train=min_train,
+        index_factory=index_factory, val_frac=val_frac,
+        # batch_size: "sharpe_net" must see the whole block at once, since the
+        # index addresses it positionally. patience only bites because val_frac
+        # gives the fold a validation block to score.
+        fit_kwargs={"epochs": epochs, "batch_size": 10 ** 9, "lr": GRADED_LR,
+                    "patience": GRADED_PATIENCE})
     return _scatter(preds, t, pairs, px.index, px.columns)
 
 
@@ -111,7 +253,7 @@ def meta_oos_signal(panel, p, *, n_folds=6, embargo=5, min_train=400,
     rets = closes(panel).pct_change(fill_method=None)
     tilts = ensemble.ensemble_tilts(sig, rets, p)
 
-    X, y, t, pairs, cols = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
+    X, y, t, pairs, cols, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
     if len(X) == 0:
         return tilts
     prob = walk_forward_predict(
