@@ -7,7 +7,6 @@ technical agents, never replacing them:
   MLP (trained offline, frozen for live use). It reads the same OHLC frame and
   emits a [-1, 1] signal like any other agent, so it drops straight into the
   `AgentPool` / ensemble.
-* `MetaLabeler` — a secondary classifier (López de Prado meta-labeling) that
   predicts the probability the ensemble's *side* is right and maps it to a size
   in [0, 1] via bet-sizing. It scales positions; it never flips them.
 
@@ -105,32 +104,6 @@ class NeuralAgent(Agent):
         return pd.Series(sig, index=idx).clip(-1.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Meta-labeling sizing layer
-# ---------------------------------------------------------------------------
-class MetaLabeler:
-    """Scales (never flips) a primary tilt by the meta-model's confidence."""
-
-    def __init__(self, bundle: ModelBundle | None = None):
-        self.bundle = bundle
-
-    def size(self, bars: pd.DataFrame, sym: str, base_signals: pd.DataFrame,
-             tilt: pd.Series) -> pd.Series:
-        from .validation import bet_size_from_prob
-        if self.bundle is None:
-            return tilt
-        feats = features.build_features(bars, agent_signals=base_signals,
-                                        pair=get_pair(sym)).assign(tilt=tilt)
-        feats = feats.reindex(columns=self.bundle.feature_cols)
-        X = feats.to_numpy()
-        ok = np.isfinite(X).all(axis=1)
-        mult = np.zeros(len(tilt))
-        if ok.any():
-            prob = self.bundle.predict(X[ok]).ravel()
-            mult[ok] = np.clip(bet_size_from_prob(prob), 0.0, 1.0)
-        return tilt * pd.Series(mult, index=tilt.index)
-
-
 def default_neural_agents(bundle: ModelBundle | None = None) -> list[Agent]:
     """The five technical agents plus the neural agent."""
     return [*default_agents(), NeuralAgent(bundle)]
@@ -151,7 +124,8 @@ def pooled_dataset(panel: dict[str, pd.DataFrame], p: FXParams, *,
                     realised vol (NeuralAgent target). Raw returns would let
                     the highest-vol instruments own the pooled Sharpe loss.
     label="meta"  : y is the triple-barrier outcome of the ensemble's side
-                    (MetaLabeler target); features include the agent signals and
+                    (the meta-labeling target used out-of-sample by
+                    `ml_backtest.meta_oos_signal`); features include the agent signals and
                     the ensemble tilt.
 
     Returns (X, y, time_index, pair_index, feature_cols, trailing_vol), all NaN

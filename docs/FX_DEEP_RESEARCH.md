@@ -154,12 +154,17 @@ precision but **cannot manufacture alpha** if the primary has none.
 ensemble's side without flipping it. Evaluated walk-forward in `ml_backtest`
 (`meta_oos`).
 
-> **NOT WIRED (verified 2026-09-19).** `MetaLabeler` has **zero call sites**
-> anywhere in the repo. `train.py` fits a bundle and writes `models/meta_label.json`
-> on every FX paper run, and nothing ever reads that file: no live decision is
-> shaped by meta-labeling. This paragraph previously read as though it were live.
-> Wiring it changes position sizing on a live book, so it needs its own spec and
-> walk-forward evidence — or the class and its training step should be deleted.
+> **REMOVED from the live path (2026-09-19).** `MetaLabeler` had **zero call
+> sites**, while `train.py` fitted a bundle and wrote `models/meta_label.json`
+> on every FX paper run for a file nothing read. The class and that training
+> step are deleted; this paragraph previously read as though it were live.
+>
+> Meta-labeling itself is **not** gone. It is still evaluated walk-forward and
+> out-of-sample by `ml_backtest.meta_oos_signal`, which builds the same dataset
+> via `pooled_dataset(label="meta")` and sizes with
+> `validation.bet_size_from_prob`. What was removed is the *unused live sizing
+> wrapper*, not the research. Promoting it to live sizing needs that evidence
+> first.
 
 ## 8. Sizing: volatility targeting, not reinforcement learning
 

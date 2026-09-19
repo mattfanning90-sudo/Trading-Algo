@@ -1,4 +1,5 @@
 """Backlog F14: market-data provider fallback."""
+import json as _json
 import numpy as np
 import pandas as pd
 import pytest
@@ -102,7 +103,6 @@ def test_load_region_drops_rows_where_only_the_index_printed(monkeypatch):
 # references — a credential that bought nothing. The fallback registry has
 # existed just as long with nothing registered in it, so `_try_fallback` always
 # returned None. These two gaps fit each other exactly.
-import json as _json
 
 
 class _Resp:

@@ -174,7 +174,6 @@ def test_data_quality_verdict_refreshed_on_a_no_new_bar_run(isolated_state, pool
 # PIPELINE test (invariant #5) and must never write where the live books live.
 # `--init` has refused to destroy a live book since C2; this is the same
 # protection for the synthetic path.
-import pytest
 
 
 def test_synthetic_refuses_the_default_state_dir(monkeypatch):

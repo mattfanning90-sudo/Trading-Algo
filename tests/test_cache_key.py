@@ -6,6 +6,11 @@ prices in a backtest.
 """
 from __future__ import annotations
 
+import os
+import time
+
+import pandas as pd
+
 from trading_algo import data, fx
 
 
@@ -65,10 +70,7 @@ def test_fx_cache_key_depends_on_currency_set(monkeypatch):
 # Only an OPEN-ENDED request (end=None, "prices up to now") can go stale. A
 # request with an explicit `end` is a closed historical window and its cache is
 # valid forever — expiring that would re-download the universe on every backtest.
-import os
-import time
 
-import pandas as pd
 
 
 def _fake_downloader(calls):

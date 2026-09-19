@@ -21,7 +21,7 @@ from .agents import (
 )
 from .fx_config import FXParams, profile, profile_names
 from .fx_strategy import compute_targets, target_weights_history
-from .ml_agent import MetaLabeler, ModelBundle, NeuralAgent, default_neural_agents
+from .ml_agent import ModelBundle, NeuralAgent, default_neural_agents
 from .nn import MLP
 from .pairs import DEFAULT_UNIVERSE, PAIRS, get_pair
 
@@ -32,5 +32,5 @@ __all__ = [
     "compute_targets", "target_weights_history",
     "PAIRS", "DEFAULT_UNIVERSE", "get_pair",
     # deep-learning layer
-    "MLP", "NeuralAgent", "MetaLabeler", "ModelBundle", "default_neural_agents",
+    "MLP", "NeuralAgent", "ModelBundle", "default_neural_agents",
 ]

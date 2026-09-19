@@ -1,4 +1,5 @@
 """Backlog F12 / foundation P0-F: shared notification channel + breaker alerts."""
+import json as _json
 from trading_algo import config as cfg
 from trading_algo import notifications as N
 
@@ -39,7 +40,6 @@ def test_log_channel_is_always_registered():
 # The registry has existed since F12 with exactly one channel, which prints.
 # `verify.py`'s own docstring records the cost: "never-traded: sleeve ASX fired
 # every day for 52 days" into a CI log nobody opens.
-import json as _json
 
 
 class _FakeResponse:
