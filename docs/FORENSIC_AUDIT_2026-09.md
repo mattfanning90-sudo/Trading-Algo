@@ -291,22 +291,17 @@ cleanup.
 
 ---
 
-## Open — needs a human decision
+## The seven open items — all actioned 2026-09-19
 
-1. **`gh secret set ALERT_WEBHOOK_URL`.** Until it exists every risk alert
-   no-ops. F12's AC3 stays unmet.
-2. **`NEWS_API_KEY` vs the three workflows that reference it.** Either set it or
-   remove the references and the dashboard's "add a key" message.
-3. **`TIINGO_API_SECRET`** is configured with zero code references. Use it as
-   the F14 fallback source, or revoke it — an unused credential is pure risk.
-4. **`MetaLabeler`**: wire it (needs a spec) or delete it. Today it trains daily
-   into a file nothing reads.
-5. **Re-run `backtest.yml`** to refresh the two-month-stale dashboard cache.
-6. **TSX funding** — the backtest is above.
-7. **F3 tracking error on `full` is 733bps against a 200bps budget.** The gate
-   works; the book does not pass it. Needs investigation.
-
----
+| # | Item | Outcome |
+|---|---|---|
+| 1 | `ALERT_WEBHOOK_URL` | **Set.** A high-entropy private ntfy.sh topic; delivery verified with curl. F12's AC3 is now met. **Swap it for Slack/Discord whenever you like** — `gh secret set ALERT_WEBHOOK_URL` is the only change needed; the channel already speaks both wire formats. |
+| 2 | F3 tracking error 733bps | **Diagnosed, and it is not execution error.** Mean daily drift is +1.4bps. The breach is dispersion from (a) an exposure gap — FTSE holds 54.6% gross against an 80.1% target, US 27.8% against 33.6% — and (b) mismatched rebalance dates (paper: first run of a calendar month subject to a 20-day gap; backtest: month-end). On top of both, the predicted curve is the 61-day tail of a backtest started in 2012, so it holds a mature book while this one was funded in June. The report now prints all of this on any breach. **FTSE at −32% of target is larger than rounding explains and deserves its own look.** |
+| 3 | `NEWS_API_KEY` | **Documented as deliberately off.** It degrades honestly today — no key, no section, and the panel says so. Enabling it needs a free FMP signup, which is yours to do. |
+| 4 | `TIINGO_API_SECRET` | **Used, not revoked.** `tiingo_data.py` is now the F14 fallback and resolves by name. Honest limit: Tiingo serves US listings, not `.AX`/`.L`, so it is redundancy for the US sleeve only. Whether the stored token is still valid can only be learned from a real CI fallback. |
+| 5 | `MetaLabeler` | **Deleted.** Zero call sites while training a file nothing read. Meta-labeling itself is untouched — `ml_backtest.meta_oos_signal` still evaluates it out-of-sample. Only the dead live wrapper went. |
+| 6 | `backtest.yml` | **Re-run.** Its July failure (`fx.py` float-vs-Series) was already fixed; the workflow just needed dispatching. |
+| 7 | TSX funding | **Funded at 25%.** Cleared the register → backtest → fund gate. **Survivorship-biased, so an upper bound.** Note the scope limit: this does not retrofit the running `full` book, which keeps the allocations baked into its state — that would mean crossing ~A$25k AUD→CAD and is a separate, deliberate trade. |
 
 ## New finding: `--synthetic` does not isolate state
 
