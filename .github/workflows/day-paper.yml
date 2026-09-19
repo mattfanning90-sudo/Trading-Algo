@@ -32,6 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FX_STATE_DIR: ${{ github.workspace }}/state
+      # Risk alerts (drawdown breaker, crowding, audit ERRORs) leave the box
+      # through this. Unset -> the webhook channel silently no-ops.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

@@ -46,6 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FX_STATE_DIR: ${{ github.workspace }}/state
+      # Risk alerts (drawdown breaker, crowding, audit ERRORs) leave the box
+      # through this. Unset -> the webhook channel silently no-ops.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}

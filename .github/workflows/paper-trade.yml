@@ -37,6 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      # Risk alerts (drawdown breaker, crowding, audit ERRORs) leave the box
+      # through this. Unset -> the webhook channel silently no-ops.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       # synthetic only when explicitly dispatched as such; scheduled = real data
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       # Paper accounts to run & publish. "regions" (optional) restricts an account

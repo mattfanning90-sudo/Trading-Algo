@@ -248,10 +248,15 @@ MIN_REBALANCE_GAP_DAYS = 20
 # ---------------------------------------------------------------------------
 # Notifications / telemetry (backlog F12 / foundation P0-F)
 # ---------------------------------------------------------------------------
-# Delivery channel for risk alerts (drawdown breaker, crowding). "log" prints;
-# register a webhook/email channel in notifications.py and name it here to route
-# alerts off-box. See trading_algo/notifications.py.
-NOTIFY_CHANNEL = "log"
+# Delivery channel for risk alerts (drawdown breaker, crowding, audit ERRORs).
+# "log" prints only. "webhook" prints AND POSTs to $ALERT_WEBHOOK_URL — with no
+# URL set it is a silent no-op, so selecting it globally is safe on a laptop
+# with nothing wired up. See trading_algo/notifications.py.
+#
+# This was "log" for the life of the project, which is why verify.py's own
+# docstring records "never-traded: sleeve ASX fired every day for 52 days" into
+# a CI log nobody opens. An unattended risk event has to leave the box.
+NOTIFY_CHANNEL = "webhook"
 
 # ---------------------------------------------------------------------------
 # Survivorship correction (backlog F13, data integrity)

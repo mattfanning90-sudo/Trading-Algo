@@ -7,13 +7,17 @@ monitor (F9), and later the promotion gate (F10) — instead of each inventing i
 own alert path.
 
 A channel is a callable `fn(payload: dict)`. The active channel is chosen by
-`config.NOTIFY_CHANNEL` (default "log", which prints). Register a webhook / email
-channel with `register_channel("slack", fn)` and point the config knob at it; the
-call site never changes. `notify()` never raises — a telemetry failure must not
-break a trading run.
+`config.NOTIFY_CHANNEL`. Two ship: "log" (prints) and "webhook" (prints, then
+POSTs to $ALERT_WEBHOOK_URL — a no-op when that is unset). Register another with
+`register_channel("slack", fn)` and point the config knob at it; the call site
+never changes. `notify()` never raises — a telemetry failure must not break a
+trading run.
 """
 from __future__ import annotations
 
+import json
+import os
+import urllib.request
 from typing import Callable
 
 from . import config as cfg
@@ -32,6 +36,44 @@ def _log_channel(payload: dict) -> None:
 
 
 register_channel("log", _log_channel)   # always-available default
+
+
+# How long to wait on the webhook before giving up. Short on purpose: this runs
+# inside a trading job, and a hanging telemetry POST must never be the reason a
+# book is late.
+WEBHOOK_TIMEOUT_SECONDS = 10
+
+
+def _webhook_channel(payload: dict) -> None:
+    """POST the payload as JSON to ``$ALERT_WEBHOOK_URL``.
+
+    Slack, Discord and ntfy.sh all accept a bare JSON body and render a ``text``
+    field, so one shape reaches any of them with no per-provider code and no new
+    dependency (stdlib ``urllib`` only).
+
+    Two deliberate properties:
+
+    * **No URL configured is a silent no-op.** A book must still trade on a
+      laptop with nothing wired up, so this is safe to leave selected globally.
+    * **The log happens FIRST.** ``notify()`` swallows channel exceptions, so
+      posting before logging would let a dead endpoint take the local trace down
+      with it — losing the alert twice over.
+    """
+    _log_channel(payload)
+    url = os.environ.get("ALERT_WEBHOOK_URL")
+    if not url:
+        return
+    body = dict(payload)
+    body.setdefault("text", f"[{payload.get('level', 'info').upper()}] "
+                            f"{payload.get('event')}: {payload.get('message')}")
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=WEBHOOK_TIMEOUT_SECONDS):
+        pass
+
+
+register_channel("webhook", _webhook_channel)
 
 
 def notify(event: str, message: str, level: str = "info",
