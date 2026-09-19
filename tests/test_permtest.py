@@ -196,3 +196,60 @@ def test_promote_surfaces_pvalue_without_changing_promotions(tmp_path, monkeypat
     assert after["perm_n"] == 7
     assert after["promoted"] == without["promoted"], "p-value must not gate"
     assert after["dsr"] == without["dsr"] and after["pbo"] == without["pbo"]
+
+
+# --- the profile must match the one the book actually breeds with -----------
+
+def test_profile_defaults_to_the_accounts_own_profile():
+    """champions resolves the profile from ACCOUNTS; permtest must agree, or it
+    measures a search the book never runs."""
+    from trading_algo.forex import fx_config as cfg
+    for account, spec in cfg.ACCOUNTS.items():
+        assert permtest.profile_for(account, None) == spec["profile"], account
+
+
+def test_explicit_profile_overrides_the_account_default():
+    assert permtest.profile_for("matt", "aggressive") == "aggressive"
+
+
+def test_profile_for_unknown_account_falls_back():
+    assert permtest.profile_for("nope", None) == "balanced"
+
+
+# --- ragged panels: instruments have different listing dates ---------------
+
+def _ragged():
+    """EURUSD from the start, SOL-like latecomer — the real matt panel's shape."""
+    full = synthetic_panel(["EURUSD", "GBPUSD"], start="2015-01-01", end="2022-01-01")
+    late = synthetic_panel(["BTCUSD"], start="2019-01-01", end="2022-01-01")
+    return {**full, **late}
+
+
+def test_common_window_makes_every_symbol_share_one_index():
+    trimmed, info = permtest.common_window_panel(_ragged())
+    idx = [df.index for df in trimmed.values()]
+    assert all(i.equals(idx[0]) for i in idx)
+    assert info["n_bars"] == len(idx[0]) and info["dropped_bars"] > 0
+
+
+def test_common_window_is_the_intersection_not_a_reindex():
+    """Trimming must DROP bars, never fabricate them by padding or filling."""
+    panel = _ragged()
+    trimmed, _ = permtest.common_window_panel(panel)
+    for sym, df in trimmed.items():
+        assert df.index.isin(panel[sym].index).all(), f"{sym} gained bars it never had"
+        pd.testing.assert_frame_equal(df, panel[sym].loc[df.index])
+
+
+def test_common_window_leaves_an_aligned_panel_untouched(panel):
+    trimmed, info = permtest.common_window_panel(panel)
+    assert info["dropped_bars"] == 0
+    for sym in panel:
+        pd.testing.assert_frame_equal(trimmed[sym], panel[sym])
+
+
+def test_run_trims_a_ragged_panel_and_records_it():
+    p = profile("balanced") if callable(profile) else profile
+    res = permtest.run(_ragged(), p, permutations=1, seed=0, generations=1, pop_size=4)
+    assert res["window"]["dropped_bars"] > 0
+    assert res["n_bars"] == res["window"]["n_bars"]

@@ -113,6 +113,11 @@ pytest -q                                                                     # 
 - **Q-1**: Does shuffling bars across market sessions (`forex/sessions.py` — crypto
   24/7 vs FX Sun 22:00→Fri 22:00) bias the null? Signals are pure TA on bars, so it
   should be neutral, but this is unverified. Measure before trusting a real verdict.
+- **Q-2b**: The common-window trim (below) costs **67% of the panel's history**
+  on the live `matt` book — 2354 of 7194 bars, limited by SOLUSD's 2020 listing.
+  The verdict therefore covers 2020→2026, a crypto-era window, not full history.
+  Whether the same search scores differently over 2003→2026 is unmeasured, and
+  would need the ragged-panel permutation in the decision log to find out.
 - **Q-2**: The breed is stochastic. Fixing one seed across real and all permutations
   isolates the *data*'s contribution, but yields a single search trajectory rather
   than a distribution over them. Whether the verdict is stable across breeding seeds
@@ -130,5 +135,7 @@ pytest -q                                                                     # 
 | 2026-09-19 | Report the p-value alongside DSR/PBO; do not gate on it yet | matt |
 | 2026-09-19 | Re-breed on every permutation rather than re-evaluating the existing 424 genomes. The cheap version is **invalid**: those genomes were bred *from* the real panel and are already fitted to it, so they underperform on noise, making the null too easy and the p-value too small — an error in the flattering direction. It is also not cheaper (424 vs 480 evaluations, both measured) | claude |
 | 2026-09-19 | Hold the breeding seed fixed across the real run and every permutation, so the only variable is the data | claude |
+| 2026-09-19 | **Trim a ragged panel to the window every symbol shares, and report the cost.** Instruments list at different times (majors 2003, AUDUSD 2006, BTC 2014, ETH 2017, SOL 2020), and a shared shuffle needs one common timeline. Alternatives rejected: forward-filling would put fabricated prices into the null; a per-symbol permutation over the union timeline preserves cross-symbol co-movement only under bookkeeping intricate enough to risk a subtly-wrong null, which is the worst possible failure here. The comparison stays fair because real and shuffled runs use the identical trimmed panel — what changes is the verdict's SCOPE, which the report states explicitly (see Q-2b) | claude |
+| 2026-09-19 | Resolve the profile from `ACCOUNTS[account]["profile"]`, as `champions.main` does, instead of defaulting to `balanced`. Found pre-flight: the hardcoded default would have silently tested `partner` (conservative) and `daytrader` (intraday) under the wrong knobs | claude |
 | 2026-09-19 | Build the referee first, then widen `research.py` — a wider search makes the `n_trials` problem worse, so the order matters | matt |
 | 2026-09-19 | **Diverge from the reference algorithm: shuffle whole bars with ONE permutation**, rather than shuffling a bar's gap separately from its interior. Measured on our FX panels, `corr(gap, intrabar)` is −0.15 to −0.23, so the two-permutation scheme inflates the null's volatility by ~2.2% and shifts cross-symbol correlations by up to 0.026 — a rigged null. Cost: the within-bar gap↔interior relationship survives, which no close-based archetype can exploit. Revisit if an intraday strategy is added | claude |

@@ -96,6 +96,55 @@ def load_report(account: str) -> dict | None:
         return None
 
 
+def profile_for(account: str, override: str | None) -> str:
+    """The profile this account actually breeds with.
+
+    `champions.main` resolves it from `ACCOUNTS[account]["profile"]`, so we must
+    too: testing `matt` (balanced) under `daytrader`'s intraday knobs would
+    produce a p-value for a search that book never runs.
+    """
+    if override:
+        return override
+    from . import fx_config as cfg
+    return cfg.ACCOUNTS.get(account, {}).get("profile", "balanced")
+
+
+def common_window_panel(panel: dict) -> tuple[dict, dict]:
+    """Trim every symbol to the dates they ALL share.
+
+    Instruments list at different times — on the live `matt` panel the majors
+    start 2003, AUDUSD 2006, BTC 2014, ETH 2017, SOL 2020. A shared shuffle
+    needs one common timeline, because sharing it across symbols is what keeps
+    cross-symbol co-movement intact (see `bar_permute`).
+
+    Trimming to the intersection costs history, and that cost is REPORTED rather
+    than buried: the comparison stays fair because the real search and every
+    shuffled search run on the identical trimmed panel. What it changes is the
+    *scope* of the verdict — the p-value describes the search over this window,
+    not over full history.
+
+    Bars are only ever dropped, never padded or forward-filled: inventing bars
+    would put fabricated prices into the null.
+    """
+    if not panel:
+        return {}, {"n_bars": 0, "dropped_bars": 0, "start": None, "end": None}
+
+    common = None
+    for df in panel.values():
+        common = df.index if common is None else common.intersection(df.index)
+    common = common.sort_values()
+
+    longest = max(len(df) for df in panel.values())
+    info = {
+        "n_bars": int(len(common)),
+        "dropped_bars": int(longest - len(common)),
+        "start": str(common[0].date()) if len(common) else None,
+        "end": str(common[-1].date()) if len(common) else None,
+        "limited_by": min(panel, key=lambda s: len(panel[s])),
+    }
+    return {s: df.loc[common] for s, df in panel.items()}, info
+
+
 def p_value(perm_scores: Sequence[float], real: float) -> float:
     """p = (k+1)/(m+1), k = shuffles that matched or beat `real`.
 
@@ -132,6 +181,8 @@ def search_best(panel: dict, p, *, seed: int, generations: int, pop_size: int,
 def run(panel: dict, p, *, permutations: int, seed: int, generations: int,
         pop_size: int, holdout_frac: float = 0.25, progress=None) -> dict:
     """Real search vs `permutations` searches on shuffled panels."""
+    # Both sides must see the identical panel or the comparison is meaningless.
+    panel, window = common_window_panel(panel)
     real_best = search_best(panel, p, seed=seed, generations=generations,
                             pop_size=pop_size, holdout_frac=holdout_frac)
 
@@ -156,9 +207,19 @@ def run(panel: dict, p, *, permutations: int, seed: int, generations: int,
         "pop_size": pop_size,
         "holdout_frac": holdout_frac,
         "symbols": symbols,
-        "n_bars": int(len(panel[symbols[0]])) if symbols else 0,
+        "n_bars": window["n_bars"],
+        "window": window,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+
+def _window_line(res: dict) -> str:
+    w = res.get("window") or {}
+    if not w.get("dropped_bars"):
+        return f"window: {w.get('start')} -> {w.get('end')} ({w.get('n_bars')} bars, full panel)"
+    return (f"window: {w['start']} -> {w['end']} ({w['n_bars']} bars) — TRIMMED to the dates "
+            f"all symbols share;\n        {w['dropped_bars']} bars dropped, limited by "
+            f"{w.get('limited_by')}. The verdict covers THIS window, not full history.")
 
 
 def format_report(res: dict, *, synthetic: bool = False) -> str:
@@ -169,6 +230,7 @@ def format_report(res: dict, *, synthetic: bool = False) -> str:
         f"In-sample permutation test — {res['n_permutations']} shuffles, "
         f"search {res['generations']}gen x {res['pop_size']}pop, seed {res['seed']}",
         f"statistic: {res['statistic']} (net of costs)",
+        _window_line(res),
         "",
         f"  real search best      {res['real_best']:+.4f}",
     ]
@@ -195,7 +257,8 @@ def format_report(res: dict, *, synthetic: bool = False) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="In-sample permutation test for the swarm search.")
     ap.add_argument("--account", default="matt")
-    ap.add_argument("--profile", default="balanced")
+    ap.add_argument("--profile", default=None,
+                    help="override; defaults to the account's own profile")
     ap.add_argument("--permutations", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--synthetic", action="store_true", help="offline; pipeline test only")
@@ -207,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     from . import fx_config as cfg
-    p = cfg.profile(args.profile)
+    profile_name = profile_for(args.account, args.profile)
+    p = cfg.profile(profile_name)
     panel = evolve._panel_for(args.account, args.synthetic)
     generations = QUICK_GENERATIONS if args.quick else PROD_GENERATIONS
     pop_size = QUICK_POP if args.quick else PROD_POP
@@ -224,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     res["synthetic"] = args.synthetic
     res["quick"] = args.quick
     res["account"] = args.account
+    res["profile"] = profile_name
 
     print(format_report(res, synthetic=args.synthetic))
     if not args.no_write:
