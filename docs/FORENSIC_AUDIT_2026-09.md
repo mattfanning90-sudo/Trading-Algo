@@ -130,7 +130,7 @@ had correctly learned to ignore its own alarm.
 | 0 | Make the audit trustworthy | ✅ **done** — 5 errors → 0; `--strict` armed |
 | 1 | Connect the alert channel | ✅ **done** (one manual step left) |
 | 2 | Stop silent data staleness | ✅ **done** |
-| 3 | Finish the champion/challenger loop | ⬜ |
+| 3 | Finish the champion/challenger loop | ✅ **done** |
 | 4 | Populate the FX backtest tab | ⬜ |
 | 5 | Publish the existing reports | ⬜ |
 | 6 | Capacity realism (ADV + impact) | ⬜ |
@@ -190,6 +190,61 @@ Still open (F14): the fallback registry itself. `DATA_FALLBACK_SOURCE` is None
 and nothing ever calls `register_fallback`, so `_try_fallback` always returns
 None. Detection without redundancy — you now learn the feed died, but nothing
 takes over.
+
+### Phase 3 — done
+
+**The measurement came first, and it settled the question.**
+`5a215db` adds `scripts/measure_champion_gate.py`, which mirrors
+`champions.promote` exactly (same hold-out split, same `n_trials`, same
+population-wide `sr_variance`) so its numbers **are** the gate's numbers.
+
+| book | hold-out SR max | real DSR max | null p90 | PBO | passed |
+|---|---|---|---|---|---|
+| matt | +0.087 | 0.0000 | 0.0000 | 0.194 | 0/40 |
+| partner | +0.055 | 0.0000 | 0.0000 | 0.329 | 0/40 |
+| multiasset | +0.027 | 0.2152 | **0.2958** | 0.437 | 0/40 |
+| daytrader | +0.074 | 0.0000 | 0.0000 | 0.111 | 0/40 |
+
+**The gate is correct. `DSR_MIN` is not the binding constraint — do not lower
+it.** Hold-out Sharpes of +0.03 to +0.09 are indistinguishable from zero once
+deflated for 424 trials, and on `multiasset` random noise scores *higher* than
+the best bred genome. No PBO exceeds its ceiling, so nothing was cohort-binned:
+the genomes simply have no edge. Promoting zero is the honest answer.
+
+The pipeline is not stuck shut — on a synthetic panel the same code scores max
+DSR 1.0000 with 3 of 40 clearing the bar.
+
+`f536e9f` wires `--champions` into the live cycle. Safe today precisely because
+every roster is empty: `champions_agents()` returns the core five, and an
+isolated A/B produced byte-identical equity, gross, pairs and trades on all four
+books. It goes live only when a genome earns promotion.
+
+**Task 3.3 needed no work** — `forex/swarm_view.summary()` already reports the
+verdict honestly, distinguishing `none_cleared` from `cohort_overfit` with the
+real PBO and `DSR_MIN`, and is already test-covered. Planned work that turns out
+to exist is recorded, not rebuilt.
+
+---
+
+## New finding: `--synthetic` does not isolate state
+
+Found the hard way during Phase 3. Running
+`python -m trading_algo.forex.engine --once --synthetic` **overwrote the live
+`state/fx_state_*.json` and `fx_books.db`** with synthetic results — four live
+paper books clobbered by a pipeline test. Recovered with `git checkout --
+state/` (the state is tracked, which is what saved it).
+
+This is a straight violation of **invariant 5**: synthetic results are pipeline
+tests only, yet the synthetic path writes to the live state directory. `--init`
+already refuses to destroy a live book (July's C2); `--synthetic` has no such
+protection.
+
+**Until fixed, always isolate:**
+`FX_STATE_DIR=/tmp/x MOMENTUM_STATE_DIR=/tmp/x python -m trading_algo.forex.engine --once --synthetic`
+
+Candidate fix: make `--synthetic` default its state dir to a scratch path, or
+refuse to write over a state file whose book was opened non-synthetically.
+**Not yet fixed — logged for Phase 7.**
 
 ---
 

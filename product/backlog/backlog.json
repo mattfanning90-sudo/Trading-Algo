@@ -149,6 +149,16 @@
           "claim": "The equity sweep exists (grid over TOP_N x lookback) and already produces the trial set DSR needs.",
           "source": "trading_algo/sweep.py",
           "confidence": "high"
+        },
+        {
+          "claim": "MEASURED 2026-09-19 on real data, all four FX books: the DSR/PBO gate is correctly calibrated and correctly promotes nothing. Hold-out Sharpe maxima are +0.027 to +0.087 across 40 finalists per book, giving real DSR maxima of 0.0000-0.2152 against null p90 of 0.0000-0.2958. On multiasset the NULL scores HIGHER than the best bred genome. No PBO exceeds its 0.5 ceiling, so no cohort was binned - the genomes simply carry no edge surviving deflation by n_trials=424.",
+          "source": "scripts/measure_champion_gate.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The gate is not stuck shut: on a synthetic panel the same pipeline scores max DSR 1.0000 with 3 of 40 finalists clearing 0.95. DO NOT lower DSR_MIN - it is not the binding constraint.",
+          "source": "scripts/measure_champion_gate.py --synthetic",
+          "confidence": "high"
         }
       ],
       "role_reviews": {

@@ -889,7 +889,15 @@ Inert today (every roster is empty = the core five agents), live the moment
 a genome clears the DSR/PBO gate on its own hold-out evidence."
 ```
 
-### Task 3.3: Show the gate's verdict on the dashboard
+### Task 3.3: Show the gate's verdict on the dashboard — ALREADY DONE, DO NOT BUILD
+
+**Verified 2026-09-19: `forex/swarm_view.summary()` already does this**, and
+better than the design below — it distinguishes `none_cleared` from
+`cohort_overfit`, carries the real PBO and `DSR_MIN`, and is covered by
+`tests/test_dashboard_swarm.py`. The task below was written on a wrong
+assumption. Left visible rather than deleted so nobody re-derives it.
+
+### (superseded) Task 3.3: Show the gate's verdict on the dashboard
 
 **Files:**
 - Modify: `trading_algo/dashboard/swarm.py`
