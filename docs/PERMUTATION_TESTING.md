@@ -241,10 +241,14 @@ long-biased rule collects it. That is the method working as intended.
    much of `trading_algo/forex/` qualifies.
 2. **The signal shuffle is the sanctioned null for cross-sectional work.**
    `scripts/measure_permutation_null.py` is the reference implementation.
-3. **Build step 2 (in-sample permutation) before steps 3 and 4.** Step 2 is
-   genuinely new capability and addresses the unresolved effective-`N` problem
-   in `MONTE_CARLO_RESEARCH.md` §3. Steps 3 and 4 substantially duplicate what
-   `sweep.py` and the PBO gate already do.
+3. **Build step 2 (in-sample permutation) before steps 3 and 4.** ✅ **Built
+   2026-09-19** as `trading_algo/forex/permtest.py`, on the **FX swarm** — not
+   the equity sleeves. The audit behind that placement: the equity sleeves run
+   no parameter search at all (`backtest.py` fits nothing, and nothing consumes
+   `sweep.py`'s `best_params`), so there is no `N` for step 2 to bite on, and
+   steps 1 and 3 are correctly absent rather than missing. The swarm *is* a
+   search — and its genomes are time-series, so this null is valid there
+   unmodified. Spec: `docs/specs/swarm-insample-permutation.md`.
 4. **Do not retire DSR/PBO in favour of this.** They answer overlapping
    questions with different assumptions; agreement between them is evidence,
    and disagreement should be treated as *unproven* rather than as a pass — the
@@ -271,19 +275,56 @@ only move this the wrong way. Treat it as "the edge survives a fair test",
 - **Monte Carlo error.** At 1,000 shuffles a p-value near 0.05 carries roughly
   ±0.01 of sampling noise, so p = 0.039 and p = 0.052 are the same finding. Do
   not read the third decimal. Halving the error needs 4× the shuffles.
-- **The OHLC gap subtlety is unmeasured.** Reading `bar_permute.py`, intrabar
-  high/low/close are shuffled with one permutation and overnight gaps with a
-  *separate* one. That zeroes the covariance between a bar's gap and its own
-  intraday move, so permuted close-to-close volatility will not match real
-  unless that covariance was already zero. Irrelevant to our daily close-based
-  equity sleeves; it would matter for intraday FX. Our cached panels are
-  close-only, so this was not measured.
+- ~~The OHLC gap subtlety is unmeasured.~~ **Measured 2026-09-19 — it is a real
+  defect.** See §9.
 - **The signal shuffle tests the ranking link only.** It validates "past
   relative performance predicts future relative performance". It does not
   exercise the regime filter, vol targeting, or `compute_targets` — a
   full-pipeline null is a larger piece of work.
 - **Steps 2 and 4 are described here, not built.** Only the null-validity
   question is implemented.
+
+## 9. The OHLC gap defect (measured, and why we diverge from the reference)
+
+§8 previously listed this as an unmeasured suspicion. Building the FX
+implementation forced the measurement, and the suspicion was correct.
+
+**The defect.** The reference `bar_permute.py` shuffles a bar's intrabar
+high/low/close with one permutation and its overnight **gap** (open versus the
+previous close) with a *separate* one. A bar's close-to-close return is
+`gap + (close − open)`, so shuffling the two halves independently pairs one
+bar's gap with another bar's interior. That zeroes `Cov(gap, close − open)` and
+therefore changes close-to-close volatility:
+
+$$\mathrm{Var}(\text{gap} + \text{intrabar}) = \mathrm{Var}(\text{gap}) + \mathrm{Var}(\text{intrabar}) + 2\,\mathrm{Cov}(\cdot,\cdot)$$
+
+**Measured on our FX panels**, that covariance is nowhere near zero:
+
+| Pair | `corr(gap, intrabar)` |
+|---|---|
+| EURUSD | **−0.154** |
+| GBPUSD | **−0.161** |
+| USDJPY | **−0.226** |
+
+It is strongly *negative* — a gap up tends to drift back down within the same
+bar. Destroying it therefore **inflates** the null's volatility (EURUSD
+close-to-close 0.004887 real → 0.004993 permuted, **+2.2%**) and shifts pairwise
+cross-symbol correlations by up to **0.026**.
+
+A null whose volatility does not match the real market is a rigged null — the
+one thing this whole document exists to prevent.
+
+**Decision.** `trading_algo/forex/bar_permute.py` uses **one** permutation:
+whole bars move as a unit, gap travelling with its own interior. Volatility and
+correlation are then preserved to 1e-10 (pinned by
+`tests/test_permtest.py::test_permutation_preserves_*`).
+
+**The cost of the fix, stated honestly.** Keeping the gap with its bar leaves
+one relationship intact: "a gap up tends to be followed by a drift back down
+*within that same bar*". That is a within-bar effect, and every swarm archetype
+trades off bar closes, so none of them can exploit it — the null is still a null
+for the strategies we actually run. **If an intraday strategy is ever added,
+this trade-off must be revisited.**
 
 ## How to reproduce
 

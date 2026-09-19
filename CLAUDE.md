@@ -105,6 +105,8 @@ python -m trading_algo.forex.research --synthetic       # quant-research search 
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
 python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
 python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
+python -m trading_algo.forex.permtest --account matt --permutations 200  # in-sample permutation test (~1h)
+python scripts/measure_permutation_null.py --permutations 1000  # is a permutation null valid for OUR strategy?
 pytest -q                                           # full suite (equity + FX/ML)
 ```
 
