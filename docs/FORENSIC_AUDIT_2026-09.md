@@ -129,7 +129,7 @@ had correctly learned to ignore its own alarm.
 |---|---|---|
 | 0 | Make the audit trustworthy | ✅ **done** — 5 errors → 0; `--strict` armed |
 | 1 | Connect the alert channel | ✅ **done** (one manual step left) |
-| 2 | Stop silent data staleness | ⬜ |
+| 2 | Stop silent data staleness | ✅ **done** |
 | 3 | Finish the champion/challenger loop | ⬜ |
 | 4 | Populate the FX backtest tab | ⬜ |
 | 5 | Publish the existing reports | ⬜ |
@@ -166,6 +166,30 @@ against a local HTTP server; no book data was sent to any external endpoint.
 
 **Remaining manual step:** `gh secret set ALERT_WEBHOOK_URL`. Until that exists
 the channel no-ops and nothing is delivered. F12's AC3 stays unmet until then.
+
+### Phase 2 — done
+
+`fb71896` gives the price cache a 20h TTL, scoped to **open-ended** requests
+(`end=None`). A closed backtest window is immutable history and still caches
+forever, or every backtest would re-download the universe. Verified against the
+real poisoned cache **with nothing deleted**: ASX went from serving 2026-07-24
+to 2026-09-18.
+
+`1ec0117` alerts `stale_panel` when a region's newest bar is more than
+`MAX_PANEL_STALENESS_DAYS` old. This is the failure the per-name gate
+structurally cannot see: `data_quality` judges names against each other, so a
+region where *every* name freezes on the same day is internally consistent and
+looks healthy. A warning rather than an exception — three other sleeves may be
+fine, and halting the book over one feed is a worse failure than the one being
+reported.
+
+Verified silent on ASX/US/FTSE loaded live, and firing on the exact 57-day
+frozen panel that caused this audit's first misdiagnosis.
+
+Still open (F14): the fallback registry itself. `DATA_FALLBACK_SOURCE` is None
+and nothing ever calls `register_fallback`, so `_try_fallback` always returns
+None. Detection without redundancy — you now learn the feed died, but nothing
+takes over.
 
 ---
 

@@ -672,6 +672,11 @@
           "claim": "No data-quality module exists today; data.py loads and returns prices directly.",
           "source": "trading_algo/data.py",
           "confidence": "high"
+        },
+        {
+          "claim": "Gap closed at the PANEL level: the per-name gate judges names against each other, so a region where every name freezes on the same day looked healthy to it. load_region now alerts on that case separately.",
+          "source": "trading_algo/data.py:_warn_if_stale",
+          "confidence": "high"
         }
       ],
       "role_reviews": {
@@ -1418,6 +1423,16 @@
         {
           "claim": "data.py has a single primary loader path plus synthetic_region for offline tests.",
           "source": "trading_algo/data.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "DETECTION now exists: data.load_region alerts 'stale_panel' when a region's newest bar is older than MAX_PANEL_STALENESS_DAYS (open-ended requests only). Verified silent on live ASX/US/FTSE and firing on a 57-day-frozen ASX panel.",
+          "source": "trading_algo/data.py; tests/test_data_quality.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "The FALLBACK itself is still inert: DATA_FALLBACK_SOURCE is None and data.register_fallback has no production caller, so _try_fallback always returns None. A TIINGO_API_SECRET repo secret exists with zero code references - a candidate source, or a credential to revoke.",
+          "source": "trading_algo/config.py; trading_algo/data.py; gh secret list 2026-09-19",
           "confidence": "high"
         }
       ],
