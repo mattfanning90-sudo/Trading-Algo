@@ -82,9 +82,14 @@ def _webhook_channel(payload: dict) -> None:
         body = dict(payload)
         body.setdefault("text", line)       # Slack/Discord both render `text`
         data, ctype = json.dumps(body).encode(), "application/json"
+    # Pin the scheme. $ALERT_WEBHOOK_URL is operator-supplied, and `urlopen`
+    # would otherwise accept file:// — which on a POST is a local write
+    # primitive driven by an env var. Alerts go over the wire or not at all.
+    if urllib.parse.urlparse(url).scheme not in ("https", "http"):
+        return
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": ctype}, method="POST")
-    with urllib.request.urlopen(req, timeout=WEBHOOK_TIMEOUT_SECONDS):
+    with urllib.request.urlopen(req, timeout=WEBHOOK_TIMEOUT_SECONDS):  # nosec B310 - scheme pinned above
         pass
 
 

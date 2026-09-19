@@ -44,9 +44,13 @@ def _series(ticker: str, start: str, end: str | None, token: str) -> pd.Series |
     if end:
         params["endDate"] = end
     url = f"{BASE}/{urllib.parse.quote(ticker)}/prices?{urllib.parse.urlencode(params)}"
+    # Pin the scheme: `urlopen` will happily follow file:// or ftp://, and market
+    # data must come off the wire (same guard as frankfurter_data._http_get).
+    if urllib.parse.urlparse(url).scheme != "https":
+        return None
     req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:  # nosec B310 - scheme pinned to https above
             rows = json.loads(resp.read().decode())
     except Exception:
         return None                      # a dead secondary must not raise
