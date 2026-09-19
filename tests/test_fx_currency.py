@@ -63,7 +63,17 @@ def _one_bar_panel(eurusd, audusd, date="2025-01-02"):
 
 def _seed_halted_long(tmp_path, monkeypatch, audusd_now, eurusd_now=1.08):
     """A halted book holding 1.0 EURUSD; marks one bar. Halted => no rebalance,
-    so we isolate the mark itself (pair move x AUD translation)."""
+    so we isolate the mark itself (pair move x AUD translation).
+
+    Broker commission is zeroed here deliberately. A halt FORCES A FLATTEN, so
+    the bar does carry one trade, and IBKR's USD 2.00 FX per-order minimum is
+    ~0.04% of a 5,000 AUD book — enough to swamp the 1.01% translation effect
+    this test exists to measure. Cost modelling is pinned in test_fx_marks.py;
+    this test is about the AUD factor.
+    """
+    from trading_algo.forex import fx_config as _c
+    monkeypatch.setattr(_c, "IBKR_FX_BPS", 0.0)
+    monkeypatch.setattr(_c, "IBKR_FX_MIN_ORDER", 0.0)
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
     fx_book.init_account("c", 5_000, "balanced")
     st = fx_book.load_state("c")

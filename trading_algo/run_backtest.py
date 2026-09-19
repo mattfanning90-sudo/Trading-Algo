@@ -95,7 +95,9 @@ def run_single(region_key: str, synthetic: bool, point_in_time: bool) -> None:
         prices, index_px = data.synthetic_region(region)
     else:
         prices, index_px = data.load_region(region, cfg.START, tickers=pit_tickers)
-    result = run_backtest(prices, index_px, region, membership=membership)
+    volume = data.capacity_volume(prices, cfg.START, None, synthetic=synthetic)
+    result = run_backtest(prices, index_px, region, membership=membership,
+                          volume=volume)
     _print_metrics(f"{region.name} sleeve — Backtest ({region.currency})", result["metrics"])
     print(f"  Universe: {_universe_label(result['point_in_time'])}")
     if len(result["turnover"]):

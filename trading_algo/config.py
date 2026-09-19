@@ -162,11 +162,46 @@ DEFAULT_PARAMS = StrategyParams()
 BASE_CURRENCY = "AUD"               # combined equity + reporting currency
 
 # Capital split across regional sleeves (must reference region keys in regions.py).
-# Equal third each — rebalanced back to target on the configured cadence.
+# Equal quarter each — rebalanced back to target on the configured cadence.
+#
+# TSX was funded 2026-09-19. The gate number originally recorded here — raw
+# Sharpe 0.948 · haircut 0.608 · DSR 0.99 (N=6) · maxDD −15.6% · Calmar 0.46 ·
+# monthly turnover 39.1% · cost drag 7.0% — used the no-risk-free Sharpe
+# convention, which is the most generous of three defensible ones. Restated
+# against the accurate convention (excess returns, idle cash credited):
+#
+#     TSX standalone SR 0.742 · DSR 0.9349 (N=6) / 0.8218 (N=20) — FAILS a 0.95 gate
+#
+# So does every other sleeve (ASX 0.476, US 0.710, FTSE 0.078 at N=20), which is
+# the point: a standalone DSR is a single-strategy significance test and was the
+# wrong instrument for a portfolio-construction decision. TSX is the BEST of the
+# four on every convention, and the ranking TSX > US > ASX > FTSE does not depend
+# on which one you pick.
+#
+# TSX STAYS FUNDED AT 25%, on the portfolio contribution rather than the gate.
+# Measured 3-sleeve vs 4-sleeve over the same 15.1y window, equal weights:
+#     Sharpe +0.080 raw / +0.064 excess-with-cash-credit
+#     CAGR +0.34pp · ann vol −0.52pp (8.66% → 8.14%) · maxDD −11.32% → −11.18%
+#     paired block bootstrap: ΔSharpe +0.080, 95% CI [−0.048, +0.192], P(Δ>0)=0.885
+# It adds return AND cuts vol AND improves drawdown — suggestive, not proven.
+# Caveat that matters more than the Sharpe: US–TSX ρ = 0.511, the highest pair in
+# the matrix, so TSX is the LEAST diversifying of the four.
+# Full derivation: docs/SHARPE_RESEARCH.md §9b.
+# CAVEAT, and it is not a small one: no region sets `constituents_file`, so that
+# backtest ran on TODAY's constituents and is SURVIVORSHIP-BIASED — treat those
+# numbers as an upper bound, not an expectation.
+#
+# NOTE ON SCOPE: this governs the portfolio backtest, the scheduler's wake
+# calendar, and any NEWLY initialised paper book. An EXISTING book keeps the
+# allocations baked into its own state at --init time, so `full` (opened
+# 2026-06-11 on ASX/US/FTSE) does NOT pick TSX up here — moving it to four
+# sleeves means crossing ~A$25k of cash AUD→CAD and paying the FX spread, which
+# is a real trade and deserves to be a deliberate, separate act.
 ALLOCATIONS: dict[str, float] = {
-    "ASX": 1 / 3,
-    "US": 1 / 3,
-    "FTSE": 1 / 3,
+    "ASX": 0.25,
+    "US": 0.25,
+    "FTSE": 0.25,
+    "TSX": 0.25,
 }
 
 # How often to true sleeve capital back to ALLOCATIONS (pandas offset alias).
@@ -189,6 +224,29 @@ INITIAL_CAPITAL = 100_000
 
 # Annualised cash rate used as the risk-free benchmark in metrics (AUD ~ RBA cash).
 RISK_FREE = 0.035
+
+# Interest CREDITED on uninvested cash.
+#
+# The sleeves hold mean gross exposure of only 0.34-0.44 — the regime filter and
+# vol targeting leave 56-66% of capital idle — while the reported Sharpe subtracts
+# RISK_FREE as a hurdle. Paying 0% on that idle cash and charging the full hurdle
+# anyway penalises the book twice for being flat: measured at +0.22 to +0.34
+# Sharpe across the four sleeves (docs/SHARPE_RESEARCH.md §1). A real broker pays
+# interest on idle balances, so 0% was a simulator artifact, not prudence.
+#
+# The property that matters: with this ON a 100%-cash book earns the cash rate, so
+# its EXCESS return is 0 and its Sharpe is 0 — the only coherent null for the
+# PSR/DSR machinery, which tests against "no skill". With it OFF the same book
+# scores -0.43.
+#
+# CAUTION, since invariant #2 is about costs always being on: this is a CREDIT and
+# it therefore FLATTERS reported performance. It is the mirror of the margin DEBIT
+# on borrowed money, which is still NOT modelled on the equity stack
+# (docs/SHARPE_RESEARCH.md §7) — so today a flat book is paid for sitting out while
+# a levered book is charged nothing for gearing. Wiring the debit is the matching
+# change; until it lands, treat leveraged-book returns as optimistic.
+CREDIT_IDLE_CASH = True
+CASH_RATE_ANNUAL = RISK_FREE        # what idle cash earns == the reported hurdle
 
 # ---------------------------------------------------------------------------
 # Risk controls
@@ -246,12 +304,37 @@ PROMOTION_TRACKING_BUDGET_BPS = 200.0   # F3 live-vs-backtest tracking-error bud
 MIN_REBALANCE_GAP_DAYS = 20
 
 # ---------------------------------------------------------------------------
+# After-tax reporting (trading_algo/tax.py)
+# ---------------------------------------------------------------------------
+# NOT tax advice, and NOT part of any trading decision — a reporting layer only.
+# Confirm every number here with your accountant before relying on it.
+#
+# These books rebalance monthly, so essentially nothing clears the 12 months an
+# Australian CGT discount needs: gains are short-term and taxed at the full
+# marginal rate. At a high rate that exceeds every transaction cost in this repo
+# combined, which makes HOLDING PERIOD a strategy parameter rather than a cost.
+MARGINAL_TAX_RATE = 0.47        # top AU marginal incl. Medicare levy; set yours
+
+# Dividend withholding by sleeve. The price series is auto_adjust=True (TOTAL
+# RETURN), so the backtest already credited you 100% of every dividend — this is
+# the slice that never arrives. US: 15% under the AU/US treaty WITH a W-8BEN on
+# file (30% without). UK: nil on most dividends for non-residents. ASX: nil
+# withholding for a resident (franking credits are a separate, unmodelled
+# POSITIVE — omitting them is the conservative direction). Canada: 15% treaty.
+DIVIDEND_WITHHOLDING = {"US": 0.15, "FTSE": 0.0, "ASX": 0.0, "TSX": 0.15}
+
+# ---------------------------------------------------------------------------
 # Notifications / telemetry (backlog F12 / foundation P0-F)
 # ---------------------------------------------------------------------------
-# Delivery channel for risk alerts (drawdown breaker, crowding). "log" prints;
-# register a webhook/email channel in notifications.py and name it here to route
-# alerts off-box. See trading_algo/notifications.py.
-NOTIFY_CHANNEL = "log"
+# Delivery channel for risk alerts (drawdown breaker, crowding, audit ERRORs).
+# "log" prints only. "webhook" prints AND POSTs to $ALERT_WEBHOOK_URL — with no
+# URL set it is a silent no-op, so selecting it globally is safe on a laptop
+# with nothing wired up. See trading_algo/notifications.py.
+#
+# This was "log" for the life of the project, which is why verify.py's own
+# docstring records "never-traded: sleeve ASX fired every day for 52 days" into
+# a CI log nobody opens. An unattended risk event has to leave the box.
+NOTIFY_CHANNEL = "webhook"
 
 # ---------------------------------------------------------------------------
 # Survivorship correction (backlog F13, data integrity)
@@ -264,18 +347,36 @@ DELISTING_REPLACEMENT_RETURN: float | None = None
 # ---------------------------------------------------------------------------
 # Market-data fallback (backlog F14, platform)
 # ---------------------------------------------------------------------------
-# Name of a registered secondary price source to try when the primary (Yahoo)
-# returns nothing (e.g. a 403). None = primary only. Registered in data.py via
-# data.register_fallback(); fallback data still passes the F7 quality gate.
-DATA_FALLBACK_SOURCE: str | None = None
+# Name of a secondary price source to try when the primary (Yahoo) returns
+# nothing (e.g. a 403). None = primary only. Built-in adapters resolve
+# themselves (see data._BUILTIN_FALLBACKS); anything else must be registered via
+# data.register_fallback(). Fallback data still passes the F7 quality gate, so a
+# poor secondary cannot slip bad prints into a rebalance.
+#
+# "tiingo" uses $TIINGO_API_SECRET. With no token set it is a silent no-op, so
+# selecting it costs nothing on a machine without the credential. HONEST LIMIT:
+# Tiingo's daily endpoint serves US listings, not the .AX / .L tickers the ASX
+# and FTSE sleeves trade — this is redundancy for the US sleeve only.
+DATA_FALLBACK_SOURCE: str | None = "tiingo"
 
 # ---------------------------------------------------------------------------
 # Pre-trade ADV / liquidity cap (backlog F15 / foundation P0-I)
 # ---------------------------------------------------------------------------
 # Cap each position at this fraction of the name's trailing average DOLLAR volume
 # so the book never targets more than it could realistically trade. None = off
-# (no cap — a perfect no-op). The cap is applied inside strategy.compute_targets
-# so backtest and paper size identically (invariant #3). Needs volume data.
+# (a perfect no-op). Needs volume data — `data.capacity_volume` fetches it, and
+# ONLY when this or IMPACT_COEF is set, since it is a second full download.
+#
+# SCOPE — read before switching this on. The cap binds in the BACKTEST path:
+# `backtest.py` builds the per-name `capacity` series and passes it to
+# `strategy.targets_at`. Paper trading calls `compute_targets` WITHOUT a
+# capacity argument, so it does NOT honour the cap. With this off the two paths
+# agree exactly; switch it on and the same signal is sized one way in the
+# backtest and another in the live book. `paper_trade.warn_if_capacity_unhonoured`
+# says so loudly on every affected run.
+#
+# (This comment previously claimed the cap was applied inside compute_targets
+# "so backtest and paper size identically". It never was.)
 ADV_CAP_PCT: float | None = None
 ADV_WINDOW = 20                    # trailing days for the average dollar volume
 

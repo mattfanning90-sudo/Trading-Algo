@@ -6,6 +6,11 @@ prices in a backtest.
 """
 from __future__ import annotations
 
+import os
+import time
+
+import pandas as pd
+
 from trading_algo import data, fx
 
 
@@ -52,3 +57,67 @@ def test_fx_cache_key_depends_on_currency_set(monkeypatch):
     fx.load_fx(["AUD", "USD"], "2012-01-01", "2026-01-01")
     fx.load_fx(["AUD", "GBP"], "2012-01-01", "2026-01-01")
     assert seen[0] != seen[1]
+
+
+# ---------------------------------------------------------------------------
+# Cache FRESHNESS — a key that never collides is still stale forever
+# ---------------------------------------------------------------------------
+# `load_prices` returned a cached parquet for the life of the file with no
+# freshness check at all. Local caches written 2026-07-24 were still being
+# served on 2026-09-19, so every local backtest, sweep and research run silently
+# used 8-week-old prices. CI never saw it (no equity cache there).
+#
+# Only an OPEN-ENDED request (end=None, "prices up to now") can go stale. A
+# request with an explicit `end` is a closed historical window and its cache is
+# valid forever — expiring that would re-download the universe on every backtest.
+
+
+
+def _fake_downloader(calls):
+    def _download(tickers, start, end):
+        calls.append((tuple(tickers), start, end))
+        idx = pd.bdate_range("2026-01-01", periods=5)
+        return pd.DataFrame({t: 1.0 for t in tickers}, index=idx)
+    return _download
+
+
+def _age_file(path, hours):
+    old = time.time() - hours * 3600
+    os.utime(path, (old, old))
+
+
+def test_open_ended_cache_is_reused_while_fresh(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(data, "_download_primary", _fake_downloader(calls))
+    data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
+    data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
+    assert len(calls) == 1
+
+
+def test_open_ended_cache_expires_and_refetches(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(data, "_download_primary", _fake_downloader(calls))
+    data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
+    _age_file(data._cache_path("k"), data.CACHE_TTL_HOURS + 1)
+    data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
+    assert len(calls) == 2
+
+
+def test_closed_window_cache_never_expires(tmp_path, monkeypatch):
+    """A fixed start/end window is immutable history — re-downloading it every
+    run would cost a full universe fetch per backtest for nothing."""
+    calls = []
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(data, "_download_primary", _fake_downloader(calls))
+    data.load_prices(["AAA"], "2026-01-01", "2026-01-08", cache_key="k2")
+    _age_file(data._cache_path("k2"), 10_000)
+    data.load_prices(["AAA"], "2026-01-01", "2026-01-08", cache_key="k2")
+    assert len(calls) == 1
+
+
+def test_ttl_is_under_one_day_so_a_daily_run_always_refetches():
+    """A scheduled run happens once every 24h; a TTL at or above that would let
+    a book trade on yesterday's prices forever."""
+    assert 0 < data.CACHE_TTL_HOURS < 24

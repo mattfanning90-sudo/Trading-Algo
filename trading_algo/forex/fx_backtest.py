@@ -23,7 +23,8 @@ from . import fxconv
 from . import marks
 from . import position_policy
 from .agents import AgentPool
-from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
+from .fx_config import (ACCOUNT_CURRENCY, FX_RISK_FREE, MARGIN_RATE_ANNUAL,
+                        SHORT_BORROW_ANNUAL, FXParams)
 from .fx_data import closes
 from .pairs import get_pair
 from ..metrics import compute_metrics
@@ -90,6 +91,7 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
     halt_events = 0
     halt_days = 0
     total_cost = total_carry = 0.0
+    total_spread = total_commission = total_financing = total_swap = 0.0
 
     for i in range(len(dates) - 1):
         d, nxt = dates[i], dates[i + 1]
@@ -103,30 +105,60 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         held = pd.Series(position_policy.settle(
             held.to_dict(), target, p, bars_held=ages, force_flat=halted),
             dtype=float).reindex(pairs).fillna(0.0)
+        # Orders below the venue's minimum size cannot be placed at all, so the
+        # book keeps its prior position in that leg rather than paying a fee on
+        # an impossible trade (see marks.is_executable).
+        for s in pairs:
+            d_w = held[s] - prev[s]
+            if d_w and not marks.is_executable(d_w, specs[s], equity[-1]):
+                held[s] = prev[s]
         ages = position_policy.advance_ages(prev.to_dict(), held.to_dict(), ages)
         move = held - prev
 
-        # Turnover cost: half the dealing spread per unit weight moved.
-        cost = 0.0
+        # Turnover cost, kept DECOMPOSED. One headline number conflates two
+        # different questions: "does this strategy have edge?" (spread is
+        # intrinsic to the instrument) and "can I trade it at this size with
+        # this broker?" (a per-ORDER minimum depends on broker, book size and
+        # leg count). Collapsing them makes "no edge" and "edge that is
+        # uneconomic at A$10k" look identical, and those call for opposite
+        # responses. The parts are summed here and reported separately below.
+        spread = commission = 0.0
         for s in pairs:
             m = move[s]
             if m:
-                cost += abs(m) * marks.half_spread_fraction(specs[s], price_d[s])
+                spread += abs(m) * marks.half_spread_fraction(specs[s], price_d[s])
+                commission += marks.commission_fraction(m, specs[s], price_d[s],
+                                                        equity[-1])
+        cost = spread + commission
 
-        # Overnight carry/financing on the positions held into the next bar.
-        carry = 0.0
+        # Overnight carry/financing on the positions held into the next bar,
+        # also decomposed: swap is SIGNED (you can earn it), financing is always
+        # a charge, and telling them apart matters on a levered or short book.
+        swap = financing = 0.0
         if p.include_carry:
             for s in pairs:
                 w = held[s]
                 if w:
-                    carry += abs(w) * specs[s].carry_fraction(price_d[s], _sign(w))
+                    swap += abs(w) * specs[s].carry_fraction(price_d[s], _sign(w))
+            # Financing is negative carry — see marks.financing_fraction. Equity
+            # and bond legs ship swap = 0, so without this a levered or short
+            # book borrows cash and shares for free.
+            financing, _ = marks.financing_fraction(
+                held.to_dict(), lambda s: specs[s],
+                margin_rate=MARGIN_RATE_ANNUAL, borrow_rate=SHORT_BORROW_ANNUAL)
+        carry = swap - financing
 
         ret_nxt = aud_rets.loc[nxt]              # AUD-translated pair returns
         pair_pnl = held * ret_nxt.reindex(pairs).fillna(0.0)
         attribution += pair_pnl
         day_ret = float(pair_pnl.sum()) + carry - cost
 
-        equity.append(equity[-1] * (1.0 + day_ret))
+        # Floor at zero. With per-ORDER commission the cost is an absolute
+        # amount, so as equity shrinks cost/equity grows without bound and the
+        # curve can go NEGATIVE — which is not a thing, and poisons every metric
+        # downstream with NaN. A wiped-out book is wiped out; it does not owe
+        # the broker its future returns.
+        equity.append(max(0.0, equity[-1] * (1.0 + day_ret)))
         daily.append(day_ret)
         turnover_log.append(float(move.abs().sum()))
         cost_log.append(cost)
@@ -135,6 +167,10 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         weights_hist[nxt] = held.copy()
         total_cost += cost
         total_carry += carry
+        total_spread += spread
+        total_commission += commission
+        total_financing += financing
+        total_swap += swap
 
         # Drawdown circuit breaker (decision at close, flat from next bar).
         peak = max(peak, equity[-1])
@@ -162,6 +198,12 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         "attribution": attribution.sort_values(ascending=False),
         "total_cost_fraction": total_cost,
         "total_carry_fraction": total_carry,
+        # The parts, so a reader can tell an instrument cost (spread) from a
+        # deployment cost (a per-order minimum) from leverage (financing).
+        "total_spread_fraction": total_spread,
+        "total_commission_fraction": total_commission,
+        "total_financing_fraction": total_financing,
+        "total_swap_carry_fraction": total_swap,
         "drawdown_halts": halt_events,
         "drawdown_halt_days": halt_days,
         "metrics": compute_metrics(ret_series, eq, risk_free=FX_RISK_FREE,

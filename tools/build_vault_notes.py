@@ -112,6 +112,14 @@ CONTENT = [
     dict(src="Concepts/Volatility Targeting.md", dst="Concepts/Volatility Targeting.md",
          title="Volatility Targeting", tags=["trading-algo", "concept", "risk"], type_="concept",
          source="obsidian/Concepts/Volatility Targeting.md (strategy.py)", trail="#trading-algo #risk"),
+    dict(src="Concepts/Monte Carlo.md", dst="Concepts/Monte Carlo.md",
+         title="Monte Carlo", tags=["trading-algo", "concept", "statistics"], type_="concept",
+         source="obsidian/Concepts/Monte Carlo.md (scripts/measure_champion_gate.py)",
+         trail="#trading-algo #statistics"),
+    dict(src="Concepts/Permutation Testing.md", dst="Concepts/Permutation Testing.md",
+         title="Permutation Testing", tags=["trading-algo", "concept", "statistics"], type_="concept",
+         source="obsidian/Concepts/Permutation Testing.md (scripts/measure_permutation_null.py)",
+         trail="#trading-algo #statistics"),
 ]
 
 HUB = """---
@@ -144,6 +152,8 @@ Map of content for the **Trading Algo** — a monthly-rebalanced **12-1 cross-se
 | [[Regime & Trend Filters]] | Per-stock 200d MA + index-regime crash protection (risk-off → cash) |
 | [[Volatility Targeting]] | Inverse-vol weights, 15% cap, scale to a 12% vol target |
 | [[No-Lookahead]] | Signal at *t*, trade at *t+1* — the sacred backtest invariant |
+| [[Monte Carlo]] | Simulating a zero-edge null to ask whether luck could have done this |
+| [[Permutation Testing]] | Shuffling our own history into a no-edge null — and why the textbook shuffle is wrong for us |
 
 ## Docs & reference
 

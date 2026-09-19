@@ -279,3 +279,126 @@ def test_a_clean_audit_sends_nothing(monkeypatch):
         verify.Finding(verify.WARN, "equity:full", "idle-sleeve", "in cash")]})
 
     assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# AGEING — a fixed bug must not be re-reported forever
+# ---------------------------------------------------------------------------
+# The audit re-derives every book from its WHOLE trade ledger, so a defect fixed
+# in July would keep firing as a fresh ERROR for the life of the book. That is
+# how an alert channel gets muted, and it is why `--strict` could never be armed.
+# Ageing is opt-in: the detector stays a pure detector unless given a clock.
+AGE_NOW = datetime(2026, 9, 19)
+OLD_SATURDAY = "2026-07-04 03:00"        # 77 days before AGE_NOW
+RECENT_SATURDAY = "2026-09-12 03:00"     # 7 days before AGE_NOW
+
+
+def _weekend_fill(stamp):
+    return {"date": stamp, "pair": "EURUSD", "price": 1.14,
+            "target_weight": 0.2, "delta_weight": 0.2}
+
+
+def test_old_closed_market_fills_age_out_to_informational():
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(OLD_SATURDAY)]),
+                                    "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade-historical"}
+    assert [f.level for f in out] == [verify.INFO]
+
+
+def test_recent_closed_market_fills_still_error():
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(RECENT_SATURDAY)]),
+                                    "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade"}
+    assert [f.level for f in out] == [verify.ERROR]
+
+
+def test_recent_and_historical_are_reported_separately():
+    out = verify.check_market_hours(
+        "t", fx_book([_weekend_fill(OLD_SATURDAY),
+                      _weekend_fill(RECENT_SATURDAY)]), "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade", "closed-market-trade-historical"}
+    by_code = {f.code: f for f in out}
+    assert by_code["closed-market-trade"].detail["by_symbol"] == {"EURUSD": 1}
+    assert by_code["closed-market-trade-historical"].detail["by_symbol"] == {"EURUSD": 1}
+
+
+def test_ageing_is_off_unless_a_clock_is_supplied():
+    """Without a clock the detector is a pure detector — every offender is an
+    ERROR. This keeps the session-gate parity tests (test_sessions.py,
+    test_fx_sessions.py) meaningful: they assert what the gate permits, not
+    how old a ledger entry is."""
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(OLD_SATURDAY)]), "fx")
+    assert codes(out) == {"closed-market-trade"}
+
+
+# ---------------------------------------------------------------------------
+# FLAT BY DESIGN — a regime-off sleeve is not a broken sleeve
+# ---------------------------------------------------------------------------
+# `never-traded` fired as an ERROR on the live ASX sleeve every day for 57 days
+# while the sleeve was doing exactly what it is built to do: ^AXJO sat below its
+# 200-day MA, so the regime filter de-risked to cash. The distinguishing
+# evidence is whether the sleeve was EVALUATED (it has a last_rebalance_date)
+# and, when recorded, WHY it came back flat (`last_flat_reason`).
+FLAT_NOW = datetime(2026, 9, 19)
+
+
+def _flat_sleeve(reason=None, evaluated=True):
+    sleeve = {"currency": "AUD", "cash": 33_333.0, "positions": {},
+              "last_status": {"date": "2026-09-18", "status": "cash:idle",
+                              "positions": 0, "flat_since": "2026-09-14"}}
+    if reason is not None:
+        sleeve["last_flat_reason"] = reason
+    if evaluated:
+        sleeve["last_rebalance_date"] = "2026-09-15"
+        sleeve["last_rebalance_month"] = "2026-09"
+    return sleeve
+
+
+def _flat_book(sleeve):
+    return equity_book([], {"ASX": sleeve}, allocations={"ASX": 1.0},
+                       equity_history=[["2026-09-18", 10_000.0]])
+
+
+def _levels(out):
+    return {f.code: f.level for f in out}
+
+
+def test_regime_off_sleeve_is_informational_not_an_error():
+    out = verify.check_liveness("full", _flat_book(_flat_sleeve("regime-off")),
+                                "equity", FLAT_NOW)
+    lv = _levels(out)
+    assert lv.get("flat-by-design") == verify.INFO
+    assert "never-traded" not in lv
+
+
+def test_no_eligible_names_is_also_by_design():
+    out = verify.check_liveness("full", _flat_book(_flat_sleeve("no-eligible-names")),
+                                "equity", FLAT_NOW)
+    lv = _levels(out)
+    assert lv.get("flat-by-design") == verify.INFO
+    assert "never-traded" not in lv
+
+
+def test_data_quality_flat_is_still_an_error():
+    """Every candidate frozen as untrustworthy means the FEED is broken —
+    the one flat reason that must keep waking somebody up."""
+    out = verify.check_liveness("full", _flat_book(_flat_sleeve("data-quality")),
+                                "equity", FLAT_NOW)
+    assert _levels(out).get("never-traded") == verify.ERROR
+
+
+def test_evaluated_but_unexplained_flat_warns_rather_than_errors():
+    """Books opened before `last_flat_reason` existed carry no reason. A
+    last_rebalance_date still proves the machinery RAN and chose cash, so this
+    is a WARN, and self-heals to INFO at the next rebalance."""
+    out = verify.check_liveness("full", _flat_book(_flat_sleeve(None)),
+                                "equity", FLAT_NOW)
+    assert _levels(out).get("never-traded") == verify.WARN
+
+
+def test_a_sleeve_that_was_never_evaluated_is_an_error():
+    """No last_rebalance_date = the sleeve has never been through a rebalance
+    at all. That is broken plumbing, not a market judgement."""
+    out = verify.check_liveness(
+        "full", _flat_book(_flat_sleeve(None, evaluated=False)), "equity", FLAT_NOW)
+    assert _levels(out).get("never-traded") == verify.ERROR

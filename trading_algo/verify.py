@@ -42,7 +42,7 @@ import json
 import os
 import statistics
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import notifications
 
@@ -55,6 +55,12 @@ _RANK = {ERROR: 0, WARN: 1, INFO: 2}
 IDLE_DAYS = 45
 # A book whose newest bar is older than this has a dead feed or a dead scheduler.
 STALE_BOOK_DAYS = 5
+# Realism findings older than this are ledger HISTORY, not a live defect. The
+# audit re-derives each book from its whole trade ledger, so without ageing a
+# bug fixed in July is re-reported as a fresh ERROR every run for the life of
+# the book — which is precisely how an alert channel gets muted and why
+# `--strict` could never be armed. Aged findings are kept, at INFO.
+HISTORICAL_CUTOFF_DAYS = 30
 # Positions closed inside this fraction of their own signal horizon are "cut
 # short" — the signal that opened them has not had a chance to resolve.
 HORIZON_FRACTION = 0.25
@@ -209,7 +215,9 @@ def reconcile_fx(account: str, state: dict) -> list[Finding]:
 # ---------------------------------------------------------------------------
 # REALISM — would a real broker have accepted this?
 # ---------------------------------------------------------------------------
-def check_market_hours(account: str, state: dict, kind: str) -> list[Finding]:
+def check_market_hours(account: str, state: dict, kind: str,
+                       today: datetime | None = None,
+                       cutoff_days: int | None = None) -> list[Finding]:
     """Flag trades stamped on a bar when the market for that instrument was shut.
 
     The boundaries live in `forex.sessions` — the SAME module `fx_book` gates on
@@ -219,10 +227,19 @@ def check_market_hours(account: str, state: dict, kind: str) -> list[Finding]:
     UTC; cash equities are shut all weekend; crypto genuinely is 24/7 and is
     exempt. A trade stamped outside its own session filled against a price that no
     venue was quoting.
+
+    Ageing is OPT-IN: with `today` and `cutoff_days` supplied (as `verify_book`
+    does), offenders older than the cutoff are reported separately at INFO
+    instead of ERROR. Called without a clock this stays a pure detector, which
+    is what the session-gate parity tests assert against.
     """
     from .forex import sessions
 
+    cutoff = (today - timedelta(days=cutoff_days)
+              if (today is not None and cutoff_days) else None)
+
     offenders: dict[str, int] = {}
+    historical: dict[str, int] = {}
     for t in state.get("trades") or []:
         symbol = t.get("pair") or t.get("ticker") or "?"
         try:
@@ -234,17 +251,29 @@ def check_market_hours(account: str, state: dict, kind: str) -> list[Finding]:
         # stamp: a daily key carries no time and names a whole trading day.
         if not sessions.bar_is_tradable(symbol, ts, kind,
                                         sessions.bar_interval(stamp)):
-            offenders[symbol] = offenders.get(symbol, 0) + 1
+            bucket = historical if (cutoff is not None and ts < cutoff) else offenders
+            bucket[symbol] = bucket.get(symbol, 0) + 1
 
-    if not offenders:
-        return []
-    total = sum(offenders.values())
-    return [Finding(
-        ERROR, account, "closed-market-trade",
-        f"{total} trades executed while the market for that instrument was "
-        f"closed (weekend/after the FX close) across {len(offenders)} symbols — "
-        "these filled against a forward-filled price no venue was quoting",
-        {"by_symbol": dict(sorted(offenders.items(), key=lambda x: -x[1]))})]
+    found: list[Finding] = []
+    if offenders:
+        total = sum(offenders.values())
+        window = f" in the last {cutoff_days} days" if cutoff is not None else ""
+        found.append(Finding(
+            ERROR, account, "closed-market-trade",
+            f"{total} trades{window} executed while the market for that "
+            f"instrument was closed (weekend/after the FX close) across "
+            f"{len(offenders)} symbols — these filled against a forward-filled "
+            "price no venue was quoting",
+            {"by_symbol": dict(sorted(offenders.items(), key=lambda x: -x[1]))}))
+    if historical:
+        total = sum(historical.values())
+        found.append(Finding(
+            INFO, account, "closed-market-trade-historical",
+            f"{total} closed-market fills older than {cutoff_days} days across "
+            f"{len(historical)} symbols — already-fixed history retained in the "
+            "ledger, not a live defect",
+            {"by_symbol": dict(sorted(historical.items(), key=lambda x: -x[1]))}))
+    return found
 
 
 def check_dead_price(account: str, state: dict) -> list[Finding]:
@@ -296,6 +325,73 @@ def check_costs_charged(account: str, state: dict) -> list[Finding]:
                     {"example": free[0]})]
 
 
+# How to read a funded sleeve that has never traded. The vocabulary comes from
+# `paper_trade._empty_target_reason`:
+#   regime-off        the index is below its trend MA — de-risking AS DESIGNED
+#   no-eligible-names regime on, but nothing cleared the momentum/trend gate
+#   data-quality      every candidate was frozen as untrustworthy — a BROKEN FEED
+#   insufficient-names a long/short book could not form both legs
+# Only the feed failure is an emergency; the rest are the strategy declining to
+# buy, which is the whole point of having filters.
+_BY_DESIGN_FLAT = {"regime-off", "no-eligible-names"}
+_BROKEN_FLAT = {"data-quality"}
+
+
+def _flat_reason(sleeve: dict) -> str | None:
+    """Why this sleeve last came back flat, or None if nothing recorded it.
+
+    Prefers the persisted `last_flat_reason`. Falls back to the status string,
+    which carries the reason on a REBALANCE day (`cash:regime-off`) before the
+    next day's run overwrites it with the generic `cash:idle`.
+    """
+    reason = sleeve.get("last_flat_reason")
+    if reason:
+        return str(reason)
+    status = str((sleeve.get("last_status") or {}).get("status") or "")
+    if status.startswith("cash:"):
+        tail = status.split(":", 1)[1]
+        if tail != "idle":
+            return tail
+    return None
+
+
+def _never_traded_finding(account: str, key: str, sleeve: dict,
+                          funded: float) -> Finding:
+    """Grade a funded-but-never-traded sleeve on the evidence in its own state.
+
+    `never-traded` fired as an ERROR on the live ASX sleeve every day for 57
+    days while ^AXJO sat below its 200-day MA and the regime filter did exactly
+    what it is built to do. An alert that cannot tell "chose cash" from "is
+    broken" trains its reader to ignore it.
+    """
+    reason = _flat_reason(sleeve)
+    evaluated = sleeve.get("last_rebalance_date")
+    what = (f"sleeve {key} is funded ({funded:.0%} of the book, "
+            f"{sleeve.get('cash', 0):,.0f} {sleeve.get('currency')}) and has "
+            "never executed a single trade")
+    if reason in _BY_DESIGN_FLAT:
+        return Finding(
+            INFO, account, "flat-by-design",
+            f"{what} — last evaluated {evaluated} and came back flat "
+            f"({reason}). Holding cash is the designed behaviour here, not a "
+            "fault; the capital is idle by choice")
+    if reason in _BROKEN_FLAT:
+        return Finding(
+            ERROR, account, "never-traded",
+            f"{what}: every candidate was frozen by the data-quality gate, so "
+            "this sleeve is parked on a feed that cannot be trusted")
+    if not evaluated:
+        return Finding(
+            ERROR, account, "never-traded",
+            f"{what}, and has never been through a rebalance at all — the "
+            "sleeve is not being evaluated, which is broken plumbing")
+    return Finding(
+        WARN, account, "never-traded",
+        f"{what}. It was evaluated {evaluated} and chose cash"
+        f"{f' ({reason})' if reason else ''}, so the machinery is running — but "
+        "no reason was recorded, so this cannot be confirmed as by design")
+
+
 # ---------------------------------------------------------------------------
 # LIVENESS — is anything silently doing nothing?
 # ---------------------------------------------------------------------------
@@ -336,11 +432,7 @@ def check_liveness(account: str, state: dict, kind: str,
         traded = any(t.get("region") == key for t in state.get("trades") or [])
         funded = (state.get("allocations") or {}).get(key)
         if funded and not traded:
-            found.append(Finding(
-                ERROR, account, "never-traded",
-                f"sleeve {key} is funded ({funded:.0%} of the book, "
-                f"{sleeve.get('cash', 0):,.0f} {sleeve.get('currency')}) but has "
-                "never executed a single trade since the book opened"))
+            found.append(_never_traded_finding(account, key, sleeve, funded))
 
         # Flat *and* already stamped for this month: `_should_rebalance` returns
         # False until the calendar rolls over, so this sleeve cannot re-enter
@@ -507,7 +599,8 @@ def verify_book(kind: str, account: str, state: dict,
         return [Finding(ERROR, account, "unreadable-state",
                         f"state file could not be parsed: {state['_unreadable']}")]
     found: list[Finding] = []
-    found += check_market_hours(account, state, kind)
+    found += check_market_hours(account, state, kind, today,
+                                HISTORICAL_CUTOFF_DAYS)
     found += check_liveness(account, state, kind, today)
     if kind == "equity":
         found += reconcile_equity(account, state)

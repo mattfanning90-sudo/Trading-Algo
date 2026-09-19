@@ -46,6 +46,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FX_STATE_DIR: ${{ github.workspace }}/state
+      # Risk alerts (drawdown breaker, crowding, audit ERRORs) leave the box
+      # through this. Unset -> the webhook channel silently no-ops.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      # F14 secondary price source; unset -> Yahoo only (silent no-op).
+      TIINGO_API_SECRET: ${{ secrets.TIINGO_API_SECRET }}
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}
@@ -81,7 +86,28 @@ jobs:
             echo "::endgroup::"
             ML_FLAG="--ml"
           fi
-          python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
+          # --champions lets the live cycle consume genomes the monthly breeder
+          # promoted through the DSR/PBO gate. Inert while every roster is empty
+          # (champions_agents then returns exactly the core five agents), so this
+          # changes nothing until a genome actually earns its place.
+          python -m trading_algo.forex.engine --once --champions $ML_FLAG $SYNTH
+
+      - name: Refresh the FX BACKTEST tab cache
+        # The writer has existed since the M15 fix and NOTHING ever invoked it, so
+        # the tab has shown "⚠ ILLUSTRATIVE NUMBERS … THE FIGURES ARE PLACEHOLDERS"
+        # since it shipped. `--account` is what writes state/fx_backtest_<acct>.json.
+        #
+        # Scheduled runs only. Those are always real data, so a synthetic
+        # workflow_dispatch can never replace a real cache with a synthetic one —
+        # the payload would be honestly flagged (invariant #5 holds either way),
+        # but it would still be a downgrade of what the dashboard shows.
+        # ~21s per book measured, so ~85s for all four.
+        if: github.event_name == 'schedule'
+        run: |
+          for acct in matt partner multiasset daytrader; do
+            python -m trading_algo.forex.run_backtest --account "$acct" \
+              || echo "::warning::BACKTEST cache refresh failed for $acct"
+          done
 
       - name: Audit live books (end-to-end verification)
         # Reads the state this run just wrote and re-derives it from the trade
@@ -90,8 +116,15 @@ jobs:
         # trading run must not be blocked by its own audit — but the findings
         # land in the step summary so a silent breakage stops being silent.
         if: always()
+        shell: bash
         run: |
-          python -m trading_algo.verify | tee /tmp/audit.txt
+          # Report-only ON PURPOSE. This step runs BEFORE the state commit and
+          # the Pages deploy, so it must never fail: a failing step here would
+          # skip them and cost the run the trading day it just completed. A bad
+          # audit must report loudly, never discard work. The blocking gate is
+          # the LAST step of this job, after the state is safely committed.
+          set -o pipefail
+          python -m trading_algo.verify 2>&1 | tee /tmp/audit.txt || true
           {
             echo "## Live-book audit"
             echo '```'
@@ -175,3 +208,36 @@ jobs:
         id: deploy_retry
         if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5
+
+  audit_gate:
+    # The BLOCKING half of the live-book audit, in its own job so that it runs
+    # AFTER both the state commit (run) and the Pages publish (deploy).
+    #
+    # It cannot live inside either of those: `deploy` has `needs: run`, so a red
+    # step in `run` skips the publish and strands the live site behind the
+    # committed state, and a red step before the commit costs the run the
+    # trading day it just completed. A bad audit must report loudly and cost
+    # nothing operationally, so it is a terminal job that only sets the verdict.
+    #
+    # --no-alert: the reporting step in `run` already notified. This is the gate,
+    # not a second alarm.
+    needs: [run, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The branch tip, NOT the triggering SHA: the run job committed the
+          # state we are auditing after this workflow started.
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Audit the committed books
+        run: python -m trading_algo.verify --strict --no-alert

@@ -267,8 +267,11 @@ them. The full literature review and the reasoning behind every choice is in
   finite-difference gradient check.
 * **`NeuralAgent`** — the Sharpe-loss net as a 6th ecosystem agent (opt in with
   `engine --ml`). Frozen at inference, so live prediction has no lookahead.
-* **`MetaLabeler`** — a secondary classifier (López de Prado meta-labeling) that
-  sizes the ensemble's side via triple-barrier labels and bet-sizing.
+* **Meta-labeling** (López de Prado) — triple-barrier labels + bet-sizing,
+  evaluated walk-forward out-of-sample by `ml_backtest.meta_oos_signal`. The
+  unused `MetaLabeler` live-sizing wrapper was removed 2026-09-19: it had zero
+  call sites while `train.py` wrote `models/meta_label.json` every paper run for
+  a file nothing read. The research path is intact; only the dead wrapper went.
 * **Hedge ensemble** — agents are blended by multiplicative weights with a
   fixed-share floor (provable regret, low overfitting), the new default.
 * **`walkforward.py`** — purged + embargoed expanding walk-forward, so every ML
@@ -455,7 +458,7 @@ watch it for weeks first.** Safety model + env-var keys: `docs/CRYPTO_HF.md`.
 | `features.py` | causal feature engineering + triple-barrier labels |
 | `walkforward.py` | purged + embargoed walk-forward prediction |
 | `validation.py` | PSR / Deflated Sharpe / PBO / bet sizing |
-| `ml_agent.py` | `NeuralAgent`, `MetaLabeler`, `ModelBundle`, pooled dataset |
+| `ml_agent.py` | `NeuralAgent`, `ModelBundle`, pooled dataset |
 | `ml_backtest.py` | honest out-of-sample strategy comparison |
 | `train.py` | train + persist models, write the walk-forward report |
 | `run_backtest.py` / `paper.py` | CLIs |

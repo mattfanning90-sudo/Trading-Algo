@@ -53,6 +53,31 @@ STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(
 _DUST = 1e-4   # drop near-zero weights
 
 
+def guard_synthetic_state_dir(synthetic: bool) -> None:
+    """Refuse to write synthetic results over the live paper books.
+
+    `--synthetic` is a PIPELINE test (invariant #5), but nothing stopped it
+    writing to the default state directory: running
+    `forex.engine --once --synthetic` locally overwrote all four live books with
+    synthetic results, and only `git checkout -- state/` recovered them.
+    `--init` has refused to destroy a live book since C2; this is the same
+    protection for the synthetic path.
+
+    An explicitly-set FX_STATE_DIR is treated as the operator meaning it — that
+    is how CI runs a synthetic dispatch, and how a local scratch run should be
+    done. Only the implicit default is refused.
+    """
+    if not synthetic or os.environ.get("FX_STATE_DIR"):
+        return
+    raise SystemExit(
+        "refusing to write synthetic results into the live state directory:\n"
+        f"    {os.path.abspath(STATE_DIR)}\n"
+        "  --synthetic is a pipeline test (invariant #5) and must not overwrite\n"
+        "  live paper books. Re-run with an explicit scratch directory, e.g.\n"
+        "    FX_STATE_DIR=/tmp/fx-scratch python -m trading_algo.forex.engine "
+        "--once --synthetic")
+
+
 # SQLite is the source of truth (atomic, durable, lock-safe); the per-account
 # JSON file is dual-written as a fallback so dashboards / CI globs keep working.
 # See trading_algo/storage.py and BACKLOG.md.
@@ -535,6 +560,17 @@ def _run_once_locked(account: str, synthetic: bool = False,
                 c = abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
                 carry_frac += c
                 carry_by_pair[s] = carry_by_pair.get(s, 0.0) + c
+        # Financing is NEGATIVE carry: margin interest on the long debit plus the
+        # stock-loan fee on shorts. Equity/bond legs only — FX swap points above
+        # already priced their own financing, so billing them here would charge
+        # the same cost twice. Folding it into carry keeps the book identity
+        # `equity - start == price_pnl + carry - cost` intact.
+        fin_frac, fin_by_pair = marks.financing_fraction(
+            positions, get_pair, margin_rate=cfg.MARGIN_RATE_ANNUAL,
+            borrow_rate=cfg.SHORT_BORROW_ANNUAL, elapsed_days=elapsed)
+        carry_frac -= fin_frac
+        for s, c in fin_by_pair.items():
+            carry_by_pair[s] = carry_by_pair.get(s, 0.0) - c
 
     equity = state["equity"] * (1.0 + pnl_frac + carry_frac)
     marked = equity              # equity after the mark, BEFORE today's spread
@@ -567,6 +603,15 @@ def _run_once_locked(account: str, synthetic: bool = False,
     ages = {k: int(v) for k, v in (state.get("bars_held") or {}).items()}
     new_positions = _apply_band(positions, target, p, frozen=shut,
                                 bars_held=ages, force_flat=halted)
+    # An order below the venue's minimum size cannot be placed (IBKR's IDEALPRO
+    # needs 20,000 units), so the leg keeps its prior position rather than
+    # booking a fill that no venue would accept. The BACKTEST applies the same
+    # rule at the same point — if only one side did, paper and backtest would
+    # hold different books from the same signal.
+    for _s in list(new_positions):
+        _d = new_positions.get(_s, 0.0) - positions.get(_s, 0.0)
+        if _d and not marks.is_executable(_d, get_pair(_s), marked):
+            new_positions[_s] = positions.get(_s, 0.0)
     state["bars_held"] = position_policy.advance_ages(
         positions, new_positions, ages, dust=_DUST)
 
@@ -579,7 +624,10 @@ def _run_once_locked(account: str, synthetic: bool = False,
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        c = marks.cost_fraction(delta, get_pair(s), price)
+        # Spread + IBKR commission. The per-ORDER minimum is why commission is
+        # charged per leg here rather than as a bps rate on total turnover: on a
+        # small book the floor, not the rate, is the dominant term.
+        c = marks.total_cost_fraction(delta, get_pair(s), price, marked)
         cost_frac += c
         cost_by_pair[s] = cost_by_pair.get(s, 0.0) + c
         why = rationale.get(s, {})
@@ -595,6 +643,13 @@ def _run_once_locked(account: str, synthetic: bool = False,
                        "target_weight": round(new_positions.get(s, 0.0), 4),
                        "price": round(float(price), 5) if price == price else None,
                        "aud_per_quote": round(float(apq), 6) if apq else None,
+                       # The equity the charge was computed against. Stamped for
+                       # the same reason as aud_per_quote: commission has a
+                       # per-ORDER floor and a per-SHARE rate, so it is NOT
+                       # proportional to equity — the blotter cannot reconstruct
+                       # it from a different equity base. Without this the book
+                       # and the blotter disagree by the size of that day's cost.
+                       "equity_at_trade": round(float(marked), 4),
                        "why": why.get("text"),
                        "regime": why.get("regime"),
                        "agents": why.get("agents"),
@@ -761,6 +816,7 @@ def main(argv: list[str] | None = None) -> None:
                          f"named preset ({', '.join(pairs.UNIVERSES)}) or a comma-"
                          "separated symbol list. The book is locked to it.")
     args = ap.parse_args(argv)
+    guard_synthetic_state_dir(getattr(args, "synthetic", False))
 
     if args.list:
         print("Accounts:", ", ".join(list_accounts()) or "(none)")

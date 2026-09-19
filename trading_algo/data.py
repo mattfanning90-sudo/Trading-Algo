@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from typing import Callable
 
 import numpy as np
@@ -18,6 +19,29 @@ from . import config as cfg
 from .regions import Region
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+
+# How long a cached price file stays usable. This applies ONLY to an open-ended
+# request (`end is None`, i.e. "prices up to now"), which goes stale every
+# trading day. A request with an explicit `end` is a closed historical window and
+# its cache is valid forever — expiring that would re-download the whole universe
+# on every backtest for nothing.
+#
+# There was NO freshness check at all before this: a cache file was served for
+# the life of the file. Local caches written 2026-07-24 were still being served
+# on 2026-09-19, so every local backtest ran on 8-week-old prices while
+# `yfinance` was returning current data on demand. CI never saw it, because the
+# scheduled workflows cache pip but not `trading_algo/.cache`.
+#
+# 20h < one calendar day, so a daily scheduled run always refetches, while a
+# burst of local runs in one session still shares a single download.
+CACHE_TTL_HOURS = 20
+
+# A LIVE panel whose newest bar is older than this has a dead feed or a dead
+# cache, not a quiet market. Long weekends and public holidays are why this is
+# not 1 or 2; it matches verify.STALE_BOOK_DAYS so the two agree on what "stale"
+# means. Only checked for open-ended requests — a closed backtest window is old
+# on purpose.
+MAX_PANEL_STALENESS_DAYS = 5
 
 # --- Market-data fallback registry (backlog F14) ---------------------------
 # A secondary source is tried when the primary (Yahoo) returns nothing. Sources
@@ -32,12 +56,28 @@ def register_fallback(name: str, loader) -> None:
     _FALLBACK_LOADERS[name] = loader
 
 
+# Adapters that ship with the repo and self-register on import. Naming one in
+# config.DATA_FALLBACK_SOURCE is enough — no caller should have to remember to
+# import the module just to populate the registry.
+_BUILTIN_FALLBACKS = {"tiingo": ("trading_algo.tiingo_data", "load")}
+
+
 def _try_fallback(tickers: list[str], start: str, end: str | None):
     """Return a fallback price frame, or None if no usable fallback is configured."""
     name = getattr(cfg, "DATA_FALLBACK_SOURCE", None)
     if not name:
         return None
     loader = _FALLBACK_LOADERS.get(name)
+    if loader is None and name in _BUILTIN_FALLBACKS:
+        # Resolve the attribute explicitly rather than relying on the module's
+        # import-time self-registration: an already-imported module would not
+        # re-run it, so a registry cleared at runtime could never recover.
+        import importlib
+        mod_name, attr = _BUILTIN_FALLBACKS[name]
+        try:
+            loader = getattr(importlib.import_module(mod_name), attr)
+        except Exception:
+            return None
     if loader is None:
         return None
     try:
@@ -54,10 +94,21 @@ def _cache_path(cache_key: str) -> str:
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
 
 
+def _cache_is_fresh(cache_file: str, end: str | None) -> bool:
+    """Is this cache file still usable?
+
+    A closed window (`end` given) is immutable history and never expires. An
+    open-ended request means "up to now", so its cache is only good for
+    `CACHE_TTL_HOURS`.
+    """
+    if end is not None:
+        return True
+    age_hours = (time.time() - os.path.getmtime(cache_file)) / 3600.0
+    return age_hours < CACHE_TTL_HOURS
+
+
 def _download_primary(tickers: list[str], start: str, end: str | None):
     """Primary price source (Yahoo via yfinance). Raises on repeated failure."""
-    import time
-
     import yfinance as yf  # imported lazily so the package works offline
 
     backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
@@ -80,7 +131,7 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
 
-    if use_cache and os.path.exists(cache_file):
+    if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
         # Reuse the cache for this key even if a few tickers persistently fail to
         # download (else every call re-fetches the whole universe). Return the
         # requested tickers that are present.
@@ -150,7 +201,61 @@ def load_region(region: Region, start: str, end: str | None = None,
     # was actually wrong. A day with no tradeable price is not a session.
     # The index keeps its own calendar; callers reindex it onto `prices`.
     prices = prices.dropna(how="all")
+    _warn_if_stale(region, prices, end)
     return prices, index_px
+
+
+def capacity_volume(prices: pd.DataFrame, start: str, end: str | None, *,
+                    synthetic: bool) -> pd.DataFrame | None:
+    """Share volume for the capacity features, or None when neither is enabled.
+
+    The F15 pre-trade ADV cap and the F6 market-impact cost both need volume,
+    and both are a perfect no-op without it. Volume is a SECOND full download,
+    so this returns None unless one of them is actually switched on — the
+    default path must not pay for data it will not use.
+
+    Both features were previously double-gated: the config values were None AND
+    no caller ever passed `volume=` to `backtest.run_backtest`, so
+    `data.load_volume` had zero callers and setting the config alone changed
+    nothing at all. This helper is the missing half.
+    """
+    from . import config as cfg
+    if not (cfg.ADV_CAP_PCT or cfg.IMPACT_COEF):
+        return None
+    tickers = list(prices.columns)
+    if synthetic:
+        return synthetic_volume(tickers, prices.index)
+    return load_volume(tickers, start, end)
+
+
+def _warn_if_stale(region: Region, prices: pd.DataFrame, end: str | None) -> None:
+    """Alert when a whole region's panel has stopped advancing.
+
+    `data_quality` judges names against EACH OTHER, so a region whose every
+    name stops printing on the same day looks perfectly healthy to it: the panel
+    is internally consistent, just frozen. The sleeve then de-risks to cash on a
+    price no venue is quoting and sits there in silence — the live ASX sleeve
+    spent 57 days flat before anyone looked, and a stale local cache made it
+    look like a dead feed when it was not.
+
+    A warning, not an exception: three other sleeves may be perfectly healthy,
+    and halting the whole book over one region's feed would be a worse failure
+    than the one being reported. `paper_trade` already has its own
+    `cash:stale-data` path for the per-name case.
+    """
+    if end is not None or not len(prices.index):
+        return
+    age = (pd.Timestamp.now().normalize() - prices.index[-1]).days
+    if age <= MAX_PANEL_STALENESS_DAYS:
+        return
+    from . import notifications
+    notifications.notify(
+        "stale_panel",
+        f"{region.key} price panel ends {prices.index[-1].date()} ({age} days "
+        "old) — the feed or the cache has stopped advancing; this sleeve will "
+        "de-risk to cash on a price nobody is quoting",
+        level="alert", region=region.key,
+        last_bar=str(prices.index[-1].date()), age_days=int(age))
 
 
 # ---------------------------------------------------------------------------

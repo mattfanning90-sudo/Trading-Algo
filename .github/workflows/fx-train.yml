@@ -33,11 +33,6 @@ on:
   # Runs the real-data training on Actions whenever the FX code changes on the
   # development branch (workflow_dispatch only works from the default branch).
   # Inert on main after merge, where dispatch + schedule take over.
-  push:
-    branches: ["claude/practical-cray-luepjo"]
-    paths:
-      - "trading_algo/forex/**"
-      - ".github/workflows/fx-train.yml"
 
 permissions:
   contents: read

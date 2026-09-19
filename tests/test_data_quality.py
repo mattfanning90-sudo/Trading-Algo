@@ -216,3 +216,65 @@ def test_near_frozen_feed_is_flagged_despite_a_gap(ftse):
 
     assert "FROZEN" in report.excluded
     assert "near-frozen" in report.reasons["FROZEN"]
+
+
+# ---------------------------------------------------------------------------
+# WHOLE-PANEL staleness — the failure the per-name gate cannot see
+# ---------------------------------------------------------------------------
+# data_quality judges names against each other, so if EVERY name in a region
+# stops printing on the same day nothing looks anomalous: the panel is
+# internally consistent, just frozen. The sleeve then de-risks to cash on a
+# price nobody is quoting, forever, in silence. The live ASX sleeve spent 57
+# days in exactly that state before anyone looked.
+def _panel_for(region, last_day, periods=300):
+    idx = pd.bdate_range(end=last_day, periods=periods)
+    cols = [*region.universe, region.index_ticker]
+    return pd.DataFrame({c: 100.0 for c in cols}, index=idx)
+
+
+def _capture_alerts(monkeypatch):
+    from trading_algo import notifications
+    got = []
+    notifications.register_channel("_cap", got.append)
+    monkeypatch.setattr(cfg, "NOTIFY_CHANNEL", "_cap")
+    return got
+
+
+def test_a_stale_region_panel_raises_an_alert(monkeypatch):
+    from trading_algo import data
+    region = get_region("ASX")
+    got = _capture_alerts(monkeypatch)
+    stale = pd.Timestamp.now().normalize() - pd.Timedelta(days=60)
+    monkeypatch.setattr(data, "load_prices",
+                        lambda *a, **k: _panel_for(region, stale))
+    data.load_region(region, "2024-01-01")
+    events = [p["event"] for p in got]
+    assert "stale_panel" in events
+    payload = next(p for p in got if p["event"] == "stale_panel")
+    assert payload["region"] == "ASX"
+    assert payload["age_days"] >= 60
+    assert payload["level"] == "alert"
+
+
+def test_a_current_region_panel_is_silent(monkeypatch):
+    from trading_algo import data
+    region = get_region("ASX")
+    got = _capture_alerts(monkeypatch)
+    fresh = pd.Timestamp.now().normalize()
+    monkeypatch.setattr(data, "load_prices",
+                        lambda *a, **k: _panel_for(region, fresh))
+    data.load_region(region, "2024-01-01")
+    assert [p for p in got if p["event"] == "stale_panel"] == []
+
+
+def test_a_closed_backtest_window_is_not_judged_stale(monkeypatch):
+    """`end` given = a deliberate historical window. Of course it is old; that
+    is the request, not a fault."""
+    from trading_algo import data
+    region = get_region("ASX")
+    got = _capture_alerts(monkeypatch)
+    old = pd.Timestamp("2020-06-30")
+    monkeypatch.setattr(data, "load_prices",
+                        lambda *a, **k: _panel_for(region, old))
+    data.load_region(region, "2019-01-01", "2020-06-30")
+    assert [p for p in got if p["event"] == "stale_panel"] == []

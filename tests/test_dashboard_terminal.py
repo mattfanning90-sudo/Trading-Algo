@@ -178,9 +178,16 @@ def test_meta_contract(books):
     m = meta.build_meta()
     assert m["params"]["top_n"] >= 1
     assert m["risk"]["max_drawdown_stop"] == pytest.approx(0.25)
-    assert len(m["regions"]) == 4        # ASX/US/FTSE funded + TSX scaffolded
+    # Derive the expectation from config rather than hard-coding a moment: TSX
+    # was the scaffolded-but-unfunded example until it cleared the gate on
+    # 2026-09-19. What must ALWAYS hold is that the METHOD tab's `funded` flag
+    # agrees with ALLOCATIONS — that flag is what tags a sleeve UNFUNDED on
+    # screen, so a disagreement would mislabel where the money actually is.
+    from trading_algo import config as _cfg
+    from trading_algo.regions import all_region_keys
+    assert len(m["regions"]) == len(all_region_keys())
     funded = {r["key"]: r["funded"] for r in m["regions"]}
-    assert funded == {"ASX": True, "US": True, "FTSE": True, "TSX": False}
+    assert funded == {k: (k in _cfg.ALLOCATIONS) for k in funded}
     assert "matt" in m["fx_profiles"]
     assert {a["key"] for a in m["accounts"]} == {"FULL", "MATT"}
 

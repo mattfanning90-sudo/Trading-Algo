@@ -212,6 +212,32 @@ def _is_stale(region, last_bar, now: datetime | None = None) -> bool:
 # ---------------------------------------------------------------------------
 # Accounting
 # ---------------------------------------------------------------------------
+def warn_if_capacity_unhonoured() -> None:
+    """Refuse to let a capacity feature diverge backtest from paper in silence.
+
+    The F15 ADV cap and the F6 impact cost are applied in `backtest.py`, which
+    builds a per-name `capacity` series and hands it to `strategy.targets_at`.
+    Paper trading calls `compute_targets` WITHOUT a capacity argument, so it
+    does not honour either. With both off (the default) that is a perfect no-op
+    and the two paths agree exactly.
+
+    Switch one on, though, and the same signal would be sized one way in the
+    backtest and another in the live book — which is the spirit of invariant #3
+    broken quietly. Wiring the cap into paper is a deliberate change to how a
+    live book sizes, so it is a decision, not a default. Until it is made, say
+    so out loud on every run that could be affected.
+    """
+    from . import config as cfg
+    on = [name for name, val in (("ADV_CAP_PCT", cfg.ADV_CAP_PCT),
+                                 ("IMPACT_COEF", cfg.IMPACT_COEF)) if val]
+    if not on:
+        return
+    print(f"  ⚠ {' and '.join(on)} set, but paper trading does not apply "
+          "capacity limits — they bind in the BACKTEST path only, so backtest "
+          "and paper will size differently from the same signal. See "
+          "config.ADV_CAP_PCT.")
+
+
 def _empty_target_reason(prices: pd.DataFrame, index_px: pd.Series,
                          p, eligible: set[str] | None) -> str:
     """Diagnose WHY `compute_targets` returned an all-cash book, so an idle
@@ -420,6 +446,98 @@ def init_account(account: str, capital: float, synthetic: bool,
 # ---------------------------------------------------------------------------
 # Rebalancing one sleeve
 # ---------------------------------------------------------------------------
+def _fit_leg(weights: dict, leg_gross: float, px, equity: float,
+             min_value: float) -> dict:
+    """The largest top-k subset of one leg that can actually be held.
+
+    Names are ranked by CONVICTION (|weight|) and dropped smallest-first, never
+    by price: dropping the expensive names would be a price-based selection the
+    strategy never asked for, and would bias the book toward cheap stocks.
+    Each surviving name is re-allocated its share of the leg's original gross,
+    so shrinking the count makes the remaining positions bigger rather than
+    leaving the leg under-deployed.
+    """
+    ordered = sorted(weights, key=lambda t: -abs(weights[t]))
+    for k in range(len(ordered), 0, -1):
+        picks = ordered[:k]
+        total = sum(abs(weights[t]) for t in picks)
+        if total <= 0:
+            continue
+        alloc = {t: leg_gross * abs(weights[t]) / total for t in picks}
+        ok = True
+        for t in picks:
+            price = px.get(t)
+            dollars = alloc[t] * equity
+            if (not price or price != price or price <= 0
+                    or int(dollars / price) < 1 or dollars < min_value):
+                ok = False
+                break
+        if ok:
+            return alloc
+    return {}
+
+
+def fit_long_short_to_lots(targets, px, equity: float, *, min_value: float,
+                           max_net: float, max_passes: int = 6):
+    """Shrink a long/short book until it can be held in whole shares — hedged.
+
+    `select_long_short` hedges in WEIGHT space. Whole-share rounding then
+    truncates toward zero, and on a small sleeve an expensive name buys NOTHING
+    at its target weight: the live `experimental` book could not afford three of
+    its six longs, breached the neutrality cap, and so held 100% cash
+    permanently. Refusing forever is a worse outcome than holding a smaller,
+    genuinely hedged book.
+
+    So both legs are concentrated TOGETHER — micro mode already does this for a
+    long-only book but deliberately skipped long/short, because concentrating
+    one leg alone would break the hedge. Each leg keeps its highest-conviction
+    names; if the rounded legs are still too far apart, the larger one is scaled
+    toward the smaller and refitted.
+
+    Returns adjusted weights, or an EMPTY series if either leg cannot be formed
+    at all — concentration is not a licence to run unhedged.
+
+    TRADE-OFF, deliberately accepted: fewer names is a lumpier, less diversified
+    book with more idiosyncratic risk. That is the price of trading at this size,
+    and it is preferable to a funded book that never deploys.
+    """
+    import pandas as _pd
+
+    longs = {t: float(w) for t, w in targets.items() if w > 0}
+    shorts = {t: float(w) for t, w in targets.items() if w < 0}
+    if not longs or not shorts:
+        return _pd.Series(dtype=float)
+
+    long_gross = sum(longs.values())
+    short_gross = -sum(shorts.values())
+
+    def notional(alloc, sign):
+        out = 0.0
+        for t, w in alloc.items():
+            price = px.get(t)
+            if price and price == price and price > 0:
+                out += int(w * equity / price) * price
+        return out
+
+    for _ in range(max_passes):
+        la = _fit_leg(longs, long_gross, px, equity, min_value)
+        sa = _fit_leg(shorts, short_gross, px, equity, min_value)
+        if not la or not sa:
+            return _pd.Series(dtype=float)
+        ln, sn = notional(la, 1), notional(sa, -1)
+        gross = ln + sn
+        if gross <= 0:
+            return _pd.Series(dtype=float)
+        if abs(ln - sn) / gross <= max_net:
+            return _pd.Series({**la, **{t: -w for t, w in sa.items()}})
+        # Still lop-sided: pull the larger leg toward the smaller and refit.
+        if ln > sn:
+            long_gross *= max(sn / ln, 0.5)
+        else:
+            short_gross *= max(ln / sn, 0.5)
+    return _pd.Series(dtype=float)
+
+
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
                      today: str, trade_log: list,
                      frozen: set[str] | None = None) -> None:
@@ -441,6 +559,40 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         else:
             targets = pd.Series(dtype=float)
             print("    ⚠ no affordable names — staying in cash")
+
+    # Long/short: concentrate BOTH legs so a book too small to hold every name
+    # trades a smaller HEDGED book instead of nothing at all. Micro mode above
+    # does this for a long-only book and deliberately skips long/short, because
+    # shrinking one leg alone would break the hedge — this shrinks them together.
+    # Without it, `experimental` could not afford 3 of its 6 longs, breached the
+    # neutrality cap every month and sat in 100% cash permanently.
+    if not long_only and not targets.empty and cfg.LS_MAX_NET_EXPOSURE is not None:
+        fitted = fit_long_short_to_lots(
+            targets, px, equity, min_value=region.min_trade_value,
+            max_net=cfg.LS_MAX_NET_EXPOSURE)
+        if fitted.empty:
+            # Neither concentration nor the full book can be hedged at this size.
+            # Say so: a funded book that quietly never deploys looks like a calm
+            # strategy rather than a size problem it cannot solve on its own.
+            longs = sum(w for w in targets if w > 0)
+            shorts = -sum(w for w in targets if w < 0)
+            print(f"    ⚠ long/short book cannot be hedged at this size even "
+                  f"concentrated (target long {longs:.2f} vs short {shorts:.2f} "
+                  f"of equity, {equity:,.0f} {region.currency}) — holding cash. "
+                  "The sleeve is too small to hold both legs in whole shares.")
+            notifications.notify(
+                "ls_not_neutral",
+                f"[{region.key}] market-neutral book could not be formed at "
+                f"{equity:,.0f} {region.currency} even after concentrating to "
+                "the highest-conviction names — holding cash. This repeats every "
+                "rebalance until the sleeve is funded larger or holds fewer names.",
+                level="alert", region=region.key, net_exposure=1.0,
+                equity=round(float(equity), 2))
+        elif len(fitted) < len(targets):
+            print(f"    ⚠ concentrating the long/short book "
+                  f"{len(targets)} -> {len(fitted)} names so it can be held in "
+                  "whole shares (highest-conviction names kept, hedge preserved)")
+        targets = fitted
 
     dust = min(200.0, equity * 0.05)
     desired = {}
@@ -567,6 +719,7 @@ def run_daily(account: str, synthetic: bool) -> None:
 
 
 def _run_daily_locked(account: str, synthetic: bool) -> None:
+    warn_if_capacity_unhonoured()
     state = load_state(account)
     # Carry forward the last known-good rates so a transient single-pair fetch
     # failure can't NaN the book's equity (see fx_snapshot). Merge rather than
@@ -703,8 +856,15 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                     reason = _empty_target_reason(prices, index_px, params, elig)
                     print(f"  [{k}] flat — {reason} (holding cash).")
                     status = f"cash:{reason}"
+                    # Persist WHY across the days that follow. The daily status
+                    # is overwritten with the generic 'cash:idle' on every
+                    # non-rebalance day, which erases the difference between
+                    # "the regime gate said cash" (correct, and the audit should
+                    # stay quiet) and "the feed was broken" (an emergency).
+                    sleeve["last_flat_reason"] = reason
                 else:
                     status = "rebalanced"
+                    sleeve.pop("last_flat_reason", None)
                 rebalance_sleeve(region, sleeve, targets, px_today, today,
                                  state["trades"], frozen=dq.excluded)
                 sleeve["last_rebalance_date"] = today
@@ -931,12 +1091,62 @@ def attribution_status(account: str, synthetic: bool) -> None:
               f"({c['cost']:,.2f} {c['currency']} on {c['notional']:,.0f} traded)")
 
     if rep.get("tracking_alert"):
+        _print_tracking_diagnosis(account, state)
         notifications.notify(
             "tracking_error",
             f"[{account}] live tracking error {rep['tracking_error_bps']:.0f}bps "
-            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget",
+            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget "
+            "— check the exposure gap and rebalance dates in the report before "
+            "concluding the book is mis-executing",
             level="alert", account=account,
             tracking_error_bps=rep["tracking_error_bps"])
+
+
+def _print_tracking_diagnosis(account: str, state: dict) -> None:
+    """Explain a tracking-error breach instead of just announcing it.
+
+    Measured on `full` 2026-09-19 (733bps against a 200bps budget): the mean
+    daily difference was +1.4bps, i.e. no systematic drift at all — the breach
+    is dispersion, and it has two structural sources that are NOT execution
+    error:
+
+      1. EXPOSURE GAP. Paper holds whole shares above a per-region dust floor,
+         so it lands at some fraction of the gross the strategy asked for. The
+         backtest holds the target exactly.
+      2. REBALANCE TIMING. Paper rebalances on the first run of a calendar month
+         subject to MIN_REBALANCE_GAP_DAYS; the backtest rebalances at month
+         END. For most of a month the two hold different books, so on the days
+         one turns over and the other does not, returns diverge sharply.
+
+    Printing both makes the number interpretable. A breach with a large exposure
+    gap or mismatched dates is a COMPARISON artefact; a breach with neither is
+    the execution problem the budget was written to catch.
+    """
+    from . import data, strategy
+    from .regions import get_region
+
+    print("  Tracking-error diagnosis (before blaming execution):")
+    for k, sl in (state.get("sleeves") or {}).items():
+        try:
+            region = get_region(k)
+            px, ix = data.load_region(region, cfg.START)
+            invested = sum(n * float(px[t].iloc[-1])
+                           for t, n in (sl.get("positions") or {}).items()
+                           if t in px.columns)
+            eq = invested + float(sl.get("cash", 0.0))
+            target = strategy.compute_targets(
+                px, ix, _account_params(state, region)).abs().sum()
+            held = invested / eq if eq else 0.0
+            gap = (held / target - 1.0) if target else 0.0
+            print(f"    [{k}] held gross {held:6.1%} vs target {target:6.1%}"
+                  f"  ({gap:+.0%} of target)   last rebalance "
+                  f"{sl.get('last_rebalance_date') or 'never'}")
+        except Exception as exc:                     # diagnosis must never fail the report
+            print(f"    [{k}] diagnosis unavailable: {exc}")
+    print("    NOTE: the predicted curve is the tail of a backtest started at "
+          f"{cfg.START}, so it holds a mature book; this one was funded "
+          f"{(state.get('equity_history') or [['?']])[0][0]}. Different holdings "
+          "by construction — expect dispersion that is not mis-execution.")
 
 
 def promotion_status(account: str) -> None:

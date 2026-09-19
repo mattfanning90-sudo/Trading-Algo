@@ -133,6 +133,15 @@ def promote(account: str, *, synthetic: bool, profile_name: str,
     meta = {"pbo": round(pbo, 4), "n_trials": log.n_trials,
             "promoted": [g.gid for g in new_roster],
             "dsr": {g.gid: d for g, d in passed}}
+    # The in-sample permutation test's verdict, REPORTED not enforced. It prices
+    # the search cost in by construction, so it needs no `n_trials` — the number
+    # above that three estimators disagree about by 40× (MONTE_CARLO_RESEARCH §3).
+    # Watch whether the two agree before letting either overrule the other; it
+    # must never change `passed` or `new_roster`. See permtest.py.
+    from . import permtest
+    if (report := permtest.load_report(account)) is not None:
+        meta["perm_pvalue"] = report.get("p_value")
+        meta["perm_n"] = report.get("n_permutations")
     save_roster(account, new_roster, meta)
     print(f"[{account}] gate: {len(passed)} passed DSR≥{dsr_min}, PBO={pbo:.2f} "
           f"-> roster of {len(new_roster)} (core 5 + {len(new_roster)} champions)")

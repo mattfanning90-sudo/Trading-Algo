@@ -66,9 +66,154 @@ def cost_fraction(delta_w: float, pair: Pair, price: float | None) -> float:
     return abs(delta_w) * half_spread_fraction(pair, price)
 
 
+# ---------------------------------------------------------------------------
+# Broker commission (IBKR's published schedule)
+# ---------------------------------------------------------------------------
+# The FX cost model is spread-only. Correct for FX — the dealing spread IS the
+# cost — and wrong for equities and bonds, where IBKR bills per SHARE with a
+# per-ORDER minimum. On a small book that minimum dominates everything else.
+def commission(delta_w: float, pair: Pair, price: float | None,
+               equity: float) -> float:
+    """Broker commission for ONE order, in the account currency.
+
+    Equity/bond legs use IBKR's per-share schedule with its per-order floor and
+    1%-of-notional cap; FX uses the bps-of-notional schedule, because a share
+    count is meaningless for a currency pair. A missing or non-positive price
+    charges nothing rather than raising — same guard philosophy as the spread.
+    """
+    from . import fx_config as _cfg
+
+    if not delta_w or not price or price != price or price <= 0 or equity <= 0:
+        return 0.0
+    notional = abs(delta_w) * equity
+    if notional <= 0:
+        return 0.0
+
+    if pair.asset_class == "fx":
+        return max(_cfg.IBKR_FX_MIN_ORDER, notional * _cfg.IBKR_FX_BPS / 1e4)
+
+    shares = notional / price
+    fee = max(_cfg.IBKR_EQUITY_MIN_ORDER, shares * _cfg.IBKR_EQUITY_PER_SHARE)
+    return min(fee, notional * _cfg.IBKR_EQUITY_MAX_PCT)
+
+
+def is_executable(delta_w: float, pair: Pair, equity: float) -> bool:
+    """Could this order actually be placed at the venue?
+
+    IBKR's IDEALPRO needs a USD 25k account and 20,000-unit minimum orders, so a
+    small book's ~A$900 FX leg is not a tradeable order at all. Charging it a
+    per-order fee models a fee on an order that cannot exist — and on a daily
+    rebalance that compounds a book to zero. Below the minimum the honest
+    outcome is that the trade does not happen.
+    """
+    from . import fx_config as _cfg
+
+    floor = (_cfg.VENUE_MIN_ORDER_NOTIONAL or {}).get(pair.asset_class, 0.0)
+    if floor <= 0:
+        return True
+    return abs(delta_w) * max(equity, 0.0) >= floor
+
+
+def commission_fraction(delta_w: float, pair: Pair, price: float | None,
+                        equity: float) -> float:
+    """`commission` expressed as a fraction of equity, to sit beside
+    `cost_fraction` in the book's per-bar cost term."""
+    if equity <= 0:
+        return 0.0
+    return commission(delta_w, pair, price, equity) / equity
+
+
+# ---------------------------------------------------------------------------
+# Financing: margin interest on the long debit + stock-loan fee on shorts
+# ---------------------------------------------------------------------------
+# Every equity and bond in the multi-asset universe ships
+# ``swap_long_pips = swap_short_pips = 0.0`` deliberately (see pairs.py): the FX
+# carry model IS swap points, and no equity financing model was ever written.
+# The consequence was that a book holding 1.02x long and 0.45x short paid
+# nothing to borrow either the cash or the shares. This is that missing charge,
+# defined ONCE here so the live book and the backtest cannot re-fork it.
+#
+# CONVENTION — stated once, because it is easy to get wrong:
+#   * Margin interest accrues on the LONG DEBIT ONLY, ``max(0, L - 1)``. A short
+#     GENERATES cash rather than consuming it, so charging on ``gross - 1`` would
+#     double-count the short leg.
+#   * Shorts instead pay a stock-loan fee on their own notional.
+#   * FX and crypto are EXCLUDED: their financing already lives in swap points
+#     and perp funding, so billing them here would charge the same cost twice.
+#   * Interest accrues on CALENDAR days (a weekend costs three days), which is
+#     why the caller passes elapsed time rather than a bar count.
+FINANCED_CLASSES = ("equity", "bond")
+DAYS_PER_YEAR = 365.25
+
+
+def financing_fraction(weights, get_pair=None, *, margin_rate: float,
+                       borrow_rate: float, elapsed_days: float = 1.0
+                       ) -> tuple[float, dict[str, float]]:
+    """Financing COST for one bar, as a positive fraction of equity.
+
+    Returns ``(total, by_pair)``. ``by_pair`` always sums to ``total`` — the
+    book-level margin debit is attributed pro-rata across the financed longs
+    that caused it, so the dashboard's per-leg reconciliation still balances.
+
+    Callers fold this into the carry term (financing is negative carry), which
+    keeps the book identity ``equity - start == price_pnl + carry - cost``.
+    """
+    if get_pair is None:
+        from .pairs import get_pair as _default
+        get_pair = _default
+    if elapsed_days <= 0:
+        return 0.0, {}
+
+    longs: dict[str, float] = {}
+    shorts: dict[str, float] = {}
+    for sym, w in (weights or {}).items():
+        if not w:
+            continue
+        try:
+            asset_class = get_pair(sym).asset_class
+        except Exception:
+            continue                      # an unknown symbol is never financed
+        if asset_class not in FINANCED_CLASSES:
+            continue
+        (longs if w > 0 else shorts)[sym] = abs(float(w))
+
+    years = elapsed_days / DAYS_PER_YEAR
+    by_pair: dict[str, float] = {}
+
+    for sym, w in shorts.items():         # stock-loan fee on short notional
+        by_pair[sym] = by_pair.get(sym, 0.0) + w * borrow_rate * years
+
+    long_exposure = sum(longs.values())
+    debit = max(0.0, long_exposure - 1.0)
+    if debit and margin_rate:
+        charge = debit * margin_rate * years
+        for sym, w in longs.items():      # pro-rata across the financed longs
+            by_pair[sym] = by_pair.get(sym, 0.0) + charge * (w / long_exposure)
+
+    total = sum(by_pair.values())
+    if not total:
+        return 0.0, {}
+    return total, {k: v for k, v in by_pair.items() if v}
+
+
+def total_cost_fraction(delta_w: float, pair: Pair, price: float | None,
+                        equity: float) -> float:
+    """Everything one order costs, as a fraction of equity: dealing spread PLUS
+    broker commission.
+
+    THE single definition of what a trade costs. The book, the per-pair
+    backtest and the dashboard's blotter reconstruction all route through this
+    (or through `trade_cost`, which is just this times equity), so the charge a
+    book applies and the charge the blotter shows can never disagree — a
+    regression `tests/test_fx_pnl.py` pins by reconstructing one from the other.
+    """
+    return (cost_fraction(delta_w, pair, price)
+            + commission_fraction(delta_w, pair, price, equity))
+
+
 def trade_cost(delta_w: float, pair: Pair, price: float | None, equity: float) -> float:
-    """Half-spread charge in the account currency (the currency `equity` is in)."""
-    return cost_fraction(delta_w, pair, price) * equity
+    """Spread + commission in the account currency (the currency `equity` is in)."""
+    return total_cost_fraction(delta_w, pair, price, equity) * equity
 
 
 # ---------------------------------------------------------------------------

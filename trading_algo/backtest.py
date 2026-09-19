@@ -61,7 +61,10 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     # ADV dollar-volume drives both the F15 pre-trade cap and the F6 market-impact
     # cost. Computed once when volume is supplied AND either feature is enabled.
-    from .config import ADV_CAP_PCT, ADV_WINDOW, IMPACT_COEF
+    # Imported in-function (matching the ADV/impact knobs) so that a test
+    # monkeypatching config takes effect instead of binding at module load.
+    from .config import (ADV_CAP_PCT, ADV_WINDOW, CASH_RATE_ANNUAL,
+                         CREDIT_IDLE_CASH, IMPACT_COEF)
     advd = None
     vols_frame = None
     if volume is not None and (ADV_CAP_PCT or IMPACT_COEF):
@@ -104,6 +107,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     cost_log: list[tuple] = []
     weights_hist: dict[pd.Timestamp, pd.Series] = {}
     total_cost = 0.0
+    total_cash_interest = 0.0
     pending: pd.Series | None = None
 
     # Drawdown circuit breaker state
@@ -150,6 +154,18 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
         day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
         r = float((current_w * day_rets).sum()) - cost
+        # Interest on whatever was NOT invested at the open. `current_w` is the
+        # start-of-day book (the pending target was applied above), and its NET sum
+        # is the exposure — see fees.idle_cash_credit on why net, not gross.
+        # Without this a flat book earns 0% while metrics still charge it the
+        # RISK_FREE hurdle, which is a double penalty worth +0.22 to +0.34 Sharpe
+        # (docs/SHARPE_RESEARCH.md §1).
+        if CREDIT_IDLE_CASH and CASH_RATE_ANNUAL:
+            interest = fees.idle_cash_credit(
+                float(current_w.sum()), (today - dates[i - 1]).days,
+                CASH_RATE_ANNUAL)
+            r += interest
+            total_cash_interest += interest
         daily_ret.append(r)
         equity.append(equity[-1] * (1 + r))
         weights_hist[today] = current_w
@@ -190,6 +206,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "turnover": pd.Series(dict(turnover_log)),
         "costs": pd.Series(dict(cost_log)),
         "total_cost_fraction": total_cost,
+        "cash_interest_fraction": total_cash_interest,
         "weights": weights_hist,
         "point_in_time": membership is not None,
         "data_quality_excluded": sorted(dq_excluded),

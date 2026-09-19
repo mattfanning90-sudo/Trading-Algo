@@ -86,6 +86,12 @@ def test_dashboard_cache_round_trips_and_carries_synthetic_flag(tmp_path, monkey
     from trading_algo.forex import fx_book, run_backtest as cli
 
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    # This test is about the CACHE round-trip, not venue economics. At IBKR's
+    # real IDEALPRO minimum (20,000 units) a 5,000 AUD book can place no FX
+    # order at all and would never trade, so the venue check is lifted here;
+    # it is pinned on its own in test_fx_marks.py.
+    from trading_algo.forex import fx_config as _c
+    monkeypatch.setattr(_c, "VENUE_MIN_ORDER_NOTIONAL", {})
     cli.main(["--synthetic", "--account", "matt",
               "--universe", "EURUSD,GBPUSD,USDJPY"])
 
@@ -138,3 +144,46 @@ def test_payoff_is_null_when_there_are_no_losing_bars(panel, params):
     res["returns"] = res["returns"].abs()          # every bar a winner
     p = cli._payload(res, "matt", "balanced", "1d", "yahoo", ["EURUSD"], 5000.0, True)
     assert p["metrics"]["payoff"] is None
+
+
+# ---------------------------------------------------------------------------
+# Cost DECOMPOSITION
+# ---------------------------------------------------------------------------
+# One headline cost number conflates two different questions: "does this
+# strategy have edge?" (spread is intrinsic to the instrument) and "can I trade
+# it at this size with this broker?" (a per-ORDER minimum depends on the broker,
+# the book size and the leg count). Collapsing them makes "no edge" and "edge
+# that is uneconomic at A$10k" look identical — and those call for opposite
+# responses. The parts must be reported separately AND must sum to the whole.
+def test_cost_parts_sum_to_the_reported_total(panel, params):
+    from trading_algo.forex import fx_backtest as bt
+    r = bt.run_backtest(panel, params, initial_capital=10_000.0)
+    for key in ("total_spread_fraction", "total_commission_fraction",
+                "total_financing_fraction", "total_swap_carry_fraction"):
+        assert key in r, key
+    assert r["total_spread_fraction"] + r["total_commission_fraction"] == \
+        pytest.approx(r["total_cost_fraction"], rel=1e-9)
+    assert r["total_swap_carry_fraction"] - r["total_financing_fraction"] == \
+        pytest.approx(r["total_carry_fraction"], rel=1e-9)
+
+
+def test_every_cost_part_is_non_negative(panel, params):
+    """Spread, commission and financing are charges, never credits. Only swap
+    carry is signed (you can earn it)."""
+    from trading_algo.forex import fx_backtest as bt
+    r = bt.run_backtest(panel, params, initial_capital=10_000.0)
+    assert r["total_spread_fraction"] >= 0
+    assert r["total_commission_fraction"] >= 0
+    assert r["total_financing_fraction"] >= 0
+
+
+def test_commission_part_is_zero_when_the_schedule_is_zeroed(panel, params, monkeypatch):
+    """Pins that the commission line reports COMMISSION and not, say, spread."""
+    from trading_algo.forex import fx_backtest as bt
+    from trading_algo.forex import fx_config as _c
+    for k in ("IBKR_EQUITY_PER_SHARE", "IBKR_EQUITY_MIN_ORDER", "IBKR_FX_BPS",
+              "IBKR_FX_MIN_ORDER"):
+        monkeypatch.setattr(_c, k, 0.0)
+    r = bt.run_backtest(panel, params, initial_capital=10_000.0)
+    assert r["total_commission_fraction"] == 0.0
+    assert r["total_spread_fraction"] > 0          # spread is still charged

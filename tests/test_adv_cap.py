@@ -76,3 +76,88 @@ def test_backtest_adv_cap_binds_when_enabled(monkeypatch):
     capped = run_backtest(prices, index_px, region, max_drawdown_stop=None, volume=vol)
     uncapped = run_backtest(prices, index_px, region, max_drawdown_stop=None)
     assert capped["metrics"] != uncapped["metrics"]
+
+
+# --- F15/F6: the plumbing that makes the cap REACHABLE ----------------------
+# Both features were double-gated: the config values are None AND no caller ever
+# passed `volume=`, so `data.load_volume` had zero callers and setting the
+# config alone changed nothing. These pin the wiring, not the maths.
+def test_capacity_volume_is_none_when_both_features_are_off(monkeypatch):
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", None)
+    monkeypatch.setattr(cfg, "IMPACT_COEF", None)
+    prices, _ = _invested_frame()
+    assert data.capacity_volume(prices, "2019-01-01", None, synthetic=True) is None
+
+
+def test_capacity_volume_is_fetched_when_the_adv_cap_is_on(monkeypatch):
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", 0.05)
+    monkeypatch.setattr(cfg, "IMPACT_COEF", None)
+    prices, _ = _invested_frame()
+    vol = data.capacity_volume(prices, "2019-01-01", None, synthetic=True)
+    assert vol is not None and list(vol.columns) == list(prices.columns)
+
+
+def test_capacity_volume_is_fetched_when_impact_cost_is_on(monkeypatch):
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", None)
+    monkeypatch.setattr(cfg, "IMPACT_COEF", 0.1)
+    prices, _ = _invested_frame()
+    assert data.capacity_volume(prices, "2019-01-01", None, synthetic=True) is not None
+
+
+def _spy_on_run_backtest(monkeypatch, module, seen):
+    real = module.run_backtest
+
+    def spy(prices, index_px, region, **kw):
+        seen["volume"] = kw.get("volume")
+        return real(prices, index_px, region, **kw)
+
+    monkeypatch.setattr(module, "run_backtest", spy)
+
+
+def test_run_single_passes_volume_when_a_capacity_feature_is_on(monkeypatch):
+    from trading_algo import run_backtest as rb
+    seen = {}
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", 0.05)
+    _spy_on_run_backtest(monkeypatch, rb, seen)
+    rb.run_single("US", synthetic=True, point_in_time=False)
+    assert seen["volume"] is not None
+
+
+def test_run_single_passes_no_volume_when_both_are_off(monkeypatch):
+    """The default path must not pay for a second full download."""
+    from trading_algo import run_backtest as rb
+    seen = {}
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", None)
+    monkeypatch.setattr(cfg, "IMPACT_COEF", None)
+    _spy_on_run_backtest(monkeypatch, rb, seen)
+    rb.run_single("US", synthetic=True, point_in_time=False)
+    assert seen["volume"] is None
+
+
+def test_portfolio_backtest_passes_volume_when_enabled(monkeypatch):
+    from trading_algo import portfolio_backtest as pb
+    seen = {}
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", 0.05)
+    _spy_on_run_backtest(monkeypatch, pb, seen)
+    pb.run_portfolio_backtest(synthetic=True)
+    assert seen["volume"] is not None
+
+
+def test_paper_warns_loudly_if_the_cap_is_on_but_unhonoured(monkeypatch, capsys):
+    """The cap is applied in the BACKTEST path only. If it is switched on while
+    paper trading cannot honour it, backtest and paper would size differently
+    from the same signal — invariant #3's spirit, broken silently. Refuse to be
+    silent about it."""
+    from trading_algo import paper_trade
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", 0.05)
+    paper_trade.warn_if_capacity_unhonoured()
+    out = capsys.readouterr().out
+    assert "ADV_CAP_PCT" in out and "backtest" in out.lower()
+
+
+def test_paper_is_silent_when_no_capacity_feature_is_on(monkeypatch, capsys):
+    from trading_algo import paper_trade
+    monkeypatch.setattr(cfg, "ADV_CAP_PCT", None)
+    monkeypatch.setattr(cfg, "IMPACT_COEF", None)
+    paper_trade.warn_if_capacity_unhonoured()
+    assert capsys.readouterr().out == ""

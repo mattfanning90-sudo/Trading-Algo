@@ -309,6 +309,28 @@ r_AUD = (1 + r_local) · (fx_t / fx_{t-1}) − 1      (fx = AUD per local unit)
 
 ---
 
+## Deliberately dormant (built, tested, switched off)
+
+Audited 2026-09-19 (`docs/FORENSIC_AUDIT_2026-09.md`). Each of these is shipped
+and tested but intentionally not running. Listed so the next audit does not
+re-derive them, and so "off" is never mistaken for "missing".
+
+| What | Why it is off | What would turn it on |
+|---|---|---|
+| `execution_ibkr.py`, `forex/crypto_exec.py` | Live order placement. Fail-safe is the correct default: no code path can accidentally send a real order. | A deliberate decision, plus `promotion.require_live_ok` passing — it currently says NOT READY. |
+| `ADV_CAP_PCT` (F15) | Measured as a **complete no-op** at A$100k on real US data — a A$100k book never approaches 5% of megacap daily volume. It is a capacity instrument for a much larger book. | Materially more capital. Note it binds in the backtest path only; paper warns loudly if set. |
+| `IMPACT_COEF` (F6) | Costs 5bps of CAGR and +62bps cumulative drag on real US data. Off so the headline stays comparable to history. | Set it when you want capacity-honest numbers. |
+| `use_value` | A strategy change, not a switch — blending a value factor needs its own walk-forward evidence first. | A backtest that earns it. |
+| `PAPER_ALLOCATION_REBALANCE` | A treasury-policy choice: the paper sim funds each sleeve once and lets it drift, which is the realistic model. | Decide you want allocations pinned to target. |
+| `DATA_FALLBACK_SOURCE` (F14) | The registry exists; no source is registered, so `_try_fallback` always returns None. Staleness is now *detected* but nothing takes over. | Register a secondary source. A `TIINGO_API_SECRET` already exists with no code using it. |
+| `forex` profiles `aggressive`, `hf_crypto` | Defined but no account uses them. `hf_crypto` needs `engine --loop` on a low-latency VPS. | Open a book with `--profile`. |
+| *(none currently)* | TSX was the worked example of a registered-but-unfunded region; it cleared the gate on 2026-09-19 and is now funded at 25%. The dashboard still tags any future registered-but-unallocated sleeve `UNFUNDED`. | — |
+| `MetaLabeler` | Zero call sites; trained every FX paper run into a file nothing reads. The docs used to imply it was live — corrected. | Its own spec + walk-forward evidence, or deletion. |
+| `engine --loop` | Nothing automates the calendar-aware daemon; all schedulers use `--once`. | A long-lived host. |
+| `state_repair.py` | A break-glass tool for a corrupted state file. | Run it by hand when `verify` says a state file is unreadable. |
+| FX dashboard news feed | Wired into three workflows; `NEWS_API_KEY` is **not set**, so `news.py` omits the section and the panel says so rather than faking it. Degrades honestly — it is off, not broken. | A free Financial Modeling Prep key: `gh secret set NEWS_API_KEY`. |
+| `oanda` / `alpaca` / `openbb` data adapters | Implemented behind a resolver no automated caller selects. | `--source` on a book that needs them. |
+
 ## Known limitations (read these)
 
 - **Survivorship bias.** Universes are *today's* liquid constituents, so the

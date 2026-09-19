@@ -333,7 +333,12 @@ def blotter(state: dict, include_why: bool = False) -> list[dict]:
             continue
         price = float(price)
         dw = float(t.get("delta_weight") or 0.0)
-        eq = equity_on(t.get("date") or "")
+        # Prefer the equity the book actually charged against (stamped at
+        # write time). Commission has a per-order floor, so it is not
+        # proportional to equity and cannot be rebased. Books written
+        # before the stamp fall back to the daily curve.
+        eq = float(t.get("equity_at_trade")
+                   or equity_on(t.get("date") or ""))
         half = marks.half_spread_fraction(pair, price) * price
         rows.append({
             "date": t.get("date"), "pair": sym, "side": t.get("side"),

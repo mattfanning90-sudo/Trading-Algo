@@ -76,3 +76,31 @@ def test_roster_round_trips(tmp_path, monkeypatch):
     champions.save_roster("matt", original, meta={"pbo": 0.2})
     back = champions.load_roster("matt")
     assert [g.gid for g in back] == [g.gid for g in original]
+
+
+# ---------------------------------------------------------------------------
+# The safety property that makes wiring `--champions` safe TODAY
+# ---------------------------------------------------------------------------
+# The breeder has written a roster every month since July and nothing read it:
+# no workflow passed --champions. Wiring it is only safe because an EMPTY roster
+# resolves to exactly the hand-written core agents, so the flag is a no-op until
+# a genome actually earns promotion through the DSR/PBO gate. If this test ever
+# fails, do NOT ship the flag.
+def test_an_empty_roster_yields_exactly_the_core_agents(tmp_path, monkeypatch):
+    from trading_algo.forex import fx_book
+    monkeypatch.setattr(champions, "STATE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    champions.save_roster("matt", [], {"pbo": 0.0833, "n_trials": 424,
+                                       "promoted": [], "dsr": {}})
+    assert [a.name for a in champions.champions_agents("matt")] == \
+           [a.name for a in default_agents()]
+
+
+def test_a_missing_roster_file_also_yields_the_core_agents(tmp_path, monkeypatch):
+    """A book the breeder has never run for must behave identically — the flag
+    cannot be allowed to change a book's decisions by its mere presence."""
+    from trading_algo.forex import fx_book
+    monkeypatch.setattr(champions, "STATE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    assert [a.name for a in champions.champions_agents("never_bred")] == \
+           [a.name for a in default_agents()]

@@ -36,7 +36,16 @@ def _print_result(name: str, res: dict) -> None:
     for k, v in res["metrics"].items():
         print(f"  {k:<22} {v}")
     print(f"  Avg gross leverage     {res['avg_gross_leverage']:.2f}x")
-    print(f"  Total spread cost      {res['total_cost_fraction']:.2%} of equity")
+    # DECOMPOSED, because one number conflates an instrument cost (spread) with
+    # a deployment cost (a per-ORDER minimum depends on broker, book size and leg
+    # count) and with leverage (financing). Collapsing them made "no edge" and
+    # "edge that is uneconomic at this size" look identical. This line used to be
+    # labelled "Total spread cost" while silently including commission.
+    print(f"  Total cost             {res['total_cost_fraction']:.2%} of equity")
+    print(f"    spread               {res.get('total_spread_fraction', 0.0):.2%}")
+    print(f"    commission           {res.get('total_commission_fraction', 0.0):.2%}")
+    print(f"    financing            {res.get('total_financing_fraction', 0.0):.2%}"
+          f"   (swap carry {res.get('total_swap_carry_fraction', 0.0):+.2%})")
     print(f"  Total carry            {res['total_carry_fraction']:+.2%} of equity")
     print(f"  Drawdown halts         {res['drawdown_halts']} "
           f"({res['drawdown_halt_days']} days flat)")

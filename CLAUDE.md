@@ -54,13 +54,27 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `tax.py` — **after-tax reporting** (NOT tax advice, NOT a trading input):
+  Australian CGT over the FIFO round-trips plus the dividend-withholding drag
+  the `auto_adjust=True` total-return series hides. The finding that motivated
+  it: across all four equity books **0 of 50 realised round-trips cleared the 12
+  months a CGT discount needs** (median hold 19–33 days), and `full` is down
+  A$496 while still owing ~A$76 of tax — realised gains are taxed even when
+  unrealised losses leave the book underwater. Holding period is therefore a
+  STRATEGY parameter, not just a cost
 - `verify.py` — **end-to-end audit of the LIVE books**. The test suite proves the
   maths on a clean price matrix; this re-derives each persisted book from its own
   trade ledger and flags what a real broker statement would contradict:
   reconciliation drift, fills on a closed market, turnover at a forward-filled
   dead price, sleeves silently parked in cash, and holding period vs the signal
-  horizon that opened the position. Offline by design (the state IS the record),
-  and it runs after every scheduled paper run
+  horizon that opened the position. Offline by design (the state IS the record).
+  Findings are **graded, not just detected**: realism findings older than
+  `HISTORICAL_CUTOFF_DAYS` age out to INFO (the audit re-reads the whole ledger,
+  so a fixed bug must not re-fire forever), and a funded sleeve that has never
+  traded is read off its own state — `regime-off` is INFO (the filter working),
+  `data-quality` is ERROR (a broken feed). It runs after every scheduled paper
+  run in two halves: a report step that can never fail the job, and a terminal
+  **strict gate** that gives the run its verdict after state is committed
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
   OVERVIEW/POSITIONS/BACKTEST/METHOD tabs (+ SWARM on FX books), FIFO
@@ -99,6 +113,8 @@ python -m trading_algo.forex.research --synthetic       # quant-research search 
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
 python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
 python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
+python -m trading_algo.forex.permtest --account matt --permutations 200  # in-sample permutation test (~20 min)
+python scripts/measure_permutation_null.py --permutations 1000  # is a permutation null valid for OUR strategy?
 pytest -q                                           # full suite (equity + FX/ML)
 ```
 
@@ -147,9 +163,21 @@ independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
 --region KEY`) and single-sleeve CLIs read the *registry*, not `ALLOCATIONS`. A
 sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
 (portfolio/paper/engine key off that). So the flow is: register → backtest →
-*then* fund. **TSX (Canada, CAD)** ships as a worked example: fully registered
-but intentionally absent from `ALLOCATIONS` until a walk-forward backtest earns
-it a slot. The dashboard METHOD tab tags such sleeves `UNFUNDED`.
+*then* fund. **TSX (Canada, CAD)** was the worked example and has now been
+through the whole gate: registered, backtested 2026-09-19 and funded at 25%
+alongside ASX/US/FTSE. Its headline gate number (raw Sharpe 0.948, haircut 0.608)
+used the no-risk-free convention; restated accurately it is SR 0.742 / DSR 0.82
+at N=20, and **no sleeve passes a standalone DSR gate** — which is why TSX is now
+held on its measured portfolio contribution (+0.064 Sharpe, vol −0.52pp,
+P(Δ>0)=0.885) rather than on the gate. Still **survivorship-biased, so an upper
+bound**. See `docs/SHARPE_RESEARCH.md` §9b. The dashboard METHOD tab still tags any
+registered-but-unallocated sleeve `UNFUNDED`.
+
+`ALLOCATIONS` governs the portfolio backtest, the scheduler's wake calendar and
+any NEWLY initialised book. An EXISTING paper book keeps the allocations baked
+into its state at `--init` time, so adding a region here does **not** retrofit
+it into a running book — that means crossing cash between currencies and is a
+deliberate, separate act.
 
 ## Specs (`/spec`)
 Goals and acceptance criteria for a piece of work live in

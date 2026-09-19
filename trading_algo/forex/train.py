@@ -3,7 +3,7 @@
 What it does:
   1. Builds the pooled cross-pair dataset(s).
   2. Trains seed-ensembled `ModelBundle`s on ALL data (the frozen models the live
-     `NeuralAgent` / `MetaLabeler` use) and saves them to `models/`.
+     `NeuralAgent` uses) and saves them to `models/`.
   3. Runs the no-lookahead walk-forward comparison (`ml_backtest`) and prints /
      writes a report with Sharpe, Probabilistic & Deflated Sharpe, and PBO.
 
@@ -33,7 +33,7 @@ from .fx_data import closes
 from .ml_agent import ModelBundle
 from .ml_backtest import (DEPLOYED_COST_AWARE, GRADED_EMBARGO, GRADED_EPOCHS,
                           GRADED_LR, GRADED_PATIENCE, GRADED_VAL_FRAC,
-                          _half_spreads, _meta_factory, _sharpe_factory,
+                          _half_spreads, _sharpe_factory,
                           format_report, run_ml_backtest, sharpe_task)
 from .nn import StandardScaler
 from .panel_index import build_panel_index
@@ -193,14 +193,12 @@ def train_models(panel, p, seeds=3, models_dir=MODELS_DIR) -> dict:
             print(f"  trained NeuralAgent bundle ({seeds} seeds, {len(Xn)} samples, "
                   f"epochs {epochs} chosen on {n_val} held-out rows) -> {path}")
 
-    Xm, ym, _, _, cols_m, _ = ml_agent.pooled_dataset(panel, p, label="meta", horizon=1)
-    if len(Xm):
-        bundle = _train_bundle(Xm, ym, cols_m, "binary", _meta_factory, seeds,
-                               {"epochs": 150, "batch_size": 64, "lr": 1e-3})
-        path = os.path.join(models_dir, "meta_label.json")
-        bundle.save(path)
-        out["meta"] = path
-        print(f"  trained MetaLabeler bundle ({seeds} seeds, {len(Xm)} samples) -> {path}")
+    # The meta-labeling bundle that used to be trained here fed a `MetaLabeler`
+    # with zero call sites, writing models/meta_label.json on every paper run for
+    # a file nothing read. Both are removed. Meta-labeling itself is NOT gone: it
+    # is evaluated walk-forward in `ml_backtest.meta_oos_signal`, which builds
+    # the same dataset (`pooled_dataset(label="meta")`) out-of-sample. Wiring it
+    # into live sizing needs that evidence first — see docs/FX_DEEP_RESEARCH.md.
     return out
 
 
