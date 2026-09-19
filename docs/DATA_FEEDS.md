@@ -219,9 +219,20 @@ risk policy should not be changeable by a stray flag on one run.
   — AUD/USD moves are part of your real P&L. See `fxconv.py` and the "From AUD to a
   trade" flow on the dashboard's How page. Crypto/equity-only books (no AUDUSD in
   their panel) fall back to no translation until an AUD/USD rate is present.
-* **US equities in an AUD book**: equity **borrow/financing carry is not modelled**
-  (swap = 0); treat equity P&L as price-only. Fine for paper/research, not a
-  financing model.
+* **US equities in an AUD book**: `swap_long_pips = swap_short_pips = 0.0` on
+  every equity and bond, because the FX carry model IS swap points. Financing is
+  therefore charged **separately** by `marks.financing_fraction` (added
+  2026-09-19): margin interest on the long debit `max(0, L - 1)` plus a
+  stock-loan fee on short notional, equity/bond legs only — FX and crypto are
+  excluded so their swap/funding is not billed twice.
+
+  Rates live in `fx_config.MARGIN_RATE_ANNUAL` / `SHORT_BORROW_ANNUAL` and are
+  **assumptions**, not measurements; set both to 0.0 to recover the old
+  price-only behaviour. Measured impact on `multiasset` over its full 5,923-bar
+  history: **1 bp/yr** — small because average gross leverage there is 0.117 and
+  the margin debit is positive on only 0.8% of bars. At the book's *current*
+  exposure (long 1.02x, short 0.45x) the same model charges ~0.30%/yr, so the
+  charge lands on exactly the periods the book is actually levered.
 * **Costs still always on**: every source crosses half the dealing spread defined
   in `pairs.py`. Intraday turnover makes costs bite harder — believe the net line.
 * **Market hours**: the engine idles outside the FX week for FX/equities but runs

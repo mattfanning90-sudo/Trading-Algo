@@ -100,8 +100,11 @@ CROSSES: dict[str, Pair] = {
 # "pairs" so the same agents/ensemble/book/backtest run unchanged: base = the
 # ticker, quote = USD. `pip` is one cent; `spread_pips` is a conservative
 # round-trip retail spread in cents (a couple of cents on a liquid name ≈ a basis
-# point or two). Equity borrow/financing is not modelled here, so swap = 0 — the
-# book's carry term is just zero for these (documented in docs/DATA_FEEDS.md).
+# point or two). swap = 0 deliberately: swap points are the FX financing model,
+# and equity financing does not fit that shape. It is charged SEPARATELY by
+# `marks.financing_fraction` (margin interest on the long debit + stock-loan fee
+# on shorts) — see docs/DATA_FEEDS.md. Do not put a rate here; that would
+# double-charge against the financing model.
 EQUITIES: dict[str, Pair] = {
     "AAPL": Pair("AAPL", "AAPL", "USD", "AAPL", 0.01, 2.0, 0.0, 0.0, "equity"),
     "MSFT": Pair("MSFT", "MSFT", "USD", "MSFT", 0.01, 3.0, 0.0, 0.0, "equity"),
