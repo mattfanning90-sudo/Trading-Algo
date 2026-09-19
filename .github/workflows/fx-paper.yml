@@ -90,6 +90,23 @@ jobs:
           # changes nothing until a genome actually earns its place.
           python -m trading_algo.forex.engine --once --champions $ML_FLAG $SYNTH
 
+      - name: Refresh the FX BACKTEST tab cache
+        # The writer has existed since the M15 fix and NOTHING ever invoked it, so
+        # the tab has shown "⚠ ILLUSTRATIVE NUMBERS … THE FIGURES ARE PLACEHOLDERS"
+        # since it shipped. `--account` is what writes state/fx_backtest_<acct>.json.
+        #
+        # Scheduled runs only. Those are always real data, so a synthetic
+        # workflow_dispatch can never replace a real cache with a synthetic one —
+        # the payload would be honestly flagged (invariant #5 holds either way),
+        # but it would still be a downgrade of what the dashboard shows.
+        # ~21s per book measured, so ~85s for all four.
+        if: github.event_name == 'schedule'
+        run: |
+          for acct in matt partner multiasset daytrader; do
+            python -m trading_algo.forex.run_backtest --account "$acct" \
+              || echo "::warning::BACKTEST cache refresh failed for $acct"
+          done
+
       - name: Audit live books (end-to-end verification)
         # Reads the state this run just wrote and re-derives it from the trade
         # ledger: reconciliation, closed-market fills, dead-price turnover, idle
