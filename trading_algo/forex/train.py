@@ -37,7 +37,7 @@ from .ml_backtest import (DEPLOYED_COST_AWARE, GRADED_EMBARGO, GRADED_EPOCHS,
                           format_report, run_ml_backtest, sharpe_task)
 from .nn import StandardScaler
 from .panel_index import build_panel_index
-from .pairs import DEFAULT_UNIVERSE
+from .pairs import DEFAULT_UNIVERSE, TRAINING_UNIVERSE
 from .walkforward import row_positions, validation_split
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
@@ -250,17 +250,40 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.synthetic:
         print("⚠ SYNTHETIC DATA — pipeline test only, not performance.")
-    panel = _load(DEFAULT_UNIVERSE, args.synthetic)
+    # Fetched once over the LEARNING set; the grade below uses the traded slice
+    # of the same panel, so both numbers come from one set of bars.
+    panel = _load(TRAINING_UNIVERSE, args.synthetic)
     if not panel:
         raise SystemExit("No FX data (offline? try --synthetic).")
     p = profile(args.profile)
 
     if not args.no_train:
-        print("Training models...")
+        print(f"Training models on {len(panel)} instruments "
+              f"(TRAINING_UNIVERSE)...")
         train_models(panel, p, seeds=args.seeds, models_dir=args.models_dir)
 
-    print("Running walk-forward out-of-sample comparison...")
-    res = run_ml_backtest(panel, p, include_ml=not args.no_ml, n_folds=args.folds)
+    # GRADE ON WHAT THE BOOKS TRADE. `promotion.clears_floor` is a deployment
+    # gate: the number it reads has to describe the portfolio that will actually
+    # run, not a wider one that includes six instruments no book holds. A model
+    # whose edge lives entirely in the crosses would otherwise clear a floor and
+    # then trade ten symbols it was never shown to help.
+    #
+    # This is the one asymmetry between the grade and the deployed artefact, and
+    # it runs the safe way: the shipped model is fit on MORE rows than the folds
+    # that graded it. `train_models` guards against shipping something more
+    # overfit than its own number claims — extra training data moves the other
+    # way. Every other part of the recipe (objective, purged validation block,
+    # early-stop epoch choice) stays identical on both sides.
+    graded = {s: panel[s] for s in DEFAULT_UNIVERSE if s in panel}
+    missing = [s for s in DEFAULT_UNIVERSE if s not in panel]
+    if missing:
+        print(f"  ⚠ no data for {', '.join(missing)} — graded on "
+              f"{len(graded)} of {len(DEFAULT_UNIVERSE)} traded instruments.")
+    if not graded:
+        raise SystemExit("No data for any traded instrument — nothing to grade.")
+    print(f"Running walk-forward out-of-sample comparison on {len(graded)} "
+          f"traded instruments (DEFAULT_UNIVERSE)...")
+    res = run_ml_backtest(graded, p, include_ml=not args.no_ml, n_folds=args.folds)
     report = format_report(res)
     print(report)
 

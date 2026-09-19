@@ -35,7 +35,7 @@ a 16-symbol/2003 number beside them would credit a *data* change to the
 
 | | |
 |---|---|
-| universe | the 16 registered symbols (7 FX majors, 6 crosses, 3 crypto) |
+| universe | the 16 registered symbols (7 FX majors, 6 crosses, 3 crypto) — see the note below: this is now `TRAINING_UNIVERSE`, and `train.py` grades on the traded 10 |
 | history | 2003-12-01 → 2026-09-16, 7,194 union-calendar bars |
 | pooled dataset | 94,787 rows × 19 features, 6,690 unique timestamps |
 | walk-forward | 6 anchored folds, purge = 1 bar label horizon, embargo = 5, `min_train` = 400 |
@@ -431,8 +431,20 @@ the reason every row in §3 was re-run.
 
 ## 9. Reproducing this
 
+> **Changed 2026-09-19 — the command below no longer reproduces §3 unchanged.**
+> These numbers were measured when one list, `DEFAULT_UNIVERSE`, was both the
+> training set and the traded set, so the grade covered all 16 symbols. That list
+> has since been split: `TRAINING_UNIVERSE` (16) is what the model learns from and
+> `DEFAULT_UNIVERSE` (10) is what the books trade, and `train.py` now grades on the
+> traded 10 because the promotion floor is a deployment gate. A fresh run therefore
+> scores a **10-symbol** portfolio. To reproduce the table exactly, grade the wide
+> panel explicitly:
+> `run_ml_backtest(_load(TRAINING_UNIVERSE, False), profile("balanced"), n_folds=6)`.
+> Nothing about the objective, the fold geometry or the cost model changed — only
+> which columns the scored portfolio holds.
+
 ```bash
-# the repo's own end-to-end run — the numbers in the §3 code block and the floor verdict
+# the repo's own end-to-end run — the floor verdict, now on the traded universe
 python -m trading_algo.forex.train --seeds 3 --folds 6 --out after.md
 ```
 

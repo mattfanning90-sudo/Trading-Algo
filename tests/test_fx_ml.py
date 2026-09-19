@@ -26,11 +26,13 @@ def params():
 
 @pytest.fixture
 def mixed_panel():
-    """FX majors + crypto — the universe the model is actually trained on.
+    """FX majors + crypto — the universe the live books actually trade.
 
     The `panel` fixture above is FX-only, so it cannot show the imbalance the
     vol-normalised target exists to fix: crypto's ~4x volatility is precisely
-    what makes a raw forward-return target lopsided.
+    what makes a raw forward-return target lopsided. (The model TRAINS on
+    `TRAINING_UNIVERSE`, which is this plus the six crosses — the imbalance
+    under test is the crypto one, which is present either way.)
     """
     return synthetic_panel(list(DEFAULT_UNIVERSE), start="2017-01-01", end="2023-01-01")
 
@@ -769,3 +771,53 @@ def test_the_deployed_artefact_is_refit_on_the_most_recent_rows(short_panel, par
     assert finals[-1]["kw"]["epochs"] == chosen, \
         "the refit ran to the cap, not to the epoch the validation block chose"
     assert bundle.meta.get("fit_epochs") == [chosen]
+
+
+# ---- the training / traded universe split --------------------------------
+def test_training_fits_the_wide_panel_but_grades_the_traded_one(monkeypatch, tmp_path):
+    """One list used to answer two questions: what the model learns from, and
+    what the live books hold. Expanding the training set therefore also opened
+    six new live positions, because `fx_book.run_once` merges DEFAULT_UNIVERSE
+    into every unlocked book.
+
+    Both halves of the split matter and neither is visible from the other:
+
+    * the FIT gets the wide panel — that is the whole point of the crosses;
+    * the GRADE gets the traded slice, because `promotion.clears_floor` is a
+      DEPLOYMENT gate. A model whose edge lived entirely in the six crosses
+      would otherwise clear the floor and then trade ten symbols nothing had
+      shown it could help.
+
+    Seams, not a real training run: the objective and the walk-forward are
+    covered elsewhere; what is unverifiable anywhere else is which panel each
+    side is handed.
+    """
+    from trading_algo.forex import pairs, train
+
+    requested: list[list[str]] = []
+    fitted: list[list[str]] = []
+    graded: list[list[str]] = []
+
+    def fake_load(symbols, synthetic):
+        requested.append(list(symbols))
+        return {s: pd.DataFrame({"close": [1.0, 1.01]}) for s in symbols}
+
+    monkeypatch.setattr(train, "_load", fake_load)
+    monkeypatch.setattr(train, "train_models",
+                        lambda panel, p, **kw: fitted.append(list(panel)) or {})
+    monkeypatch.setattr(train, "run_ml_backtest",
+                        lambda panel, p, **kw: graded.append(list(panel))
+                        or {"metrics": {}, "returns": {}, "pbo": 0.0,
+                            "n_trials": 0, "risk_free": 0.0})
+    monkeypatch.setattr(train, "format_report", lambda res: "")
+    monkeypatch.setattr(train, "record_evaluation", lambda *a, **kw: None)
+
+    train.main(["--models-dir", str(tmp_path)])
+
+    assert requested == [list(pairs.TRAINING_UNIVERSE)], \
+        "the panel was not fetched over the training universe"
+    assert fitted == [list(pairs.TRAINING_UNIVERSE)], \
+        "the deployed fit did not see the crosses it was widened for"
+    assert graded == [list(pairs.DEFAULT_UNIVERSE)], \
+        "the grade covers instruments the books do not trade"
+    assert not (set(graded[0]) & set(pairs.CROSSES))

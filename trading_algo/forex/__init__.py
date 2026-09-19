@@ -23,14 +23,14 @@ from .fx_config import FXParams, profile, profile_names
 from .fx_strategy import compute_targets, target_weights_history
 from .ml_agent import ModelBundle, NeuralAgent, default_neural_agents
 from .nn import MLP
-from .pairs import DEFAULT_UNIVERSE, PAIRS, get_pair
+from .pairs import DEFAULT_UNIVERSE, PAIRS, TRAINING_UNIVERSE, get_pair
 
 __all__ = [
     "AgentPool", "TrendAgent", "BreakoutAgent", "MeanReversionAgent",
     "MomentumAgent", "CarryAgent", "default_agents",
     "FXParams", "profile", "profile_names",
     "compute_targets", "target_weights_history",
-    "PAIRS", "DEFAULT_UNIVERSE", "get_pair",
+    "PAIRS", "DEFAULT_UNIVERSE", "TRAINING_UNIVERSE", "get_pair",
     # deep-learning layer
     "MLP", "NeuralAgent", "ModelBundle", "default_neural_agents",
 ]

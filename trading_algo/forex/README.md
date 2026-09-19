@@ -75,18 +75,33 @@ python -m trading_algo.forex.dashboard --all --out-dir public   # one html per b
 python -m trading_algo.forex.dashboard --account matt -o matt.html
 ```
 
-## Universe (FX majors + crosses + crypto)
+## Two universes: what the books trade, what the model learns from
 
-The default universe is **16 symbols**: the seven FX majors, the **six G10
-crosses** (`EURGBP`, `EURJPY`, `GBPJPY`, `AUDJPY`, `AUDNZD`, `EURAUD`) and the
-three major cryptos (`BTCUSD`, `ETHUSD`, `SOLUSD`, via Yahoo `BTC-USD` etc.).
-A cross is a combination of two majors, so it adds rows faster than it adds
-information — `pairs.py` says so at the registry and
-`docs/research/COST_AWARE_OBJECTIVE_RESULT.md` §7.3 measures it (the panel is
-roughly five to six independent bets, not sixteen). Crypto trades 24/7, has no
-spot swap, and runs far hotter than G10 FX — the volatility-targeting risk layer
-sizes it down automatically, so it slots into the same agents/ensemble/book
-unchanged. Existing books pick up newly-added instruments on their next run.
+`pairs.py` carries **two** lists, because they answer two different questions
+and one list used to answer both.
+
+| List | Size | What it decides |
+|---|---|---|
+| `DEFAULT_UNIVERSE` | **10** | What the live books **trade**: seven FX majors + three major cryptos (`BTCUSD`, `ETHUSD`, `SOLUSD`, via Yahoo `BTC-USD` etc.). `fx_book.run_once` merges this into every unlocked book, so **adding a name here puts capital into it on the next run.** |
+| `TRAINING_UNIVERSE` | **16** | What the deep-learning layer **learns from**: the traded ten plus the **six G10 crosses** (`EURGBP`, `EURJPY`, `GBPJPY`, `AUDJPY`, `AUDNZD`, `EURAUD`). Widening it changes the model's data and nothing about the books. |
+
+The split exists because the crosses were registered purely to give the neural
+layer more rows (its train/validation Sharpe gap is 3.5 vs 0.67) — and, through
+the merge above, would silently have opened six live positions as a side effect
+of a data decision.
+
+`train.py` fits the deployed model on the 16 and **grades it on the 10**:
+`promotion.clears_floor` is a deployment gate, so its number must describe the
+book that actually runs. The asymmetry runs the safe way — the shipped model
+sees more rows than the folds that graded it.
+
+A cross adds rows faster than it adds information — `pairs.py` says so at the
+registry and `docs/research/COST_AWARE_OBJECTIVE_RESULT.md` §7.3 measures it
+(the panel is roughly five to six independent bets, not sixteen). Crypto trades
+24/7, has no spot swap, and runs far hotter than G10 FX — the volatility-targeting
+risk layer sizes it down automatically, so it slots into the same
+agents/ensemble/book unchanged. Existing books pick up newly-added *traded*
+instruments on their next run.
 
 **Locally** (if your machine has internet) the same runs as a daemon:
 

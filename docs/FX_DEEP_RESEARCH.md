@@ -94,11 +94,17 @@ each walk-forward fold's training rows only (`walkforward.py`).
 asset-pricing nets (Gu–Kelly–Xiu) exploit far more data than per-series models —
 critical when per-series signal is tiny.
 
-**Decision.** `ml_agent.pooled_dataset` stacks the whole registered universe
+**Decision.** `ml_agent.pooled_dataset` stacks `pairs.TRAINING_UNIVERSE`
 — 16 symbols: 7 FX majors, 6 G10 crosses, 3 cryptos — into one training set; the
 carry feature lets the single model distinguish pairs cross-sectionally. It is
 the *only* pair-identifying feature, which matters when the loss carries a cost
 term the columns do not share equally (COST_AWARE_OBJECTIVE_RESULT.md §4).
+
+That list is deliberately WIDER than `pairs.DEFAULT_UNIVERSE`, the 10 symbols the
+live books trade: the crosses are training data, not positions. `train.py` fits
+the deployed bundle on the 16 and grades it on the traded 10, because
+`promotion.clears_floor` gates deployment and must read a number describing the
+book that actually runs.
 Seed-ensembling (several MLPs from different inits, averaged) cuts the
 high-variance of NN training (`ModelBundle`).
 

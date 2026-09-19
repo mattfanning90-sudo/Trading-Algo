@@ -82,11 +82,11 @@ CRYPTO: dict[str, Pair] = {
     "SOLUSD": Pair("SOLUSD", "SOL", "USD", "SOL-USD", 1.0, 0.30, 0.0, 0.0, "crypto"),
 }
 
-# The six G10 crosses. In the default universe: they are registered, priced and
-# carry the same verified history as the majors, and the neural layer needs rows
-# (its measured train/validation Sharpe gap is 3.5 vs 0.67). Honest caveat for
-# any evaluation that uses them — a cross is a combination of two majors, so the
-# marginal INFORMATION they add is well below the marginal row count.
+# The six G10 crosses. In the TRAINING universe, not the traded one: they are
+# registered, priced and carry the same verified history as the majors, and the
+# neural layer needs rows (its measured train/validation Sharpe gap is 3.5 vs
+# 0.67) — but nothing has yet argued they belong in a live book. See
+# TRAINING_UNIVERSE below for the split and its caveat.
 CROSSES: dict[str, Pair] = {
     "EURGBP": Pair("EURGBP", "EUR", "GBP", "EURGBP=X", 0.0001, 0.9, -0.08, -0.15),
     "EURJPY": Pair("EURJPY", "EUR", "JPY", "EURJPY=X", 0.01, 1.2, 0.35, -0.75),
@@ -126,9 +126,28 @@ BONDS: dict[str, Pair] = {
 
 ALL_PAIRS: dict[str, Pair] = {**PAIRS, **CRYPTO, **CROSSES, **EQUITIES, **BONDS}
 
-# Default tradable universe: the seven FX majors, the three major cryptos and
-# the six G10 crosses.
-DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO, *CROSSES]
+# Two universes, because "what the model learns from" and "what the books trade"
+# are two different questions and a single list silently answered both. They
+# coincided until the crosses were registered purely to give the neural layer
+# more rows — which also, and unintentionally, put six new instruments into the
+# live `matt`/`partner` books, since `fx_book.run_once` merges DEFAULT_UNIVERSE
+# into every unlocked book. Keep them separate so a data decision stays a data
+# decision.
+#
+# DEFAULT_UNIVERSE — the TRADED set. Adding a symbol here puts (paper) capital
+# into it on the next scheduled run, in every unlocked book, with no further
+# review. Seven FX majors + three major cryptos.
+DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]
+
+# TRAINING_UNIVERSE — the LEARNING set: everything traded, plus the six G10
+# crosses. Widening this changes what the model sees and nothing about what the
+# books hold. It is a superset by construction: a model is never graded on an
+# instrument the books cannot trade being absent from its training data.
+#
+# Honest caveat for any evaluation over it — a cross is a combination of two
+# majors, so the marginal INFORMATION the six add is well below the marginal row
+# count (16 columns, not 16 independent bets).
+TRAINING_UNIVERSE: list[str] = [*DEFAULT_UNIVERSE, *CROSSES]
 
 # A liquid US-equity universe for the Alpaca / OpenBB feeds (off by default).
 EQUITY_UNIVERSE: list[str] = list(EQUITIES)
@@ -141,7 +160,8 @@ MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
 
 # Named universe presets, so tools (research, backtest, paper) can select a
 # tradable set by name instead of hardcoding one. Extend by adding a key here.
-#   default        : the seven FX majors + three cryptos + six crosses (live)
+#   default        : the seven FX majors + three cryptos — what the books TRADE
+#   training       : default + the six crosses — what the model LEARNS from
 #   majors         : the seven FX majors only
 #   fx / majors+crosses : all G10 FX — majors plus the six crosses, no crypto
 #   crosses        : the six crosses on their own
@@ -150,6 +170,7 @@ MULTI_ASSET_UNIVERSE: list[str] = [*EQUITIES, *BONDS, "AUDUSD"]
 #   multiasset     : equities + bonds + an AUDUSD overlay
 UNIVERSES: dict[str, list[str]] = {
     "default": DEFAULT_UNIVERSE,
+    "training": TRAINING_UNIVERSE,
     "majors": list(PAIRS),
     "fx": [*PAIRS, *CROSSES],
     "majors+crosses": [*PAIRS, *CROSSES],

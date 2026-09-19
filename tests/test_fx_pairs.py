@@ -4,12 +4,12 @@ import pytest
 from trading_algo.forex import pairs
 
 
-def test_default_universe_is_majors_plus_crypto_plus_crosses():
+def test_default_universe_is_majors_plus_crypto():
+    """The TRADED set. `fx_book.run_once` merges this into every unlocked book,
+    so a name added here starts holding (paper) capital on the next run."""
     assert pairs.DEFAULT_UNIVERSE == ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
                                       "USDCAD", "USDCHF", "NZDUSD",
-                                      "BTCUSD", "ETHUSD", "SOLUSD",
-                                      "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
-                                      "AUDNZD", "EURAUD"]
+                                      "BTCUSD", "ETHUSD", "SOLUSD"]
 
 
 def test_crypto_pairs_registered():
@@ -121,8 +121,8 @@ def test_resolve_universe_rejects_typos_and_empty():
 # ---------------------------------------------------------------------------
 # Training universe / history (task 7: data expansion)
 # ---------------------------------------------------------------------------
-def test_default_universe_includes_the_registered_crosses():
-    """Six FX crosses are registered, priced, and were never used for training.
+def test_training_universe_includes_the_registered_crosses():
+    """Six FX crosses are registered, priced, and used for training.
 
     The model overfits (train Sharpe 3.5 vs validation 0.67) and more data is the
     textbook remedy -- but they are combinations of the majors, so their marginal
@@ -130,8 +130,25 @@ def test_default_universe_includes_the_registered_crosses():
     evaluation, not in a decision to exclude them.
     """
     for sym in pairs.CROSSES:
-        assert sym in pairs.DEFAULT_UNIVERSE, f"{sym} is registered but never trained on"
-    assert len(pairs.DEFAULT_UNIVERSE) == 16
+        assert sym in pairs.TRAINING_UNIVERSE, f"{sym} is registered but never trained on"
+    assert len(pairs.TRAINING_UNIVERSE) == 16
+
+
+def test_training_universe_is_a_superset_of_what_is_traded():
+    """The two lists answer two questions, and only one of them moves money.
+
+    One list used to answer both: the crosses were added to give the neural layer
+    rows, and because `fx_book.run_once` merges DEFAULT_UNIVERSE into every
+    unlocked book, that data decision would also have opened six live positions.
+    Superset, not equality, is the invariant -- the model may learn from more
+    than the books hold, never from less.
+    """
+    assert set(pairs.DEFAULT_UNIVERSE) < set(pairs.TRAINING_UNIVERSE)
+    assert not (set(pairs.CROSSES) & set(pairs.DEFAULT_UNIVERSE)), \
+        "a cross reached the traded universe -- training data must not move money"
+    # order is preserved, traded names first, so a panel sliced either way lines up
+    assert pairs.TRAINING_UNIVERSE[:len(pairs.DEFAULT_UNIVERSE)] == pairs.DEFAULT_UNIVERSE
+    assert pairs.resolve_universe("training") == pairs.TRAINING_UNIVERSE
 
 
 def test_start_covers_the_verified_yahoo_history():
