@@ -446,6 +446,98 @@ def init_account(account: str, capital: float, synthetic: bool,
 # ---------------------------------------------------------------------------
 # Rebalancing one sleeve
 # ---------------------------------------------------------------------------
+def _fit_leg(weights: dict, leg_gross: float, px, equity: float,
+             min_value: float) -> dict:
+    """The largest top-k subset of one leg that can actually be held.
+
+    Names are ranked by CONVICTION (|weight|) and dropped smallest-first, never
+    by price: dropping the expensive names would be a price-based selection the
+    strategy never asked for, and would bias the book toward cheap stocks.
+    Each surviving name is re-allocated its share of the leg's original gross,
+    so shrinking the count makes the remaining positions bigger rather than
+    leaving the leg under-deployed.
+    """
+    ordered = sorted(weights, key=lambda t: -abs(weights[t]))
+    for k in range(len(ordered), 0, -1):
+        picks = ordered[:k]
+        total = sum(abs(weights[t]) for t in picks)
+        if total <= 0:
+            continue
+        alloc = {t: leg_gross * abs(weights[t]) / total for t in picks}
+        ok = True
+        for t in picks:
+            price = px.get(t)
+            dollars = alloc[t] * equity
+            if (not price or price != price or price <= 0
+                    or int(dollars / price) < 1 or dollars < min_value):
+                ok = False
+                break
+        if ok:
+            return alloc
+    return {}
+
+
+def fit_long_short_to_lots(targets, px, equity: float, *, min_value: float,
+                           max_net: float, max_passes: int = 6):
+    """Shrink a long/short book until it can be held in whole shares — hedged.
+
+    `select_long_short` hedges in WEIGHT space. Whole-share rounding then
+    truncates toward zero, and on a small sleeve an expensive name buys NOTHING
+    at its target weight: the live `experimental` book could not afford three of
+    its six longs, breached the neutrality cap, and so held 100% cash
+    permanently. Refusing forever is a worse outcome than holding a smaller,
+    genuinely hedged book.
+
+    So both legs are concentrated TOGETHER — micro mode already does this for a
+    long-only book but deliberately skipped long/short, because concentrating
+    one leg alone would break the hedge. Each leg keeps its highest-conviction
+    names; if the rounded legs are still too far apart, the larger one is scaled
+    toward the smaller and refitted.
+
+    Returns adjusted weights, or an EMPTY series if either leg cannot be formed
+    at all — concentration is not a licence to run unhedged.
+
+    TRADE-OFF, deliberately accepted: fewer names is a lumpier, less diversified
+    book with more idiosyncratic risk. That is the price of trading at this size,
+    and it is preferable to a funded book that never deploys.
+    """
+    import pandas as _pd
+
+    longs = {t: float(w) for t, w in targets.items() if w > 0}
+    shorts = {t: float(w) for t, w in targets.items() if w < 0}
+    if not longs or not shorts:
+        return _pd.Series(dtype=float)
+
+    long_gross = sum(longs.values())
+    short_gross = -sum(shorts.values())
+
+    def notional(alloc, sign):
+        out = 0.0
+        for t, w in alloc.items():
+            price = px.get(t)
+            if price and price == price and price > 0:
+                out += int(w * equity / price) * price
+        return out
+
+    for _ in range(max_passes):
+        la = _fit_leg(longs, long_gross, px, equity, min_value)
+        sa = _fit_leg(shorts, short_gross, px, equity, min_value)
+        if not la or not sa:
+            return _pd.Series(dtype=float)
+        ln, sn = notional(la, 1), notional(sa, -1)
+        gross = ln + sn
+        if gross <= 0:
+            return _pd.Series(dtype=float)
+        if abs(ln - sn) / gross <= max_net:
+            return _pd.Series({**la, **{t: -w for t, w in sa.items()}})
+        # Still lop-sided: pull the larger leg toward the smaller and refit.
+        if ln > sn:
+            long_gross *= max(sn / ln, 0.5)
+        else:
+            short_gross *= max(ln / sn, 0.5)
+    return _pd.Series(dtype=float)
+
+
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
                      today: str, trade_log: list,
                      frozen: set[str] | None = None) -> None:
@@ -467,6 +559,40 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         else:
             targets = pd.Series(dtype=float)
             print("    ⚠ no affordable names — staying in cash")
+
+    # Long/short: concentrate BOTH legs so a book too small to hold every name
+    # trades a smaller HEDGED book instead of nothing at all. Micro mode above
+    # does this for a long-only book and deliberately skips long/short, because
+    # shrinking one leg alone would break the hedge — this shrinks them together.
+    # Without it, `experimental` could not afford 3 of its 6 longs, breached the
+    # neutrality cap every month and sat in 100% cash permanently.
+    if not long_only and not targets.empty and cfg.LS_MAX_NET_EXPOSURE is not None:
+        fitted = fit_long_short_to_lots(
+            targets, px, equity, min_value=region.min_trade_value,
+            max_net=cfg.LS_MAX_NET_EXPOSURE)
+        if fitted.empty:
+            # Neither concentration nor the full book can be hedged at this size.
+            # Say so: a funded book that quietly never deploys looks like a calm
+            # strategy rather than a size problem it cannot solve on its own.
+            longs = sum(w for w in targets if w > 0)
+            shorts = -sum(w for w in targets if w < 0)
+            print(f"    ⚠ long/short book cannot be hedged at this size even "
+                  f"concentrated (target long {longs:.2f} vs short {shorts:.2f} "
+                  f"of equity, {equity:,.0f} {region.currency}) — holding cash. "
+                  "The sleeve is too small to hold both legs in whole shares.")
+            notifications.notify(
+                "ls_not_neutral",
+                f"[{region.key}] market-neutral book could not be formed at "
+                f"{equity:,.0f} {region.currency} even after concentrating to "
+                "the highest-conviction names — holding cash. This repeats every "
+                "rebalance until the sleeve is funded larger or holds fewer names.",
+                level="alert", region=region.key, net_exposure=1.0,
+                equity=round(float(equity), 2))
+        elif len(fitted) < len(targets):
+            print(f"    ⚠ concentrating the long/short book "
+                  f"{len(targets)} -> {len(fitted)} names so it can be held in "
+                  "whole shares (highest-conviction names kept, hedge preserved)")
+        targets = fitted
 
     dust = min(200.0, equity * 0.05)
     desired = {}

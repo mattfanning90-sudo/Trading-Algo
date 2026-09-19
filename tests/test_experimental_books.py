@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trading_algo import config as cfg
 from trading_algo import data, paper_trade as pt, pnl, profiles, strategy
 from trading_algo.regions import get_region
 
@@ -192,7 +193,11 @@ def test_rounding_that_kills_one_leg_holds_cash(us_region, capsys):
 
     assert trades == [], "an unhedgeable neutral book must not trade"
     assert sleeve["positions"] == {}
-    assert "net after whole-share rounding" in capsys.readouterr().out
+    # The REASON changed when concentration landed — the book is now refused
+    # because neither the full book nor any concentrated subset can be hedged at
+    # this size, not merely because the full book rounded badly. The behaviour
+    # (hold cash) and the requirement to SAY SO are unchanged.
+    assert "cannot be hedged at this size" in capsys.readouterr().out
 
 
 def test_both_legs_surviving_rounding_does_trade(us_region):
@@ -219,3 +224,110 @@ def test_gate_does_not_touch_long_only_books(us_region):
     trades = []
     pt.rebalance_sleeve(us_region, sleeve, targets, px, "2026-01-05", trades)
     assert trades, "long-only books must be unaffected by the neutrality gate"
+
+
+# --- the REAL incident, pinned --------------------------------------------
+# On 2026-07-02 the live `experimental` book opened SIX shorts against ONE long:
+#     SELL ACN 3@137.28  BSX 12@45.12  INTU 1@275.21
+#          NFLX 9@77.61  NOW 3@106.27  ZTS 6@74.76
+#     BUY  SMH 1@592.59
+# That is $593 long against $2,694 short — 64% net short on a book labelled
+# "market-neutral" — and it was held for a MONTH before closing on 08-03. The
+# post-rounding gate did not exist yet; it landed 2026-07-25 (commit 54b5822,
+# July audit C3). This pins the real numbers so the fix can never silently
+# regress, and so the incident stays legible to whoever reads this next.
+INCIDENT_LONGS = [(1, 592.59)]                                    # SMH
+INCIDENT_SHORTS = [(3, 137.28), (12, 45.12), (1, 275.21),         # ACN BSX INTU
+                   (9, 77.61), (3, 106.27), (6, 74.76)]           # NFLX NOW ZTS
+
+
+def test_the_2026_07_02_book_would_now_be_refused():
+    long_notional = sum(q * p for q, p in INCIDENT_LONGS)
+    short_notional = sum(q * p for q, p in INCIDENT_SHORTS)
+    gross = long_notional + short_notional
+    net = abs(long_notional - short_notional) / gross
+
+    assert long_notional == pytest.approx(592.59)
+    assert short_notional == pytest.approx(2_694.35, abs=0.01)
+    assert net == pytest.approx(0.639, abs=0.001)
+    assert cfg.LS_MAX_NET_EXPOSURE is not None
+    assert net > cfg.LS_MAX_NET_EXPOSURE, (
+        "the 2026-07-02 experimental book must be refused by the neutrality gate")
+
+
+def test_an_unhedgeable_neutral_book_raises_an_alert(us_region, monkeypatch):
+    """Refusing to trade is only half the job — an unattended book that keeps
+    declining to deploy has to say so, or it looks like a quiet strategy rather
+    than a size problem it cannot solve on its own."""
+    from trading_algo import notifications
+    got = []
+    notifications.register_channel("_cap_ls", got.append)
+    monkeypatch.setattr(cfg, "NOTIFY_CHANNEL", "_cap_ls")
+
+    sleeve = _ls_sleeve()
+    px = pd.Series({"RICH": 10_000.0, "CHEAP_A": 10.0, "CHEAP_B": 10.0})
+    targets = pd.Series({"RICH": 0.5, "CHEAP_A": -0.25, "CHEAP_B": -0.25})
+    pt.rebalance_sleeve(us_region, sleeve, targets, px, "2026-01-05", [])
+
+    events = [p["event"] for p in got]
+    assert "ls_not_neutral" in events, events
+    payload = next(p for p in got if p["event"] == "ls_not_neutral")
+    assert payload["level"] == "alert"
+    assert payload["net_exposure"] > cfg.LS_MAX_NET_EXPOSURE
+
+
+# --- concentrating a long/short book so it can actually trade ---------------
+# A book that refuses to trade forever is worse than a smaller book that trades.
+# `experimental` asks for 6 long + 6 short, but on a US$6.7k sleeve three of the
+# longs (MU $1,016, AMD $560, AMAT $445) cannot buy even ONE share at their
+# ~$400 target weight — so the neutrality gate fires and it holds 100% cash,
+# permanently. Micro mode already concentrates a LONG-ONLY book; the fix here is
+# to concentrate BOTH LEGS TOGETHER so the hedge survives the shrink.
+#
+# Names are dropped by CONVICTION (smallest |weight| first), never by price:
+# dropping the expensive names would be a price-based selection the strategy
+# never asked for, and would systematically bias the book toward cheap stocks.
+def test_a_book_that_cannot_hold_every_name_still_trades_a_hedged_subset():
+    px = pd.Series({"RICH_A": 1_000.0, "RICH_B": 600.0, "MID": 150.0,
+                    "SH_A": 70.0, "SH_B": 45.0, "SH_C": 40.0})
+    targets = pd.Series({"RICH_A": 0.10, "RICH_B": 0.13, "MID": 0.25,
+                         "SH_A": -0.16, "SH_B": -0.16, "SH_C": -0.16})
+    out = pt.fit_long_short_to_lots(targets, px, equity=6_700.0,
+                                    min_value=330.0, max_net=0.20)
+    assert not out.empty, "must trade something rather than nothing"
+    longs = {t: w for t, w in out.items() if w > 0}
+    shorts = {t: w for t, w in out.items() if w < 0}
+    assert longs and shorts, "both legs must survive — this is a hedged book"
+    ln = sum(int(w * 6_700.0 / px[t]) * px[t] for t, w in longs.items())
+    sn = sum(int(-w * 6_700.0 / px[t]) * px[t] for t, w in shorts.items())
+    assert abs(ln - sn) / (ln + sn) <= 0.20 + 1e-9, "the shrunk book must still be hedged"
+
+
+def test_concentration_keeps_the_highest_conviction_names():
+    """MID carries the largest long weight, so it must survive when the leg is
+    cut — dropping it because RICH_A is expensive would be a price bias."""
+    px = pd.Series({"RICH_A": 1_000.0, "MID": 150.0, "SH_A": 50.0, "SH_B": 45.0})
+    targets = pd.Series({"RICH_A": 0.10, "MID": 0.30, "SH_A": -0.20, "SH_B": -0.20})
+    out = pt.fit_long_short_to_lots(targets, px, equity=6_700.0,
+                                    min_value=330.0, max_net=0.20)
+    assert "MID" in out.index and out["MID"] > 0
+
+
+def test_a_leg_that_cannot_be_formed_at_all_still_refuses():
+    """Concentration is not a licence to run unhedged: if NO long is affordable
+    the book must still hold cash."""
+    px = pd.Series({"RICH": 500_000.0, "SH_A": 50.0, "SH_B": 45.0})
+    targets = pd.Series({"RICH": 0.40, "SH_A": -0.20, "SH_B": -0.20})
+    out = pt.fit_long_short_to_lots(targets, px, equity=6_700.0,
+                                    min_value=330.0, max_net=0.20)
+    assert out.empty
+
+
+def test_a_book_that_already_fits_is_left_alone():
+    """No-op when every name is affordable — concentration must not churn a
+    book that was fine."""
+    px = pd.Series({"A": 10.0, "B": 10.0, "C": 10.0, "D": 10.0})
+    targets = pd.Series({"A": 0.25, "B": 0.25, "C": -0.25, "D": -0.25})
+    out = pt.fit_long_short_to_lots(targets, px, equity=10_000.0,
+                                    min_value=330.0, max_net=0.20)
+    pd.testing.assert_series_equal(out.sort_index(), targets.sort_index())
