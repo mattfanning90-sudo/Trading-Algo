@@ -327,11 +327,19 @@ def test_transactions_blotter(isolated):
     assert r["bid"] <= r["price"] <= r["ask"]
     assert r["spread_bps"] > 0
     assert r["cost"] >= 0 and r["notional"] >= 0
-    # cost equals half the spread crossed on the notional traded (matches the book)
+    # cost = half the spread crossed on the notional traded PLUS IBKR commission
+    # (matches the book, via marks.total_cost_fraction). For an FX leg that
+    # commission is max(USD 2.00, 0.20bps x notional) — on a book this small the
+    # per-ORDER floor dominates the spread by ~80x, which is exactly why it is
+    # modelled rather than assumed away.
+    from trading_algo.forex import marks as _m
     from trading_algo.forex.pairs import get_pair
     pr = get_pair(r["pair"])
-    assert r["cost"] == pytest.approx(0.5 * pr.spread_fraction(r["price"]) * r["notional"],
-                                      rel=1e-2)        # values are rounded for display
+    dw = r["dweight"]
+    eq = r["notional"] / abs(dw)              # the book equity this row traded against
+    expected = (0.5 * pr.spread_fraction(r["price"]) * r["notional"]
+                + _m.commission(dw, pr, r["price"], eq))
+    assert r["cost"] == pytest.approx(expected, rel=1e-2)  # rounded for display
     assert {"cost", "notional", "pnl"} <= set(txn["totals"])
 
 
@@ -537,7 +545,17 @@ def test_blotter_matches_book_charge(isolated):
     p = dashboard.build_payload("matt", synthetic=True)
     equity_on, _ = dashboard._equity_lookup(st)
     daily = st["daily"]
-    expected = -daily["cost_pct"] * equity_on(daily["date"])
+    # cost_pct is a fraction of the MARKED (pre-cost) equity, while equity_on()
+    # returns the recorded post-cost equity, so the base must be grossed back
+    # up: marked = post / (1 - cost_pct). That was always true; it stayed inside
+    # the tolerance only while costs were spread-only and tiny. Adding IBKR
+    # commission (a per-ORDER floor) made the ~0.5% base error visible.
+    # `cost_pct` is stored NEGATIVE, and the book applies it as
+    # equity_after = marked * (1 - cost_frac) with cost_frac = -cost_pct.
+    # So marked = equity_after / (1 - cost_frac) = equity_after / (1 + cost_pct).
+    cost_pct = daily["cost_pct"]
+    marked = equity_on(daily["date"]) / (1.0 + cost_pct)
+    expected = -cost_pct * marked
     # tolerance = stored rounding only (cost_pct 6dp, row costs 4dp)
     assert p["transactions"]["totals"]["cost"] == pytest.approx(expected, abs=0.05)
     assert expected > 0

@@ -86,6 +86,12 @@ def test_dashboard_cache_round_trips_and_carries_synthetic_flag(tmp_path, monkey
     from trading_algo.forex import fx_book, run_backtest as cli
 
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    # This test is about the CACHE round-trip, not venue economics. At IBKR's
+    # real IDEALPRO minimum (20,000 units) a 5,000 AUD book can place no FX
+    # order at all and would never trade, so the venue check is lifted here;
+    # it is pinned on its own in test_fx_marks.py.
+    from trading_algo.forex import fx_config as _c
+    monkeypatch.setattr(_c, "VENUE_MIN_ORDER_NOTIONAL", {})
     cli.main(["--synthetic", "--account", "matt",
               "--universe", "EURUSD,GBPUSD,USDJPY"])
 

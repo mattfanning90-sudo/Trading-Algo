@@ -104,6 +104,13 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         held = pd.Series(position_policy.settle(
             held.to_dict(), target, p, bars_held=ages, force_flat=halted),
             dtype=float).reindex(pairs).fillna(0.0)
+        # Orders below the venue's minimum size cannot be placed at all, so the
+        # book keeps its prior position in that leg rather than paying a fee on
+        # an impossible trade (see marks.is_executable).
+        for s in pairs:
+            d_w = held[s] - prev[s]
+            if d_w and not marks.is_executable(d_w, specs[s], equity[-1]):
+                held[s] = prev[s]
         ages = position_policy.advance_ages(prev.to_dict(), held.to_dict(), ages)
         move = held - prev
 
@@ -112,7 +119,10 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         for s in pairs:
             m = move[s]
             if m:
-                cost += abs(m) * marks.half_spread_fraction(specs[s], price_d[s])
+                # Spread + IBKR commission, via the ONE definition the book and
+                # the blotter also use, so the three cannot disagree.
+                cost += marks.total_cost_fraction(m, specs[s], price_d[s],
+                                                  equity[-1])
 
         # Overnight carry/financing on the positions held into the next bar.
         carry = 0.0
@@ -134,7 +144,12 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         attribution += pair_pnl
         day_ret = float(pair_pnl.sum()) + carry - cost
 
-        equity.append(equity[-1] * (1.0 + day_ret))
+        # Floor at zero. With per-ORDER commission the cost is an absolute
+        # amount, so as equity shrinks cost/equity grows without bound and the
+        # curve can go NEGATIVE — which is not a thing, and poisons every metric
+        # downstream with NaN. A wiped-out book is wiped out; it does not owe
+        # the broker its future returns.
+        equity.append(max(0.0, equity[-1] * (1.0 + day_ret)))
         daily.append(day_ret)
         turnover_log.append(float(move.abs().sum()))
         cost_log.append(cost)

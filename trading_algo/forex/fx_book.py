@@ -603,6 +603,15 @@ def _run_once_locked(account: str, synthetic: bool = False,
     ages = {k: int(v) for k, v in (state.get("bars_held") or {}).items()}
     new_positions = _apply_band(positions, target, p, frozen=shut,
                                 bars_held=ages, force_flat=halted)
+    # An order below the venue's minimum size cannot be placed (IBKR's IDEALPRO
+    # needs 20,000 units), so the leg keeps its prior position rather than
+    # booking a fill that no venue would accept. The BACKTEST applies the same
+    # rule at the same point — if only one side did, paper and backtest would
+    # hold different books from the same signal.
+    for _s in list(new_positions):
+        _d = new_positions.get(_s, 0.0) - positions.get(_s, 0.0)
+        if _d and not marks.is_executable(_d, get_pair(_s), marked):
+            new_positions[_s] = positions.get(_s, 0.0)
     state["bars_held"] = position_policy.advance_ages(
         positions, new_positions, ages, dust=_DUST)
 
@@ -615,7 +624,10 @@ def _run_once_locked(account: str, synthetic: bool = False,
         if abs(delta) < _DUST:
             continue
         price = px_last.get(s)
-        c = marks.cost_fraction(delta, get_pair(s), price)
+        # Spread + IBKR commission. The per-ORDER minimum is why commission is
+        # charged per leg here rather than as a bps rate on total turnover: on a
+        # small book the floor, not the rate, is the dominant term.
+        c = marks.total_cost_fraction(delta, get_pair(s), price, marked)
         cost_frac += c
         cost_by_pair[s] = cost_by_pair.get(s, 0.0) + c
         why = rationale.get(s, {})
@@ -631,6 +643,13 @@ def _run_once_locked(account: str, synthetic: bool = False,
                        "target_weight": round(new_positions.get(s, 0.0), 4),
                        "price": round(float(price), 5) if price == price else None,
                        "aud_per_quote": round(float(apq), 6) if apq else None,
+                       # The equity the charge was computed against. Stamped for
+                       # the same reason as aud_per_quote: commission has a
+                       # per-ORDER floor and a per-SHARE rate, so it is NOT
+                       # proportional to equity — the blotter cannot reconstruct
+                       # it from a different equity base. Without this the book
+                       # and the blotter disagree by the size of that day's cost.
+                       "equity_at_trade": round(float(marked), 4),
                        "why": why.get("text"),
                        "regime": why.get("regime"),
                        "agents": why.get("agents"),

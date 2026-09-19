@@ -45,11 +45,21 @@ def pool():
     ("TLT", 95.0),           # bond ETF
 ])
 def test_cost_formulas_match_legacy(sym, price):
+    """The SPREAD component must still reproduce the legacy number exactly.
+
+    `trade_cost` deliberately no longer equals it: since IBKR commission was
+    added it is spread PLUS commission, which is the whole point — a per-order
+    floor the spread-only model never charged. The legacy pin therefore moves
+    onto `cost_fraction`, and `trade_cost` is pinned against the composed
+    total so the two halves can still be told apart.
+    """
     pr = get_pair(sym)
     for dw in (0.25, -0.10, 0.0):
         legacy = abs(dw) * 0.5 * pr.spread_fraction(price)
         assert marks.cost_fraction(dw, pr, price) == legacy
-        assert marks.trade_cost(dw, pr, price, 5_000.0) == legacy * 5_000.0
+        expected = legacy + marks.commission_fraction(dw, pr, price, 5_000.0)
+        assert marks.trade_cost(dw, pr, price, 5_000.0) == pytest.approx(
+            expected * 5_000.0)
 
 
 def test_cost_bad_price_guard():
@@ -107,7 +117,7 @@ def test_fx_book_routes_through_marks_only():
     # _run_once_locked; the mark/cost formulas live in the locked body, so the
     # source pin must inspect both (the negative asserts still scan the real body).
     src = inspect.getsource(fx_book.run_once) + inspect.getsource(fx_book._run_once_locked)
-    assert "marks.cost_fraction" in src
+    assert "marks.total_cost_fraction" in src   # spread + commission, one site
     assert "marks.position_contribution" in src
     assert "0.5 * get_pair(s).spread_fraction" not in src
     assert "0.5 * spread_fraction" not in src
@@ -282,3 +292,91 @@ def test_zero_rates_are_a_perfect_noop():
     total, by_pair = _fin({"SPY": 1.5, "AAPL": -0.4},
                           margin_rate=0.0, borrow_rate=0.0, elapsed_days=10.0)
     assert total == 0.0 and by_pair == {}
+
+
+# ---------------------------------------------------------------------------
+# IBKR commission — the cost the FX stack never charged at all
+# ---------------------------------------------------------------------------
+# The FX cost model is spread-only. That is right for FX (the dealing spread IS
+# the cost) but wrong for equities and bonds, where IBKR bills per SHARE with a
+# per-ORDER minimum. On a small book the minimum dominates: a $0.35 floor on a
+# $1,000 position is 3.5 bps a side, ~50x the SPY half-spread.
+# Published IBKR Tiered US-stock schedule: USD 0.0035/share, min USD 0.35/order,
+# max 1% of trade value, plus USD 0.0002/share clearing.
+def test_commission_is_per_share_on_a_large_order():
+    """10,000 shares at $0.0037 all-in = $37, well clear of both bounds."""
+    c = marks.commission(delta_w=1.0, pair=_gp("SPY"), price=100.0, equity=1_000_000.0)
+    assert c == pytest.approx(10_000 * 0.0037, rel=1e-6)
+
+
+def test_the_per_order_minimum_binds_on_a_small_order():
+    """$100 of SPY is 1 share = $0.0037 of per-share fee, but IBKR still bills
+    the $0.35 floor. This is the cost that matters for a A$10k book."""
+    c = marks.commission(delta_w=0.01, pair=_gp("SPY"), price=100.0, equity=10_000.0)
+    assert c == pytest.approx(0.35, rel=1e-9)
+
+
+def test_the_one_percent_cap_binds_on_a_penny_stock():
+    """max 1% of trade value: 1,000 shares at $0.10 = $100 notional, per-share
+    would be $3.70, capped to $1.00."""
+    c = marks.commission(delta_w=1.0, pair=_gp("SPY"), price=0.10, equity=100.0)
+    assert c == pytest.approx(1.0, rel=1e-9)
+
+
+def test_fx_legs_use_the_fx_schedule_not_the_share_schedule():
+    """IBKR bills FX as bps of notional with its own minimum — a share count is
+    meaningless for a currency pair."""
+    c = marks.commission(delta_w=1.0, pair=_gp("AUDUSD"), price=0.70, equity=1_000_000.0)
+    assert c == pytest.approx(1_000_000.0 * 0.20 / 1e4, rel=1e-6)
+
+
+def test_commission_fraction_is_relative_to_equity():
+    frac = marks.commission_fraction(delta_w=0.01, pair=_gp("SPY"),
+                                     price=100.0, equity=10_000.0)
+    assert frac == pytest.approx(0.35 / 10_000.0, rel=1e-9)
+
+
+def test_a_missing_price_charges_nothing_rather_than_exploding():
+    assert marks.commission_fraction(0.1, _gp("SPY"), None, 10_000.0) == 0.0
+    assert marks.commission_fraction(0.1, _gp("SPY"), 0.0, 10_000.0) == 0.0
+
+
+def test_zero_weight_change_is_free():
+    assert marks.commission_fraction(0.0, _gp("SPY"), 100.0, 10_000.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Venue minimum order size
+# ---------------------------------------------------------------------------
+# IBKR's IDEALPRO needs a USD 25,000 account AND 20,000-unit minimum orders. A
+# A$5-10k book rebalancing 16 pairs trades ~A$900 a leg — orders that cannot be
+# placed. Charging them the USD 2.00 per-order minimum models a fee on an
+# impossible trade and compounds the book to zero; the honest outcome is that
+# the trade does not happen.
+@pytest.fixture
+def idealpro(monkeypatch):
+    """Opt IN to IBKR IDEALPRO's access rules. Off by default: nothing declares
+    IDEALPRO as these books' venue, and OANDA (which this repo has an adapter
+    for) allows micro lots. The constraint is one broker's, not physics."""
+    from trading_algo.forex import fx_config as _c
+    monkeypatch.setattr(_c, "VENUE_MIN_ORDER_NOTIONAL", {"fx": 20_000.0})
+
+
+def test_a_small_fx_order_is_not_executable_at_idealpro(idealpro):
+    assert marks.is_executable(0.18, _gp("EURUSD"), 5_000.0) is False   # ~A$900
+
+
+def test_a_large_enough_fx_order_is_executable(idealpro):
+    assert marks.is_executable(0.25, _gp("EURUSD"), 200_000.0) is True  # A$50k
+
+
+def test_equities_have_no_venue_minimum(idealpro):
+    """IBKR has no equivalent minimum for US stock, so a small order is fine —
+    it just pays the USD 0.35 per-order floor."""
+    assert marks.is_executable(0.01, _gp("SPY"), 10_000.0) is True
+
+
+def test_no_venue_minimum_is_configured_by_default():
+    """The shipped default must not silently impose one broker's access rules:
+    with it off, the same small FX order IS placeable."""
+    assert marks.is_executable(0.18, _gp("EURUSD"), 5_000.0) is True

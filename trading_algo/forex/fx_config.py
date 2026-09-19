@@ -219,18 +219,62 @@ def profile_names() -> list[str]:
 ACCOUNT_CURRENCY = "AUD"             # paper-book equity + reporting currency
 FX_RISK_FREE = 0.035                 # AUD cash benchmark for metrics (RBA-ish)
 
-# --- Financing the book cannot get for free --------------------------------
-# Equities and bonds ship swap_long = swap_short = 0.0 (the FX carry model IS
-# swap points), so without these a levered or short book pays NOTHING to borrow
-# the cash or the shares. Applied by `marks.financing_fraction` to equity/bond
-# legs only — FX swap points and crypto funding already price their own.
+# --- Broker costs: IBKR's published schedule -------------------------------
+# Sourced from IBKR's own pricing pages (2026-09), not invented. IBKR Pro /
+# Tiered, which is what an Australian resident trades on (IBKR Lite is US-only).
 #
-# THESE ARE ASSUMPTIONS, not measurements. They are plausible retail-broker
-# numbers (IBKR-style margin, liquid-name stock loan); set them to your actual
-# rates before treating any resulting haircut as precise. Set both to 0.0 to
-# recover the old no-financing behaviour exactly.
-MARGIN_RATE_ANNUAL = 0.055      # interest on the LONG DEBIT, max(0, L - 1)
-SHORT_BORROW_ANNUAL = 0.004     # stock-loan fee on short notional
+# MARGIN. Tier I (USD 0-100k) = IBKR Benchmark (Fed Funds effective) + 1.50%,
+# quoted at 5.12%. The spread narrows to +0.25% above USD 3M and the rate is
+# blended across tiers — irrelevant at this book's size, but that is why it is a
+# single number here rather than a tier table. It MOVES with the benchmark;
+# re-check it rather than trusting this constant indefinitely.
+MARGIN_RATE_ANNUAL = 0.0512
+# BORROW. IBKR bills the actual securities-lending rate, which is per-instrument
+# and moves daily — there is no published constant. 0.25% is an indicative
+# general-collateral / easy-to-borrow level, which is what every name in the
+# multi-asset universe is. A hard-to-borrow name can be multiples of this.
+SHORT_BORROW_ANNUAL = 0.0025
+
+# COMMISSION. The FX stack charged spread ONLY, which is right for FX (the
+# dealing spread IS the cost) and wrong for equities and bonds, where IBKR bills
+# per SHARE with a per-ORDER minimum. On a small book the minimum dominates: a
+# USD 0.35 floor on a USD 1,000 position is 3.5 bps a side, ~50x SPY's
+# half-spread. Modelling it is the difference between a plausible-looking small
+# book and an honest one.
+#
+# Amounts are charged in the ACCOUNT currency. IBKR bills these in USD, so for
+# the AUD books the floor is understated by the AUD/USD rate (~A$0.53, not
+# A$0.35) — a known, documented approximation; the per-order floor's EXISTENCE
+# is what changes the answer, not its last 35%.
+IBKR_EQUITY_PER_SHARE = 0.0037   # 0.0035 tiered + 0.0002 clearing
+IBKR_EQUITY_MIN_ORDER = 0.35     # per order
+IBKR_EQUITY_MAX_PCT = 0.01       # capped at 1% of trade value
+IBKR_FX_BPS = 0.20               # FX is bps of notional, not per share
+# IBKR's USD 2.00 FX per-order minimum is DEFAULTED OFF, deliberately. These
+# books' execution venue is not specified anywhere — the data comes from Yahoo
+# and ccxt, and the repo ships an OANDA adapter; OANDA charges spread only and
+# allows micro lots. Turning it on models IBKR IDEALPRO specifically, where a
+# A$5k book rebalancing 16 pairs pays ~USD 32 a BAR and is wiped out inside a
+# year. That is a true statement about IDEALPRO, not about the strategy, so it
+# is opt-in rather than a silent default. Measured impact: docs/DATA_FEEDS.md.
+IBKR_FX_MIN_ORDER = 0.00         # set to 2.00 to model IBKR IDEALPRO
+
+# VENUE MINIMUM ORDER SIZE. IBKR's FX desk (IDEALPRO) requires an account over
+# USD 25,000 AND a minimum order of 20,000 units of the base currency. A A$5-10k
+# book rebalancing 16 pairs trades ~A$900 a leg — those orders CANNOT BE PLACED,
+# so charging them a USD 2.00 minimum models a fee on an order that does not
+# exist, and compounds a book straight to zero.
+#
+# Orders below the venue minimum are therefore SKIPPED, not charged: the book
+# simply cannot reach its target that bar. That is what a real account would
+# experience, and it is the same idea as the equity side's
+# `config.MIN_VIABLE_EQUITY_BASE`. Set to 0.0 to disable the check.
+# DEFAULTED OFF for the same reason as the FX per-order minimum: it encodes
+# IBKR IDEALPRO's access rules, and nothing declares IDEALPRO as the venue. Set
+# to {"fx": 20_000.0} to model it — at which point a A$5-10k book can place no
+# FX order at all and its turnover collapses ~27x, which is the honest IDEALPRO
+# answer and the reason these books would need to be far larger to trade there.
+VENUE_MIN_ORDER_NOTIONAL: dict[str, float] = {}
 DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
 # Yahoo carries the FX majors from 2003-12-01 (EURGBP from 1999); verified
 # 2026-09-16. Training started 2015 against that, and the neural layer overfits

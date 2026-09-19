@@ -67,6 +67,63 @@ def cost_fraction(delta_w: float, pair: Pair, price: float | None) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Broker commission (IBKR's published schedule)
+# ---------------------------------------------------------------------------
+# The FX cost model is spread-only. Correct for FX — the dealing spread IS the
+# cost — and wrong for equities and bonds, where IBKR bills per SHARE with a
+# per-ORDER minimum. On a small book that minimum dominates everything else.
+def commission(delta_w: float, pair: Pair, price: float | None,
+               equity: float) -> float:
+    """Broker commission for ONE order, in the account currency.
+
+    Equity/bond legs use IBKR's per-share schedule with its per-order floor and
+    1%-of-notional cap; FX uses the bps-of-notional schedule, because a share
+    count is meaningless for a currency pair. A missing or non-positive price
+    charges nothing rather than raising — same guard philosophy as the spread.
+    """
+    from . import fx_config as _cfg
+
+    if not delta_w or not price or price != price or price <= 0 or equity <= 0:
+        return 0.0
+    notional = abs(delta_w) * equity
+    if notional <= 0:
+        return 0.0
+
+    if pair.asset_class == "fx":
+        return max(_cfg.IBKR_FX_MIN_ORDER, notional * _cfg.IBKR_FX_BPS / 1e4)
+
+    shares = notional / price
+    fee = max(_cfg.IBKR_EQUITY_MIN_ORDER, shares * _cfg.IBKR_EQUITY_PER_SHARE)
+    return min(fee, notional * _cfg.IBKR_EQUITY_MAX_PCT)
+
+
+def is_executable(delta_w: float, pair: Pair, equity: float) -> bool:
+    """Could this order actually be placed at the venue?
+
+    IBKR's IDEALPRO needs a USD 25k account and 20,000-unit minimum orders, so a
+    small book's ~A$900 FX leg is not a tradeable order at all. Charging it a
+    per-order fee models a fee on an order that cannot exist — and on a daily
+    rebalance that compounds a book to zero. Below the minimum the honest
+    outcome is that the trade does not happen.
+    """
+    from . import fx_config as _cfg
+
+    floor = (_cfg.VENUE_MIN_ORDER_NOTIONAL or {}).get(pair.asset_class, 0.0)
+    if floor <= 0:
+        return True
+    return abs(delta_w) * max(equity, 0.0) >= floor
+
+
+def commission_fraction(delta_w: float, pair: Pair, price: float | None,
+                        equity: float) -> float:
+    """`commission` expressed as a fraction of equity, to sit beside
+    `cost_fraction` in the book's per-bar cost term."""
+    if equity <= 0:
+        return 0.0
+    return commission(delta_w, pair, price, equity) / equity
+
+
+# ---------------------------------------------------------------------------
 # Financing: margin interest on the long debit + stock-loan fee on shorts
 # ---------------------------------------------------------------------------
 # Every equity and bond in the multi-asset universe ships
@@ -139,9 +196,24 @@ def financing_fraction(weights, get_pair=None, *, margin_rate: float,
     return total, {k: v for k, v in by_pair.items() if v}
 
 
+def total_cost_fraction(delta_w: float, pair: Pair, price: float | None,
+                        equity: float) -> float:
+    """Everything one order costs, as a fraction of equity: dealing spread PLUS
+    broker commission.
+
+    THE single definition of what a trade costs. The book, the per-pair
+    backtest and the dashboard's blotter reconstruction all route through this
+    (or through `trade_cost`, which is just this times equity), so the charge a
+    book applies and the charge the blotter shows can never disagree — a
+    regression `tests/test_fx_pnl.py` pins by reconstructing one from the other.
+    """
+    return (cost_fraction(delta_w, pair, price)
+            + commission_fraction(delta_w, pair, price, equity))
+
+
 def trade_cost(delta_w: float, pair: Pair, price: float | None, equity: float) -> float:
-    """Half-spread charge in the account currency (the currency `equity` is in)."""
-    return cost_fraction(delta_w, pair, price) * equity
+    """Spread + commission in the account currency (the currency `equity` is in)."""
+    return total_cost_fraction(delta_w, pair, price, equity) * equity
 
 
 # ---------------------------------------------------------------------------

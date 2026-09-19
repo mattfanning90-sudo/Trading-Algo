@@ -219,6 +219,38 @@ risk policy should not be changeable by a stray flag on one run.
   — AUD/USD moves are part of your real P&L. See `fxconv.py` and the "From AUD to a
   trade" flow on the dashboard's How page. Crypto/equity-only books (no AUDUSD in
   their panel) fall back to no translation until an AUD/USD rate is present.
+* **Broker fees are IBKR's published schedule** (2026-09), not estimates:
+  margin at Tier I `benchmark + 1.50% = 5.12%`; commission at `USD 0.0035/share
+  + 0.0002 clearing, min USD 0.35/order, max 1% of trade value` for stock and
+  `0.20 bps` for FX. Borrow is per-instrument and unpublished; the 0.25%
+  default is an indicative general-collateral level.
+
+  **The per-ORDER minimum is the finding, not the rate.** A small book
+  rebalancing many instruments every bar pays the floor on every leg, every bar.
+  Measured over full history with the SHIPPED defaults:
+
+  | book | before (spread only) | with IBKR fees |
+  |---|---|---|
+  | `multiasset` (A$10k, 9 equity legs) | CAGR −7.65% | **CAGR −23.98%** |
+  | `matt` (A$5k, FX only) | CAGR −8.24% | CAGR −9.51% |
+
+  `multiasset` loses ~16 points of CAGR to the USD 0.35 equity floor alone.
+  `matt` is barely touched because **IBKR's USD 2.00 FX per-order minimum ships
+  OFF** — these books' execution venue is not declared anywhere (data is Yahoo +
+  ccxt, and the repo has an OANDA adapter; OANDA charges spread only and allows
+  micro lots). Set `IBKR_FX_MIN_ORDER = 2.00` to model IDEALPRO, at which point
+  a A$5k book pays ~USD 32 a bar and is wiped out inside a year.
+
+  IBKR's FX desk additionally requires a **USD 25,000 account and 20,000-unit
+  minimum orders**. `marks.is_executable` models that via
+  `VENUE_MIN_ORDER_NOTIONAL` (also **off by default**, same reasoning): turn it
+  on and these books can place no FX order at all — turnover collapses ~27x.
+
+  **Read the IDEALPRO numbers as a statement about book SIZE, not strategy.** At
+  these sizes an FX book is not viable at IBKR. The options are a materially
+  larger book, a venue without the floor, or far lower turnover than the
+  875–1,800x gross these books run.
+
 * **US equities in an AUD book**: `swap_long_pips = swap_short_pips = 0.0` on
   every equity and bond, because the FX carry model IS swap points. Financing is
   therefore charged **separately** by `marks.financing_fraction` (added
