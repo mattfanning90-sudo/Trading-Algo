@@ -965,12 +965,62 @@ def attribution_status(account: str, synthetic: bool) -> None:
               f"({c['cost']:,.2f} {c['currency']} on {c['notional']:,.0f} traded)")
 
     if rep.get("tracking_alert"):
+        _print_tracking_diagnosis(account, state)
         notifications.notify(
             "tracking_error",
             f"[{account}] live tracking error {rep['tracking_error_bps']:.0f}bps "
-            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget",
+            f"exceeds the {int(attribution.TRACKING_ERROR_ALERT_BPS)}bps budget "
+            "— check the exposure gap and rebalance dates in the report before "
+            "concluding the book is mis-executing",
             level="alert", account=account,
             tracking_error_bps=rep["tracking_error_bps"])
+
+
+def _print_tracking_diagnosis(account: str, state: dict) -> None:
+    """Explain a tracking-error breach instead of just announcing it.
+
+    Measured on `full` 2026-09-19 (733bps against a 200bps budget): the mean
+    daily difference was +1.4bps, i.e. no systematic drift at all — the breach
+    is dispersion, and it has two structural sources that are NOT execution
+    error:
+
+      1. EXPOSURE GAP. Paper holds whole shares above a per-region dust floor,
+         so it lands at some fraction of the gross the strategy asked for. The
+         backtest holds the target exactly.
+      2. REBALANCE TIMING. Paper rebalances on the first run of a calendar month
+         subject to MIN_REBALANCE_GAP_DAYS; the backtest rebalances at month
+         END. For most of a month the two hold different books, so on the days
+         one turns over and the other does not, returns diverge sharply.
+
+    Printing both makes the number interpretable. A breach with a large exposure
+    gap or mismatched dates is a COMPARISON artefact; a breach with neither is
+    the execution problem the budget was written to catch.
+    """
+    from . import data, strategy
+    from .regions import get_region
+
+    print("  Tracking-error diagnosis (before blaming execution):")
+    for k, sl in (state.get("sleeves") or {}).items():
+        try:
+            region = get_region(k)
+            px, ix = data.load_region(region, cfg.START)
+            invested = sum(n * float(px[t].iloc[-1])
+                           for t, n in (sl.get("positions") or {}).items()
+                           if t in px.columns)
+            eq = invested + float(sl.get("cash", 0.0))
+            target = strategy.compute_targets(
+                px, ix, _account_params(state, region)).abs().sum()
+            held = invested / eq if eq else 0.0
+            gap = (held / target - 1.0) if target else 0.0
+            print(f"    [{k}] held gross {held:6.1%} vs target {target:6.1%}"
+                  f"  ({gap:+.0%} of target)   last rebalance "
+                  f"{sl.get('last_rebalance_date') or 'never'}")
+        except Exception as exc:                     # diagnosis must never fail the report
+            print(f"    [{k}] diagnosis unavailable: {exc}")
+    print("    NOTE: the predicted curve is the tail of a backtest started at "
+          f"{cfg.START}, so it holds a mature book; this one was funded "
+          f"{(state.get('equity_history') or [['?']])[0][0]}. Different holdings "
+          "by construction — expect dispersion that is not mis-execution.")
 
 
 def promotion_status(account: str) -> None:
