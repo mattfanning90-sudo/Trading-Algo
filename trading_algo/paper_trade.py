@@ -703,8 +703,15 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                     reason = _empty_target_reason(prices, index_px, params, elig)
                     print(f"  [{k}] flat — {reason} (holding cash).")
                     status = f"cash:{reason}"
+                    # Persist WHY across the days that follow. The daily status
+                    # is overwritten with the generic 'cash:idle' on every
+                    # non-rebalance day, which erases the difference between
+                    # "the regime gate said cash" (correct, and the audit should
+                    # stay quiet) and "the feed was broken" (an emergency).
+                    sleeve["last_flat_reason"] = reason
                 else:
                     status = "rebalanced"
+                    sleeve.pop("last_flat_reason", None)
                 rebalance_sleeve(region, sleeve, targets, px_today, today,
                                  state["trades"], frozen=dq.excluded)
                 sleeve["last_rebalance_date"] = today
