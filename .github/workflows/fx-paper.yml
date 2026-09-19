@@ -49,6 +49,8 @@ jobs:
       # Risk alerts (drawdown breaker, crowding, audit ERRORs) leave the box
       # through this. Unset -> the webhook channel silently no-ops.
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      # F14 secondary price source; unset -> Yahoo only (silent no-op).
+      TIINGO_API_SECRET: ${{ secrets.TIINGO_API_SECRET }}
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
       SYNTH: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'synthetic') && '--synthetic' || '' }}
       USE_ML: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ml == false) && 'false' || 'true' }}

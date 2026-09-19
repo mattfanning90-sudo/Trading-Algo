@@ -56,12 +56,28 @@ def register_fallback(name: str, loader) -> None:
     _FALLBACK_LOADERS[name] = loader
 
 
+# Adapters that ship with the repo and self-register on import. Naming one in
+# config.DATA_FALLBACK_SOURCE is enough — no caller should have to remember to
+# import the module just to populate the registry.
+_BUILTIN_FALLBACKS = {"tiingo": ("trading_algo.tiingo_data", "load")}
+
+
 def _try_fallback(tickers: list[str], start: str, end: str | None):
     """Return a fallback price frame, or None if no usable fallback is configured."""
     name = getattr(cfg, "DATA_FALLBACK_SOURCE", None)
     if not name:
         return None
     loader = _FALLBACK_LOADERS.get(name)
+    if loader is None and name in _BUILTIN_FALLBACKS:
+        # Resolve the attribute explicitly rather than relying on the module's
+        # import-time self-registration: an already-imported module would not
+        # re-run it, so a registry cleared at runtime could never recover.
+        import importlib
+        mod_name, attr = _BUILTIN_FALLBACKS[name]
+        try:
+            loader = getattr(importlib.import_module(mod_name), attr)
+        except Exception:
+            return None
     if loader is None:
         return None
     try:

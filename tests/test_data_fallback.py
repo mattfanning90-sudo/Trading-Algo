@@ -93,3 +93,62 @@ def test_load_region_drops_rows_where_only_the_index_printed(monkeypatch):
     assert prices.index[-1] == idx[2], "the index-only row must not be the as-of date"
     assert prices.notna().any(axis=1).all(), "no all-NaN rows survive"
     assert len(index_px) == 4, "the index series itself keeps its own calendar"
+
+
+# ---------------------------------------------------------------------------
+# F14: the built-in Tiingo secondary source
+# ---------------------------------------------------------------------------
+# A TIINGO_API_SECRET repo secret has existed since 2026-06-27 with ZERO code
+# references — a credential that bought nothing. The fallback registry has
+# existed just as long with nothing registered in it, so `_try_fallback` always
+# returned None. These two gaps fit each other exactly.
+import json as _json
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._p = _json.dumps(payload).encode()
+
+    def read(self):
+        return self._p
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _tiingo_payload():
+    return [{"date": "2026-01-02T00:00:00.000Z", "adjClose": 10.0},
+            {"date": "2026-01-03T00:00:00.000Z", "adjClose": 11.0}]
+
+
+def test_tiingo_loader_returns_a_close_frame(monkeypatch):
+    from trading_algo import tiingo_data
+    monkeypatch.setenv("TIINGO_API_SECRET", "tok")
+    monkeypatch.setattr(tiingo_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(_tiingo_payload()))
+    df = tiingo_data.load(["AAPL"], "2026-01-01")
+    assert list(df.columns) == ["AAPL"] and len(df) == 2
+    assert df["AAPL"].iloc[-1] == 11.0
+
+
+def test_tiingo_loader_is_a_noop_without_a_token(monkeypatch):
+    from trading_algo import tiingo_data
+    monkeypatch.delenv("TIINGO_API_SECRET", raising=False)
+    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    assert tiingo_data.load(["AAPL"], "2026-01-01") is None
+
+
+def test_named_builtin_fallback_self_registers(monkeypatch):
+    """Setting DATA_FALLBACK_SOURCE='tiingo' must be enough — no caller should
+    have to remember to import the adapter to register it."""
+    from trading_algo import data, tiingo_data
+    monkeypatch.setattr(cfg, "DATA_FALLBACK_SOURCE", "tiingo")
+    monkeypatch.setenv("TIINGO_API_SECRET", "tok")
+    monkeypatch.setattr(tiingo_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(_tiingo_payload()))
+    monkeypatch.delitem(data._FALLBACK_LOADERS, "tiingo", raising=False)
+    out = data._try_fallback(["AAPL"], "2026-01-01", None)
+    assert out is not None and "AAPL" in out.columns

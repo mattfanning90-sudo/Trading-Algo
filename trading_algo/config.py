@@ -269,10 +269,17 @@ DELISTING_REPLACEMENT_RETURN: float | None = None
 # ---------------------------------------------------------------------------
 # Market-data fallback (backlog F14, platform)
 # ---------------------------------------------------------------------------
-# Name of a registered secondary price source to try when the primary (Yahoo)
-# returns nothing (e.g. a 403). None = primary only. Registered in data.py via
-# data.register_fallback(); fallback data still passes the F7 quality gate.
-DATA_FALLBACK_SOURCE: str | None = None
+# Name of a secondary price source to try when the primary (Yahoo) returns
+# nothing (e.g. a 403). None = primary only. Built-in adapters resolve
+# themselves (see data._BUILTIN_FALLBACKS); anything else must be registered via
+# data.register_fallback(). Fallback data still passes the F7 quality gate, so a
+# poor secondary cannot slip bad prints into a rebalance.
+#
+# "tiingo" uses $TIINGO_API_SECRET. With no token set it is a silent no-op, so
+# selecting it costs nothing on a machine without the credential. HONEST LIMIT:
+# Tiingo's daily endpoint serves US listings, not the .AX / .L tickers the ASX
+# and FTSE sleeves trade — this is redundancy for the US sleeve only.
+DATA_FALLBACK_SOURCE: str | None = "tiingo"
 
 # ---------------------------------------------------------------------------
 # Pre-trade ADV / liquidity cap (backlog F15 / foundation P0-I)

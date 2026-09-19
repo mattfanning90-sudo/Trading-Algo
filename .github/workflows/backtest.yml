@@ -46,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      # F14 secondary price source; unset -> Yahoo only (silent no-op).
+      TIINGO_API_SECRET: ${{ secrets.TIINGO_API_SECRET }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
