@@ -303,6 +303,42 @@ cleanup.
 | 6 | `backtest.yml` | **Re-run.** Its July failure (`fx.py` float-vs-Series) was already fixed; the workflow just needed dispatching. |
 | 7 | TSX funding | **Funded at 25%.** Cleared the register → backtest → fund gate. **Survivorship-biased, so an upper bound.** Note the scope limit: this does not retrofit the running `full` book, which keeps the allocations baked into its state — that would mean crossing ~A$25k AUD→CAD and is a separate, deliberate trade. |
 
+## After-tax reporting (2026-09-19)
+
+`tax.py` measures two things the books never accounted for. Reporting only — it
+never touches an equity curve, a weight or a fill, because tax is entity-specific.
+
+**Capital gains.** Across all four equity books, **0 of 50 realised round-trips
+cleared the 12 months** an Australian CGT discount requires (median hold 19–33
+days). Every gain is short-term and taxed at the full marginal rate.
+
+**`full` is down A$496 and still owes ~A$76 of tax** at 47%: realised gains net
+to +A$162 while the losses keeping the book underwater are unrealised and
+therefore not yet deductible. That is the classic short-term-trading trap, and it
+is invisible in every pre-tax number the dashboard shows.
+
+**The implication is a design one, not a reporting one.** At a high marginal rate
+this can exceed every transaction cost in the repo combined — which makes
+**holding period a strategy parameter**, not merely a cost. A 12-month hold is a
+materially different after-tax strategy from the same signal rebalanced monthly.
+
+**Dividend withholding.** The price series is `auto_adjust=True` — total return —
+so the books silently credit themselves 100% of every dividend. Measured on
+`full`: A$81 received while held, A$0.58 withheld (US 15% under treaty). Small
+here only because momentum selects low-yield semis and growth names.
+
+**A 100x bug caught in the first run.** LSE dividends come off Yahoo in PENCE,
+exactly like LSE prices — which is why FTSE carries `price_scale=0.01`. The first
+report claimed A$7,742 of dividends on a A$100k book in three months. Pinned by
+`test_lse_dividends_are_scaled_from_pence_to_pounds`.
+
+Also caught by its own test: a **365-day** CGT threshold is wrong. 2024-01-01 to
+2025-01-01 is 366 calendar days but exactly 12 months, and earns no discount — a
+day count silently halves the tax on every trade straddling a 29 February. The
+comparison is a calendar-month offset.
+
+---
+
 ## New finding: `--synthetic` does not isolate state
 
 Found the hard way during Phase 3. Running
