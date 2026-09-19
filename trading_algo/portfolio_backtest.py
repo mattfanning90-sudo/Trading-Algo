@@ -71,8 +71,9 @@ def run_portfolio_backtest(regions: list[str] | None = None,
             prices, index_px = data.synthetic_region(region, start=start, end=syn_end)
         else:
             prices, index_px = data.load_region(region, start, end, tickers=pit_tickers)
+        volume = data.capacity_volume(prices, start, end, synthetic=synthetic)
         bt = run_backtest(prices, index_px, region, membership=membership,
-                          apply_delisting=apply_delisting)
+                          apply_delisting=apply_delisting, volume=volume)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         sleeves[key] = bt

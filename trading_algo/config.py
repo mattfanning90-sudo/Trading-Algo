@@ -279,8 +279,19 @@ DATA_FALLBACK_SOURCE: str | None = None
 # ---------------------------------------------------------------------------
 # Cap each position at this fraction of the name's trailing average DOLLAR volume
 # so the book never targets more than it could realistically trade. None = off
-# (no cap — a perfect no-op). The cap is applied inside strategy.compute_targets
-# so backtest and paper size identically (invariant #3). Needs volume data.
+# (a perfect no-op). Needs volume data — `data.capacity_volume` fetches it, and
+# ONLY when this or IMPACT_COEF is set, since it is a second full download.
+#
+# SCOPE — read before switching this on. The cap binds in the BACKTEST path:
+# `backtest.py` builds the per-name `capacity` series and passes it to
+# `strategy.targets_at`. Paper trading calls `compute_targets` WITHOUT a
+# capacity argument, so it does NOT honour the cap. With this off the two paths
+# agree exactly; switch it on and the same signal is sized one way in the
+# backtest and another in the live book. `paper_trade.warn_if_capacity_unhonoured`
+# says so loudly on every affected run.
+#
+# (This comment previously claimed the cap was applied inside compute_targets
+# "so backtest and paper size identically". It never was.)
 ADV_CAP_PCT: float | None = None
 ADV_WINDOW = 20                    # trailing days for the average dollar volume
 

@@ -212,6 +212,32 @@ def _is_stale(region, last_bar, now: datetime | None = None) -> bool:
 # ---------------------------------------------------------------------------
 # Accounting
 # ---------------------------------------------------------------------------
+def warn_if_capacity_unhonoured() -> None:
+    """Refuse to let a capacity feature diverge backtest from paper in silence.
+
+    The F15 ADV cap and the F6 impact cost are applied in `backtest.py`, which
+    builds a per-name `capacity` series and hands it to `strategy.targets_at`.
+    Paper trading calls `compute_targets` WITHOUT a capacity argument, so it
+    does not honour either. With both off (the default) that is a perfect no-op
+    and the two paths agree exactly.
+
+    Switch one on, though, and the same signal would be sized one way in the
+    backtest and another in the live book — which is the spirit of invariant #3
+    broken quietly. Wiring the cap into paper is a deliberate change to how a
+    live book sizes, so it is a decision, not a default. Until it is made, say
+    so out loud on every run that could be affected.
+    """
+    from . import config as cfg
+    on = [name for name, val in (("ADV_CAP_PCT", cfg.ADV_CAP_PCT),
+                                 ("IMPACT_COEF", cfg.IMPACT_COEF)) if val]
+    if not on:
+        return
+    print(f"  ⚠ {' and '.join(on)} set, but paper trading does not apply "
+          "capacity limits — they bind in the BACKTEST path only, so backtest "
+          "and paper will size differently from the same signal. See "
+          "config.ADV_CAP_PCT.")
+
+
 def _empty_target_reason(prices: pd.DataFrame, index_px: pd.Series,
                          p, eligible: set[str] | None) -> str:
     """Diagnose WHY `compute_targets` returned an all-cash book, so an idle
@@ -567,6 +593,7 @@ def run_daily(account: str, synthetic: bool) -> None:
 
 
 def _run_daily_locked(account: str, synthetic: bool) -> None:
+    warn_if_capacity_unhonoured()
     state = load_state(account)
     # Carry forward the last known-good rates so a transient single-pair fetch
     # failure can't NaN the book's equity (see fx_snapshot). Merge rather than

@@ -189,6 +189,29 @@ def load_region(region: Region, start: str, end: str | None = None,
     return prices, index_px
 
 
+def capacity_volume(prices: pd.DataFrame, start: str, end: str | None, *,
+                    synthetic: bool) -> pd.DataFrame | None:
+    """Share volume for the capacity features, or None when neither is enabled.
+
+    The F15 pre-trade ADV cap and the F6 market-impact cost both need volume,
+    and both are a perfect no-op without it. Volume is a SECOND full download,
+    so this returns None unless one of them is actually switched on — the
+    default path must not pay for data it will not use.
+
+    Both features were previously double-gated: the config values were None AND
+    no caller ever passed `volume=` to `backtest.run_backtest`, so
+    `data.load_volume` had zero callers and setting the config alone changed
+    nothing at all. This helper is the missing half.
+    """
+    from . import config as cfg
+    if not (cfg.ADV_CAP_PCT or cfg.IMPACT_COEF):
+        return None
+    tickers = list(prices.columns)
+    if synthetic:
+        return synthetic_volume(tickers, prices.index)
+    return load_volume(tickers, start, end)
+
+
 def _warn_if_stale(region: Region, prices: pd.DataFrame, end: str | None) -> None:
     """Alert when a whole region's panel has stopped advancing.
 
