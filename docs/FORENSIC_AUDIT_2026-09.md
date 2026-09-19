@@ -133,8 +133,8 @@ had correctly learned to ignore its own alarm.
 | 3 | Finish the champion/challenger loop | ✅ **done** |
 | 4 | Populate the FX backtest tab | ✅ **done** |
 | 5 | Publish the existing reports | ✅ **done** |
-| 6 | Capacity realism (ADV + impact) | ⬜ |
-| 7 | Housekeeping | ⬜ |
+| 6 | Capacity realism (ADV + impact) | ✅ **done** (still off by default) |
+| 7 | Housekeeping | ✅ **mostly** — 3 items need your decision |
 
 ### Phase 0 — done
 
@@ -242,6 +242,69 @@ Two things that surfaced the moment the reports ran:
   already raises a `tracking_error` alert, which until Phase 1 nobody received.
 - **F10 says NOT READY** for `full` (4 rebalance months of the 6 required). The
   gate works and is correctly withholding.
+
+### Phase 6 — done (features remain off)
+
+`60066cf` adds `data.capacity_volume()`, the missing half that made the ADV cap
+and impact cost reachable at all. Both stay **off**; the deterministic
+regression gate (`ci_regression --check`) still matches baseline.
+
+Measured on real US data, 2012-01 → 2026-09, 125 names, A$100k:
+
+| config | CAGR | Sharpe | maxDD | cum cost |
+|---|---|---|---|---|
+| baseline (both off) | +7.36% | +0.42 | −16.32% | 4.07% |
+| ADV cap 5% of ADV$ | +7.36% | +0.42 | −16.32% | 4.07% |
+| impact coef 0.1 | +7.31% | +0.42 | −16.36% | 4.69% |
+| both on | +7.31% | +0.42 | −16.36% | 4.69% |
+
+**The ADV cap is a complete no-op at this capital** — a A$100k book trading
+megacaps never approaches 5% of daily dollar volume. It is a capacity instrument
+for a much larger book, not a live knob today. Impact is real but small: 5bps of
+CAGR, +62bps of cumulative drag.
+
+`config.py`'s claim that the cap "is applied inside strategy.compute_targets so
+backtest and paper size identically" was false and is corrected. Rather than
+silently wire a position cap into a live book,
+`paper_trade.warn_if_capacity_unhonoured()` now says so loudly on any run where
+it could matter — the divergence cannot be silent.
+
+### Phase 7 — mostly done
+
+`03c0ce3` gives the synthetic path the protection `--init` has had since C2 (see
+the finding above), corrects the MetaLabeler claims in two documents, drops
+`fx-train.yml`'s stale dev-branch trigger, and adds a **Deliberately dormant**
+register to `README.md` so the next audit does not re-derive 12 switched-off
+features.
+
+`backtest.yml`'s July failure (`fx.py` `AttributeError: 'float' object has no
+attribute 'index'`) is **already fixed** — `fx.py:64` now filters on
+`isinstance(s, pd.Series)`. Verified locally: `dashboard.backtest_store` runs
+clean and writes the cache. The workflow only needs a re-run, which commits to
+`main` and so is left for a human.
+
+**TSX, backtested 2026-09-19** (the register → backtest → fund gate): raw Sharpe
+0.948, haircut Sharpe 0.608, DSR 0.99 (N=6), maxDD −15.6%, Calmar 0.46, monthly
+turnover 39.1%, cost drag 7.0%. **Survivorship-biased — an upper bound**, since
+no region sets `constituents_file`. Funding it is a capital decision, not a
+cleanup.
+
+---
+
+## Open — needs a human decision
+
+1. **`gh secret set ALERT_WEBHOOK_URL`.** Until it exists every risk alert
+   no-ops. F12's AC3 stays unmet.
+2. **`NEWS_API_KEY` vs the three workflows that reference it.** Either set it or
+   remove the references and the dashboard's "add a key" message.
+3. **`TIINGO_API_SECRET`** is configured with zero code references. Use it as
+   the F14 fallback source, or revoke it — an unused credential is pure risk.
+4. **`MetaLabeler`**: wire it (needs a spec) or delete it. Today it trains daily
+   into a file nothing reads.
+5. **Re-run `backtest.yml`** to refresh the two-month-stale dashboard cache.
+6. **TSX funding** — the backtest is above.
+7. **F3 tracking error on `full` is 733bps against a 200bps budget.** The gate
+   works; the book does not pass it. Needs investigation.
 
 ---
 
