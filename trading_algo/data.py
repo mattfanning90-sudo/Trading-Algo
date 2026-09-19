@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from typing import Callable
 
 import numpy as np
@@ -18,6 +19,22 @@ from . import config as cfg
 from .regions import Region
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+
+# How long a cached price file stays usable. This applies ONLY to an open-ended
+# request (`end is None`, i.e. "prices up to now"), which goes stale every
+# trading day. A request with an explicit `end` is a closed historical window and
+# its cache is valid forever — expiring that would re-download the whole universe
+# on every backtest for nothing.
+#
+# There was NO freshness check at all before this: a cache file was served for
+# the life of the file. Local caches written 2026-07-24 were still being served
+# on 2026-09-19, so every local backtest ran on 8-week-old prices while
+# `yfinance` was returning current data on demand. CI never saw it, because the
+# scheduled workflows cache pip but not `trading_algo/.cache`.
+#
+# 20h < one calendar day, so a daily scheduled run always refetches, while a
+# burst of local runs in one session still shares a single download.
+CACHE_TTL_HOURS = 20
 
 # --- Market-data fallback registry (backlog F14) ---------------------------
 # A secondary source is tried when the primary (Yahoo) returns nothing. Sources
@@ -54,10 +71,21 @@ def _cache_path(cache_key: str) -> str:
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
 
 
+def _cache_is_fresh(cache_file: str, end: str | None) -> bool:
+    """Is this cache file still usable?
+
+    A closed window (`end` given) is immutable history and never expires. An
+    open-ended request means "up to now", so its cache is only good for
+    `CACHE_TTL_HOURS`.
+    """
+    if end is not None:
+        return True
+    age_hours = (time.time() - os.path.getmtime(cache_file)) / 3600.0
+    return age_hours < CACHE_TTL_HOURS
+
+
 def _download_primary(tickers: list[str], start: str, end: str | None):
     """Primary price source (Yahoo via yfinance). Raises on repeated failure."""
-    import time
-
     import yfinance as yf  # imported lazily so the package works offline
 
     backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
@@ -80,7 +108,7 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
 
-    if use_cache and os.path.exists(cache_file):
+    if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
         # Reuse the cache for this key even if a few tickers persistently fail to
         # download (else every call re-fetches the whole universe). Return the
         # requested tickers that are present.
