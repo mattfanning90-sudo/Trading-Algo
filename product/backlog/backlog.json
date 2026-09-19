@@ -270,6 +270,11 @@
           "claim": "The FX book already logs an equity curve that this can borrow its pattern from.",
           "source": "trading_algo/forex/fx_book.py",
           "confidence": "medium"
+        },
+        {
+          "claim": "TRIGGERED 2026-09-19, and it immediately FAILS its own budget: `full` shows live-vs-backtest tracking error of 733bps against the 200bps budget, and already raises a tracking_error alert that nothing was receiving until the webhook channel landed. Needs investigation - the gate works, the book does not pass it.",
+          "source": ".github/workflows/monthly-report.yml; trading_algo/tearsheet.py; trading_algo/paper_trade.py",
+          "confidence": "high"
         }
       ],
       "role_reviews": {
@@ -473,6 +478,11 @@
         {
           "claim": "report.py already renders markdown metrics that a tearsheet can extend.",
           "source": "trading_algo/report.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "TRIGGERED 2026-09-19: trading_algo.tearsheet has always had its own main()/argparse and no caller. monthly-report.yml now runs it for every equity book on the 1st and uploads the tearsheets as an artifact. Verified against all four live books.",
+          "source": ".github/workflows/monthly-report.yml; trading_algo/tearsheet.py; trading_algo/paper_trade.py",
           "confidence": "high"
         }
       ],
@@ -1012,6 +1022,11 @@
           "claim": "The $1k micro account already demonstrated fee drag kills small size.",
           "source": "HANDOFF.md; README.md",
           "confidence": "high"
+        },
+        {
+          "claim": "TRIGGERED 2026-09-19: --promotion now runs monthly and reports NOT READY for `full` (4 rebalance months of the 6 required). The gate is functioning and correctly withholding; it has still never been exercised against a real order because execution_ibkr has no production caller.",
+          "source": ".github/workflows/monthly-report.yml; trading_algo/tearsheet.py; trading_algo/paper_trade.py",
+          "confidence": "high"
         }
       ],
       "role_reviews": {
@@ -1122,6 +1137,11 @@
         {
           "claim": "Modelled slippage is a flat per-region bps (ASX 10 / US 5 / FTSE 8) with no realized comparison.",
           "source": "trading_algo/fees.py; trading_algo/regions.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "TRIGGERED 2026-09-19 and producing REAL numbers: decision prices are now recorded (46/81 trades on `full`, 18/23 on `ultra`), so --tca reports realised 5.0bps vs 5.0 modelled (US) and 8.1 vs 8.0 (FTSE) — the cost model is accurate. The July audit's '0 of 49 carry a decision price' is stale.",
+          "source": ".github/workflows/monthly-report.yml; trading_algo/tearsheet.py; trading_algo/paper_trade.py",
           "confidence": "high"
         }
       ],

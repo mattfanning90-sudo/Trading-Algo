@@ -131,8 +131,8 @@ had correctly learned to ignore its own alarm.
 | 1 | Connect the alert channel | ✅ **done** (one manual step left) |
 | 2 | Stop silent data staleness | ✅ **done** |
 | 3 | Finish the champion/challenger loop | ✅ **done** |
-| 4 | Populate the FX backtest tab | ⬜ |
-| 5 | Publish the existing reports | ⬜ |
+| 4 | Populate the FX backtest tab | ✅ **done** |
+| 5 | Publish the existing reports | ✅ **done** |
 | 6 | Capacity realism (ADV + impact) | ⬜ |
 | 7 | Housekeeping | ⬜ |
 
@@ -223,6 +223,25 @@ books. It goes live only when a genome earns promotion.
 verdict honestly, distinguishing `none_cleared` from `cohort_overfit` with the
 real PBO and `DSR_MIN`, and is already test-covered. Planned work that turns out
 to exist is recorded, not rebuilt.
+
+### Phases 4 and 5 — done
+
+`f00c667` refreshes the FX BACKTEST cache on scheduled runs, so the tab stops
+showing "ILLUSTRATIVE NUMBERS … PLACEHOLDERS". **Be ready for what it says:**
+`matt` over 2003-12 → 2026-09 is CAGR **−8.24%**, Sharpe **−1.93**, max drawdown
+**−92.1%**. The placeholders flattered the book. This agrees with the Phase 3
+finding — the FX agents have no measurable edge — and the tab will now say so.
+
+`89c0396` adds `monthly-report.yml`, the trigger F5/F11/F3/F10 never had.
+`trading_algo.tearsheet` even ships its own `main()` and argparse; nothing had
+ever called it.
+
+Two things that surfaced the moment the reports ran:
+
+- **F3 tracking error on `full` is 733bps against a 200bps budget — over.** It
+  already raises a `tracking_error` alert, which until Phase 1 nobody received.
+- **F10 says NOT READY** for `full` (4 rebalance months of the 6 required). The
+  gate works and is correctly withholding.
 
 ---
 
