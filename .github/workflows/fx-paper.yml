@@ -84,7 +84,11 @@ jobs:
             echo "::endgroup::"
             ML_FLAG="--ml"
           fi
-          python -m trading_algo.forex.engine --once $ML_FLAG $SYNTH
+          # --champions lets the live cycle consume genomes the monthly breeder
+          # promoted through the DSR/PBO gate. Inert while every roster is empty
+          # (champions_agents then returns exactly the core five agents), so this
+          # changes nothing until a genome actually earns its place.
+          python -m trading_algo.forex.engine --once --champions $ML_FLAG $SYNTH
 
       - name: Audit live books (end-to-end verification)
         # Reads the state this run just wrote and re-derives it from the trade
