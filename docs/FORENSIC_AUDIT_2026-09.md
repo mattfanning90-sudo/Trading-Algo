@@ -128,7 +128,7 @@ had correctly learned to ignore its own alarm.
 | Phase | What | Status |
 |---|---|---|
 | 0 | Make the audit trustworthy | ✅ **done** — 5 errors → 0; `--strict` armed |
-| 1 | Connect the alert channel | ⬜ |
+| 1 | Connect the alert channel | ✅ **done** (one manual step left) |
 | 2 | Stop silent data staleness | ⬜ |
 | 3 | Finish the champion/challenger loop | ⬜ |
 | 4 | Populate the FX backtest tab | ⬜ |
@@ -150,6 +150,22 @@ books and 1 against a book with a never-evaluated funded sleeve.
 The remaining ASX finding is now an honest WARN ("evaluated 2026-09-15 and chose
 cash, but no reason was recorded") and self-heals to INFO at the next rebalance,
 when `paper_trade` persists `last_flat_reason`.
+
+### Phase 1 — done, bar one manual step
+
+`2f0d665` adds a `webhook` notification channel (stdlib `urllib`, no new
+dependency) and points `config.NOTIFY_CHANNEL` at it. `ALERT_WEBHOOK_URL` is
+wired at **job** level in all three scheduled workflows, so drawdown-breaker
+alerts raised during the trading run reach it too — not only the audit step.
+
+Design points worth keeping: no URL configured is a **silent no-op** (so
+selecting the channel globally is safe on a laptop), and the **log happens
+first**, because `notify()` swallows channel exceptions — posting first would
+let a dead endpoint take the local trace down with it. Verified end-to-end
+against a local HTTP server; no book data was sent to any external endpoint.
+
+**Remaining manual step:** `gh secret set ALERT_WEBHOOK_URL`. Until that exists
+the channel no-ops and nothing is delivered. F12's AC3 stays unmet until then.
 
 ---
 

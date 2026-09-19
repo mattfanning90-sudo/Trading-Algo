@@ -656,7 +656,7 @@
       "status": "in_progress",
       "owner_role": "chief_engineer",
       "problem": "Signals run on whatever the feed returns; a stale, gapped, or split-corrupted print (a known yfinance failure mode) can silently corrupt every downstream number and generate a real order.",
-      "hypothesis": "A shared validator that flags stale prices, gaps, outliers and corporate-action jumps before signals \u2014 and holds prior weights rather than trade on garbage \u2014 prevents bad prints from becoming orders.",
+      "hypothesis": "A shared validator that flags stale prices, gaps, outliers and corporate-action jumps before signals — and holds prior weights rather than trade on garbage — prevents bad prints from becoming orders.",
       "evidence": [
         {
           "claim": "yfinance split/dividend errors and LSE pence scaling are called out as known landmines.",
@@ -981,7 +981,7 @@
       "status": "in_progress",
       "owner_role": "algo_trader",
       "problem": "Switching from paper to real capital is an unguarded manual call; nothing objectively checks track record, overfitting, drawdown, or account solvency before a live order can fire.",
-      "hypothesis": "A hard promotion gate in the execution path \u2014 refusing live unless track-record, DSR/PBO, drawdown and min-account-size criteria are met \u2014 operationalizes the HANDOFF 'Decision agent' and protects capital.",
+      "hypothesis": "A hard promotion gate in the execution path — refusing live unless track-record, DSR/PBO, drawdown and min-account-size criteria are met — operationalizes the HANDOFF 'Decision agent' and protects capital.",
       "evidence": [
         {
           "claim": "HANDOFF describes a Decision agent that should gate execution, including a minimum-account-size pre-trade check.",
@@ -1092,7 +1092,7 @@
       "status": "in_progress",
       "owner_role": "algo_trader",
       "problem": "No trade records decision price vs fill price, so realized slippage is never measured against the modelled slippage_bps and the backtest-vs-live gap can't be diagnosed.",
-      "hypothesis": "Capturing fills and logging implementation shortfall per order \u2014 rolled up per sleeve vs the modelled cost \u2014 reveals where live underperforms the backtest and recalibrates the cost model.",
+      "hypothesis": "Capturing fills and logging implementation shortfall per order — rolled up per sleeve vs the modelled cost — reveals where live underperforms the backtest and recalibrates the cost model.",
       "evidence": [
         {
           "claim": "execution_ibkr.py places orders and discards the result; no fill is captured today.",
@@ -1205,6 +1205,21 @@
         {
           "claim": "The engine is designed to run unattended in the background / via cron.",
           "source": "trading_algo/engine.py; README.md",
+          "confidence": "high"
+        },
+        {
+          "claim": "The delivery channel now exists: notifications.'webhook' POSTs the payload to $ALERT_WEBHOOK_URL (stdlib urllib, no new dependency) and config.NOTIFY_CHANNEL selects it. Verified end-to-end against a local HTTP server.",
+          "source": "trading_algo/notifications.py; trading_algo/config.py; tests/test_notifications.py",
+          "confidence": "high"
+        },
+        {
+          "claim": "ALERT_WEBHOOK_URL is wired at JOB level in all three scheduled workflows, so breaker alerts raised during the trading run reach it, not only the audit step.",
+          "source": ".github/workflows/{paper-trade,fx-paper,day-paper}.yml",
+          "confidence": "high"
+        },
+        {
+          "claim": "AC3 remains UNMET pending one manual step: the ALERT_WEBHOOK_URL repo secret does not exist (gh secret list shows only TIINGO_API_SECRET). Until it is set the webhook channel is a deliberate silent no-op.",
+          "source": "gh secret list, 2026-09-19",
           "confidence": "high"
         }
       ],
