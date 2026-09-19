@@ -129,9 +129,13 @@ def common_window_panel(panel: dict) -> tuple[dict, dict]:
     if not panel:
         return {}, {"n_bars": 0, "dropped_bars": 0, "start": None, "end": None}
 
-    common = None
-    for df in panel.values():
-        common = df.index if common is None else common.intersection(df.index)
+    # Seed from the first index rather than None: the `if not panel` guard above
+    # already proves the loop runs at least once, but mypy cannot narrow
+    # `Any | None` across it and the money-path gate is a 0-error gate.
+    indexes = [df.index for df in panel.values()]
+    common = indexes[0]
+    for idx in indexes[1:]:
+        common = common.intersection(idx)
     common = common.sort_values()
 
     longest = max(len(df) for df in panel.values())
