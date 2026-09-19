@@ -36,6 +36,13 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 # burst of local runs in one session still shares a single download.
 CACHE_TTL_HOURS = 20
 
+# A LIVE panel whose newest bar is older than this has a dead feed or a dead
+# cache, not a quiet market. Long weekends and public holidays are why this is
+# not 1 or 2; it matches verify.STALE_BOOK_DAYS so the two agree on what "stale"
+# means. Only checked for open-ended requests — a closed backtest window is old
+# on purpose.
+MAX_PANEL_STALENESS_DAYS = 5
+
 # --- Market-data fallback registry (backlog F14) ---------------------------
 # A secondary source is tried when the primary (Yahoo) returns nothing. Sources
 # register a loader(tickers, start, end) -> DataFrame[Close] here; the active one
@@ -178,7 +185,38 @@ def load_region(region: Region, start: str, end: str | None = None,
     # was actually wrong. A day with no tradeable price is not a session.
     # The index keeps its own calendar; callers reindex it onto `prices`.
     prices = prices.dropna(how="all")
+    _warn_if_stale(region, prices, end)
     return prices, index_px
+
+
+def _warn_if_stale(region: Region, prices: pd.DataFrame, end: str | None) -> None:
+    """Alert when a whole region's panel has stopped advancing.
+
+    `data_quality` judges names against EACH OTHER, so a region whose every
+    name stops printing on the same day looks perfectly healthy to it: the panel
+    is internally consistent, just frozen. The sleeve then de-risks to cash on a
+    price no venue is quoting and sits there in silence — the live ASX sleeve
+    spent 57 days flat before anyone looked, and a stale local cache made it
+    look like a dead feed when it was not.
+
+    A warning, not an exception: three other sleeves may be perfectly healthy,
+    and halting the whole book over one region's feed would be a worse failure
+    than the one being reported. `paper_trade` already has its own
+    `cash:stale-data` path for the per-name case.
+    """
+    if end is not None or not len(prices.index):
+        return
+    age = (pd.Timestamp.now().normalize() - prices.index[-1]).days
+    if age <= MAX_PANEL_STALENESS_DAYS:
+        return
+    from . import notifications
+    notifications.notify(
+        "stale_panel",
+        f"{region.key} price panel ends {prices.index[-1].date()} ({age} days "
+        "old) — the feed or the cache has stopped advancing; this sleeve will "
+        "de-risk to cash on a price nobody is quoting",
+        level="alert", region=region.key,
+        last_bar=str(prices.index[-1].date()), age_days=int(age))
 
 
 # ---------------------------------------------------------------------------
