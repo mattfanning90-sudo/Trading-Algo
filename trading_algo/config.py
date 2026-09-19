@@ -162,11 +162,27 @@ DEFAULT_PARAMS = StrategyParams()
 BASE_CURRENCY = "AUD"               # combined equity + reporting currency
 
 # Capital split across regional sleeves (must reference region keys in regions.py).
-# Equal third each — rebalanced back to target on the configured cadence.
+# Equal quarter each — rebalanced back to target on the configured cadence.
+#
+# TSX was funded 2026-09-19 after clearing the register → backtest → fund gate.
+# Its walk-forward (`run_backtest --region TSX`, 2012-01 → 2026-09) returned:
+#     raw Sharpe 0.948 · haircut Sharpe 0.608 · DSR 0.99 (N=6)
+#     maxDD −15.6% · Calmar 0.46 · monthly turnover 39.1% · cost drag 7.0%
+# CAVEAT, and it is not a small one: no region sets `constituents_file`, so that
+# backtest ran on TODAY's constituents and is SURVIVORSHIP-BIASED — treat those
+# numbers as an upper bound, not an expectation.
+#
+# NOTE ON SCOPE: this governs the portfolio backtest, the scheduler's wake
+# calendar, and any NEWLY initialised paper book. An EXISTING book keeps the
+# allocations baked into its own state at --init time, so `full` (opened
+# 2026-06-11 on ASX/US/FTSE) does NOT pick TSX up here — moving it to four
+# sleeves means crossing ~A$25k of cash AUD→CAD and paying the FX spread, which
+# is a real trade and deserves to be a deliberate, separate act.
 ALLOCATIONS: dict[str, float] = {
-    "ASX": 1 / 3,
-    "US": 1 / 3,
-    "FTSE": 1 / 3,
+    "ASX": 0.25,
+    "US": 0.25,
+    "FTSE": 0.25,
+    "TSX": 0.25,
 }
 
 # How often to true sleeve capital back to ALLOCATIONS (pandas offset alias).

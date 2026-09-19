@@ -153,9 +153,17 @@ independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
 --region KEY`) and single-sleeve CLIs read the *registry*, not `ALLOCATIONS`. A
 sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
 (portfolio/paper/engine key off that). So the flow is: register → backtest →
-*then* fund. **TSX (Canada, CAD)** ships as a worked example: fully registered
-but intentionally absent from `ALLOCATIONS` until a walk-forward backtest earns
-it a slot. The dashboard METHOD tab tags such sleeves `UNFUNDED`.
+*then* fund. **TSX (Canada, CAD)** was the worked example and has now been
+through the whole gate: registered, backtested 2026-09-19 (raw Sharpe 0.948,
+haircut 0.608, maxDD −15.6% — **survivorship-biased, so an upper bound**), and
+funded at 25% alongside ASX/US/FTSE. The dashboard METHOD tab still tags any
+registered-but-unallocated sleeve `UNFUNDED`.
+
+`ALLOCATIONS` governs the portfolio backtest, the scheduler's wake calendar and
+any NEWLY initialised book. An EXISTING paper book keeps the allocations baked
+into its state at `--init` time, so adding a region here does **not** retrofit
+it into a running book — that means crossing cash between currencies and is a
+deliberate, separate act.
 
 ## Specs (`/spec`)
 Goals and acceptance criteria for a piece of work live in

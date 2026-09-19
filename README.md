@@ -324,10 +324,11 @@ re-derive them, and so "off" is never mistaken for "missing".
 | `PAPER_ALLOCATION_REBALANCE` | A treasury-policy choice: the paper sim funds each sleeve once and lets it drift, which is the realistic model. | Decide you want allocations pinned to target. |
 | `DATA_FALLBACK_SOURCE` (F14) | The registry exists; no source is registered, so `_try_fallback` always returns None. Staleness is now *detected* but nothing takes over. | Register a secondary source. A `TIINGO_API_SECRET` already exists with no code using it. |
 | `forex` profiles `aggressive`, `hf_crypto` | Defined but no account uses them. `hf_crypto` needs `engine --loop` on a low-latency VPS. | Open a book with `--profile`. |
-| `TSX` region | Registered but absent from `ALLOCATIONS` — the register → backtest → fund gate working as designed. Backtested 2026-09-19: raw Sharpe 0.948, haircut 0.608, maxDD −15.6%, **survivorship-biased, treat as an upper bound**. | Add `"TSX"` to `config.ALLOCATIONS`. |
+| *(none currently)* | TSX was the worked example of a registered-but-unfunded region; it cleared the gate on 2026-09-19 and is now funded at 25%. The dashboard still tags any future registered-but-unallocated sleeve `UNFUNDED`. | — |
 | `MetaLabeler` | Zero call sites; trained every FX paper run into a file nothing reads. The docs used to imply it was live — corrected. | Its own spec + walk-forward evidence, or deletion. |
 | `engine --loop` | Nothing automates the calendar-aware daemon; all schedulers use `--once`. | A long-lived host. |
 | `state_repair.py` | A break-glass tool for a corrupted state file. | Run it by hand when `verify` says a state file is unreadable. |
+| FX dashboard news feed | Wired into three workflows; `NEWS_API_KEY` is **not set**, so `news.py` omits the section and the panel says so rather than faking it. Degrades honestly — it is off, not broken. | A free Financial Modeling Prep key: `gh secret set NEWS_API_KEY`. |
 | `oanda` / `alpaca` / `openbb` data adapters | Implemented behind a resolver no automated caller selects. | `--source` on a book that needs them. |
 
 ## Known limitations (read these)

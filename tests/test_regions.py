@@ -54,8 +54,21 @@ def test_tsx_scaffold():
     assert all(t.endswith(".TO") for t in tsx.universe)
 
 
-def test_tsx_registered_but_unfunded():
-    """The backtest gate: TSX is a full region (backtestable on its own) but is
-    deliberately NOT in the funded ALLOCATIONS until a real backtest justifies it."""
+def test_every_funded_region_is_registered():
+    """The funding gate's DURABLE half.
+
+    TSX used to be the worked example of "registered but unfunded". It cleared
+    the register -> backtest -> fund gate on 2026-09-19 (raw Sharpe 0.948,
+    haircut 0.608, maxDD -15.6%; survivorship-biased, so an upper bound) and is
+    now funded, so pinning "TSX not in ALLOCATIONS" would pin a moment rather
+    than a rule.
+
+    The rule that must always hold: capital can only be allocated to a region
+    that actually exists, and the split must be a complete one. The registry may
+    legitimately hold regions with no allocation — that is the gate working.
+    """
     assert "TSX" in all_region_keys()
-    assert "TSX" not in config.ALLOCATIONS
+    assert "TSX" in config.ALLOCATIONS
+    for key in config.ALLOCATIONS:
+        assert key in all_region_keys(), f"{key} is funded but not registered"
+    assert abs(sum(config.ALLOCATIONS.values()) - 1.0) < 1e-9
