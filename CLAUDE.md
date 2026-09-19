@@ -54,6 +54,14 @@ It reuses this project's principles (no lookahead, costs always on, one shared
 - `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
 - `constituents.py` — point-in-time index membership (survivorship-bias fix)
 - `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
+- `tax.py` — **after-tax reporting** (NOT tax advice, NOT a trading input):
+  Australian CGT over the FIFO round-trips plus the dividend-withholding drag
+  the `auto_adjust=True` total-return series hides. The finding that motivated
+  it: across all four equity books **0 of 50 realised round-trips cleared the 12
+  months a CGT discount needs** (median hold 19–33 days), and `full` is down
+  A$496 while still owing ~A$76 of tax — realised gains are taxed even when
+  unrealised losses leave the book underwater. Holding period is therefore a
+  STRATEGY parameter, not just a cost
 - `verify.py` — **end-to-end audit of the LIVE books**. The test suite proves the
   maths on a clean price matrix; this re-derives each persisted book from its own
   trade ledger and flags what a real broker statement would contradict:
@@ -105,7 +113,7 @@ python -m trading_algo.forex.research --synthetic       # quant-research search 
 python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
 python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
 python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
-python -m trading_algo.forex.permtest --account matt --permutations 200  # in-sample permutation test (~1h)
+python -m trading_algo.forex.permtest --account matt --permutations 200  # in-sample permutation test (~20 min)
 python scripts/measure_permutation_null.py --permutations 1000  # is a permutation null valid for OUR strategy?
 pytest -q                                           # full suite (equity + FX/ML)
 ```
@@ -156,9 +164,13 @@ independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
 sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
 (portfolio/paper/engine key off that). So the flow is: register → backtest →
 *then* fund. **TSX (Canada, CAD)** was the worked example and has now been
-through the whole gate: registered, backtested 2026-09-19 (raw Sharpe 0.948,
-haircut 0.608, maxDD −15.6% — **survivorship-biased, so an upper bound**), and
-funded at 25% alongside ASX/US/FTSE. The dashboard METHOD tab still tags any
+through the whole gate: registered, backtested 2026-09-19 and funded at 25%
+alongside ASX/US/FTSE. Its headline gate number (raw Sharpe 0.948, haircut 0.608)
+used the no-risk-free convention; restated accurately it is SR 0.742 / DSR 0.82
+at N=20, and **no sleeve passes a standalone DSR gate** — which is why TSX is now
+held on its measured portfolio contribution (+0.064 Sharpe, vol −0.52pp,
+P(Δ>0)=0.885) rather than on the gate. Still **survivorship-biased, so an upper
+bound**. See `docs/SHARPE_RESEARCH.md` §9b. The dashboard METHOD tab still tags any
 registered-but-unallocated sleeve `UNFUNDED`.
 
 `ALLOCATIONS` governs the portfolio backtest, the scheduler's wake calendar and

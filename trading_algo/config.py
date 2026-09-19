@@ -164,10 +164,29 @@ BASE_CURRENCY = "AUD"               # combined equity + reporting currency
 # Capital split across regional sleeves (must reference region keys in regions.py).
 # Equal quarter each — rebalanced back to target on the configured cadence.
 #
-# TSX was funded 2026-09-19 after clearing the register → backtest → fund gate.
-# Its walk-forward (`run_backtest --region TSX`, 2012-01 → 2026-09) returned:
-#     raw Sharpe 0.948 · haircut Sharpe 0.608 · DSR 0.99 (N=6)
-#     maxDD −15.6% · Calmar 0.46 · monthly turnover 39.1% · cost drag 7.0%
+# TSX was funded 2026-09-19. The gate number originally recorded here — raw
+# Sharpe 0.948 · haircut 0.608 · DSR 0.99 (N=6) · maxDD −15.6% · Calmar 0.46 ·
+# monthly turnover 39.1% · cost drag 7.0% — used the no-risk-free Sharpe
+# convention, which is the most generous of three defensible ones. Restated
+# against the accurate convention (excess returns, idle cash credited):
+#
+#     TSX standalone SR 0.742 · DSR 0.9349 (N=6) / 0.8218 (N=20) — FAILS a 0.95 gate
+#
+# So does every other sleeve (ASX 0.476, US 0.710, FTSE 0.078 at N=20), which is
+# the point: a standalone DSR is a single-strategy significance test and was the
+# wrong instrument for a portfolio-construction decision. TSX is the BEST of the
+# four on every convention, and the ranking TSX > US > ASX > FTSE does not depend
+# on which one you pick.
+#
+# TSX STAYS FUNDED AT 25%, on the portfolio contribution rather than the gate.
+# Measured 3-sleeve vs 4-sleeve over the same 15.1y window, equal weights:
+#     Sharpe +0.080 raw / +0.064 excess-with-cash-credit
+#     CAGR +0.34pp · ann vol −0.52pp (8.66% → 8.14%) · maxDD −11.32% → −11.18%
+#     paired block bootstrap: ΔSharpe +0.080, 95% CI [−0.048, +0.192], P(Δ>0)=0.885
+# It adds return AND cuts vol AND improves drawdown — suggestive, not proven.
+# Caveat that matters more than the Sharpe: US–TSX ρ = 0.511, the highest pair in
+# the matrix, so TSX is the LEAST diversifying of the four.
+# Full derivation: docs/SHARPE_RESEARCH.md §9b.
 # CAVEAT, and it is not a small one: no region sets `constituents_file`, so that
 # backtest ran on TODAY's constituents and is SURVIVORSHIP-BIASED — treat those
 # numbers as an upper bound, not an expectation.
@@ -205,6 +224,29 @@ INITIAL_CAPITAL = 100_000
 
 # Annualised cash rate used as the risk-free benchmark in metrics (AUD ~ RBA cash).
 RISK_FREE = 0.035
+
+# Interest CREDITED on uninvested cash.
+#
+# The sleeves hold mean gross exposure of only 0.34-0.44 — the regime filter and
+# vol targeting leave 56-66% of capital idle — while the reported Sharpe subtracts
+# RISK_FREE as a hurdle. Paying 0% on that idle cash and charging the full hurdle
+# anyway penalises the book twice for being flat: measured at +0.22 to +0.34
+# Sharpe across the four sleeves (docs/SHARPE_RESEARCH.md §1). A real broker pays
+# interest on idle balances, so 0% was a simulator artifact, not prudence.
+#
+# The property that matters: with this ON a 100%-cash book earns the cash rate, so
+# its EXCESS return is 0 and its Sharpe is 0 — the only coherent null for the
+# PSR/DSR machinery, which tests against "no skill". With it OFF the same book
+# scores -0.43.
+#
+# CAUTION, since invariant #2 is about costs always being on: this is a CREDIT and
+# it therefore FLATTERS reported performance. It is the mirror of the margin DEBIT
+# on borrowed money, which is still NOT modelled on the equity stack
+# (docs/SHARPE_RESEARCH.md §7) — so today a flat book is paid for sitting out while
+# a levered book is charged nothing for gearing. Wiring the debit is the matching
+# change; until it lands, treat leveraged-book returns as optimistic.
+CREDIT_IDLE_CASH = True
+CASH_RATE_ANNUAL = RISK_FREE        # what idle cash earns == the reported hurdle
 
 # ---------------------------------------------------------------------------
 # Risk controls
@@ -260,6 +302,26 @@ PROMOTION_TRACKING_BUDGET_BPS = 200.0   # F3 live-vs-backtest tracking-error bud
 # the calendar trigger so a freshly-funded book gets a proper hold first. Set 0
 # to disable (pure calendar-month cadence). Does not affect the backtest.
 MIN_REBALANCE_GAP_DAYS = 20
+
+# ---------------------------------------------------------------------------
+# After-tax reporting (trading_algo/tax.py)
+# ---------------------------------------------------------------------------
+# NOT tax advice, and NOT part of any trading decision — a reporting layer only.
+# Confirm every number here with your accountant before relying on it.
+#
+# These books rebalance monthly, so essentially nothing clears the 12 months an
+# Australian CGT discount needs: gains are short-term and taxed at the full
+# marginal rate. At a high rate that exceeds every transaction cost in this repo
+# combined, which makes HOLDING PERIOD a strategy parameter rather than a cost.
+MARGINAL_TAX_RATE = 0.47        # top AU marginal incl. Medicare levy; set yours
+
+# Dividend withholding by sleeve. The price series is auto_adjust=True (TOTAL
+# RETURN), so the backtest already credited you 100% of every dividend — this is
+# the slice that never arrives. US: 15% under the AU/US treaty WITH a W-8BEN on
+# file (30% without). UK: nil on most dividends for non-residents. ASX: nil
+# withholding for a resident (franking credits are a separate, unmodelled
+# POSITIVE — omitting them is the conservative direction). Canada: 15% treaty.
+DIVIDEND_WITHHOLDING = {"US": 0.15, "FTSE": 0.0, "ASX": 0.0, "TSX": 0.15}
 
 # ---------------------------------------------------------------------------
 # Notifications / telemetry (backlog F12 / foundation P0-F)

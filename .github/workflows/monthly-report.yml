@@ -50,6 +50,18 @@ jobs:
               --out "reports/tearsheet_${acct}.md" >> "$GITHUB_STEP_SUMMARY" \
               || echo "_tearsheet unavailable_" >> "$GITHUB_STEP_SUMMARY"
 
+            # After-tax view. Reporting only — never a trading input. --rate
+            # defaults to config.MARGINAL_TAX_RATE; dividends need network, so a
+            # failure degrades to the CGT section rather than failing the job.
+            {
+              echo "### after-tax"
+              echo '```'
+              python -m trading_algo.tax --account "$acct" 2>&1 \
+                || python -m trading_algo.tax --account "$acct" --no-dividends 2>&1 \
+                || echo "unavailable"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
             # F11 (execution TCA), F3 (live vs backtest), F10 (promotion gate).
             # Fenced: these print fixed-width tables, not markdown.
             for report in tca attribution promotion; do
