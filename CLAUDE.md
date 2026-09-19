@@ -59,8 +59,14 @@ It reuses this project's principles (no lookahead, costs always on, one shared
   trade ledger and flags what a real broker statement would contradict:
   reconciliation drift, fills on a closed market, turnover at a forward-filled
   dead price, sleeves silently parked in cash, and holding period vs the signal
-  horizon that opened the position. Offline by design (the state IS the record),
-  and it runs after every scheduled paper run
+  horizon that opened the position. Offline by design (the state IS the record).
+  Findings are **graded, not just detected**: realism findings older than
+  `HISTORICAL_CUTOFF_DAYS` age out to INFO (the audit re-reads the whole ledger,
+  so a fixed bug must not re-fire forever), and a funded sleeve that has never
+  traded is read off its own state — `regime-off` is INFO (the filter working),
+  `data-quality` is ERROR (a broken feed). It runs after every scheduled paper
+  run in two halves: a report step that can never fail the job, and a terminal
+  **strict gate** that gives the run its verdict after state is committed
 - `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
   vanilla SPA): every paper book (equity + FX) behind one account switcher,
   OVERVIEW/POSITIONS/BACKTEST/METHOD tabs (+ SWARM on FX books), FIFO
