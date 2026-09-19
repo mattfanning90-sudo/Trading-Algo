@@ -57,11 +57,14 @@ def test_tsx_scaffold():
 def test_every_funded_region_is_registered():
     """The funding gate's DURABLE half.
 
-    TSX used to be the worked example of "registered but unfunded". It cleared
-    the register -> backtest -> fund gate on 2026-09-19 (raw Sharpe 0.948,
-    haircut 0.608, maxDD -15.6%; survivorship-biased, so an upper bound) and is
-    now funded, so pinning "TSX not in ALLOCATIONS" would pin a moment rather
-    than a rule.
+    TSX used to be the worked example of "registered but unfunded". It was funded
+    on 2026-09-19 and is now the worked example of something else: the gate it
+    "cleared" used the most generous of three Sharpe conventions, and under an
+    accurate one (excess returns, idle cash credited) NO sleeve passes a
+    standalone DSR >= 0.95. It stays funded on its measured portfolio
+    contribution (+0.064 Sharpe, P(delta>0)=0.885) instead — see
+    docs/SHARPE_RESEARCH.md §9b and the note in config.ALLOCATIONS. Either way,
+    pinning "TSX not in ALLOCATIONS" would pin a moment rather than a rule.
 
     The rule that must always hold: capital can only be allocated to a region
     that actually exists, and the split must be a complete one. The registry may

@@ -12,6 +12,16 @@ panel (`trading_algo/.cache`, 3,797 daily observations, 15.1 years), plus the
 eight live paper books read off their own state files. Nothing here is quoted
 from the literature as if it were our result.
 
+> **This document spans a change it caused.** §1b found that the simulator paid
+> 0% on idle cash while the metric charged a full cash-rate hurdle, and that is
+> now fixed in `backtest.py`. So the tables below split two ways. **Level-dependent
+> sections are restated post-change**: §3 (precision) and §9 (the gate). **Structure-
+> dependent sections are unaffected and remain as first measured**: §2
+> (autocorrelation), §5 (the FX tick), §6 (cross-sleeve correlation), §8 (costs) —
+> crediting a constant on idle cash shifts means, not correlations, serial
+> dependence or cost ratios. §1's four-convention table is deliberately left
+> pre-change: it is the evidence for making the fix.
+
 > **Honesty note.** The Sharpe ratio is the most over-trusted number in this
 > field. It is a *t*-statistic in a costume — and like any *t*-statistic, it is
 > worthless without its standard error, its sample size, and a count of how many
@@ -59,12 +69,79 @@ This repo makes those choices **differently in two places**:
    `validation` convention; the dashboard would print **0.484** for the same
    sleeve. Both are defensible, neither is labelled.
 
-**Decision.** Keep two conventions — they answer different questions (PSR/DSR
-test whether an edge exists at all; the dashboard asks whether it beat cash) —
-but **label them at the point of output**, and state the convention wherever a
-Sharpe is quoted in prose. `metrics.py` already embeds the rate in its key
-(`"Sharpe (vs 3.5%)"`); `validation.py` should say `sharpe_ann_excess_free` or
-equivalent, and every doc quoting 0.948 should say which one it is.
+### 1b. Why we could not simply standardise, and what we fixed first
+
+The obvious answer is to adopt the canonical definition everywhere — Sharpe's
+1994 revision, `SR = E[Rₐ − R_b] / σ(Rₐ − R_b)`, excess return over a benchmark
+with σ taken of the *differential*. Two of the four choices turn out not to be
+choices at all:
+
+- **`ddof` is immaterial** (measured above).
+- **The denominator question is moot while the rate is a constant.** Subtracting
+  a constant cannot change a standard deviation; measured difference on all four
+  sleeves is exactly `0.0e+00`. It only bites with a rate *series*.
+
+So there was only one real decision — subtract a cash rate or not — and it was
+blocked by a simulator asymmetry: **`RISK_FREE` appeared only in reporting
+(`metrics.py`, `tearsheet.py`, `dashboard.py`) and never in the simulation.
+Idle cash earned 0%.** And these sleeves are mostly idle:
+
+| sleeve | mean gross | idle | fully-cash days | Sharpe −rf (cash at 0%) | …with idle cash paid | penalty |
+|---|---|---|---|---|---|---|
+| ASX | 0.340 | 66% | 34.6% | 0.142 | 0.479 | **+0.336** |
+| US | 0.407 | 59% | 23.0% | 0.425 | 0.642 | **+0.217** |
+| FTSE | 0.406 | 59% | 34.4% | −0.138 | 0.124 | **+0.262** |
+| TSX | 0.444 | 56% | 32.3% | 0.484 | 0.742 | **+0.258** |
+
+The regime filter and vol targeting hold gross at 0.34–0.44, so charging a full
+3.5% hurdle against a book that is ~60% in cash earning nothing penalised it
+twice — worth **+0.22 to +0.34 Sharpe**. A real broker pays interest on idle
+balances, so the 0% was a simulator artifact, not prudence.
+
+**Decision (implemented).** Credit interest on uninvested cash in the simulator,
+then standardise the metric — in that order, because the reverse makes every
+sleeve look ~0.25 Sharpe worse for an accounting reason.
+
+- `config.CREDIT_IDLE_CASH` / `CASH_RATE_ANNUAL`, and
+  [fees.idle_cash_credit](../trading_algo/fees.py) wired into `backtest.py`'s
+  daily loop. ACT/365 on calendar days, accrued on the **net** exposure
+  `1 − Σw`, never `gross − 1` — longs consume cash, shorts generate it, so a
+  dollar-neutral book has its whole equity on deposit. That signing is the same
+  trap the FX financing model hit twice.
+- The property this buys: a 100%-cash book now earns the cash rate, so its excess
+  return is 0 and its Sharpe is 0. **That is the only coherent null for PSR/DSR**,
+  which test against "no skill".
+- The synthetic regression baseline moved with it, deliberately: portfolio CAGR
+  0.0673 → 0.0911, Sharpe 0.61 → 1.05, maxDD −11.31% → −8.64%
+  (`python -m trading_algo.ci_regression --update`). Synthetic is a drift detector,
+  not a performance claim — invariant #5.
+
+**Measured effect on the real 2012–2026 panel**, which is the number that counts:
+
+| sleeve | interest earned | per yr | SR (excess) before | after | CAGR | maxDD |
+|---|---|---|---|---|---|---|
+| ASX | 33.96% | 2.30% | 0.142 | **0.477** | 6.75% | −9.57% |
+| US | 30.58% | 2.08% | 0.425 | **0.643** | 9.62% | −13.20% |
+| FTSE | 30.50% | 2.07% | −0.138 | **0.113** | 4.17% | −15.54% |
+| TSX | 28.64% | 1.96% | 0.484 | **0.743** | 9.21% | −14.27% |
+| **PORTFOLIO** | — | — | 0.376 | **0.625** | 8.60% | −9.76% |
+
+The realised credit is ~2.0–2.3%/yr per sleeve, which is 3.5% on the 56–66% that
+was idle — i.e. exactly the arithmetic, arriving day by day rather than as an
+average. FTSE crosses from negative to positive vs cash on this alone.
+
+> **This change flatters reported performance, and it introduced a new
+> asymmetry.** It is a credit, not a cost. Its mirror — the margin *debit* on
+> borrowed money — is still not modelled on the equity stack (§7). So today a
+> flat book is paid for sitting out while `ultra` at 3× gross is charged nothing
+> for gearing. Wiring the debit is the matching change and it is now the more
+> urgent half.
+
+**Still open on the convention itself:** `validation.py` remains on raw returns
+(see §9 for why that is the one with a correctness argument), and `RISK_FREE` is
+a single 3.5% applied to AUD, USD, GBP *and* CAD returns — which cuts against
+invariant #6, since those policy rates spanned roughly 0.05%–5.5% over the
+sample. A per-currency rate series is the remaining piece.
 
 ## 2. Annualisation: √252 assumes IID, and our returns are not
 
@@ -140,13 +217,30 @@ $$\widehat{MinTRL}(c) = \left(1 - \gamma_3\widehat{SR} + \frac{\gamma_4-1}{4}\wi
 | FTSE | 14.7 | −0.29 | 8.24 | 0.304 | 0.261 | [−0.21, +0.82] | 29.5y | never |
 | TSX | 14.7 | −0.63 | 7.62 | 0.948 | 0.267 | [+0.42, +1.47] | 3.1y | 14.1y |
 
+**Restated on excess returns, post-change** — the coherent version, and a
+*harsher* one than the raw numbers above, because a 3.5% hurdle costs more than
+crediting idle cash returns:
+
+| series | SR | SE | 95% CI | MinTRL SR>0 | MinTRL SR>0.5 |
+|---|---|---|---|---|---|
+| PORTFOLIO | 0.625 | 0.260 | [+0.12, +1.13] | 7.1y | **177.0y** |
+| ASX | 0.477 | 0.262 | **[−0.04, +0.99]** | 12.1y | never |
+| US | 0.643 | 0.264 | [+0.13, +1.16] | 6.7y | 135.3y |
+| FTSE | 0.113 | 0.261 | [−0.40, +0.62] | 212.3y | never |
+| TSX | 0.743 | 0.266 | [+0.22, +1.26] | 5.1y | 47.4y |
+
+Note the standard error is **unchanged at ±0.26** — it depends on sample length
+and the higher moments, not on the level of the Sharpe. And ASX's interval now
+straddles zero. Proving the portfolio beats 0.5 goes from 30 years to **177**.
+
 **This is the single most useful table in the document.** Fifteen years of daily
 data buys a standard error of **±0.26**. So:
 
 - Every sleeve Sharpe is ±0.5 at 95%. TSX's 0.948 and ASX's 0.652 are **not
   distinguishable from each other**, and FTSE's 0.304 is not distinguishable
   from zero.
-- Proving the portfolio clears **0.5** would take **29.7 years**. We have 15.
+- Proving the portfolio clears **0.5** would take **29.7 years** on raw returns,
+  **177** on excess returns. We have 15.
 - Ranking sleeves by backtest Sharpe and funding accordingly is therefore
   ranking on noise. The current 25/25/25/25 equal split is the right answer
   *because* the differences are unprovable — it should stay that way, and this
@@ -407,6 +501,52 @@ discarding real edges. Here a registration gate passes 6 with no derivation at
 all. Both are the same root cause: **N is a property of the search you actually
 ran, and no artifact in this repo records it.**
 
+### 9b. The gate is the wrong instrument — not TSX the wrong sleeve
+
+Applying the accurate convention to the *gate* rather than just to TSX settles
+this. **No sleeve passes a standalone DSR ≥ 0.95** once returns are excess and
+idle cash is credited:
+
+| sleeve | SR (excess, cash credited) | DSR N=6 | DSR N=20 | verdict |
+|---|---|---|---|---|
+| ASX | 0.479 | 0.7038 | 0.4757 | FAIL |
+| US | 0.642 | 0.8743 | 0.7098 | FAIL |
+| FTSE | 0.124 | 0.2056 | 0.0776 | FAIL |
+| **TSX** | **0.742** | **0.9349** | 0.8218 | FAIL (closest of the four) |
+
+So enforcing a standalone DSR gate consistently would defund *everything*. That
+is the reductio: it is a single-strategy significance test being used for a
+portfolio-construction decision. And TSX is the **best** sleeve on every
+convention — the ranking TSX > US > ASX > FTSE is convention-invariant.
+
+**What TSX actually contributes** (rebuilt 3-sleeve vs 4-sleeve portfolio, same
+15.1-year overlapping window, equal weights both sides):
+
+| | 3 sleeves | 4 (+TSX) | Δ |
+|---|---|---|---|
+| Sharpe, raw | 0.726 | 0.806 | **+0.080** |
+| Sharpe, excess (cash 0%) | 0.322 | 0.376 | +0.055 |
+| Sharpe, excess (idle cash paid) | 0.570 | 0.635 | +0.064 |
+| CAGR | 6.09% | 6.43% | +0.34pp |
+| ann vol | 8.66% | **8.14%** | −0.52pp |
+| max drawdown | −11.32% | **−11.18%** | better |
+
+It adds return *and* cuts volatility *and* improves drawdown — a real
+diversification gain, not a return chase. Tested with the paired stationary block
+bootstrap this document recommends in §10 (same days resampled for both books, so
+the three shared sleeves' noise cancels): **ΔSharpe +0.080, 95% CI [−0.048,
++0.192], P(Δ>0) = 0.885.** Suggestive, not proven — but positive under all three
+conventions.
+
+**Decision on TSX: keep it funded at 25%, and change the claim.** Retire "TSX
+cleared the gate, DSR 0.99", which is false under an accurate convention. Record
+instead: *best of four sleeves, none individually provable (SE ±0.26, §3), funded
+for a measured +0.064 Sharpe portfolio contribution at 89% confidence.* Weaker
+sounding, better founded. The one genuine caveat is not the Sharpe at all —
+US–TSX ρ = 0.511 is the highest pair in the matrix (§6), so TSX is the *least*
+diversifying of the four and a fifth North American sleeve would add close to
+nothing.
+
 **Decision.** Make the trial count a recorded artifact rather than a remembered
 one. Concretely: (a) `sweep.py` should emit the configuration count it evaluated
 alongside its grid, so a parameter choice carries its own search cost; (b) the
@@ -450,17 +590,19 @@ Recorded so the metric is not asked to do work it cannot do.
 
 | # | Change | Why | Where |
 |---|---|---|---|
-| 1 | Screen the FX translation panel with `data_quality`'s jump check | A 52% bad tick corrupts every AUD number since 2012 (§5) | `fx.py` |
-| 2 | Record the trial count N *with its derivation*; annotate TSX's N=6 as unverified | N=6 vs N=20 straddles the DSR 0.95 gate (§9) | `sweep.py`, `config.py:169` |
-| 3 | Report `MinTRL` beside every Sharpe | Makes an unfalsifiable number falsifiable (§3) | `validation.deflation_summary` |
-| 4 | Show CI, not point Sharpe, until it excludes zero | Seven of eight live books are pure noise (§4) | `dashboard/` |
-| 5 | Investigate `fx_daytrader`'s significantly negative Sharpe | Only live book whose CI excludes zero (§4, §8) | FX subsystem |
-| 6 | Charge financing on the equity stack; tag `ultra`/`experimental` financing-free meanwhile | Two levered/short books live, zero financing modelled (§7) | `fees.py`, `config.py:324` |
-| 7 | Geometric-numerator Sharpe for `target_vol > 0.20` books | `ultra` reads 0.175 better than it compounds (§7) | `metrics.py` |
-| 8 | Label the convention wherever a Sharpe is emitted | Same series, 0.376 or 0.806 (§1) | `validation.py` |
-| 9 | Low-turnover FTSE variant | Costs take 41% of its gross Sharpe (§8) | `regions.py` params |
-| 10 | Do **not** adopt a Lo-corrected Sharpe | Fails its own null on 3 of 5 series (§2) | — |
-| 11 | Do **not** unify `ddof` | Measured null: identical to 3 d.p. (§1) | — |
+| ✅ | **DONE** — credit interest on idle cash in the backtest | Sleeves are 56–66% idle; charging the hurdle anyway cost 0.22–0.34 Sharpe (§1b) | `fees.py`, `backtest.py`, `config.py` |
+| 1 | Charge the margin **debit** on the equity stack | The credit above landed without its mirror; `ultra` gears free (§1b, §7) | `fees.py`, `backtest.py` |
+| 2 | Screen the FX translation panel with `data_quality`'s jump check | A 52% bad tick corrupts every AUD number since 2012 (§5) | `fx.py` |
+| 3 | Stop using standalone DSR as a funding gate; record N with its derivation | No sleeve passes it; it is the wrong instrument (§9b) | `sweep.py`, `config.py:169` |
+| 4 | Report `MinTRL` beside every Sharpe | Makes an unfalsifiable number falsifiable (§3) | `validation.deflation_summary` |
+| 5 | Show CI, not point Sharpe, until it excludes zero | Seven of eight live books are pure noise (§4) | `dashboard/` |
+| 6 | Investigate `fx_daytrader`'s significantly negative Sharpe | Only live book whose CI excludes zero (§4, §8) | FX subsystem |
+| 7 | Credit idle cash in the **paper books** too (needs an `interest` ledger row, else `verify` reports cash-drift) | Backtest and live books now use different cash conventions (§1b) | `paper_trade.py`, `verify.py` |
+| 8 | Geometric-numerator Sharpe for `target_vol > 0.20` books | `ultra` reads 0.175 better than it compounds (§7) | `metrics.py` |
+| 9 | Switch `validation.py` to excess returns; per-currency rate series | DSR's null is SR=0 only in excess terms (§9); one rate for four currencies breaks invariant #6 (§1b) | `validation.py`, `config.py` |
+| 10 | Low-turnover FTSE variant | Costs take 41% of its gross Sharpe (§8) | `regions.py` params |
+| 11 | Do **not** adopt a Lo-corrected Sharpe | Fails its own null on 3 of 5 series (§2) | — |
+| 12 | Do **not** unify `ddof` | Measured null: identical to 3 d.p. (§1) | — |
 
 ## References
 

@@ -1,4 +1,4 @@
-"""Per-region transaction costs.
+"""Per-region transaction costs, plus interest on uninvested cash.
 
 Two pieces, both in the region's local currency:
 - commission: max(floor, notional · commission_bps) — IBKR-style.
@@ -8,6 +8,11 @@ Two pieces, both in the region's local currency:
 
 Slippage is modelled separately (in the execution/backtest layer) as a price
 adjustment per side; it is not a fee here.
+
+`idle_cash_credit` is the odd one out: a CREDIT rather than a cost. It lives here
+because this module is the one entrypoint for money adjustments the simulator
+applies per bar (refactor R1), and the alternative was a second place that knows
+the cash rate.
 """
 from __future__ import annotations
 
@@ -65,3 +70,32 @@ def square_root_impact(order_notional: float, adv_dollar: float, vol: float,
         return 0.0
     participation = max(float(order_notional) / float(adv_dollar), 0.0)
     return float(coef) * float(vol) * math.sqrt(participation)
+
+
+def idle_cash_credit(net_exposure: float, days: float, annual_rate: float) -> float:
+    """Interest earned on the UNINVESTED fraction of NAV, as a fraction of NAV.
+
+    `net_exposure` is Σw — NET and signed. Cash held is 1 − Σw, because longs
+    consume cash and shorts generate it: a flat book (Σw = 0) has its whole
+    equity on deposit, a fully-invested long-only book (Σw = 1) has none, and a
+    dollar-neutral long/short book (Σw = 0, gross 2.0) also has its equity on
+    deposit — the longs are funded by the short proceeds.
+
+    That signing is deliberate and is the same trap the FX financing model hit
+    twice: the exposure that matters is NET, never `gross − 1`. Charging (or
+    crediting) on gross double-counts the short leg, which generates cash rather
+    than consuming it.
+
+    ACT/365 on calendar `days`, so a weekend accrues three days and a full year
+    of daily bars sums to `annual_rate`.
+
+    CREDIT SIDE ONLY. A net exposure above 1 is a margin debit and returns 0.0
+    here — the borrow charge is a separate cost that the equity stack does not yet
+    model (docs/SHARPE_RESEARCH.md §7). This function must never return a negative
+    number, or that unmodelled debit would appear by accident and only for books
+    that happen to be levered.
+    """
+    idle = 1.0 - float(net_exposure)
+    if idle <= 0.0 or annual_rate <= 0.0 or days <= 0:
+        return 0.0
+    return idle * float(annual_rate) * float(days) / 365.0
