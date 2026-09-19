@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from trading_algo.forex import fx_book, fxconv, marks
+from trading_algo.forex.pairs import get_pair as _gp
 from trading_algo.forex.agents import AgentPool
 from trading_algo.forex.pairs import get_pair
 
@@ -229,7 +230,6 @@ def test_status_daily_book_unchanged_at_252(isolated_state, capsys):
 # leg. Shorts pay a separate stock-loan fee on their notional. FX and crypto are
 # EXCLUDED: their financing already lives in swap points / perp funding, so
 # charging them here would bill the same cost twice.
-from trading_algo.forex.pairs import get_pair as _gp
 
 
 def _fin(weights, **kw):
