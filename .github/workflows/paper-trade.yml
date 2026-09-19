@@ -76,8 +76,15 @@ jobs:
       - name: Audit live books (end-to-end verification)
         # See fx-paper.yml for the rationale. Report-only: never blocks the run.
         if: always()
+        shell: bash
         run: |
-          python -m trading_algo.verify | tee /tmp/audit.txt
+          # Report-only ON PURPOSE. This step runs BEFORE the state commit and
+          # the Pages deploy, so it must never fail: a failing step here would
+          # skip them and cost the run the trading day it just completed. A bad
+          # audit must report loudly, never discard work. The blocking gate is
+          # the LAST step of this job, after the state is safely committed.
+          set -o pipefail
+          python -m trading_algo.verify 2>&1 | tee /tmp/audit.txt || true
           {
             echo "## Live-book audit"
             echo '```'
@@ -138,3 +145,12 @@ jobs:
 
       # Dashboards are published to GitHub Pages by fx-paper.yml (single Pages
       # deployer); this workflow exports them into public/ and updates state only.
+
+      - name: Fail the job on audit errors
+        # The blocking half of the audit, deliberately LAST: the state commit and
+        # the Pages deploy have already happened, so going red here reports a
+        # real defect without costing the run its state or stranding the site.
+        # --no-alert because the reporting step above already notified; this is
+        # the gate, not a second alarm.
+        if: always()
+        run: python -m trading_algo.verify --strict --no-alert

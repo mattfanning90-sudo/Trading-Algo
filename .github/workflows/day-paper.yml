@@ -62,8 +62,15 @@ jobs:
       - name: Audit live books (end-to-end verification)
         # See fx-paper.yml for the rationale. Report-only: never blocks the run.
         if: always()
+        shell: bash
         run: |
-          python -m trading_algo.verify | tee /tmp/audit.txt
+          # Report-only ON PURPOSE. This step runs BEFORE the state commit and
+          # the Pages deploy, so it must never fail: a failing step here would
+          # skip them and cost the run the trading day it just completed. A bad
+          # audit must report loudly, never discard work. The blocking gate is
+          # the LAST step of this job, after the state is safely committed.
+          set -o pipefail
+          python -m trading_algo.verify 2>&1 | tee /tmp/audit.txt || true
           {
             echo "## Live-book audit"
             echo '```'
@@ -143,3 +150,36 @@ jobs:
         id: deploy_retry
         if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5
+
+  audit_gate:
+    # The BLOCKING half of the live-book audit, in its own job so that it runs
+    # AFTER both the state commit (run) and the Pages publish (deploy).
+    #
+    # It cannot live inside either of those: `deploy` has `needs: run`, so a red
+    # step in `run` skips the publish and strands the live site behind the
+    # committed state, and a red step before the commit costs the run the
+    # trading day it just completed. A bad audit must report loudly and cost
+    # nothing operationally, so it is a terminal job that only sets the verdict.
+    #
+    # --no-alert: the reporting step in `run` already notified. This is the gate,
+    # not a second alarm.
+    needs: [run, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The branch tip, NOT the triggering SHA: the run job committed the
+          # state we are auditing after this workflow started.
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Audit the committed books
+        run: python -m trading_algo.verify --strict --no-alert
