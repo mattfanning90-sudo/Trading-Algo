@@ -267,8 +267,11 @@ them. The full literature review and the reasoning behind every choice is in
   finite-difference gradient check.
 * **`NeuralAgent`** — the Sharpe-loss net as a 6th ecosystem agent (opt in with
   `engine --ml`). Frozen at inference, so live prediction has no lookahead.
-* **`MetaLabeler`** — a secondary classifier (López de Prado meta-labeling) that
-  sizes the ensemble's side via triple-barrier labels and bet-sizing.
+* **`MetaLabeler`** — a secondary classifier (López de Prado meta-labeling)
+  *intended* to size the ensemble's side via triple-barrier labels and
+  bet-sizing. **NOT WIRED:** it has zero call sites; `train.py` writes
+  `models/meta_label.json` on every paper run and nothing reads it. No live
+  decision is shaped by it (verified 2026-09-19).
 * **Hedge ensemble** — agents are blended by multiplicative weights with a
   fixed-share floor (provable regret, low overfitting), the new default.
 * **`walkforward.py`** — purged + embargoed expanding walk-forward, so every ML

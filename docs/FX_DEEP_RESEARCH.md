@@ -150,8 +150,16 @@ maps the meta-probability through `size = 2·Φ((p−0.5)/√(p(1−p))) − 1`.
 precision but **cannot manufacture alpha** if the primary has none.
 
 **Decision.** `features.triple_barrier_labels`, the binary meta-model, and
-`MetaLabeler` (with `validation.bet_size_from_prob`) size the ensemble's side
-without flipping it. Evaluated walk-forward in `ml_backtest` (`meta_oos`).
+`MetaLabeler` (with `validation.bet_size_from_prob`) are designed to size the
+ensemble's side without flipping it. Evaluated walk-forward in `ml_backtest`
+(`meta_oos`).
+
+> **NOT WIRED (verified 2026-09-19).** `MetaLabeler` has **zero call sites**
+> anywhere in the repo. `train.py` fits a bundle and writes `models/meta_label.json`
+> on every FX paper run, and nothing ever reads that file: no live decision is
+> shaped by meta-labeling. This paragraph previously read as though it were live.
+> Wiring it changes position sizing on a live book, so it needs its own spec and
+> walk-forward evidence — or the class and its training step should be deleted.
 
 ## 8. Sizing: volatility targeting, not reinforcement learning
 

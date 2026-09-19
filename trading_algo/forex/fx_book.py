@@ -53,6 +53,31 @@ STATE_DIR = os.environ.get("FX_STATE_DIR") or os.path.join(
 _DUST = 1e-4   # drop near-zero weights
 
 
+def guard_synthetic_state_dir(synthetic: bool) -> None:
+    """Refuse to write synthetic results over the live paper books.
+
+    `--synthetic` is a PIPELINE test (invariant #5), but nothing stopped it
+    writing to the default state directory: running
+    `forex.engine --once --synthetic` locally overwrote all four live books with
+    synthetic results, and only `git checkout -- state/` recovered them.
+    `--init` has refused to destroy a live book since C2; this is the same
+    protection for the synthetic path.
+
+    An explicitly-set FX_STATE_DIR is treated as the operator meaning it — that
+    is how CI runs a synthetic dispatch, and how a local scratch run should be
+    done. Only the implicit default is refused.
+    """
+    if not synthetic or os.environ.get("FX_STATE_DIR"):
+        return
+    raise SystemExit(
+        "refusing to write synthetic results into the live state directory:\n"
+        f"    {os.path.abspath(STATE_DIR)}\n"
+        "  --synthetic is a pipeline test (invariant #5) and must not overwrite\n"
+        "  live paper books. Re-run with an explicit scratch directory, e.g.\n"
+        "    FX_STATE_DIR=/tmp/fx-scratch python -m trading_algo.forex.engine "
+        "--once --synthetic")
+
+
 # SQLite is the source of truth (atomic, durable, lock-safe); the per-account
 # JSON file is dual-written as a fallback so dashboards / CI globs keep working.
 # See trading_algo/storage.py and BACKLOG.md.
@@ -761,6 +786,7 @@ def main(argv: list[str] | None = None) -> None:
                          f"named preset ({', '.join(pairs.UNIVERSES)}) or a comma-"
                          "separated symbol list. The book is locked to it.")
     args = ap.parse_args(argv)
+    guard_synthetic_state_dir(getattr(args, "synthetic", False))
 
     if args.list:
         print("Accounts:", ", ".join(list_accounts()) or "(none)")

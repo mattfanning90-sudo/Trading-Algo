@@ -163,3 +163,35 @@ def test_data_quality_verdict_refreshed_on_a_no_new_bar_run(isolated_state, pool
     state = fx_book.load_state("matt")
     assert state["data_quality"]["excluded"] == ["USDJPY"]
     assert len(state["equity_history"]) == 1                  # genuinely a no-op bar
+
+
+# ---------------------------------------------------------------------------
+# --synthetic must not be able to clobber the live books
+# ---------------------------------------------------------------------------
+# Found the hard way: `python -m trading_algo.forex.engine --once --synthetic`
+# overwrote all four live fx_state_*.json and fx_books.db with synthetic
+# results. Only `git checkout -- state/` got them back. --synthetic is a
+# PIPELINE test (invariant #5) and must never write where the live books live.
+# `--init` has refused to destroy a live book since C2; this is the same
+# protection for the synthetic path.
+import pytest
+
+
+def test_synthetic_refuses_the_default_state_dir(monkeypatch):
+    from trading_algo.forex import fx_book
+    monkeypatch.delenv("FX_STATE_DIR", raising=False)
+    with pytest.raises(SystemExit) as e:
+        fx_book.guard_synthetic_state_dir(True)
+    assert "FX_STATE_DIR" in str(e.value)
+
+
+def test_synthetic_is_allowed_with_an_explicit_state_dir(monkeypatch, tmp_path):
+    from trading_algo.forex import fx_book
+    monkeypatch.setenv("FX_STATE_DIR", str(tmp_path))
+    fx_book.guard_synthetic_state_dir(True)          # must not raise
+
+
+def test_a_real_run_is_never_blocked(monkeypatch):
+    from trading_algo.forex import fx_book
+    monkeypatch.delenv("FX_STATE_DIR", raising=False)
+    fx_book.guard_synthetic_state_dir(False)         # must not raise

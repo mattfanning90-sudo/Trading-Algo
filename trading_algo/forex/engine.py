@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--benchmark", action="store_true", help="measure cycle latency")
     ap.add_argument("--synthetic", action="store_true")
     args = ap.parse_args(argv)
+    fx_book.guard_synthetic_state_dir(args.synthetic)
 
     if args.benchmark:
         benchmark(synthetic=args.synthetic, workers=args.workers)
