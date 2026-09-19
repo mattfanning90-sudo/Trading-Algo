@@ -560,6 +560,17 @@ def _run_once_locked(account: str, synthetic: bool = False,
                 c = abs(w) * get_pair(s).carry_fraction(px_last.get(s), _sign(w)) * elapsed
                 carry_frac += c
                 carry_by_pair[s] = carry_by_pair.get(s, 0.0) + c
+        # Financing is NEGATIVE carry: margin interest on the long debit plus the
+        # stock-loan fee on shorts. Equity/bond legs only — FX swap points above
+        # already priced their own financing, so billing them here would charge
+        # the same cost twice. Folding it into carry keeps the book identity
+        # `equity - start == price_pnl + carry - cost` intact.
+        fin_frac, fin_by_pair = marks.financing_fraction(
+            positions, get_pair, margin_rate=cfg.MARGIN_RATE_ANNUAL,
+            borrow_rate=cfg.SHORT_BORROW_ANNUAL, elapsed_days=elapsed)
+        carry_frac -= fin_frac
+        for s, c in fin_by_pair.items():
+            carry_by_pair[s] = carry_by_pair.get(s, 0.0) - c
 
     equity = state["equity"] * (1.0 + pnl_frac + carry_frac)
     marked = equity              # equity after the mark, BEFORE today's spread

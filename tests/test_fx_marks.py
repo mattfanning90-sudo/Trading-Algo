@@ -212,3 +212,73 @@ def test_status_daily_book_unchanged_at_252(isolated_state, capsys):
                   index=pd.to_datetime([d for d, _ in st["equity_history"]]))
     rets = s.pct_change(fill_method=None).dropna()
     assert f"{rets.std() * math.sqrt(252):.1%}" in line
+
+
+# ---------------------------------------------------------------------------
+# Financing: margin interest on the long debit + stock-loan fee on shorts
+# ---------------------------------------------------------------------------
+# Every equity and bond in MULTI_ASSET_UNIVERSE ships swap_long = swap_short =
+# 0.0, deliberately (pairs.py:103) — the FX carry model is swap points, and
+# nobody wrote an equity financing model. The consequence: the `multiasset` book
+# holds 1.02x long and 0.45x short and pays NOTHING to borrow either the cash or
+# the shares. This is that missing charge.
+#
+# Convention, stated once so it cannot drift: margin interest accrues on the
+# LONG DEBIT ONLY — max(0, long exposure - 1) — because a short generates cash
+# rather than consuming it. Charging on (gross - 1) would double-count the short
+# leg. Shorts pay a separate stock-loan fee on their notional. FX and crypto are
+# EXCLUDED: their financing already lives in swap points / perp funding, so
+# charging them here would bill the same cost twice.
+from trading_algo.forex.pairs import get_pair as _gp
+
+
+def _fin(weights, **kw):
+    kw.setdefault("margin_rate", 0.055)
+    kw.setdefault("borrow_rate", 0.004)
+    return marks.financing_fraction(weights, _gp, **kw)
+
+
+def test_unlevered_long_only_book_pays_no_financing():
+    total, by_pair = _fin({"SPY": 0.6, "AGG": 0.4})
+    assert total == 0.0 and by_pair == {}
+
+
+def test_levered_long_book_pays_margin_on_the_debit_only():
+    """1.5x long = 0.5x financed, not 1.5x."""
+    total, _ = _fin({"SPY": 1.0, "QQQ": 0.5}, elapsed_days=365.25)
+    assert total == pytest.approx(0.5 * 0.055, rel=1e-6)
+
+
+def test_a_short_pays_borrow_but_creates_no_margin_debit():
+    """The whole point of the correction: a short is not borrowed cash."""
+    total, by_pair = _fin({"SPY": 1.0, "AAPL": -0.4}, elapsed_days=365.25)
+    assert total == pytest.approx(0.4 * 0.004, rel=1e-6)   # borrow only, no margin
+    assert by_pair["AAPL"] == pytest.approx(0.4 * 0.004, rel=1e-6)
+
+
+def test_fx_legs_are_excluded_because_swap_points_already_finance_them():
+    """AUDUSD carries real swap_long/swap_short. Charging margin here too would
+    bill the same financing twice."""
+    total, by_pair = _fin({"AUDUSD": 2.0}, elapsed_days=365.25)
+    assert total == 0.0 and by_pair == {}
+
+
+def test_margin_is_attributed_pro_rata_across_the_financed_longs():
+    """by_pair must sum to the total, or the dashboard's reconciliation breaks."""
+    total, by_pair = _fin({"SPY": 1.0, "QQQ": 0.5, "AAPL": -0.4},
+                          elapsed_days=365.25)
+    assert sum(by_pair.values()) == pytest.approx(total, rel=1e-9)
+    assert by_pair["SPY"] == pytest.approx(2 * by_pair["QQQ"], rel=1e-6)  # 1.0 vs 0.5
+
+
+def test_financing_scales_with_elapsed_time():
+    """A weekend gap costs three days of interest, not one."""
+    one, _ = _fin({"SPY": 1.5}, elapsed_days=1.0)
+    three, _ = _fin({"SPY": 1.5}, elapsed_days=3.0)
+    assert three == pytest.approx(3.0 * one, rel=1e-9)
+
+
+def test_zero_rates_are_a_perfect_noop():
+    total, by_pair = _fin({"SPY": 1.5, "AAPL": -0.4},
+                          margin_rate=0.0, borrow_rate=0.0, elapsed_days=10.0)
+    assert total == 0.0 and by_pair == {}

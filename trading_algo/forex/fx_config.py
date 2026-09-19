@@ -218,6 +218,19 @@ def profile_names() -> list[str]:
 # ---------------------------------------------------------------------------
 ACCOUNT_CURRENCY = "AUD"             # paper-book equity + reporting currency
 FX_RISK_FREE = 0.035                 # AUD cash benchmark for metrics (RBA-ish)
+
+# --- Financing the book cannot get for free --------------------------------
+# Equities and bonds ship swap_long = swap_short = 0.0 (the FX carry model IS
+# swap points), so without these a levered or short book pays NOTHING to borrow
+# the cash or the shares. Applied by `marks.financing_fraction` to equity/bond
+# legs only — FX swap points and crypto funding already price their own.
+#
+# THESE ARE ASSUMPTIONS, not measurements. They are plausible retail-broker
+# numbers (IBKR-style margin, liquid-name stock loan); set them to your actual
+# rates before treating any resulting haircut as precise. Set both to 0.0 to
+# recover the old no-financing behaviour exactly.
+MARGIN_RATE_ANNUAL = 0.055      # interest on the LONG DEBIT, max(0, L - 1)
+SHORT_BORROW_ANNUAL = 0.004     # stock-loan fee on short notional
 DEFAULT_CAPITAL = 5_000.0           # starting paper capital per account
 # Yahoo carries the FX majors from 2003-12-01 (EURGBP from 1999); verified
 # 2026-09-16. Training started 2015 against that, and the neural layer overfits

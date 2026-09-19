@@ -23,7 +23,8 @@ from . import fxconv
 from . import marks
 from . import position_policy
 from .agents import AgentPool
-from .fx_config import ACCOUNT_CURRENCY, FX_RISK_FREE, FXParams
+from .fx_config import (ACCOUNT_CURRENCY, FX_RISK_FREE, MARGIN_RATE_ANNUAL,
+                        SHORT_BORROW_ANNUAL, FXParams)
 from .fx_data import closes
 from .pairs import get_pair
 from ..metrics import compute_metrics
@@ -120,6 +121,13 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
                 w = held[s]
                 if w:
                     carry += abs(w) * specs[s].carry_fraction(price_d[s], _sign(w))
+            # Financing is negative carry — see marks.financing_fraction. Equity
+            # and bond legs ship swap = 0, so without this a levered or short
+            # book borrows cash and shares for free.
+            fin, _ = marks.financing_fraction(
+                held.to_dict(), lambda s: specs[s],
+                margin_rate=MARGIN_RATE_ANNUAL, borrow_rate=SHORT_BORROW_ANNUAL)
+            carry -= fin
 
         ret_nxt = aud_rets.loc[nxt]              # AUD-translated pair returns
         pair_pnl = held * ret_nxt.reindex(pairs).fillna(0.0)

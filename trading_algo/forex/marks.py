@@ -66,6 +66,79 @@ def cost_fraction(delta_w: float, pair: Pair, price: float | None) -> float:
     return abs(delta_w) * half_spread_fraction(pair, price)
 
 
+# ---------------------------------------------------------------------------
+# Financing: margin interest on the long debit + stock-loan fee on shorts
+# ---------------------------------------------------------------------------
+# Every equity and bond in the multi-asset universe ships
+# ``swap_long_pips = swap_short_pips = 0.0`` deliberately (see pairs.py): the FX
+# carry model IS swap points, and no equity financing model was ever written.
+# The consequence was that a book holding 1.02x long and 0.45x short paid
+# nothing to borrow either the cash or the shares. This is that missing charge,
+# defined ONCE here so the live book and the backtest cannot re-fork it.
+#
+# CONVENTION — stated once, because it is easy to get wrong:
+#   * Margin interest accrues on the LONG DEBIT ONLY, ``max(0, L - 1)``. A short
+#     GENERATES cash rather than consuming it, so charging on ``gross - 1`` would
+#     double-count the short leg.
+#   * Shorts instead pay a stock-loan fee on their own notional.
+#   * FX and crypto are EXCLUDED: their financing already lives in swap points
+#     and perp funding, so billing them here would charge the same cost twice.
+#   * Interest accrues on CALENDAR days (a weekend costs three days), which is
+#     why the caller passes elapsed time rather than a bar count.
+FINANCED_CLASSES = ("equity", "bond")
+DAYS_PER_YEAR = 365.25
+
+
+def financing_fraction(weights, get_pair=None, *, margin_rate: float,
+                       borrow_rate: float, elapsed_days: float = 1.0
+                       ) -> tuple[float, dict[str, float]]:
+    """Financing COST for one bar, as a positive fraction of equity.
+
+    Returns ``(total, by_pair)``. ``by_pair`` always sums to ``total`` — the
+    book-level margin debit is attributed pro-rata across the financed longs
+    that caused it, so the dashboard's per-leg reconciliation still balances.
+
+    Callers fold this into the carry term (financing is negative carry), which
+    keeps the book identity ``equity - start == price_pnl + carry - cost``.
+    """
+    if get_pair is None:
+        from .pairs import get_pair as _default
+        get_pair = _default
+    if elapsed_days <= 0:
+        return 0.0, {}
+
+    longs: dict[str, float] = {}
+    shorts: dict[str, float] = {}
+    for sym, w in (weights or {}).items():
+        if not w:
+            continue
+        try:
+            asset_class = get_pair(sym).asset_class
+        except Exception:
+            continue                      # an unknown symbol is never financed
+        if asset_class not in FINANCED_CLASSES:
+            continue
+        (longs if w > 0 else shorts)[sym] = abs(float(w))
+
+    years = elapsed_days / DAYS_PER_YEAR
+    by_pair: dict[str, float] = {}
+
+    for sym, w in shorts.items():         # stock-loan fee on short notional
+        by_pair[sym] = by_pair.get(sym, 0.0) + w * borrow_rate * years
+
+    long_exposure = sum(longs.values())
+    debit = max(0.0, long_exposure - 1.0)
+    if debit and margin_rate:
+        charge = debit * margin_rate * years
+        for sym, w in longs.items():      # pro-rata across the financed longs
+            by_pair[sym] = by_pair.get(sym, 0.0) + charge * (w / long_exposure)
+
+    total = sum(by_pair.values())
+    if not total:
+        return 0.0, {}
+    return total, {k: v for k, v in by_pair.items() if v}
+
+
 def trade_cost(delta_w: float, pair: Pair, price: float | None, equity: float) -> float:
     """Half-spread charge in the account currency (the currency `equity` is in)."""
     return cost_fraction(delta_w, pair, price) * equity
