@@ -279,3 +279,53 @@ def test_a_clean_audit_sends_nothing(monkeypatch):
         verify.Finding(verify.WARN, "equity:full", "idle-sleeve", "in cash")]})
 
     assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# AGEING — a fixed bug must not be re-reported forever
+# ---------------------------------------------------------------------------
+# The audit re-derives every book from its WHOLE trade ledger, so a defect fixed
+# in July would keep firing as a fresh ERROR for the life of the book. That is
+# how an alert channel gets muted, and it is why `--strict` could never be armed.
+# Ageing is opt-in: the detector stays a pure detector unless given a clock.
+AGE_NOW = datetime(2026, 9, 19)
+OLD_SATURDAY = "2026-07-04 03:00"        # 77 days before AGE_NOW
+RECENT_SATURDAY = "2026-09-12 03:00"     # 7 days before AGE_NOW
+
+
+def _weekend_fill(stamp):
+    return {"date": stamp, "pair": "EURUSD", "price": 1.14,
+            "target_weight": 0.2, "delta_weight": 0.2}
+
+
+def test_old_closed_market_fills_age_out_to_informational():
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(OLD_SATURDAY)]),
+                                    "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade-historical"}
+    assert [f.level for f in out] == [verify.INFO]
+
+
+def test_recent_closed_market_fills_still_error():
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(RECENT_SATURDAY)]),
+                                    "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade"}
+    assert [f.level for f in out] == [verify.ERROR]
+
+
+def test_recent_and_historical_are_reported_separately():
+    out = verify.check_market_hours(
+        "t", fx_book([_weekend_fill(OLD_SATURDAY),
+                      _weekend_fill(RECENT_SATURDAY)]), "fx", AGE_NOW, 30)
+    assert codes(out) == {"closed-market-trade", "closed-market-trade-historical"}
+    by_code = {f.code: f for f in out}
+    assert by_code["closed-market-trade"].detail["by_symbol"] == {"EURUSD": 1}
+    assert by_code["closed-market-trade-historical"].detail["by_symbol"] == {"EURUSD": 1}
+
+
+def test_ageing_is_off_unless_a_clock_is_supplied():
+    """Without a clock the detector is a pure detector — every offender is an
+    ERROR. This keeps the session-gate parity tests (test_sessions.py,
+    test_fx_sessions.py) meaningful: they assert what the gate permits, not
+    how old a ledger entry is."""
+    out = verify.check_market_hours("t", fx_book([_weekend_fill(OLD_SATURDAY)]), "fx")
+    assert codes(out) == {"closed-market-trade"}
