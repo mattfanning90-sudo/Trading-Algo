@@ -1,0 +1,71 @@
+name: Monthly Book Report
+
+# F5 / F10 / F11 / F3 all shipped working CLIs and none of them had a trigger:
+# the tearsheet, execution TCA, live-vs-backtest attribution and the promotion
+# gate have been runnable-but-never-run since they were written. This is the
+# trigger. Report-only — it reads state and writes nothing back.
+#
+#   Actions → "Monthly Book Report" → Run workflow
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"      # 03:00 UTC on the 1st
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-report-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    env:
+      MOMENTUM_STATE_DIR: ${{ github.workspace }}/state
+      FX_STATE_DIR: ${{ github.workspace }}/state
+      # Alerts raised while reporting (e.g. the F3 tracking-error breach) should
+      # reach the same channel as everything else.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Per-account reports
+        shell: bash
+        run: |
+          mkdir -p reports
+          for acct in full small ultra experimental; do
+            [ -f "state/paper_state_${acct}.json" ] || continue
+            echo "## ${acct}" >> "$GITHUB_STEP_SUMMARY"
+
+            # F5 — the monthly tearsheet its docstring has always promised.
+            python -m trading_algo.tearsheet --account "$acct" \
+              --out "reports/tearsheet_${acct}.md" >> "$GITHUB_STEP_SUMMARY" \
+              || echo "_tearsheet unavailable_" >> "$GITHUB_STEP_SUMMARY"
+
+            # F11 (execution TCA), F3 (live vs backtest), F10 (promotion gate).
+            # Fenced: these print fixed-width tables, not markdown.
+            for report in tca attribution promotion; do
+              {
+                echo "### ${report}"
+                echo '```'
+                python -m trading_algo.paper_trade --account "$acct" "--${report}" 2>&1 \
+                  || echo "unavailable"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+
+      - name: Upload the tearsheets
+        uses: actions/upload-artifact@v7
+        with:
+          name: tearsheets
+          path: reports/
+          if-no-files-found: warn
