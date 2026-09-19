@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 import urllib.request
 from typing import Callable
 
@@ -44,6 +45,13 @@ register_channel("log", _log_channel)   # always-available default
 WEBHOOK_TIMEOUT_SECONDS = 10
 
 
+def _is_ntfy(url: str) -> bool:
+    try:
+        return urllib.parse.urlparse(url).hostname in ("ntfy.sh", "www.ntfy.sh")
+    except Exception:
+        return False
+
+
 def _webhook_channel(payload: dict) -> None:
     """POST the payload as JSON to ``$ALERT_WEBHOOK_URL``.
 
@@ -63,12 +71,19 @@ def _webhook_channel(payload: dict) -> None:
     url = os.environ.get("ALERT_WEBHOOK_URL")
     if not url:
         return
-    body = dict(payload)
-    body.setdefault("text", f"[{payload.get('level', 'info').upper()}] "
-                            f"{payload.get('event')}: {payload.get('message')}")
+    line = (f"[{payload.get('level', 'info').upper()}] "
+            f"{payload.get('event')}: {payload.get('message')}")
+    if _is_ntfy(url):
+        # ntfy renders the raw request BODY as the notification text, so posting
+        # JSON there puts a wall of escaped braces on your phone. Verified
+        # against the live service before special-casing it.
+        data, ctype = line.encode(), "text/plain; charset=utf-8"
+    else:
+        body = dict(payload)
+        body.setdefault("text", line)       # Slack/Discord both render `text`
+        data, ctype = json.dumps(body).encode(), "application/json"
     req = urllib.request.Request(
-        url, data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        url, data=data, headers={"Content-Type": ctype}, method="POST")
     with urllib.request.urlopen(req, timeout=WEBHOOK_TIMEOUT_SECONDS):
         pass
 

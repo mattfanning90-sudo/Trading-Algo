@@ -103,3 +103,36 @@ def test_webhook_logs_before_posting_so_a_dead_endpoint_loses_nothing(
                         _capture_urlopen({}, fail=True))
     N.notify("audit_errors", "still recorded", level="alert", channel="webhook")
     assert "still recorded" in capsys.readouterr().out
+
+
+def test_ntfy_endpoints_get_a_plain_readable_body(monkeypatch):
+    """ntfy renders the raw request body as the notification text, so posting
+    JSON there puts a wall of escaped braces on your phone. Slack and Discord
+    want JSON at their webhook URL. One channel, two wire formats, chosen by
+    host — verified against the real service before special-casing it."""
+    sent = {}
+
+    def _urlopen(req, timeout=None):
+        sent["url"] = req.full_url
+        sent["raw"] = req.data.decode()
+        sent["ctype"] = {k.lower(): v for k, v in req.header_items()}.get("content-type")
+        return _FakeResponse()
+
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://ntfy.sh/my-topic")
+    monkeypatch.setattr(N.urllib.request, "urlopen", _urlopen)
+    N.notify("audit_errors", "sleeve ASX is parked", level="alert", channel="webhook")
+    assert sent["raw"] == "[ALERT] audit_errors: sleeve ASX is parked"
+    assert sent["ctype"] == "text/plain; charset=utf-8"
+
+
+def test_non_ntfy_endpoints_still_get_json(monkeypatch):
+    sent = {}
+
+    def _urlopen(req, timeout=None):
+        sent["raw"] = req.data.decode()
+        return _FakeResponse()
+
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.slack.com/services/x")
+    monkeypatch.setattr(N.urllib.request, "urlopen", _urlopen)
+    N.notify("audit_errors", "msg", level="alert", channel="webhook")
+    assert _json.loads(sent["raw"])["event"] == "audit_errors"
