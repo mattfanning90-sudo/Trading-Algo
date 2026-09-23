@@ -18,18 +18,18 @@
     "AUDUSD"
   ],
   "initial_capital": 10000.0,
-  "equity": 10313.14739653711,
+  "equity": 10313.789228513455,
   "positions": {
-    "NVDA": -0.12967,
-    "SHY": -0.02611,
-    "QQQ": -0.22207,
-    "AGG": 0.09597,
     "SPY": 0.16304,
-    "AUDUSD": 0.17738,
-    "MSFT": 0.03873,
+    "AUDUSD": 0.05658,
+    "NVDA": -0.12967,
+    "QQQ": -0.22207,
+    "AGG": -0.00096,
+    "TLT": -0.06217,
+    "AAPL": -0.20811,
+    "SHY": -0.02611,
     "IEF": -0.04052,
-    "TLT": -0.03886,
-    "AAPL": -0.20811
+    "MSFT": 0.03873
   },
   "last_close": {
     "AAPL": 338.9800109863281,
@@ -41,10 +41,10 @@
     "IEF": 91.1500015258789,
     "AGG": 96.20999908447266,
     "SHY": 81.29000091552734,
-    "AUDUSD": 0.7110353112220764
+    "AUDUSD": 0.7113387584686279
   },
-  "last_bar_date": "2026-09-22",
-  "peak_equity": 10313.796590119106,
+  "last_bar_date": "2026-09-23",
+  "peak_equity": 10313.940628673348,
   "risk_halted": false,
   "halt_cooldown": 0,
   "trades": [
@@ -9857,6 +9857,96 @@
         "donchian_lo": 80.46,
         "ann_vol": 0.09925
       }
+    },
+    {
+      "date": "2026-09-23",
+      "pair": "AGG",
+      "side": "SELL",
+      "delta_weight": -0.0969,
+      "target_weight": -0.001,
+      "price": 96.21,
+      "aud_per_quote": 1.4058,
+      "why": "SHORT AGG at 96.21, sized to 0% of equity (signed weight -0.00). Net ensemble tilt -0.00. Driven by: Breakout -1.00, Momentum -0.96. Leaning against: meanrev +0.17. Evidence: EMA20 is below EMA100 (ADX 16, ranging); RSI 43; 60d momentum -1.6%. Realised vol 4%; the vol-target + per-pair cap set the final size.",
+      "regime": "ranging",
+      "agents": {
+        "trend": -0.0,
+        "breakout": -1.0,
+        "meanrev": 0.173,
+        "momentum": -0.96,
+        "carry": 0.0
+      },
+      "indicators": {
+        "price": 96.21,
+        "ema_fast": 96.43556,
+        "ema_slow": 97.07179,
+        "adx": 16.2848,
+        "rsi": 42.64883,
+        "roc": -0.01644,
+        "bb_z": -0.59243,
+        "donchian_hi": 97.79863,
+        "donchian_lo": 95.73,
+        "ann_vol": 0.04244
+      }
+    },
+    {
+      "date": "2026-09-23",
+      "pair": "AUDUSD",
+      "side": "SELL",
+      "delta_weight": -0.1208,
+      "target_weight": 0.0566,
+      "price": 0.71134,
+      "aud_per_quote": 1.4058,
+      "why": "LONG AUDUSD at 0.71134, sized to 6% of equity (signed weight +0.06). Net ensemble tilt +0.07. Driven by: Momentum +0.95, Trend +0.50, Carry +0.17. Leaning against: breakout -1.00. Evidence: EMA20 is above EMA100 (ADX 21, trending); RSI 46; 60d momentum +2.9%; price -1.2\u03c3 from its Bollinger mean. Realised vol 5%; the vol-target + per-pair cap set the final size.",
+      "regime": "trending",
+      "agents": {
+        "trend": 0.503,
+        "breakout": -1.0,
+        "meanrev": 0.0,
+        "momentum": 0.954,
+        "carry": 0.175
+      },
+      "indicators": {
+        "price": 0.71134,
+        "ema_fast": 0.71372,
+        "ema_slow": 0.70711,
+        "adx": 20.5254,
+        "rsi": 46.07868,
+        "roc": 0.02899,
+        "bb_z": -1.17769,
+        "donchian_hi": 0.7239,
+        "donchian_lo": 0.69073,
+        "ann_vol": 0.05473
+      }
+    },
+    {
+      "date": "2026-09-23",
+      "pair": "TLT",
+      "side": "SELL",
+      "delta_weight": -0.0233,
+      "target_weight": -0.0622,
+      "price": 81.8,
+      "aud_per_quote": 1.4058,
+      "why": "SHORT TLT at 81.8, sized to 6% of equity (signed weight -0.06). Net ensemble tilt -0.08. Driven by: Breakout -1.00, Momentum -0.98. Evidence: EMA20 is below EMA100 (ADX 11, ranging); RSI 50; 60d momentum -3.6%. Realised vol 10%; the vol-target + per-pair cap set the final size.",
+      "regime": "ranging",
+      "agents": {
+        "trend": -0.0,
+        "breakout": -1.0,
+        "meanrev": -0.038,
+        "momentum": -0.981,
+        "carry": 0.0
+      },
+      "indicators": {
+        "price": 81.8,
+        "ema_fast": 81.68366,
+        "ema_slow": 83.00506,
+        "adx": 10.62362,
+        "rsi": 49.89575,
+        "roc": -0.03597,
+        "bb_z": 0.1278,
+        "donchian_hi": 84.15721,
+        "donchian_lo": 80.46,
+        "ann_vol": 0.09921
+      }
     }
   ],
   "equity_history": [
@@ -10059,339 +10149,343 @@
     [
       "2026-09-22",
       10313.15
+    ],
+    [
+      "2026-09-23",
+      10313.79
     ]
   ],
   "decisions": {
     "AAPL": {
-      "weight": -0.1984,
-      "tilt": -0.3101,
+      "weight": -0.1942,
+      "tilt": -0.2869,
       "regime": "ranging",
       "agents": {
         "trend": 0.0,
         "breakout": 1.0,
-        "meanrev": -0.38,
-        "momentum": 0.985,
+        "meanrev": -0.355,
+        "momentum": 0.973,
         "carry": 0.0
       },
       "indicators": {
         "price": 338.98001,
-        "ema_fast": 327.6409,
-        "ema_slow": 308.92665,
-        "adx": 18.32882,
+        "ema_fast": 328.72081,
+        "ema_slow": 309.52177,
+        "adx": 19.05951,
         "rsi": 66.8757,
-        "roc": 0.17249,
-        "bb_z": 1.49488,
+        "roc": 0.1525,
+        "bb_z": 1.359,
         "donchian_hi": 344.2731,
         "donchian_lo": 299.7415,
-        "ann_vol": 0.2036
+        "ann_vol": 0.20055
       },
-      "text": "SHORT AAPL at 338.98, sized to 20% of equity (signed weight -0.20). Net ensemble tilt -0.31. Driven by: Mean-reversion -0.38. Leaning against: breakout +1.00, momentum +0.98. Evidence: EMA20 is above EMA100 (ADX 18, ranging); RSI 67; 60d momentum +17.2%; price +1.5\u03c3 from its Bollinger mean. Realised vol 20%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT AAPL at 338.98, sized to 19% of equity (signed weight -0.19). Net ensemble tilt -0.29. Driven by: Mean-reversion -0.35. Leaning against: breakout +1.00, momentum +0.97. Evidence: EMA20 is above EMA100 (ADX 19, ranging); RSI 67; 60d momentum +15.2%; price +1.4\u03c3 from its Bollinger mean. Realised vol 20%; the vol-target + per-pair cap set the final size."
     },
     "MSFT": {
-      "weight": 0.0368,
-      "tilt": 0.0575,
+      "weight": 0.0388,
+      "tilt": 0.0574,
       "regime": "trending",
       "agents": {
-        "trend": 0.874,
+        "trend": 0.871,
         "breakout": 1.0,
         "meanrev": -0.0,
-        "momentum": 0.999,
+        "momentum": 0.997,
         "carry": 0.0
       },
       "indicators": {
         "price": 501.60999,
-        "ema_fast": 495.01947,
-        "ema_slow": 452.15411,
-        "adx": 31.0393,
+        "ema_fast": 495.64714,
+        "ema_slow": 453.13343,
+        "adx": 30.62131,
         "rsi": 57.19299,
-        "roc": 0.34726,
-        "bb_z": 0.32949,
+        "roc": 0.30778,
+        "bb_z": 0.28912,
         "donchian_hi": 517.78003,
         "donchian_lo": 372.64849,
-        "ann_vol": 0.21917
+        "ann_vol": 0.20845
       },
-      "text": "LONG MSFT at 501.61, sized to 4% of equity (signed weight +0.04). Net ensemble tilt +0.06. Driven by: Breakout +1.00, Momentum +1.00, Trend +0.87. Evidence: EMA20 is above EMA100 (ADX 31, trending); RSI 57; 60d momentum +34.7%. Realised vol 22%; the vol-target + per-pair cap set the final size."
+      "text": "LONG MSFT at 501.61, sized to 4% of equity (signed weight +0.04). Net ensemble tilt +0.06. Driven by: Breakout +1.00, Momentum +1.00, Trend +0.87. Evidence: EMA20 is above EMA100 (ADX 31, trending); RSI 57; 60d momentum +30.8%. Realised vol 21%; the vol-target + per-pair cap set the final size."
     },
     "NVDA": {
-      "weight": -0.1297,
-      "tilt": -0.2026,
+      "weight": -0.1261,
+      "tilt": -0.1863,
       "regime": "ranging",
       "agents": {
         "trend": 0.0,
         "breakout": 1.0,
-        "meanrev": -0.268,
-        "momentum": 0.985,
+        "meanrev": -0.251,
+        "momentum": 0.989,
         "carry": 0.0
       },
       "indicators": {
         "price": 227.38,
-        "ema_fast": 220.36162,
-        "ema_slow": 210.63444,
-        "adx": 14.08593,
+        "ema_fast": 221.03004,
+        "ema_slow": 210.96603,
+        "adx": 14.30542,
         "rsi": 58.33392,
-        "roc": 0.13766,
-        "bb_z": 0.96111,
+        "roc": 0.15211,
+        "bb_z": 0.88981,
         "donchian_hi": 234.4976,
         "donchian_lo": 189.79762,
-        "ann_vol": 0.39944
+        "ann_vol": 0.39021
       },
-      "text": "SHORT NVDA at 227.38, sized to 13% of equity (signed weight -0.13). Net ensemble tilt -0.20. Driven by: Mean-reversion -0.27. Leaning against: breakout +1.00, momentum +0.98. Evidence: EMA20 is above EMA100 (ADX 14, ranging); RSI 58; 60d momentum +13.8%. Realised vol 40%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT NVDA at 227.38, sized to 13% of equity (signed weight -0.13). Net ensemble tilt -0.19. Driven by: Mean-reversion -0.25. Leaning against: breakout +1.00, momentum +0.99. Evidence: EMA20 is above EMA100 (ADX 14, ranging); RSI 58; 60d momentum +15.2%. Realised vol 39%; the vol-target + per-pair cap set the final size."
     },
     "SPY": {
-      "weight": 0.163,
-      "tilt": 0.2547,
+      "weight": 0.1715,
+      "tilt": 0.2534,
       "regime": "ranging",
       "agents": {
         "trend": 0.0,
         "breakout": 1.0,
-        "meanrev": -0.406,
-        "momentum": 0.994,
+        "meanrev": -0.376,
+        "momentum": 0.995,
         "carry": 0.0
       },
       "indicators": {
         "price": 773.5,
-        "ema_fast": 763.4934,
-        "ema_slow": 745.20223,
-        "adx": 13.00167,
+        "ema_fast": 764.44641,
+        "ema_slow": 745.76258,
+        "adx": 12.67656,
         "rsi": 59.93506,
-        "roc": 0.03837,
-        "bb_z": 1.64748,
+        "roc": 0.03977,
+        "bb_z": 1.47147,
         "donchian_hi": 777.43949,
         "donchian_lo": 727.29398,
-        "ann_vol": 0.09668
+        "ann_vol": 0.09644
       },
-      "text": "LONG SPY at 773.5, sized to 16% of equity (signed weight +0.16). Net ensemble tilt +0.25. Driven by: Breakout +1.00, Momentum +0.99. Leaning against: meanrev -0.41. Evidence: EMA20 is above EMA100 (ADX 13, ranging); RSI 60; 60d momentum +3.8%; price +1.6\u03c3 from its Bollinger mean. Realised vol 10%; the vol-target + per-pair cap set the final size."
+      "text": "LONG SPY at 773.5, sized to 17% of equity (signed weight +0.17). Net ensemble tilt +0.25. Driven by: Breakout +1.00, Momentum +1.00. Leaning against: meanrev -0.38. Evidence: EMA20 is above EMA100 (ADX 13, ranging); RSI 60; 60d momentum +4.0%; price +1.5\u03c3 from its Bollinger mean. Realised vol 10%; the vol-target + per-pair cap set the final size."
     },
     "QQQ": {
-      "weight": -0.2221,
-      "tilt": -0.4425,
+      "weight": -0.2194,
+      "tilt": -0.3937,
       "regime": "ranging",
       "agents": {
         "trend": 0.0,
         "breakout": 1.0,
-        "meanrev": -0.51,
-        "momentum": 0.318,
+        "meanrev": -0.466,
+        "momentum": 0.747,
         "carry": 0.0
       },
       "indicators": {
         "price": 741.46997,
-        "ema_fast": 718.05888,
-        "ema_slow": 700.74706,
-        "adx": 12.1056,
+        "ema_fast": 720.28851,
+        "ema_slow": 701.55345,
+        "adx": 13.03461,
         "rsi": 66.387,
-        "roc": 0.00793,
-        "bb_z": 2.50836,
+        "roc": 0.02354,
+        "bb_z": 2.07329,
         "donchian_hi": 743.21997,
         "donchian_lo": 660.45179,
-        "ann_vol": 0.15214
+        "ann_vol": 0.15104
       },
-      "text": "SHORT QQQ at 741.47, sized to 22% of equity (signed weight -0.22). Net ensemble tilt -0.44. Driven by: Mean-reversion -0.51. Leaning against: breakout +1.00, momentum +0.32. Evidence: EMA20 is above EMA100 (ADX 12, ranging); RSI 66; 60d momentum +0.8%; price +2.5\u03c3 from its Bollinger mean. Realised vol 15%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT QQQ at 741.47, sized to 22% of equity (signed weight -0.22). Net ensemble tilt -0.39. Driven by: Mean-reversion -0.47. Leaning against: breakout +1.00, momentum +0.75. Evidence: EMA20 is above EMA100 (ADX 13, ranging); RSI 66; 60d momentum +2.4%; price +2.1\u03c3 from its Bollinger mean. Realised vol 15%; the vol-target + per-pair cap set the final size."
     },
     "TLT": {
-      "weight": -0.0389,
-      "tilt": -0.0539,
+      "weight": -0.0622,
+      "tilt": -0.0806,
       "regime": "ranging",
       "agents": {
         "trend": -0.0,
         "breakout": -1.0,
-        "meanrev": -0.009,
-        "momentum": -0.99,
+        "meanrev": -0.038,
+        "momentum": -0.981,
         "carry": 0.0
       },
       "indicators": {
         "price": 81.8,
-        "ema_fast": 81.67141,
-        "ema_slow": 83.0294,
-        "adx": 11.3788,
+        "ema_fast": 81.68366,
+        "ema_slow": 83.00506,
+        "adx": 10.62362,
         "rsi": 49.89575,
-        "roc": -0.04248,
-        "bb_z": 0.02921,
-        "donchian_hi": 84.50447,
+        "roc": -0.03597,
+        "bb_z": 0.1278,
+        "donchian_hi": 84.15721,
         "donchian_lo": 80.46,
-        "ann_vol": 0.09925
+        "ann_vol": 0.09921
       },
-      "text": "SHORT TLT at 81.8, sized to 4% of equity (signed weight -0.04). Net ensemble tilt -0.05. Driven by: Breakout -1.00, Momentum -0.99. Evidence: EMA20 is below EMA100 (ADX 11, ranging); RSI 50; 60d momentum -4.2%. Realised vol 10%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT TLT at 81.8, sized to 6% of equity (signed weight -0.06). Net ensemble tilt -0.08. Driven by: Breakout -1.00, Momentum -0.98. Evidence: EMA20 is below EMA100 (ADX 11, ranging); RSI 50; 60d momentum -3.6%. Realised vol 10%; the vol-target + per-pair cap set the final size."
     },
     "IEF": {
-      "weight": -0.0405,
-      "tilt": -0.0562,
+      "weight": -0.0456,
+      "tilt": -0.0591,
       "regime": "trending",
       "agents": {
-        "trend": -0.728,
+        "trend": -0.751,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.977,
+        "momentum": -0.967,
         "carry": 0.0
       },
       "indicators": {
         "price": 91.15,
-        "ema_fast": 91.58861,
-        "ema_slow": 92.6062,
-        "adx": 22.41542,
+        "ema_fast": 91.54684,
+        "ema_slow": 92.57737,
+        "adx": 22.65842,
         "rsi": 39.48352,
-        "roc": -0.02618,
-        "bb_z": -0.80494,
+        "roc": -0.02381,
+        "bb_z": -0.72978,
         "donchian_hi": 93.44234,
         "donchian_lo": 90.7,
-        "ann_vol": 0.04952
+        "ann_vol": 0.04935
       },
-      "text": "SHORT IEF at 91.15, sized to 4% of equity (signed weight -0.04). Net ensemble tilt -0.06. Driven by: Breakout -1.00, Momentum -0.98, Trend -0.73. Evidence: EMA20 is below EMA100 (ADX 22, trending); RSI 39; 60d momentum -2.6%. Realised vol 5%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT IEF at 91.15, sized to 5% of equity (signed weight -0.05). Net ensemble tilt -0.06. Driven by: Breakout -1.00, Momentum -0.97, Trend -0.75. Evidence: EMA20 is below EMA100 (ADX 23, trending); RSI 39; 60d momentum -2.4%. Realised vol 5%; the vol-target + per-pair cap set the final size."
     },
     "AGG": {
-      "weight": 0.098,
-      "tilt": 0.136,
+      "weight": -0.001,
+      "tilt": -0.0012,
       "regime": "ranging",
       "agents": {
         "trend": -0.0,
         "breakout": -1.0,
-        "meanrev": 0.193,
-        "momentum": -0.97,
+        "meanrev": 0.173,
+        "momentum": -0.96,
         "carry": 0.0
       },
       "indicators": {
         "price": 96.21,
-        "ema_fast": 96.45931,
-        "ema_slow": 97.0892,
-        "adx": 16.36722,
-        "rsi": 42.64884,
-        "roc": -0.01793,
-        "bb_z": -0.66691,
-        "donchian_hi": 97.80855,
+        "ema_fast": 96.43556,
+        "ema_slow": 97.07179,
+        "adx": 16.2848,
+        "rsi": 42.64883,
+        "roc": -0.01644,
+        "bb_z": -0.59243,
+        "donchian_hi": 97.79863,
         "donchian_lo": 95.73,
-        "ann_vol": 0.04264
+        "ann_vol": 0.04244
       },
-      "text": "LONG AGG at 96.21, sized to 10% of equity (signed weight +0.10). Net ensemble tilt +0.14. Driven by: Mean-reversion +0.19. Leaning against: breakout -1.00, momentum -0.97. Evidence: EMA20 is below EMA100 (ADX 16, ranging); RSI 43; 60d momentum -1.8%. Realised vol 4%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT AGG at 96.21, sized to 0% of equity (signed weight -0.00). Net ensemble tilt -0.00. Driven by: Breakout -1.00, Momentum -0.96. Leaning against: meanrev +0.17. Evidence: EMA20 is below EMA100 (ADX 16, ranging); RSI 43; 60d momentum -1.6%. Realised vol 4%; the vol-target + per-pair cap set the final size."
     },
     "SHY": {
-      "weight": -0.0187,
-      "tilt": -0.026,
+      "weight": -0.0211,
+      "tilt": -0.0273,
       "regime": "trending",
       "agents": {
-        "trend": 0.137,
+        "trend": 0.091,
         "breakout": -1.0,
         "meanrev": 0.0,
-        "momentum": -0.337,
+        "momentum": -0.215,
         "carry": 0.0
       },
       "indicators": {
         "price": 81.29,
-        "ema_fast": 81.45772,
-        "ema_slow": 81.42128,
-        "adx": 24.91679,
+        "ema_fast": 81.44175,
+        "ema_slow": 81.41868,
+        "adx": 25.20393,
         "rsi": 36.29772,
-        "roc": -0.00108,
-        "bb_z": -1.16298,
+        "roc": -0.00069,
+        "bb_z": -1.06396,
         "donchian_hi": 81.85537,
         "donchian_lo": 81.24,
-        "ann_vol": 0.01365
+        "ann_vol": 0.01347
       },
-      "text": "SHORT SHY at 81.29, sized to 2% of equity (signed weight -0.02). Net ensemble tilt -0.03. Driven by: Breakout -1.00, Momentum -0.34. Leaning against: trend +0.14. Evidence: EMA20 is above EMA100 (ADX 25, trending); RSI 36; 60d momentum -0.1%; price -1.2\u03c3 from its Bollinger mean. Realised vol 1%; the vol-target + per-pair cap set the final size."
+      "text": "SHORT SHY at 81.29, sized to 2% of equity (signed weight -0.02). Net ensemble tilt -0.03. Driven by: Breakout -1.00, Momentum -0.21. Leaning against: trend +0.09. Evidence: EMA20 is above EMA100 (ADX 25, trending); RSI 36; 60d momentum -0.1%; price -1.1\u03c3 from its Bollinger mean. Realised vol 1%; the vol-target + per-pair cap set the final size."
     },
     "AUDUSD": {
-      "weight": 0.1774,
-      "tilt": 0.2462,
-      "regime": "ranging",
+      "weight": 0.0566,
+      "tilt": 0.0734,
+      "regime": "trending",
       "agents": {
-        "trend": 0.0,
+        "trend": 0.503,
         "breakout": -1.0,
-        "meanrev": 0.351,
-        "momentum": 0.973,
+        "meanrev": 0.0,
+        "momentum": 0.954,
         "carry": 0.175
       },
       "indicators": {
-        "price": 0.71104,
-        "ema_fast": 0.71389,
-        "ema_slow": 0.70701,
-        "adx": 19.38384,
-        "rsi": 45.63021,
-        "roc": 0.03312,
-        "bb_z": -1.33973,
+        "price": 0.71134,
+        "ema_fast": 0.71372,
+        "ema_slow": 0.70711,
+        "adx": 20.5254,
+        "rsi": 46.07868,
+        "roc": 0.02899,
+        "bb_z": -1.17769,
         "donchian_hi": 0.7239,
         "donchian_lo": 0.69073,
-        "ann_vol": 0.05495
+        "ann_vol": 0.05473
       },
-      "text": "LONG AUDUSD at 0.71104, sized to 18% of equity (signed weight +0.18). Net ensemble tilt +0.25. Driven by: Momentum +0.97, Mean-reversion +0.35, Carry +0.17. Leaning against: breakout -1.00. Evidence: EMA20 is above EMA100 (ADX 19, ranging); RSI 46; 60d momentum +3.3%; price -1.3\u03c3 from its Bollinger mean. Realised vol 5%; the vol-target + per-pair cap set the final size."
+      "text": "LONG AUDUSD at 0.71134, sized to 6% of equity (signed weight +0.06). Net ensemble tilt +0.07. Driven by: Momentum +0.95, Trend +0.50, Carry +0.17. Leaning against: breakout -1.00. Evidence: EMA20 is above EMA100 (ADX 21, trending); RSI 46; 60d momentum +2.9%; price -1.2\u03c3 from its Bollinger mean. Realised vol 5%; the vol-target + per-pair cap set the final size."
     }
   },
   "daily": {
-    "date": "2026-09-22",
-    "start_equity": 10081.09,
-    "end_equity": 10313.15,
-    "pnl_pct": 0.023076,
-    "carry_pct": 6e-06,
-    "cost_pct": -6.3e-05,
-    "net_pct": 0.023019,
-    "net_aud": 232.05,
+    "date": "2026-09-23",
+    "start_equity": 10313.15,
+    "end_equity": 10313.79,
+    "pnl_pct": 7.6e-05,
+    "carry_pct": 1e-06,
+    "cost_pct": -1.5e-05,
+    "net_pct": 6.2e-05,
+    "net_aud": 0.64,
     "by_pair": [
       {
-        "pair": "QQQ",
-        "weight": 0.2293,
-        "move": 0.052148,
-        "fx": 0.000996,
-        "contrib": 0.011967
+        "pair": "AUDUSD",
+        "weight": 0.1774,
+        "move": 0.000427,
+        "fx": -0.000427,
+        "contrib": 7.6e-05
       },
       {
         "pair": "NVDA",
-        "weight": 0.1706,
-        "move": 0.06302,
-        "fx": 0.000996,
-        "contrib": 0.010765
-      },
-      {
-        "pair": "AAPL",
-        "weight": -0.2081,
-        "move": 0.019765,
-        "fx": 0.000996,
-        "contrib": -0.004117
-      },
-      {
-        "pair": "SPY",
-        "weight": 0.0981,
-        "move": 0.025794,
-        "fx": 0.000996,
-        "contrib": 0.002534
-      },
-      {
-        "pair": "TLT",
-        "weight": 0.1631,
-        "move": 0.011375,
-        "fx": 0.000996,
-        "contrib": 0.001857
-      },
-      {
-        "pair": "IEF",
-        "weight": -0.2124,
-        "move": 0.004629,
-        "fx": 0.000996,
-        "contrib": -0.000984
-      },
-      {
-        "pair": "MSFT",
-        "weight": 0.0387,
-        "move": 0.023068,
-        "fx": 0.000996,
-        "contrib": 0.000894
-      },
-      {
-        "pair": "AGG",
-        "weight": 0.096,
-        "move": 0.004175,
-        "fx": 0.000996,
-        "contrib": 0.000401
-      },
-      {
-        "pair": "AUDUSD",
-        "weight": 0.2258,
-        "move": -0.000995,
-        "fx": 0.000996,
-        "contrib": -0.000225
+        "weight": -0.1297,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
       },
       {
         "pair": "SHY",
         "weight": -0.0261,
-        "move": 0.000615,
-        "fx": 0.000996,
-        "contrib": -1.6e-05
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
+      },
+      {
+        "pair": "QQQ",
+        "weight": -0.2221,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
+      },
+      {
+        "pair": "AGG",
+        "weight": 0.096,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": 0.0
+      },
+      {
+        "pair": "SPY",
+        "weight": 0.163,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": 0.0
+      },
+      {
+        "pair": "MSFT",
+        "weight": 0.0387,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": 0.0
+      },
+      {
+        "pair": "IEF",
+        "weight": -0.0405,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
+      },
+      {
+        "pair": "TLT",
+        "weight": -0.0389,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
+      },
+      {
+        "pair": "AAPL",
+        "weight": -0.2081,
+        "move": 0.0,
+        "fx": -0.000427,
+        "contrib": -0.0
       }
     ],
     "halted": false
@@ -10399,21 +10493,21 @@
   "data_quality": {
     "excluded": [],
     "reasons": {},
-    "date": "2026-09-22",
+    "date": "2026-09-23",
     "close_only": [],
     "close_only_policy": "refuse"
   },
   "cumulative": {
     "from": "2026-07-28",
     "start_equity": 10187.479695576303,
-    "price_pnl": 144.59266923061617,
-    "carry": -3.2071825806544525,
-    "cost": 15.717785689156528,
+    "price_pnl": 145.37304289356427,
+    "carry": -3.1943241073643427,
+    "cost": 15.869185849050275,
     "by_pair": {
       "AUDUSD": {
-        "pnl": -4.114169967830581,
-        "carry": -3.2071825806544525,
-        "cost": 1.187026774653163
+        "pnl": -3.3337963048824806,
+        "carry": -3.1943241073643427,
+        "cost": 1.2570873517119876
       },
       "SPY": {
         "pnl": -23.133763450635385,
@@ -10428,7 +10522,7 @@
       "TLT": {
         "pnl": 35.79158253373174,
         "carry": 0.0,
-        "cost": 3.626396174535137
+        "cost": 3.655781041686001
       },
       "MSFT": {
         "pnl": -208.5163826387931,
@@ -10453,7 +10547,7 @@
       "AGG": {
         "pnl": 1.8909546846987326,
         "carry": 0.0,
-        "cost": 0.7780608072069192
+        "cost": 0.830015522890977
       },
       "QQQ": {
         "pnl": 144.58373934879506,
@@ -10461,19 +10555,19 @@
         "cost": 0.18353615889590066
       }
     },
-    "to": "2026-09-22",
-    "bars": 34
+    "to": "2026-09-23",
+    "bars": 35
   },
   "bars_held": {
-    "NVDA": 0,
-    "SHY": 2,
-    "QQQ": 0,
-    "AGG": 1,
-    "SPY": 1000000022,
-    "AUDUSD": 9,
-    "MSFT": 1000000022,
-    "IEF": 3,
-    "TLT": 0,
-    "AAPL": 4
+    "SPY": 1000000023,
+    "AUDUSD": 10,
+    "NVDA": 1,
+    "QQQ": 1,
+    "AGG": 0,
+    "TLT": 1,
+    "AAPL": 5,
+    "SHY": 3,
+    "IEF": 4,
+    "MSFT": 1000000023
   }
 }
