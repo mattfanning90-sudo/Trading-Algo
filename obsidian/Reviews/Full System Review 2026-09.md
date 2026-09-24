@@ -30,10 +30,12 @@ The strategy is compared against a benchmark that leaves out dividends while the
 
 Two mechanisms leave 56 to 66% of the money in cash on an average day ([[Cash Drag and Exposure]]):
 
-- **The regime filter.** When a region's index is below its 200-day average the whole sleeve holds cash. That was true 23 to 35% of all days. Over 2012 to 2026, a mostly rising market with two short crashes, switching the filter off would have added 2 to 3 points a year and roughly doubled the worst drawdown. In a 2008-type year it would have earned its keep. The sample cannot tell you which.
+- **The regime filter.** When a region's index is below its 200-day average the whole sleeve holds cash. That was true 23 to 35% of all days. Switching it off would have added 2 to 3 points a year and roughly doubled the worst drawdown. A first pass called that a drag; the adversarial check overturned it. On [[Calmar]], return per unit of worst drawdown, which is the measure a crash filter exists to serve, the filter **wins in every sleeve**: 0.73 against 0.53 for the US, 0.71 against 0.49 for the ASX. And with the filter off the drawdown stop never once fires, so the two are not doing the same job. It is insurance that is working, priced in forgone return.
 - **The sizing formula.** It assumes the ten stocks move together with a correlation of 0.6. They actually measure 0.18 to 0.36. So the book thinks it is riskier than it is, holds back, and lands at 8 to 10% volatility against its 12% target even when fully invested. Changing that one number lifts US returns from 9.6% to 11.5% a year at the same Sharpe.
 
-Two of the three eligibility filters do nothing measurable. Monthly rebalancing matters a lot; quarterly is much worse.
+Two of the three eligibility filters do nothing measurable.
+
+**Rebalancing less often looks better, not worse.** A first pass reported that quarterly rebalancing was much worse and read that as the momentum signal decaying within the month. That was [[Rebalance Timing Luck]] and nothing more: the test used one arbitrary quarterly phase, and it happened to be the worst of the three available. Averaged across all three phases, quarterly beats monthly in all four sleeves and cuts FTSE's cost drag from 24.7% of capital to about 11%. Annual rebalancing beats quarterly in three of four, which no decay story allows. This is now the strongest unexploited lead in the equity book.
 
 ## Where the strategies are not being allowed to play out
 
@@ -80,6 +82,37 @@ Dead code is under one percent, about 170 lines; the codebase is tight. The weig
 ## How much of this is verified
 
 Eighteen agents produced 143 findings. An adversarial pass (a skeptic tries to refute each one, a promoter defends it, a judge decides) got through 27 before the account's session limit stopped it: 24 survived, 3 were refuted. I re-checked the 25 highest-impact findings myself in the committed code and state files, and those are the only ones stated as facts. Twelve high-severity claims are still labelled unverified in the full document.
+
+## What the adversarial check changed
+
+Every finding has now been through a pass where an independent agent was told to
+demolish it and to default to "refuted" when unsure. **143 judged: 128 confirmed,
+11 refuted, 4 plausible, with the severity revised on 60.**
+
+Three of those refutations overturned things the review itself had published, and
+they are written up rather than quietly edited, because an audit that hides its
+own misses is not an audit:
+
+- The **regime filter is not a drag** (above).
+- **Quarterly rebalancing is not worse** (above), and the opposite is the lead.
+- The **August phantom liquidation** is real history but it is fixed, covered by
+  a regression test, corrected in the stored state, and already written up in an
+  earlier research note. What survives is only that no audit *narrates* it.
+
+One finding got worse instead of better. The neural agent was described as never
+having reached a live book. In fact it voted on **274 of the 281 trades** in the
+`matt` book before 17 September, using model weights that no longer exist
+anywhere, with nothing recording which model cast which vote. It then disappeared
+from every decision and nothing reported that either.
+
+> [!danger] And one thing that happened after the review was written
+> On 22 September, six currency crosses entered the live FX books. They were
+> added to a list so the machine-learning model would have more data to study,
+> but the same list also decides what the books trade. They now carry **32% of
+> `matt`'s risk, 34% of `partner`'s and 21% of `daytrader`'s**. A cross like
+> EUR/JPY is just two existing bets combined, so this is not diversification, it
+> is a hidden doubling-down. The fix already exists in the repo, on a branch that
+> was never merged.
 
 ## Related
 - [[How It Works]] · [[12-1 Momentum]] · [[Regime & Trend Filters]] · [[Volatility Targeting]] · [[Sharpe Ratio]] · [[Permutation Testing]]
