@@ -97,7 +97,7 @@ Each phase changes the input to the next. Doing regeneration before conventions 
 | Phase | Tasks | Gate to pass |
 |---|---|---|
 | 1 — semantic layer | 1-4 | No independent metric implementation outside `metrics.py`; suite green |
-| 2 — bridge | 5-8 | Bridge identity holds to 1bp on the current books |
+| 2 — bridge | 5-8 | Bridge sums exactly (residual is the remainder); every line computable from the book's own state is computed; the residual is **reported, not gated** (spec §5 sets no target for it) |
 | 3 — conventions | 9-13 | Bridge shows the dividend and cash-interest lines at zero |
 | 4 — mechanism | 14-20 | A test per defect; the regression gate re-baselined **once**, here, with the bridge as evidence |
 | 5 — deploy | 21-27 | Schedulers on new code; books reopened clean; PIT delta published per region |
