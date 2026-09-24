@@ -19,6 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .. import metrics
 from . import ensemble, marks, ml_agent, validation
 from .agents import AgentPool, PairContext, default_agents
 from .fx_config import FX_RISK_FREE, FXParams
@@ -93,14 +94,15 @@ def _annual_metrics(ret: pd.Series, n_trials: int, sr_variance: float) -> dict:
     r = ret.dropna()
     if len(r) < 20 or r.std() == 0:
         return {"Sharpe": 0.0, "CAGR": 0.0, "PSR": 0.0, "DSR": 0.0}
-    ppy = marks.periods_per_year(r.index)                # bar-aware (daily -> 252)
-    sharpe = r.mean() / r.std() * np.sqrt(ppy)
-    eq = (1 + r).cumprod()
-    cagr = eq.iloc[-1] ** (ppy / len(r)) - 1
+    ppy = metrics.periods_per_year(r.index)              # bar-aware (daily -> 252)
+    # The N+1 marks these N returns were differenced from, starting at 1.0 —
+    # one of the two pairings metrics.compute_metrics accepts as coherent.
+    eq = pd.concat([pd.Series([1.0]), (1 + r).cumprod()], ignore_index=True)
     return {
-        "Sharpe": round(float(sharpe), 2),
-        "CAGR": round(float(cagr), 4),
-        "MaxDD": round(float((eq / eq.cummax() - 1).min()), 4),
+        # No risk-free subtracted: promotion's 0.0 floor means "must not lose money".
+        "Sharpe": round(metrics.sharpe(r, periods_per_year=ppy, risk_free=None).value, 2),
+        "CAGR": round(metrics.cagr(eq, periods_per_year=ppy).value, 4),
+        "MaxDD": round(metrics.max_drawdown(eq).value, 4),
         "PSR": round(validation.probabilistic_sharpe_ratio(r.to_numpy()), 3),
         "DSR": round(validation.deflated_sharpe_ratio(r.to_numpy(), n_trials,
                                                       sr_variance), 3),

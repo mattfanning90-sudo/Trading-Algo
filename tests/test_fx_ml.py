@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trading_algo import metrics
 from trading_algo.forex import features, ml_backtest
 from trading_algo.forex import indicators as ind
 from trading_algo.forex.agents import PairContext
@@ -176,6 +177,41 @@ def test_run_ml_backtest_rule_based(panel, params):
         assert {"Sharpe", "PSR", "DSR"} <= set(m)
         assert 0.0 <= m["PSR"] <= 1.0
     assert "Probability of Backtest Overfitting" in ml_backtest.format_report(res)
+
+
+def _oos_returns(freq: str, n: int = 60, seed: int = 4) -> pd.Series:
+    idx = pd.date_range("2025-01-06", periods=n, freq=freq)
+    return pd.Series(np.random.default_rng(seed).normal(0.004, 0.01, n), index=idx)
+
+
+@pytest.mark.parametrize("freq", ["B", "h"])
+def test_report_card_is_the_layers_measures(freq):
+    """Sharpe (no risk-free: the promotion floor's convention), CAGR and MaxDD
+    are the primitives at the returns' own annualisation (daily 252, hourly
+    24*365.25), measured on the N+1 marks the returns were differenced from."""
+    r = _oos_returns(freq)
+    ppy = metrics.periods_per_year(r.index)
+    curve = pd.concat([pd.Series([1.0]), (1 + r).cumprod()], ignore_index=True)
+    sr = metrics.sharpe(r, periods_per_year=ppy, risk_free=None).value
+    population = r.mean() / r.std(ddof=0) * np.sqrt(ppy)
+    assert round(sr, 2) != round(population, 2), "the pin must tell ddof apart"
+    m = ml_backtest._annual_metrics(r, n_trials=3, sr_variance=0.01)
+    assert m["Sharpe"] == round(sr, 2)
+    assert m["CAGR"] == round(metrics.cagr(curve, periods_per_year=ppy).value, 4)
+    assert m["MaxDD"] == round(metrics.max_drawdown(curve).value, 4)
+
+
+def test_report_card_routes_through_the_metrics_layer(monkeypatch):
+    """A local formula with the same values passes the pin above; this passes
+    only if _annual_metrics CALLS the layer for all three measures."""
+    monkeypatch.setattr(metrics, "sharpe", lambda r, *, periods_per_year, risk_free:
+                        metrics.Measure(9.87, "Sharpe", periods_per_year, risk_free))
+    monkeypatch.setattr(metrics, "cagr", lambda e, *, periods_per_year:
+                        metrics.Measure(0.5555, "CAGR", periods_per_year))
+    monkeypatch.setattr(metrics, "max_drawdown",
+                        lambda e: metrics.Measure(-0.4444, "MaxDrawdown", float("nan")))
+    m = ml_backtest._annual_metrics(_oos_returns("B"), n_trials=3, sr_variance=0.01)
+    assert (m["Sharpe"], m["CAGR"], m["MaxDD"]) == (9.87, 0.5555, -0.4444)
 
 
 # ---- the model factory behind the walk-forward ---------------------------
