@@ -33,7 +33,7 @@ A compacted session reads this first to find where execution stopped.
 | Phase | Tasks | Status |
 |---|---|---|
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
-| 1 — measurement semantic layer | 1-4 | ⬜ not started |
+| 1 — measurement semantic layer | 1-4 (+3b) | 🟡 in progress — 1 done; 2, 3, 3b implemented, fix round 1 |
 | 2 — reconciliation bridge | 5-8 | ⬜ not started |
 | 3 — conventions | 9-13 | ⬜ not started |
 | 4 — mechanism | 14-20 | ⬜ not started |
@@ -48,6 +48,18 @@ A compacted session reads this first to find where execution stopped.
   pytest 1121 passed, ruff clean, bandit 0 medium+, detect-secrets clean, regression
   gate matches baseline, and `state/` untouched by the suite. The September
   remediation is now deployed; the schedulers pick it up on their next run.
+- **2026-09-24 — Task 1 (`9d6f5c5`).** `metrics.py` now owns `ANNUALIZATION`,
+  `periods_per_year`, the `Measure` record and the primitives; `compute_metrics`
+  derives annualisation from the bar spacing, so an hourly book annualises at 8766
+  with no call-site change. Reviewed: spec ✅, approved.
+- **2026-09-24 — Task 3b inserted (plan gap).** `benchmark_stats` hardcoded 252 five
+  times and no task covered it; routed through the primitives, plus a length guard on
+  `compute_metrics`. Side effect is a fix: the portfolio backtest reported the
+  benchmark's CAGR twice via two formulas that disagreed by one day's index move.
+- **2026-09-24 — Tasks 2, 3, 3b (`bb39d92`, `ce24e5f`, `81c95f7`).** Spec ✅ on all
+  three; live books' vol, drawdown and Sharpe bit-identical old vs new. Fix round 1
+  open for two test/label findings. Process note: a compaction caused a double
+  dispatch; no damage, and the ledger now records every dispatch before it happens.
 
 ---
 
