@@ -259,3 +259,39 @@ def test_panel_start_shared_across_profiles():
     assert dashboard._panel_start(594) == dashboard._panel_start(1110)
     # ...while a hypothetical LARGER future need still widens the fetch (floor)
     assert dashboard._panel_start(5000) < dashboard._panel_start(1110)
+
+
+def test_period_metrics_come_from_python(isolated):
+    """The 1W/1M/3M/ALL table is computed server-side, per period, at the
+    curve's own annualisation — the page only renders it."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    # init_account seeds an EMPTY equity_history (no curve, nothing to slice),
+    # so give the book one long enough for every period to carry a Sharpe.
+    dates = synthetic_panel(["EURUSD"])["EURUSD"].index[-130:]
+    vals = 5_000 * np.cumprod(1 + np.random.default_rng(7).normal(0.0002, 0.006, 130))
+    st = fx_book.load_state("matt")
+    st["equity_history"] = [[d.strftime("%Y-%m-%d"), round(float(v), 2)]
+                            for d, v in zip(dates, vals)]
+    fx_book.save_state("matt", st)
+    p = dashboard.build_payload("matt", synthetic=True)
+    bm = p["book_period_metrics"]
+    assert set(bm) == {"0", "7", "30", "90"}
+    assert all("sharpe" in m for m in bm.values())   # not a vacuous {} == {}
+    assert bm["0"] == p["book_metrics"]          # ALL == the header tile
+    assert p["bench_period_metrics"]["0"] == p["bench_metrics"]
+
+
+def test_curve_metrics_route_through_the_metrics_layer():
+    """No local Sharpe: the page's numbers ARE trading_algo.metrics'."""
+    from trading_algo import metrics
+    from trading_algo.forex.fx_config import FX_RISK_FREE
+    idx = pd.date_range("2026-06-01", periods=40, freq="B")
+    rng = np.random.default_rng(11)
+    vals = list(10_000 * np.cumprod(1 + rng.normal(0.0003, 0.008, 40)))
+    m = dashboard._curve_metrics([d.strftime("%Y-%m-%d") for d in idx], vals)
+    s = pd.Series(vals, index=idx, dtype=float)
+    r = s.pct_change().dropna()
+    assert m["sharpe"] == round(metrics.sharpe(r, periods_per_year=252,
+                                               risk_free=FX_RISK_FREE).value, 2)
+    assert m["vol"] == round(metrics.annualised_vol(r, periods_per_year=252), 4)
+    assert m["max_dd"] == round(metrics.max_drawdown(s).value, 4)

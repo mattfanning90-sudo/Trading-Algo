@@ -26,6 +26,7 @@ import pandas as pd
 
 import math
 
+from .. import metrics
 from . import feeds
 from . import fx_data
 from . import fx_pnl
@@ -244,7 +245,18 @@ def _beginner_explanation(side, weight, agents, indicators, pair):
     return " ".join(parts)
 
 
-def _curve_metrics(dates, values) -> dict:
+# The period buttons on the equity chart: ALL, 1W, 1M, 3M (in days; 0 = ALL).
+_PERIOD_DAYS: tuple[int, ...] = (0, 7, 30, 90)
+
+
+def _curve_metrics(dates, values, *, ppy: float | None = None) -> dict:
+    """Return / Sharpe / vol / drawdown / win-rate for one equity curve.
+
+    Every figure is `trading_algo.metrics`' — the page has no maths of its own.
+    `ppy` pins the annualisation (so a one-week SLICE of an hourly book is still
+    annualised at the whole curve's spacing); omitted, it is derived from the
+    curve's own index.
+    """
     if not values or len(values) < 2:
         return {}
     # format='mixed': one documented --bar 60m override run on a daily book mixes
@@ -253,14 +265,36 @@ def _curve_metrics(dates, values) -> dict:
     out = {"total_return": round(float(s.iloc[-1] / s.iloc[0] - 1.0), 4)}
     r = s.pct_change().dropna()
     if len(r) >= 5 and r.std() > 0:
-        # Annualise by the curve's ACTUAL bar spacing — an hourly book (daytrader)
-        # must not be annualised as if its bars were daily.
-        ppy = _ppy(s.index)
-        out["sharpe"] = round(float((r.mean() * ppy - FX_RISK_FREE)
-                                    / (r.std() * np.sqrt(ppy))), 2)
-        out["vol"] = round(float(r.std() * np.sqrt(ppy)), 4)
-        out["max_dd"] = round(float((s / s.cummax() - 1.0).min()), 4)
+        # Annualise by the curve's ACTUAL bar spacing — an hourly book
+        # (daytrader) must not be annualised as if its bars were daily.
+        p = _ppy(s.index) if ppy is None else ppy
+        out["sharpe"] = round(metrics.sharpe(r, periods_per_year=p,
+                                             risk_free=FX_RISK_FREE).value, 2)
+        out["vol"] = round(metrics.annualised_vol(r, periods_per_year=p), 4)
+        out["max_dd"] = round(metrics.max_drawdown(s).value, 4)
         out["win_rate"] = round(float((r > 0).mean()), 3)
+    return out
+
+
+def _period_metrics(curve: list, ppy: float) -> dict:
+    """The metrics table for each period button, computed HERE.
+
+    The page used to recompute Sharpe, vol and drawdown in JavaScript on the
+    sliced curve, with its own hardcoded cash rate and a POPULATION standard
+    deviation — two different numbers for one curve. The slice happens in Python
+    now and the page only renders."""
+    out: dict[str, dict] = {}
+    if not curve:
+        return out
+    times = pd.to_datetime([p["time"] for p in curve], format="mixed")
+    last = times[-1]
+    for days in _PERIOD_DAYS:
+        keep = (range(len(curve)) if not days else
+                [i for i, t in enumerate(times)
+                 if t >= last - pd.Timedelta(days=days)])
+        out[str(days)] = _curve_metrics([curve[i]["time"] for i in keep],
+                                        [curve[i]["value"] for i in keep],
+                                        ppy=ppy)
     return out
 
 
@@ -966,6 +1000,8 @@ def build_payload(account, synthetic=False, bars=180):
                       for k, v in sorted(state.get("positions", {}).items(),
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
+        "book_period_metrics": _period_metrics(book_curve, book_ppy),
+        "bench_period_metrics": _period_metrics(bench_curve, bench_ppy),
         "book_ppy": book_ppy, "bench_ppy": bench_ppy, "signal_note": signal_note,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
