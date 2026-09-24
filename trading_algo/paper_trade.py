@@ -1124,7 +1124,7 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
     gap or mismatched dates is a COMPARISON artefact; a breach with neither is
     the execution problem the budget was written to catch.
     """
-    from . import data, strategy
+    from . import data, data_quality, strategy
     from .regions import get_region
 
     print("  Tracking-error diagnosis (before blaming execution):")
@@ -1132,17 +1132,31 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
         try:
             region = get_region(k)
             px, ix = data.load_region(region, cfg.START)
-            invested = sum(n * float(px[t].iloc[-1])
+            # Ask exactly what the live rebalance asked (see run_daily): the
+            # gated candidate set, as of the bar the book was actually built on.
+            # Today's bar with no gate compares two different questions and
+            # invents an exposure gap.
+            asof = px.index[-1]
+            lrd = sl.get("last_rebalance_date")
+            if lrd:
+                loc = px.index.searchsorted(pd.Timestamp(lrd), side="right") - 1
+                if loc >= 0:
+                    asof = px.index[loc]
+            elig, _dq = data_quality.eligible(px, region, asof)
+            # Positions have not moved since `asof` (rebalances are monthly), so
+            # marking them at the as-of bar is the book as executed.
+            invested = sum(n * float(px[t].loc[asof])
                            for t, n in (sl.get("positions") or {}).items()
                            if t in px.columns)
             eq = invested + float(sl.get("cash", 0.0))
             target = strategy.compute_targets(
-                px, ix, _account_params(state, region)).abs().sum()
+                px, ix, _account_params(state, region),
+                asof=asof, eligible=elig).abs().sum()
             held = invested / eq if eq else 0.0
             gap = (held / target - 1.0) if target else 0.0
             print(f"    [{k}] held gross {held:6.1%} vs target {target:6.1%}"
-                  f"  ({gap:+.0%} of target)   last rebalance "
-                  f"{sl.get('last_rebalance_date') or 'never'}")
+                  f"  ({gap:+.0%} of target)   as of {asof.date()}"
+                  f"   last rebalance {sl.get('last_rebalance_date') or 'never'}")
         except Exception as exc:                     # diagnosis must never fail the report
             print(f"    [{k}] diagnosis unavailable: {exc}")
     print("    NOTE: the predicted curve is the tail of a backtest started at "

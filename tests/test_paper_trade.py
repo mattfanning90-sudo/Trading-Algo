@@ -479,3 +479,49 @@ def test_status_routes_through_the_metrics_layer(account, capsys, monkeypatch):
                         lambda e: metrics.Measure(-0.1234, "MaxDrawdown", float("nan")))
     assert _status_value(capsys, account, "Ann. vol") == "43.2%"
     assert _status_value(capsys, account, "Max drawdown") == "-12.34%"
+
+
+def test_diagnosis_uses_the_same_gate_and_date_as_the_live_path(monkeypatch, capsys):
+    """The tracking diagnosis must ask `compute_targets` the same question the
+    live rebalance asks (paper_trade.py:849-854): the data-quality gate's
+    eligible set, evaluated as of the sleeve's last rebalance date. Without
+    both, the 'exposure gap' it prints is an artefact of comparing a gated book
+    built in June to an ungated target computed in September."""
+    from trading_algo import data, data_quality, strategy
+
+    region = get_region("US")
+    px, ix = data.synthetic_region(region, start="2024-01-01", end="2026-01-01")
+    monkeypatch.setattr(data, "load_region", lambda *a, **k: (px, ix))
+
+    gated = set(px.columns) - {px.columns[0]}     # the gate froze one name
+    calls = {}
+
+    def fake_eligible(prices, reg, asof, base=None):
+        calls["eligible_asof"] = asof
+        return gated, data_quality.QualityReport()
+
+    monkeypatch.setattr(data_quality, "eligible", fake_eligible)
+
+    real = strategy.compute_targets
+
+    def spy(prices, index_prices, p, asof=None, eligible=None, capacity=None):
+        calls["asof"] = asof
+        calls["eligible"] = eligible
+        return real(prices, index_prices, p, asof=asof, eligible=eligible,
+                    capacity=capacity)
+
+    monkeypatch.setattr(strategy, "compute_targets", spy)
+
+    rebal = px.index[-40]
+    state = {"sleeves": {"US": {"positions": {px.columns[1]: 10}, "cash": 5_000.0,
+                                "last_rebalance_date": rebal.strftime("%Y-%m-%d")}},
+             "equity_history": [["2025-01-02", 100_000.0]]}
+
+    pt._print_tracking_diagnosis("test", state)
+
+    # the diagnosis swallows exceptions, so prove it did not silently bail
+    out = capsys.readouterr().out
+    assert "diagnosis unavailable" not in out, out
+    assert calls.get("eligible") == gated, "target computed outside the quality gate"
+    assert calls.get("asof") == rebal, "target computed at today's bar, not the rebalance"
+    assert calls.get("eligible_asof") == rebal, "quality gate assessed at the wrong date"
