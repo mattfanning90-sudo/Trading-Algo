@@ -12,31 +12,38 @@ new statistical claim), and every tearsheet carries a plain-paper disclaimer.
 from __future__ import annotations
 
 import argparse
-import math
 import os
+
+import pandas as pd
 
 from . import attribution
 from . import config as cfg
+from . import metrics
 from . import paper_trade
 
 
 def _annualised(equity_history: list) -> dict:
-    """Ann. vol + max drawdown from the equity history (assumes ~daily points;
-    labelled as such since a paper book's cadence is roughly daily)."""
+    """Ann. vol, max drawdown and Sharpe from the equity history.
+
+    Every figure comes from the measurement layer (`trading_algo.metrics`) at
+    the annualisation the history's OWN mark spacing implies — a daily book
+    still reads 252, an hourly one does not pretend to.
+    """
     rets = attribution.equity_returns(equity_history)
     if len(rets) < 2:
-        return {"ann_vol": None, "max_drawdown": None, "sharpe": None}
-    vol = float(rets.std(ddof=1) * math.sqrt(252))
-    # equity path for drawdown
-    vals = [float(v) for _, v in equity_history]
-    peak, mdd = vals[0], 0.0
-    for v in vals:
-        peak = max(peak, v)
-        mdd = min(mdd, v / peak - 1.0)
-    excess = float(rets.mean() * 252 - cfg.RISK_FREE)
-    sharpe = excess / vol if vol > 0 else None
+        return {"ann_vol": None, "max_drawdown": None, "sharpe": None,
+                "periods_per_year": float(metrics.ANNUALIZATION),
+                "sharpe_label": "Sharpe"}
+    ppy = metrics.periods_per_year(rets.index)
+    vol = metrics.annualised_vol(rets, periods_per_year=ppy)
+    equity = pd.Series([float(v) for _, v in equity_history],
+                       index=pd.to_datetime([d for d, _ in equity_history])
+                       ).sort_index()
+    mdd = metrics.max_drawdown(equity).value
+    sr = metrics.sharpe(rets, periods_per_year=ppy, risk_free=cfg.RISK_FREE)
     return {"ann_vol": vol, "max_drawdown": mdd,
-            "sharpe": round(sharpe, 2) if sharpe is not None else None}
+            "sharpe": round(sr.value, 2) if vol > 0 else None,
+            "periods_per_year": ppy, "sharpe_label": sr.label()}
 
 
 def account_tearsheet(state: dict, as_of: str | None = None) -> str:
@@ -62,9 +69,10 @@ def account_tearsheet(state: dict, as_of: str | None = None) -> str:
         f"| Total return | {total_ret:+.2%} |",
     ]
     if stats["max_drawdown"] is not None:
+        ppy = stats["periods_per_year"]
         out += [f"| Max drawdown | {stats['max_drawdown']:.2%} |",
-                f"| Ann. vol (≈daily) | {stats['ann_vol']:.1%} |",
-                f"| Sharpe (vs {cfg.RISK_FREE:.1%}, ≈daily) | {stats['sharpe']} |"]
+                f"| Ann. vol ({ppy:g}/yr) | {stats['ann_vol']:.1%} |",
+                f"| {stats['sharpe_label']} | {stats['sharpe']} |"]
     out += [f"| Equity points | {len(eh)} |",
             f"| Trades to date | {len(state.get('trades', []))} |", ""]
 

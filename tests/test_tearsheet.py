@@ -1,5 +1,7 @@
 """Backlog F5: monthly paper-book tearsheet."""
-from trading_algo import attribution, tearsheet
+import pandas as pd
+
+from trading_algo import attribution, metrics, tearsheet
 
 
 def _state():
@@ -42,3 +44,37 @@ def test_idle_sleeve_shows_zero_positions():
     md = tearsheet.account_tearsheet(_state())
     # ASX sleeve is all cash -> 0 positions in the table
     assert "| ASX |" in md and "| 0 |" in md
+
+
+def test_tearsheet_routes_through_the_metrics_layer():
+    """No local 252 and no hand-rolled drawdown loop: every figure on the
+    tearsheet is the metrics primitive's value, to the last bit."""
+    eh = _state()["equity_history"]
+    rets = attribution.equity_returns(eh)
+    ppy = metrics.periods_per_year(rets.index)
+    equity = pd.Series([float(v) for _, v in eh],
+                       index=pd.to_datetime([d for d, _ in eh])).sort_index()
+
+    stats = tearsheet._annualised(eh)
+    assert stats["periods_per_year"] == ppy
+    assert stats["ann_vol"] == metrics.annualised_vol(rets, periods_per_year=ppy)
+    assert stats["max_drawdown"] == metrics.max_drawdown(equity).value
+    assert stats["sharpe"] == round(
+        metrics.sharpe(rets, periods_per_year=ppy, risk_free=0.035).value, 2)
+
+
+def test_tearsheet_rows_name_their_convention():
+    """A reader cannot be shown a Sharpe without being told which Sharpe."""
+    md = tearsheet.account_tearsheet(_state())
+    assert "| Sharpe (vs 3.5%, 252/yr) |" in md
+    assert "| Ann. vol (252/yr) |" in md
+    assert "\u2248daily" not in md                     # the vague old label is gone
+
+
+def test_tearsheet_annualises_an_hourly_history_at_its_own_spacing():
+    """A book marked hourly must not be annualised as if its marks were days."""
+    idx = pd.date_range("2026-06-01", periods=60, freq="h")
+    vals = [10_000.0 * (1.0 + 0.0004 * ((i % 7) - 3)) ** i for i in range(60)]
+    eh = [[d.strftime("%Y-%m-%d %H:%M"), v] for d, v in zip(idx, vals)]
+    stats = tearsheet._annualised(eh)
+    assert stats["periods_per_year"] > 2000       # hourly ppy ~ 8766, not 252
