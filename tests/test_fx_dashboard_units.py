@@ -125,7 +125,8 @@ def test_book_ppy_true_panel_no_note_for_hourly_book(isolated):
     html = dashboard.render(p)
     assert "book_ppy" in html and "bench_ppy" in html
     assert "ANN=252" not in html                       # hardcoded annualisation gone
-    assert "compute(bh,BENCH_ANN)" in html             # bench annualised by ITS ppy
+    assert "Math.sqrt" not in html                     # no JS Sharpe at all
+    assert "book_period_metrics" in html               # Python's numbers instead
     assert "compute(bh,252)" not in html               # hardcoded bench ann gone
     assert "DAILY proxy panel" not in html             # true-bar page: no proxy note
     # hourly-vs-daily legend is CONDITIONAL on the two ppys differing

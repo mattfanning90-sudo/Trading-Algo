@@ -84,9 +84,9 @@ def test_intraday_book_builds_true_60m_panel(isolated):
     assert p["bench_curve"] and " " in p["bench_curve"][0]["time"]
     # no daily-proxy honesty note on the true-bar path
     assert p["signal_note"] is None
-    # and the page renders with the bench_ppy-driven annualisation token
+    # and the page renders Python's per-period numbers — no JavaScript maths
     html = dashboard.render(p)
-    assert "compute(bh,BENCH_ANN)" in html and "compute(bh,252)" not in html
+    assert "Math.sqrt" not in html and "bench_period_metrics" in html
 
 
 def test_empty_intraday_fetch_degrades_to_daily_proxy(isolated, monkeypatch):

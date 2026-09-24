@@ -939,7 +939,7 @@ def build_payload(account, synthetic=False, bars=180):
         bench_metrics = _curve_metrics([d.strftime(tfmt) for d in bh_eq.index],
                                        list(bh_eq.values))
         try:
-            # Annualisation for the client-side bench column: the bench curve's
+            # Annualisation for _period_metrics' bench column: the bench curve's
             # own bar spacing (252 on the daily panel, ~8766 on a true 60m one).
             bench_ppy = int(round(_ppy(bh_eq.index)))
         except Exception:
@@ -971,7 +971,7 @@ def build_payload(account, synthetic=False, bars=180):
     signals, tilts, rets = _signal_parts(panel, p)
     risk.update(_advanced_significance(signals, rets, book_rets, bars))  # DSR + PBO alongside PSR
 
-    # Annualisation for the client-side metrics table: each curve by its OWN
+    # Annualisation for the _period_metrics table: each curve by its OWN
     # bar spacing (marks.periods_per_year — the one calendar-time convention).
     # book_ppy comes from the equity keys (hourly ≈ 8766); bench_ppy was set
     # above from the bench panel (equal to book_ppy on a true intraday panel,
@@ -1540,26 +1540,16 @@ document.addEventListener('keydown',e=>{
 (function(){
   // Equity chart + period selector (1W/1M/3M/ALL) + crosshair readout + metrics.
   const el=document.getElementById('eqchart'), mEl=document.getElementById('metrics');
-  const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[], RF=0.035;
-  // Each curve is annualised for its OWN bar spacing (one calendar-time
-  // convention, marks.periods_per_year): the book by book_ppy (hourly ≈ 8766,
-  // from Python — agrees with the header Sharpe tile), the buy&hold bench by
-  // bench_ppy (equal to book_ppy on a true intraday panel; 252 on the daily
-  // panel / daily-proxy fallback).
+  const BOOK=DASH.book_curve||[], BENCH=DASH.bench_curve||[];
+  // The metrics table is computed in PYTHON (trading_algo.metrics), per period,
+  // and shipped as book_period_metrics / bench_period_metrics. There is no
+  // JavaScript Sharpe: the page that used to recompute it disagreed with the
+  // header tile, had its own cash rate and used a population sd.
+  const BOOKM=DASH.book_period_metrics||{}, BENCHM=DASH.bench_period_metrics||{};
+  // Kept only to decide whether the mixed-cadence legend below applies.
   const BOOK_ANN=DASH.book_ppy||252, BENCH_ANN=DASH.bench_ppy||252;
   const ROWS=[["Return","total_return",true,"Benchmark"],["Sharpe","sharpe",false,"Sharpe"],
     ["Volatility","vol",true,"Volatility"],["Max drawdown","max_dd",true,"Max drawdown"],["Win rate","win_rate",true,"Win rate"]];
-  function compute(series,ann){
-    const out={}; if(series.length<2) return out;
-    const v=series.map(p=>p.value); out.total_return=v[v.length-1]/v[0]-1;
-    const r=[]; for(let i=1;i<v.length;i++) r.push(v[i]/v[i-1]-1);
-    if(r.length>=5){const mean=r.reduce((a,b)=>a+b,0)/r.length;
-      const sd=Math.sqrt(r.reduce((a,b)=>a+(b-mean)**2,0)/r.length);
-      if(sd>0){out.sharpe=+((mean*ann-RF)/(sd*Math.sqrt(ann))).toFixed(2); out.vol=+(sd*Math.sqrt(ann)).toFixed(4);}
-      let peak=-1e18,dd=0; for(const x of v){peak=Math.max(peak,x); dd=Math.min(dd,x/peak-1);} out.max_dd=+dd.toFixed(4);
-      out.win_rate=+(r.filter(x=>x>0).length/r.length).toFixed(3);}
-    return out;
-  }
   function renderMetrics(b,k){const cell=(m,key,isP)=>{const x=m[key];return x==null?"–":(isP?pct(x):x);};
     mEl.innerHTML=`<div class=hd></div><div class=hd>Book</div><div class=hd>Buy&amp;Hold</div>`+
       ROWS.map(([l,key,isP,g])=>`<div>${tip(l,g)}</div><div>${cell(b,key,isP)}</div><div class=muted>${cell(k,key,isP)}</div>`).join('');}
@@ -1573,7 +1563,8 @@ document.addEventListener('keydown',e=>{
   const bookS=c.addLineSeries({color:'#58a6ff',lineWidth:2,title:'Book'});
   const lwc=s=>s.map(p=>({time:toT(p.time),value:p.value}));
   function apply(days){const bk=rebase(cut(BOOK,days)),bh=rebase(cut(BENCH,days));
-    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent(); renderMetrics(compute(bk,BOOK_ANN),compute(bh,BENCH_ANN));}
+    benchS.setData(lwc(bh)); bookS.setData(lwc(bk)); c.timeScale().fitContent();
+    const key=String(days||0); renderMetrics(BOOKM[key]||{},BENCHM[key]||{});}
   if(BOOK_ANN!==BENCH_ANN&&mEl)mEl.insertAdjacentHTML('afterend',
     '<div class=legend>Book bars are hourly; the Buy&amp;Hold benchmark is daily — each row is annualised for its own bar spacing.</div>');
   const periods=[["1W",7],["1M",30],["3M",90],["ALL",0]], pe=document.getElementById('eqperiod');
