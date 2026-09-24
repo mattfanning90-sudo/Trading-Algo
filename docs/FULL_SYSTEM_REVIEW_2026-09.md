@@ -25,6 +25,7 @@
 12. Recommendations, in order
 13. How this review was produced, and its limits
 14. Sources
+15. Verification round two, and the corrections it forced
 
 ---
 
@@ -101,7 +102,7 @@ Every technical term is explained the first time it appears, and the ones that r
 
 **What I recommend, in order** (section 12): merge the branch so the fixes reach the books; fix the two FTSE tickers and the breaker latch; correct the correlation assumption and re-run; replace the binary regime switch with graded de-risking and measure; credit dividends and cash interest in the paper books so live-versus-backtest tracking means something; stop or shrink the FX books until a cost-corrected backtest shows a positive net Sharpe; and point the next quarter of effort at the equity signal rather than the learning layer.
 
-**Verification status.** Eighteen agents produced 143 de-duplicated findings. The adversarial verification pass was interrupted by the account's session limit after 27 findings; 24 survived, 3 were refuted. I verified the 25 highest-impact findings myself against the committed code and state, and those are the only ones stated as facts (section 10, tier 1). Twelve high-severity claims remain unverified and are labelled as such.
+**Verification status.** Eighteen agents produced 143 de-duplicated findings. The adversarial pass was interrupted on 19 September and **completed on 24 September: all 143 judged, 128 confirmed, 11 refuted, 4 plausible, severity revised on 60.** Section 15 carries the corrections it forced, three of which overturn claims made in this document. Read section 15 before acting on section 10.
 
 
 ---
@@ -237,9 +238,9 @@ What this says, rule by rule:
 
 - **The positive-momentum floor does nothing.** Removing it changes not a single number. It is a no-op because the top 10 by momentum always have positive momentum when the regime is on.
 - **The per-stock 200-day filter is worth almost nothing** either way (0.02 to 0.03 Sharpe).
-- **The regime filter is pure insurance.** It costs 2 to 3 points of CAGR and 0.04 to 0.25 of Sharpe on three of four sleeves, and roughly halves the worst drawdown. Over a sample with only two short bear markets (2020, 2022) that trade looks bad. In a 2008-type year it would look very different. The sample cannot tell you which world you are in, and no test in the repo has tried a crash-heavy period.
+- **The regime filter is pure insurance.** It costs 2 to 3 points of CAGR and 0.04 to 0.25 of Sharpe on three of four sleeves, and roughly halves the worst drawdown. **(Corrected in section 15: it is not a defect. With the gate off the breaker never fires, so the two are not duplicates, and on Calmar the gate wins in every sleeve.)** Over a sample with only two short bear markets (2020, 2022) that trade looks bad. In a 2008-type year it would look very different. The sample cannot tell you which world you are in, and no test in the repo has tried a crash-heavy period.
 - **Vol targeting helps Sharpe and hurts return**, and it is mis-calibrated: the assumed 0.6 correlation between held stocks is two to three times what the picks actually show (0.18 to 0.36), so the book runs at 8 to 10% vol instead of 12% even when fully invested. Setting the assumption to 0.3 lifts US CAGR from 9.6% to 11.5% with no Sharpe cost.
-- **Monthly rebalancing earns its keep**: quarterly is much worse everywhere, which is consistent with a 12-1 signal decaying over a few months.
+- **Monthly rebalancing earns its keep**: quarterly is much worse everywhere, which is consistent with a 12-1 signal decaying over a few months. **(Corrected in section 15: wrong. The test used one arbitrary quarterly phase, the worst of three. Averaged over phase, quarterly beats monthly in all four sleeves and halves FTSE's cost.)**
 - **The raw momentum signal is real but modest.** The unfiltered top-10 book has the same Sharpe as a naive equal-weight of the whole universe (0.87 vs 0.88 for the US, 0.94 vs 1.00 for ASX) at higher return and higher vol. Forward one-month top-10-minus-universe spreads have t-statistics of 1.8 to 3.2 over the full sample and 0.6 to 2.0 over the last five years: alive, but statistically marginal recently.
 
 ### 3.4 Survivorship: which way and how much
@@ -526,7 +527,7 @@ Severity scale: **critical** = wrong numbers on a live book or a silent broken i
 
 **F2. The 12% volatility target cannot be reached, and the reason is a wrong assumption.** High. `strategy.py:67-79`: estimated book vol uses `avg_correlation = 0.6` (`config.py:29`), then `scale = min(target/port_vol, max_vol_scale)` and a de-lever to `max_gross = 1.0` (`config.py:30-31`). Measured correlation of the held names is 0.18 to 0.36, so the estimator overstates risk by about 1.5x, sizes the book to 51 to 65% of capital when invested, and realises 8 to 10% vol against the 12% target. Setting the assumption to 0.3 lifts US CAGR from 9.6% to 11.5% at the same Sharpe. `HOW_IT_WORKS.md:106` says the book "hits a 12% annual target", which the code cannot do. *Plain English: the sizing formula assumes the ten stocks move together much more than they actually do, so it thinks the book is riskier than it is and holds it back. One number in the config is the lever.*
 
-**F3. The regime filter is measured cash drag over 2012 to 2026 on three of four sleeves.** High, and a decision rather than a bug. Ablation (section 3.3): switching it off lifts CAGR 2 to 3 points and Sharpe 0.04 to 0.25 on US, ASX and TSX, and roughly doubles max drawdown. No document in the repo had ablated it. The sample has only two short bear markets, so its insurance value in a 2008-type year is unmeasured. *Plain English: the "go to cash when the index is below its 200-day average" rule cost return in a mostly rising market and would have paid off in a crash the sample does not contain. Best practice scales exposure smoothly rather than switching it off.*
+**F3. The regime filter is measured cash drag over 2012 to 2026 on three of four sleeves.** ~~High~~ **Refuted in section 15 — the measurement holds, the conclusion does not.** Ablation (section 3.3): switching it off lifts CAGR 2 to 3 points and Sharpe 0.04 to 0.25 on US, ASX and TSX, and roughly doubles max drawdown. No document in the repo had ablated it. The sample has only two short bear markets, so its insurance value in a 2008-type year is unmeasured. *Plain English: the "go to cash when the index is below its 200-day average" rule cost return in a mostly rising market and would have paid off in a crash the sample does not contain. Best practice scales exposure smoothly rather than switching it off.*
 
 **F4. The positive-momentum floor is a no-op and the per-stock 200-day filter is nearly one.** Medium. Ablation: `abs_momentum_floor = -1` produces identical results on all four sleeves; removing the stock trend filter moves Sharpe by 0.02 to 0.03. *Plain English: two of the three eligibility rules do nothing measurable.*
 
@@ -538,7 +539,7 @@ Severity scale: **critical** = wrong numbers on a live book or a silent broken i
 
 **F8. The ASX sleeve has been 0% invested since 11 June, and two of its five rebalances were lost to bugs, not to the filter.** High. `state/paper_state_full.json`: ASX cash exactly 33,333.33, zero trades. On 06-11, 07-01 and 09-15 the index was below its 200-day average (design). On 08-03 it was 2.8% above and on 09-01 3.0% above; the first was lost because a single missing index print made the whole 200-day window NaN under the code then on `main` (fixed by `404799e`, on this branch), the second to the phantom breaker trip in F9. The September audit's verdict "not a bug, regime filter working" was right for three months and wrong for two. *Plain English: a third of the main portfolio has been idle for three months. Most of that was the rule doing its job; two months of it were bugs.*
 
-**F9. A phantom 26% drawdown liquidated the entire `full` book on 27 August and kept it in cash until 16 September, and no audit document records it.** High. `state/paper_state_full.json` `corrections`: FTSE was marked at cash only on an all-NaN price row, equity read A$74,552 instead of A$99,086, the 25% breaker tripped, sixteen names were sold, and £46 of stamp duty was paid to re-enter. Fixed by PR #93 (`paper_trade.py:292-308`, `:652-682`, the unpriced-holdings guard) and corrected in state with an audit trail. Absent from both `FORENSIC_AUDIT_2026-09.md` and `LIVE_BOOK_AUDIT.md`. *Plain English: a data gap made the book look like it had lost a quarter of its value, the safety stop fired on that illusion, and the book sat out for three weeks. The fix is good; the silence about it is not.*
+**F9. A phantom 26% drawdown liquidated the entire `full` book on 27 August and kept it in cash until 16 September, and no audit document records it.** ~~High~~ **Partly refuted in section 15: the incident is real, but it is fixed, regression-tested, corrected in state, and it IS recorded in `docs/research/REALISED_TRADE_EVIDENCE.md:177`.** `state/paper_state_full.json` `corrections`: FTSE was marked at cash only on an all-NaN price row, equity read A$74,552 instead of A$99,086, the 25% breaker tripped, sixteen names were sold, and £46 of stamp duty was paid to re-enter. Fixed by PR #93 (`paper_trade.py:292-308`, `:652-682`, the unpriced-holdings guard) and corrected in state with an audit trail. Absent from both `FORENSIC_AUDIT_2026-09.md` and `LIVE_BOOK_AUDIT.md`. *Plain English: a data gap made the book look like it had lost a quarter of its value, the safety stop fired on that illusion, and the book sat out for three weeks. The fix is good; the silence about it is not.*
 
 **F10. The drawdown breaker's high-water mark never resets, in all four simulators.** High. `paper_trade.py:905-920` (`peak = max(peak, combined)`, never lowered after a halt), `forex/fx_backtest.py:176-184`, `forex/fx_book.py:579-587`, and the same shape in `backtest.py`. Once a book is more than the stop below its all-time high it re-trips on the first bar after every cooldown, forever. On the `matt` FX backtest that is 381 halts and 3,804 flat bars. It has not fired on a live book because none has fallen 20% yet. `tests/test_backtest.py:36` only asserts `halts >= 1`. *Plain English: the stop measures from the best value the account ever had and never forgets it. An account still 20% below that value after the cool-off is stopped again immediately. It is a permanent off switch disguised as a pause.*
 
@@ -546,7 +547,7 @@ Severity scale: **critical** = wrong numbers on a live book or a silent broken i
 
 **F12. The FX price cache never expires, and CI restores it across runs.** High. `forex/fx_data.py:66-76`: if the cache file exists it is read, with no age check; `.github/workflows/fx-paper.yml:70-74` restores `trading_algo/forex/.cache` with `restore-keys: fx-parquet-`. The nightly BACKTEST-tab refresh and the monthly swarm breeder therefore read a panel frozen at the first cached run. The equity cache got a 20-hour expiry in September (`data.py:37`); the FX cache did not. *Plain English: the FX backtests and the monthly breeding run are looking at prices that stopped updating whenever the cache was first written.*
 
-**F13. The neural-agent lane in the nightly workflow can never activate.** Medium (safe today; the fallback is the five rule agents). `.github/workflows/fx-paper.yml:80-93` trains a fresh bundle with `--no-ml` (which never stamps a grade) and then passes `--ml`; `promotion.clears_floor` refuses any ungraded bundle. The weekly job that does grade a bundle saves it as a run artifact that nothing downloads; `models/*.json` is gitignored. Confirmed by the skeptic against the real CI log (trained 01:06:26, refused ten seconds later). *Plain English: every night the system trains a model, forgets to grade it, and then refuses to use it because it has no grade. The one graded model ever produced would have been refused anyway (Sharpe −0.62).*
+**F13. The neural-agent lane in the nightly workflow can never activate.** ~~Medium~~ **Raised to high and corrected in section 15: true today, but the agent voted on 274 of 281 trades in `matt` before 17 September, from weights that no longer exist.** `.github/workflows/fx-paper.yml:80-93` trains a fresh bundle with `--no-ml` (which never stamps a grade) and then passes `--ml`; `promotion.clears_floor` refuses any ungraded bundle. The weekly job that does grade a bundle saves it as a run artifact that nothing downloads; `models/*.json` is gitignored. Confirmed by the skeptic against the real CI log (trained 01:06:26, refused ten seconds later). *Plain English: every night the system trains a model, forgets to grade it, and then refuses to use it because it has no grade. The one graded model ever produced would have been refused anyway (Sharpe −0.62).*
 
 **F14. Two FTSE names are quoted in US dollars on Yahoo and are scaled as if they were pence.** High for live readiness, medium for the paper numbers. Verified live: `CPG.L` and `IHG.L` report `currency USD` (last 29.97 and 151.85) while `RR.L` and `HSBA.L` report `GBp`. `regions.py:111` multiplies every FTSE price by 0.01. The `full` book bought 593 IHG.L at "£1.63" on 06-11 and 724 CPG.L at "£0.32" on 07-01 (real prices about £120 and £24), and sold both in August. Because paper weights are notional-based the equity effect is limited to the embedded USD/GBP move, but the share counts are 70 to 100x wrong, the momentum ranking for those two names is computed on USD returns, and a live order would be catastrophic. Not in any prior audit. *Plain English: two London stocks come from Yahoo priced in dollars; the code divides by 100 as if they were pence, so it thinks they cost pennies and "buys" hundreds of them.*
 
@@ -760,3 +761,108 @@ Academic and practitioner references cited by the benchmark agents, all fetched 
 
 In-repo documents this review builds on: `docs/FORENSIC_AUDIT_2026-07.md`, `docs/FORENSIC_AUDIT_2026-09.md`, `docs/CTO_ARCHITECTURE_BENCHMARK.md`, `docs/EFFICIENCY_REVIEW.md`, `docs/LIVE_BOOK_AUDIT.md`, `docs/SHARPE_RESEARCH.md`, `docs/MONTE_CARLO_RESEARCH.md`, `docs/PERMUTATION_TESTING.md`, `docs/EFFECTIVE_PUBLIC_STRATEGIES.md`, `docs/research/COST_AWARE_OBJECTIVE_RESULT.md`, `docs/research/REALISED_TRADE_EVIDENCE.md`, `docs/DATA_FEEDS.md`.
 
+---
+
+## 15. Verification round two, and the corrections it forced
+
+The adversarial pass this document promised was interrupted by an account limit on
+19 September. It was completed on 24 September, and it changes several things
+written above. **Every finding in this document has now been through it: 143
+judged, 128 confirmed, 11 refuted, 4 plausible, with severity revised on 60.**
+
+Each finding was attacked by an independent agent instructed to refute it and to
+default to "refuted" when uncertain, then judged by a third. Where a verdict
+contradicts the body of this document, **the verdict wins and the correction is
+below rather than silently applied**, because an audit that quietly edits its own
+misses is not an audit.
+
+### The three corrections that matter most
+
+**The regime filter is not a defect, and finding F3 above is wrong.** The
+measurement stands and was independently replicated three times: the filter holds
+each sleeve in cash on 23 to 35% of days and costs 2 to 3 points of compound
+growth and up to 0.25 of Sharpe. The *conclusion* fails on three counts.
+
+| Claim in F3 | What verification found |
+|---|---|
+| It duplicates the drawdown breaker | With the gate off, the breaker fires **zero** times. Drawdown tops out at −22.3% (US) and −20.0% (ASX), below the 25% trigger. The breaker supplies none of the protection the gate supplies. |
+| It lowers risk-adjusted return | True on Sharpe only. On **Calmar**, return per unit of worst drawdown, which is the measure the gate exists to serve, the gate wins in every sleeve: US 0.73 against 0.53, ASX 0.71 against 0.49. |
+| The idle cash earns nothing meanwhile | Stale since commit `57676c4`. Idle cash now earns the cash rate. |
+
+Graded de-risking is still worth testing against a binary switch, but as an
+improvement to something that works, not as the removal of a drag.
+
+**Quarterly rebalancing is not worse, and the inference in section 3.3 is
+backwards.** The ablation used pandas' `QE` alias, which is not "quarterly" but
+one specific phase of it, March/June/September/December, and it happens to be the
+worst of the three available phases in all four sleeves. Averaged across phase:
+
+| Sleeve | Monthly Sharpe | Quarterly, mean of three phases |
+|---|---|---|
+| FTSE | 0.110 | **0.220**, with cost drag cut from 24.7% to about 11% |
+| US | 0.430 | 0.553 |
+| ASX | 0.150 | 0.400 |
+| TSX | 0.390 | 0.600 |
+
+Annual rebalancing also beats quarterly in three of four sleeves, which no
+signal-decay story permits. So the repo's standing recommendation of a
+lower-turnover FTSE variant is the one the evidence supports, and this document's
+claim that monthly rebalancing earns its keep was an artefact of one unlucky
+phase. **This is now the strongest unexploited lead in the equity book**, and it
+belongs in the next block rather than this one.
+
+**The August phantom liquidation is fixed, tested and already recorded, so
+finding F9's forward-looking half is wrong.** The incident happened exactly as
+described. But the root cause is fixed and pinned by regression tests at
+`tests/test_paper_trade.py:367`, the breaker path is now unreachable on an
+unpriced book, the state carries a correction restoring both rows, and it *is*
+recorded, in `docs/research/REALISED_TRADE_EVIDENCE.md:177`. What survives is
+narrow: no audit *narrates* it, and no module reads the `corrections` block.
+
+### One finding that got worse
+
+**The neural agent did trade, and then silently stopped.** Finding F13 said the
+machine-learning lane could never activate. That is true today and was not true
+before. Verification found a `neural` vote recorded on **274 of 281 trades** in
+the `matt` book and 226 in `partner`, cast by model weights that no longer exist
+anywhere, with no bundle identity, no training window and no data-source stamp in
+any trade record. The agent then vanished from every live decision after
+17 September and nothing reported it. Severity rises to high, for the reason the
+original finding only implied: with no persisted incumbent, the promotion gate
+can never be satisfied in the cloud, so the lane is not merely idle, it is
+unfixable in place.
+
+### The full tally
+
+| Verdict | Count |
+|---|---|
+| Confirmed | 128 |
+| Refuted | 11 |
+| Plausible, something remains unchecked | 4 |
+
+Confirmed findings by final severity: 16 high, 56 medium, 51 low, 5 informational.
+No finding retained a critical grade; the dividend defect, graded critical in the
+first pass, was reduced to high on the argument that it corrupts a comparison
+rather than a live book's cash.
+
+The eleven refutations are listed in the review's working data. Besides the three
+above they include: the backtest and paper drawdown breakers differing in scope
+(deliberate, documented, and neither has ever tripped on real data); the champion
+gate deflating by 424 raw trials (the repo's own Monte Carlo study measured the
+alternatives disagreeing by a factor of forty and declined to switch, and the
+roster is empty either way); the market-neutral book's unformable long leg, closed
+by commit `b997a9a`; and the severely negative FX backtests, which are
+substantially a cost-model artefact rather than a strategy result.
+
+### What this round confirmed that was not known before
+
+Sixteen findings are confirmed at high severity. The one that is both new and
+live is not in the body of this document at all, because it happened after it was
+written: **six currency crosses entered the live FX books on 22 September** and
+now carry 32.4% of `matt`'s gross risk, 34.1% of `partner`'s and 20.7% of
+`daytrader`'s. They were added to `DEFAULT_UNIVERSE` to give the neural model more
+training rows, and because that one list also decides what the books trade,
+`fx_book.py:411-413` merged them into every unlocked book. A cross is an
+arithmetic combination of two majors, so this is not new diversification, it is
+undisclosed concentration on exposures the books already held. The fix, commit
+`f15a118`, splits the training list from the traded list and is merged nowhere.
