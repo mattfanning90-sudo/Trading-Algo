@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trading_algo import metrics
 from trading_algo.forex import dashboard, fx_book, fx_pnl, marks
 from trading_algo.forex.fx_config import profile
 from trading_algo.forex.fx_data import synthetic_panel
@@ -57,6 +58,42 @@ def test_risk_costs_hourly_annualisation():
     assert rk["unit"] == "hour" and rk["bars_per_day"] == 24
     # n_obs stays an OBSERVATION count (Bailey/LdP math unrescaled)
     assert rk["n_obs"] == len(st["equity_history"]) - 1
+
+
+def test_risk_costs_curve_and_vol_are_the_layers():
+    """The page's drawdown CURVE and realized-vol figure equal the metrics
+    primitives at the curve's own annualisation, exactly (to the 4 dp shipped)."""
+    st = _hourly_state()
+    # a random walk that sets new highs, so the running peak actually moves
+    rets = np.random.default_rng(3).normal(0.0005, 0.002, len(st["equity_history"]))
+    st["equity_history"] = [[d, round(10_000.0 * float(g), 2)] for (d, _), g in
+                            zip(st["equity_history"], np.cumprod(1 + rets))]
+    rk = dashboard._risk_costs(st, profile("intraday"), {"rows": []})
+    keys = [d for d, _ in st["equity_history"]]
+    s = pd.Series([v for _, v in st["equity_history"]], index=keys, dtype=float)
+    r = s.pct_change().dropna()
+    ppy = metrics.periods_per_year(pd.to_datetime(keys, format="mixed"))
+    vol = metrics.annualised_vol(r, periods_per_year=ppy)
+    assert round(vol, 4) != round(float(r.std(ddof=0) * np.sqrt(ppy)), 4), \
+        "the pin must tell ddof apart"
+    assert rk["realized_vol"] == round(vol, 4)
+    assert rk["drawdown"] == [{"time": d, "value": round(float(v), 4)}
+                              for d, v in metrics.drawdown(s).items()]
+    s0 = s / s.iloc[0] - 1.0                                 # no running peak
+    assert [round(float(v), 4) for v in s0] != [p["value"] for p in rk["drawdown"]], \
+        "the pin must tell a running peak from the first mark"
+
+
+def test_risk_costs_routes_through_the_metrics_layer(monkeypatch):
+    """A local formula with the same values passes the pin above; this passes
+    only if _risk_costs CALLS the layer for both the curve and the vol."""
+    st = _hourly_state()
+    monkeypatch.setattr(metrics, "annualised_vol",
+                        lambda r, *, periods_per_year: 0.4321)
+    monkeypatch.setattr(metrics, "drawdown", lambda e: e * 0.0 - 0.1234)
+    rk = dashboard._risk_costs(st, profile("intraday"), {"rows": []})
+    assert rk["realized_vol"] == 0.4321
+    assert {p["value"] for p in rk["drawdown"]} == {-0.1234}
 
 
 def test_bar_unit_mapping_exact():

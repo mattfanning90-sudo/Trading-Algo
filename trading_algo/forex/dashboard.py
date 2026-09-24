@@ -593,8 +593,8 @@ def _risk_costs(state, p, txn) -> dict:
         return out
 
     s = pd.Series([float(e) for _, e in eqh], index=[d for d, _ in eqh], dtype=float)
-    dd = s / s.cummax() - 1.0
-    out["drawdown"] = [{"time": d, "value": round(float(v), 4)} for d, v in dd.items()]
+    out["drawdown"] = [{"time": d, "value": round(float(v), 4)}
+                       for d, v in metrics.drawdown(s).items()]
 
     base = float(s.iloc[0]) or float(state["initial_capital"])
     cum, curve = 0.0, []
@@ -606,11 +606,12 @@ def _risk_costs(state, p, txn) -> dict:
     out["cost_curve"] = curve
 
     r = s.pct_change().dropna()
-    if len(r) >= 2 and r.std() > 0:
-        # Annualise by the curve's ACTUAL bar spacing (same rule as the header
-        # Sharpe tile via _curve_metrics) — hourly bars are not days.
-        ppy = _ppy(idx)
-        out["realized_vol"] = round(float(r.std() * np.sqrt(ppy)), 4)
+    # Annualise by the curve's ACTUAL bar spacing (same rule as the header
+    # Sharpe tile via _curve_metrics) — hourly bars are not days. The layer
+    # returns 0.0 for fewer than two returns, so `> 0` is the old guard.
+    vol = metrics.annualised_vol(r, periods_per_year=_ppy(idx))
+    if vol > 0:
+        out["realized_vol"] = round(vol, 4)
         out["vol_ratio"] = round(out["realized_vol"] / p.target_vol, 2) if p.target_vol else None
     if len(r) >= 3:
         out["psr"] = round(float(probabilistic_sharpe_ratio(r.values)), 3)
