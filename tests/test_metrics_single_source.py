@@ -22,8 +22,6 @@ from __future__ import annotations
 import ast
 import pathlib
 
-import pytest
-
 ROOT = pathlib.Path(__file__).resolve().parents[1] / "trading_algo"
 
 # Measurement INPUTS — permanent (spec §4: optimisation internals keep their

@@ -122,6 +122,11 @@ def test_book_ppy_true_panel_no_note_for_hourly_book(isolated):
     assert p["book_ppy"] > 2000                        # hourly ppy ≈ 8766, not 252
     assert p["bench_ppy"] == p["book_ppy"]             # bench built at the book's bar
     assert p["signal_note"] is None                    # note only where it applies
+    # the period table is annualised at each curve's OWN ppy: its ALL row is
+    # the header tile, which derives ppy from the curve (a 252 would not match)
+    assert "sharpe" in p["book_metrics"] and "sharpe" in p["bench_metrics"]
+    assert p["book_period_metrics"]["0"] == p["book_metrics"]
+    assert p["bench_period_metrics"]["0"] == p["bench_metrics"]
     html = dashboard.render(p)
     assert "book_ppy" in html and "bench_ppy" in html
     assert "ANN=252" not in html                       # hardcoded annualisation gone
@@ -296,3 +301,21 @@ def test_curve_metrics_route_through_the_metrics_layer():
                                                risk_free=FX_RISK_FREE).value, 2)
     assert m["vol"] == round(metrics.annualised_vol(r, periods_per_year=252), 4)
     assert m["max_dd"] == round(metrics.max_drawdown(s).value, 4)
+
+
+def test_period_metrics_slice_each_window():
+    """Each period button's row is measured over ITS window only — the last
+    `days` calendar days, boundary inclusive (the chart's own `cut()` rule) —
+    not over the whole curve."""
+    idx = pd.date_range("2026-01-01", periods=120, freq="D")
+    vals = 100 * np.cumprod(1 + np.random.default_rng(3).normal(0.0, 0.01, 120))
+    curve = [{"time": d.strftime("%Y-%m-%d"), "value": float(v)}
+             for d, v in zip(idx, vals)]
+    pm = dashboard._period_metrics(curve, 252)
+    # a `days` window on a daily curve holds days+1 marks: return is from the
+    # mark `days` back to the last one
+    want = {"0": vals[-1] / vals[0] - 1.0,
+            **{str(d): vals[-1] / vals[-(d + 1)] - 1.0 for d in (7, 30, 90)}}
+    assert len({round(v, 4) for v in want.values()}) == 4    # windows distinguishable
+    for key, ret in want.items():
+        assert pm[key]["total_return"] == round(float(ret), 4), key
