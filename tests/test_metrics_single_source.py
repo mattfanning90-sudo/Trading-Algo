@@ -37,6 +37,12 @@ _MEASUREMENT_INPUTS: dict[str, object] = {
     "crowding.py": {"crowding_report"},           # regime gate input
     "data_quality.py": {"assess"},                # feed-health gate input
     "forex/dashboard.py": {"_min_track_record_days"},   # Bailey/LdP MinTRL
+    "forex/ensemble.py": {"_adaptive_pair_tilt"},  # rolling info-ratio used as agent WEIGHTS (a strategy input)
+    # the rolling vol the position SIZER uses (a strategy input); its last value is
+    # displayed deliberately in the why-callout (explain._pair_indicators) as the
+    # sizer's own input, already bar-aware; controller ruled it stays outside the
+    # layer for that reason.
+    "forex/indicators.py": {"realized_vol"},
 }
 
 # Open findings — display sites not yet routed through the layer. Each is a
@@ -61,6 +67,42 @@ def _is_252(node) -> bool:
     return isinstance(node, ast.Constant) and node.value == 252
 
 
+def _bound(fn, attr: str) -> set[str]:
+    """Names a function assigns from an expression that calls `.attr()`."""
+    return {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)
+            and any(_attr_call(k, attr) for k in ast.walk(n.value))}
+
+
+def _widened(tree: ast.AST) -> set[tuple[int, str]]:
+    """Three shapes `_offences` cannot see: a non-literal `std() * sqrt(...)`,
+    a mean/std Sharpe split across two statements, and `np.maximum.accumulate`
+    drawdowns."""
+    out: set[tuple[int, str]] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mult) and \
+                {_attr_call(n.left, "std"), _attr_call(n.right, "std")} == {True, False} and \
+                (_attr_call(n.left, "sqrt") or _attr_call(n.right, "sqrt")):
+            out.add((n.lineno, "std() * sqrt(...) — an annualised vol"))
+        elif _attr_call(n, "accumulate") and getattr(n.func.value, "attr", None) == "maximum":
+            out.add((n.lineno, "np.maximum.accumulate — a drawdown"))
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stds, means = _bound(fn, "std"), _bound(fn, "mean")
+            for n in ast.walk(fn):
+                if not (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)):
+                    continue
+                den, num = n.right, n.left
+                if isinstance(den, ast.BinOp) and isinstance(den.op, ast.Mult):
+                    den = den.left                        # sd * sqrt(ann)
+                if isinstance(num, ast.BinOp) and isinstance(num.op, ast.Sub):
+                    num = num.left            # (mu - rf) / sd; a z-score's x - mu is not
+                if isinstance(den, ast.Name) and den.id in stds and (
+                        _attr_call(num, "mean") or getattr(num, "id", None) in means):
+                    out.add((n.lineno, "mean / std over two statements — a Sharpe"))
+    return out
+
+
 def _offences(tree: ast.AST) -> list[tuple[int, str]]:
     """(line, kind) for every independent measurement computation."""
     out: list[tuple[int, str]] = []
@@ -79,7 +121,7 @@ def _offences(tree: ast.AST) -> list[tuple[int, str]]:
             if _attr_call(den, "std") and any(_attr_call(k, "mean")
                                               for k in ast.walk(n.left)):
                 out.append((n.lineno, "mean/std — a Sharpe"))
-    return out
+    return out + sorted(_widened(tree))
 
 
 def _owner(tree: ast.AST, line: int) -> str:
