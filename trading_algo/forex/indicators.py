@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .. import metrics
 from .bar_quality import require_series_true_range
 
 _EPS = 1e-12
@@ -51,7 +52,7 @@ def roc(s: pd.Series, window: int) -> pd.Series:
     return s.pct_change(window, fill_method=None)
 
 
-def realized_vol(close: pd.Series, window: int, ann: float = 252) -> pd.Series:
+def realized_vol(close: pd.Series, window: int, ann: float = metrics.ANNUALIZATION) -> pd.Series:
     """Annualised trailing realised volatility from close-to-close returns."""
     rets = close.pct_change(fill_method=None)
     return rets.rolling(window).std() * np.sqrt(ann)
