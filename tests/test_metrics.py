@@ -129,6 +129,22 @@ def test_primitives_agree_with_compute_metrics():
     assert ANNUALIZATION == 252
 
 
+def test_drawdown_series_is_the_one_definition_max_drawdown_reads(monkeypatch):
+    """A page that draws the drawdown CURVE and a card that prints its trough
+    must read one definition: the series primitive, whose min IS max_drawdown."""
+    from trading_algo import metrics
+    idx = pd.bdate_range("2026-01-05", periods=6)
+    equity = pd.Series([100.0, 110.0, 99.0, 104.5, 121.0, 90.75], index=idx)
+    pd.testing.assert_series_equal(
+        metrics.drawdown(equity),
+        pd.Series([0.0, 0.0, -0.1, -0.05, 0.0, -0.25], index=idx))
+    assert max_drawdown(equity).value == pytest.approx(-0.25)
+    # max_drawdown is BUILT on the series, not a second copy of the formula
+    monkeypatch.setattr(metrics, "drawdown",
+                        lambda e: pd.Series([0.0, -0.37], index=idx[:2]))
+    assert max_drawdown(equity).value == -0.37
+
+
 def test_marks_still_re_exports_periods_per_year():
     """Moving the function must not break the FX callers that import it."""
     from trading_algo.forex import marks

@@ -132,12 +132,18 @@ def cagr(equity: pd.Series, *, periods_per_year: float) -> Measure:
                    periods_per_year=float(periods_per_year), n=n)
 
 
+def drawdown(equity: pd.Series) -> pd.Series:
+    """Fall from the running peak at every mark, as a negative fraction (0 at a
+    new high). THE drawdown definition: a page that draws the curve and a card
+    that prints its trough (`max_drawdown`) both read this."""
+    return equity / equity.cummax() - 1.0
+
+
 def max_drawdown(equity: pd.Series) -> Measure:
     """Deepest peak-to-trough fall of an equity curve, as a negative fraction.
 
     Not annualised, so `periods_per_year` is NaN and `label()` omits it."""
-    dd = equity / equity.cummax() - 1.0
-    return Measure(value=float(dd.min()), name="MaxDrawdown",
+    return Measure(value=float(drawdown(equity).min()), name="MaxDrawdown",
                    periods_per_year=float("nan"), n=len(equity))
 
 
