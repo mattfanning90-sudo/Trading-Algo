@@ -5,7 +5,7 @@
 **Scope:** The equity stack's measurement surface — what the two engines compute,
 what the books record, and what is published. Plus point-in-time index membership
 for all four regions. The FX subsystem gets two cheap changes and is otherwise
-deferred to its own block (§14). No change to expected return is in scope (§11).
+deferred to its own block (§15). No change to expected return is in scope (§11).
 **Source:** `docs/FULL_SYSTEM_REVIEW_2026-09.md`, findings F1, F2, F5–F7, F9–F10,
 F14–F15, F19–F22, and the semantic-layer gap measured during brainstorming.
 
@@ -111,7 +111,7 @@ daytrader backtest tab annualises 60-minute bars at 252.
 | D5 | Extend `attribution.py`; do not add a reconciler module | It already owns divergence, tracking error and cost drag |
 | D6 | Add a measurement semantic layer with AST enforcement | Same mechanism that has kept the weight function single-sourced |
 | D7 | Two waves split on the data dependency | Membership never touches a book, so wave two cannot block wave one |
-| D8 | FX books get two cheap changes only (§14) | Full FX treatment is its own block |
+| D8 | FX books get two cheap changes only (§15) | Full FX treatment is its own block |
 
 ## 4. The semantic layer
 
@@ -293,7 +293,28 @@ strategy change when the numbers move:
 | P6 | Deploy, archive, restart | Schedulers on new code; books reopened; first clean run green |
 | W2 | Survivorship, in parallel from P1 | PIT vs non-PIT delta measured and published per region |
 
-## 13. Testing strategy
+## 13. Implementation constraints
+
+The owner's instruction, and it is load-bearing for this block specifically: a
+measurement fix that sprawls cannot be told apart from a rewrite, and then nobody
+can say which change moved which number. Operationally:
+
+- **One defect, one change.** No drive-by refactoring of code a fix passes
+  through. If something adjacent is wrong, it becomes a finding, not a diff.
+- **Fix the concept, not the call sites.** The semantic layer (§4) is this
+  principle applied: six Sharpe implementations are not six bugs, they are one
+  missing definition. Prefer removing a special case to adding one.
+- **Every change carries its test and its number.** The test is written first
+  (repo norm); the number is the bridge line it moved, before and after. A fix
+  with no measured movement is not finished.
+- **A fix that needs more than about thirty lines is a design signal.** Stop,
+  say so, and reconsider the abstraction rather than pushing through.
+- **No new module unless no existing one can host it** (already D5). `metrics.py`
+  and `attribution.py` are the homes for this block.
+- **Diffs stay readable in one screen.** The owner reads every diff; that is the
+  review mechanism, and it only works if each commit is one idea.
+
+## 14. Testing strategy
 
 **The bridge is the master test.** Each stage names the line it should move,
 predicts the direction, and the report either shows it or the stage is not done.
@@ -310,7 +331,7 @@ Per-defect tests, written before the fix (TDD, per the repo's norm):
 
 `ci_regression` is re-baselined once (P4) and never silently.
 
-## 14. The next block: FX
+## 15. The next block: FX
 
 Recorded here so it is not lost. The FX subsystem needs a full treatment of its
 own, covering at least:
