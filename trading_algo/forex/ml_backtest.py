@@ -303,11 +303,11 @@ def run_ml_backtest(panel: dict[str, pd.DataFrame], p: FXParams, *,
     per_period_sr = {c: validation.sharpe_ratio(mat[c].to_numpy()) for c in mat.columns}
     sr_variance = float(np.var(list(per_period_sr.values()))) if n_trials > 1 else 0.0
 
-    metrics = {name: _annual_metrics(r, n_trials, sr_variance)
-               for name, r in rets_by_strat.items()}
+    scores = {name: _annual_metrics(r, n_trials, sr_variance)
+              for name, r in rets_by_strat.items()}
     pbo = validation.pbo(mat.to_numpy(), n_splits=min(10, max(2, len(mat) // 50)))
     return {
-        "metrics": metrics,
+        "metrics": scores,
         "returns": rets_by_strat,
         "pbo": pbo,
         "n_trials": n_trials,
