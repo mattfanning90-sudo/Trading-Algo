@@ -41,7 +41,6 @@ _MEASUREMENT_INPUTS: dict[str, object] = {
 # Open findings — display sites not yet routed through the layer. Each is a
 # number a human reads, computed locally. Remove an entry when its task lands.
 _PENDING_DISPLAY_SITES: dict[str, set[str]] = {
-    "forex/fx_book.py": {"status"},          # same two prints, FX side
     "forex/dashboard.py": {"_risk_costs"},   # the drawdown curve on the page
     "forex/ml_backtest.py": {"_annual_metrics"},   # walk-forward report card
 }

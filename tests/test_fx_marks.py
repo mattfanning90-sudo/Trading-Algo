@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trading_algo import metrics
 from trading_algo.forex import fx_book, fxconv, marks
 from trading_algo.forex.pairs import get_pair as _gp
 from trading_algo.forex.agents import AgentPool
@@ -223,6 +224,52 @@ def test_status_daily_book_unchanged_at_252(isolated_state, capsys):
                   index=pd.to_datetime([d for d, _ in st["equity_history"]]))
     rets = s.pct_change(fill_method=None).dropna()
     assert f"{rets.std() * math.sqrt(252):.1%}" in line
+
+
+def _seed_hourly_book(n=30, sigma=0.002, seed=7) -> pd.Series:
+    fx_book.init_account("daytrader", 10_000, "intraday", bar="60m")
+    st = fx_book.load_state("daytrader")
+    idx = pd.date_range("2025-01-02 00:00", periods=n, freq="h")
+    eq = 10_000.0 * np.cumprod(1.0 + np.random.default_rng(seed).normal(0.0, sigma, n))
+    st["equity_history"] = [[t.strftime("%Y-%m-%d %H:%M"), round(float(v), 2)]
+                            for t, v in zip(idx, eq)]
+    st["equity"] = st["equity_history"][-1][1]
+    fx_book.save_state("daytrader", st)
+    return pd.Series([v for _, v in st["equity_history"]], index=idx)
+
+
+def _status_value(capsys, label) -> str:
+    capsys.readouterr()
+    fx_book.status("daytrader")
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if label in ln)
+    return line.split()[-1]
+
+
+def test_status_prints_the_layers_vol_and_drawdown(isolated_state, capsys):
+    """Both figures equal the primitives at the book's own annualisation
+    (hourly -> 24*365.25) with the sample (ddof=1) sd."""
+    s = _seed_hourly_book()
+    rets = s.pct_change().dropna()
+    ppy = metrics.periods_per_year(s.index)
+    vol = metrics.annualised_vol(rets, periods_per_year=ppy)
+    population = rets.std(ddof=0) * math.sqrt(ppy)
+    assert f"{vol:.1%}" != f"{population:.1%}", "the pin must tell ddof apart"
+    assert _status_value(capsys, "Ann. vol") == f"{vol:.1%}"
+    assert _status_value(capsys, "Max drawdown") == \
+        f"{metrics.max_drawdown(s).value:.2%}"
+
+
+def test_status_routes_through_the_metrics_layer(isolated_state, capsys,
+                                                 monkeypatch):
+    """A local formula with the same value passes the pin above; this passes
+    only if status() CALLS the layer."""
+    _seed_hourly_book()
+    monkeypatch.setattr(metrics, "annualised_vol",
+                        lambda r, *, periods_per_year: 0.4321)
+    monkeypatch.setattr(metrics, "max_drawdown",
+                        lambda e: metrics.Measure(-0.1234, "MaxDrawdown", float("nan")))
+    assert _status_value(capsys, "Ann. vol") == "43.2%"
+    assert _status_value(capsys, "Max drawdown") == "-12.34%"
 
 
 # ---------------------------------------------------------------------------

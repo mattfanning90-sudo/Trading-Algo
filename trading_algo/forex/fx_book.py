@@ -31,6 +31,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from .. import metrics
 from .. import notifications
 from .. import storage
 from . import bar_quality
@@ -751,11 +752,12 @@ def status(account: str) -> None:
         print(f"  Total return     {state['equity'] / state['initial_capital'] - 1:+.2%}")
         if len(rets) > 20:
             # Calendar-time annualisation at the book's own bar cadence — the
-            # ONE convention (see marks.periods_per_year); daily books still
+            # ONE convention (see metrics.periods_per_year); daily books still
             # annualise at 252, hourly at 24*365.25.
-            ppy = marks.periods_per_year(s.index)
-            print(f"  Ann. vol         {rets.std() * np.sqrt(ppy):.1%}")
-            print(f"  Max drawdown     {(s / s.cummax() - 1).min():.2%}")
+            ppy = metrics.periods_per_year(s.index)
+            vol = metrics.annualised_vol(rets, periods_per_year=ppy)
+            print(f"  Ann. vol         {vol:.1%}")
+            print(f"  Max drawdown     {metrics.max_drawdown(s).value:.2%}")
         print(f"  Trades to date   {len(state['trades'])}")
     if state.get("risk_halted"):
         print(f"  ⛔ RISK-HALTED   {state.get('halt_cooldown', 0)} bars remaining")
