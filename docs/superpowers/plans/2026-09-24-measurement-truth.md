@@ -25,6 +25,27 @@ Every task's requirements implicitly include this section.
 - **Tests** live in `tests/test_<module>.py`, plain pytest, no network (monkeypatch or fixtures).
 - **Every commit ends with:** `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
 
+## Progress
+
+**Update this table as each task lands, and tick the task's own `- [ ]` steps.**
+A compacted session reads this first to find where execution stopped.
+
+| Phase | Tasks | Status |
+|---|---|---|
+| 0 — deploy what already exists | merge branch → `main` | ⬜ not started |
+| 1 — measurement semantic layer | 1-4 | ⬜ not started |
+| 2 — reconciliation bridge | 5-8 | ⬜ not started |
+| 3 — conventions | 9-13 | ⬜ not started |
+| 4 — mechanism | 14-20 | ⬜ not started |
+| 5 — regeneration, deploy, restart | 21-26 | ⬜ not started |
+| W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
+
+**Execution log** — one line per task, appended as it completes:
+
+_(nothing yet)_
+
+---
+
 ## Before you edit: line numbers in this plan are stale
 
 The drafting agents found HEAD had moved during the work and **every line number inherited from the review is stale**. Verified examples:
