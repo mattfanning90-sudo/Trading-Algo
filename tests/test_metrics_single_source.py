@@ -15,7 +15,8 @@ Two allowlists, and the difference between them matters:
   maths. Any of their values that IS displayed must be re-derived through the
   layer for display.
 * `_PENDING_DISPLAY_SITES` is a list of open findings: display sites that still
-  compute for themselves and have not been routed yet. Emptying it is the goal.
+  compute for themselves and have not been routed yet. It is now empty; an
+  entry here is a known defect, not an exemption.
 """
 from __future__ import annotations
 
@@ -40,8 +41,7 @@ _MEASUREMENT_INPUTS: dict[str, object] = {
 
 # Open findings — display sites not yet routed through the layer. Each is a
 # number a human reads, computed locally. Remove an entry when its task lands.
-_PENDING_DISPLAY_SITES: dict[str, set[str]] = {
-}
+_PENDING_DISPLAY_SITES: dict[str, set[str]] = {}
 
 
 def _allowed(rel: str) -> object:
