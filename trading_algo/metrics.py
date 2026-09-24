@@ -158,6 +158,20 @@ def compute_metrics(rets: pd.Series, equity: pd.Series,
     rets = rets.dropna()
     if len(rets) == 0 or equity.iloc[0] == 0:
         return {"error": "insufficient data"}
+    # `cagr` takes its exponent from len(equity) while every other figure here
+    # is measured off `rets` — a coupling nothing enforced. Exactly two
+    # pairings are coherent: N marks against N returns (what all four
+    # production call sites pass, e.g. backtest.py's `equity[1:]`), and the N+1
+    # marks the N returns were differenced FROM (`equity.pct_change().dropna()`).
+    # Any other pair rescales the CAGR exponent, so it fails loudly here rather
+    # than printing a wrong number no reader could catch.
+    if len(equity) - len(rets) not in (0, 1):
+        raise ValueError(
+            f"compute_metrics: equity has {len(equity)} marks but rets has "
+            f"{len(rets)} after dropna. `cagr` keys its exponent off "
+            "len(equity), so an unaligned pair silently changes the CAGR; "
+            "pass N equity marks against N returns, or the N+1 marks those "
+            "returns were differenced from.")
 
     ppy = _ppy_of(rets.index) if periods_per_year is None else float(periods_per_year)
     ann_ret = cagr(equity, periods_per_year=ppy).value
@@ -187,25 +201,37 @@ def compute_metrics(rets: pd.Series, equity: pd.Series,
 
 
 def benchmark_stats(strat_rets: pd.Series, bench_rets: pd.Series,
-                    risk_free: float = RISK_FREE) -> dict:
+                    risk_free: float = RISK_FREE,
+                    periods_per_year: float | None = None) -> dict:
     """Strategy-vs-benchmark stats: benchmark CAGR, active return, beta, Jensen's
-    alpha, tracking error and information ratio. Both inputs are daily returns."""
+    alpha, tracking error and information ratio.
+
+    `periods_per_year=None` derives the convention from the OVERLAPPING index,
+    exactly as `compute_metrics` does, so an hourly pair no longer annualises at
+    252. The CAGRs and the tracking error come from `cagr` / `annualised_vol`,
+    which also makes "BenchmarkCAGR" here and "CAGR" from `compute_metrics` the
+    same measure on the same curve — they were two formulas before.
+
+    The returned KEYS are unchanged (pinned by
+    `tests/test_metrics.py::test_benchmark_stats_keys_are_unchanged`).
+    """
     df = pd.concat([strat_rets.rename("s"), bench_rets.rename("b")], axis=1).dropna()
     if len(df) < 2:
         return {}
     s, b = df["s"], df["b"]
+    ppy = _ppy_of(df.index) if periods_per_year is None else float(periods_per_year)
 
-    bench_cagr = (1 + b).prod() ** (252 / len(b)) - 1
-    strat_cagr = (1 + s).prod() ** (252 / len(s)) - 1
+    bench_cagr = cagr((1 + b).cumprod(), periods_per_year=ppy).value
+    strat_cagr = cagr((1 + s).cumprod(), periods_per_year=ppy).value
     # Covariance and variance must share one ddof, else beta is biased by
     # (N-1)/N. np.cov(..., ddof=1) and Series.var() (pandas default ddof=1)
     # both normalise by N-1.
     var_b = float(b.var())
     beta = float(np.cov(s, b, ddof=1)[0, 1] / var_b) if var_b > 0 else float("nan")
-    alpha = (s.mean() * 252 - risk_free) - beta * (b.mean() * 252 - risk_free)
+    alpha = (s.mean() * ppy - risk_free) - beta * (b.mean() * ppy - risk_free)
     active = s - b
-    te = float(active.std() * np.sqrt(252))
-    info = float(active.mean() * 252 / te) if te > 0 else float("nan")
+    te = annualised_vol(active, periods_per_year=ppy)
+    info = float(active.mean() * ppy / te) if te > 0 else float("nan")
 
     return {
         "BenchmarkCAGR": round(float(bench_cagr), 4),
