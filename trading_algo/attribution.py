@@ -19,13 +19,12 @@ LOCAL currency (invariant #6) — sleeves are not blended across currencies here
 """
 from __future__ import annotations
 
-import math
-
 import pandas as pd
+
+from . import metrics
 
 # AC4: alert when annualised tracking error exceeds this budget.
 TRACKING_ERROR_ALERT_BPS = 200.0
-TRADING_DAYS = 252
 
 
 def equity_returns(equity_history: list) -> pd.Series:
@@ -45,13 +44,17 @@ def total_return(equity_history: list) -> float:
 
 
 def tracking_error(realized_ret: pd.Series, predicted_ret: pd.Series,
-                   periods_per_year: int = TRADING_DAYS) -> dict:
-    """Annualised std of (realized - predicted) per-period returns on common dates."""
+                   periods_per_year: int = metrics.ANNUALIZATION) -> dict:
+    """Annualised std of (realized - predicted) per-period returns on common dates.
+
+    The annualisation is the measurement layer's (`metrics.annualised_vol`), so
+    a tracking error and a vol on this repo's pages can never mean two
+    different things."""
     df = pd.concat([realized_ret.rename("r"), predicted_ret.rename("p")], axis=1).dropna()
     if len(df) < 2:
         return {"tracking_error_bps": None, "n_obs": int(len(df))}
-    diff = df["r"] - df["p"]
-    te = float(diff.std(ddof=1) * math.sqrt(periods_per_year))
+    te = metrics.annualised_vol(df["r"] - df["p"],
+                                periods_per_year=periods_per_year)
     return {"tracking_error_bps": round(te * 1e4, 1), "n_obs": int(len(df))}
 
 

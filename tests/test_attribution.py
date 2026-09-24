@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from trading_algo import attribution
+from trading_algo import attribution, metrics
 
 
 def _equity_history(vals, start="2026-01-05"):
@@ -83,3 +83,33 @@ def test_report_without_predicted_curve_still_gives_cost():
     rep = attribution.attribution_report(state, None)
     assert "divergence" not in rep
     assert rep["cost_drag_by_region"]["ASX"]["cost"] > 0
+
+
+def test_tracking_error_is_the_metrics_annualised_vol():
+    """The annualised std of the difference IS annualised_vol — not a second
+    copy of sqrt(252) living in attribution.py."""
+    idx = pd.bdate_range("2026-01-05", periods=40)
+    rng = np.random.default_rng(3)
+    r = pd.Series(rng.normal(0.0004, 0.009, 40), index=idx)
+    p = pd.Series(rng.normal(0.0004, 0.009, 40), index=idx)
+    te = attribution.tracking_error(r, p)
+    expected = metrics.annualised_vol(r - p,
+                                      periods_per_year=metrics.ANNUALIZATION)
+    assert te["tracking_error_bps"] == round(expected * 1e4, 1)
+    assert te["n_obs"] == 40
+
+
+def test_tracking_error_honours_an_explicit_convention():
+    """The public signature is unchanged: callers can still pass their own."""
+    idx = pd.date_range("2026-01-05", periods=40, freq="h")
+    rng = np.random.default_rng(4)
+    r = pd.Series(rng.normal(0.0, 0.002, 40), index=idx)
+    p = pd.Series(rng.normal(0.0, 0.002, 40), index=idx)
+    daily = attribution.tracking_error(r, p)["tracking_error_bps"]
+    hourly = attribution.tracking_error(r, p, periods_per_year=8766)["tracking_error_bps"]
+    assert hourly > daily * 5          # sqrt(8766/252) ~ 5.9
+
+
+def test_no_second_annualisation_constant_in_attribution():
+    """One definition of 252 in the repo, and it is metrics.ANNUALIZATION."""
+    assert not hasattr(attribution, "TRADING_DAYS")
