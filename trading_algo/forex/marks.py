@@ -26,7 +26,8 @@ and the dashboard report them:
 This is calendar time, NOT FX trading time (~6048 traded hours/yr), so hourly
 vol/Sharpe are consistently, modestly overstated — a known calibration choice,
 kept deliberately for simplicity and internal consistency. ``periods_per_year``
-below is the ONE implementation (moved verbatim from the dashboard's ``_ppy``);
+now lives in ``trading_algo.metrics`` (the measurement semantic layer) and is
+re-exported below, so the FX and equity stacks annualise through ONE function;
 book-side prints (``fx_book.status``) and the dashboard both route through it.
 """
 from __future__ import annotations
@@ -34,7 +35,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .fx_config import ANNUALIZATION
 from .pairs import Pair
 
 
@@ -257,14 +257,4 @@ def trade_mark(delta_w: float, px_entry: float, px_now: float, fx_factor: float,
 # ---------------------------------------------------------------------------
 # Annualisation (see module docstring: calendar-time IS the convention)
 # ---------------------------------------------------------------------------
-def periods_per_year(idx: pd.DatetimeIndex) -> float:
-    """Periods-per-year implied by a DatetimeIndex's median bar spacing.
-
-    Calendar-time convention (the project decision — see module docstring):
-    >= 12h spacing -> ``ANNUALIZATION`` (252); faster -> ``365.25*86400/secs``
-    capped at hourly (``24*365.25``). Empty/degenerate indexes fall back to
-    daily spacing (-> 252).
-    """
-    med = idx.to_series().diff().median() if len(idx) else pd.NaT
-    secs = med.total_seconds() if pd.notna(med) and med.total_seconds() > 0 else 86400.0
-    return min(ANNUALIZATION if secs >= 43200 else 365.25 * 86400.0 / secs, 24 * 365.25)
+from ..metrics import periods_per_year  # noqa: F401,E402  (moved; re-exported for callers)

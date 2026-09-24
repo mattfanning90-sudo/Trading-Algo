@@ -3,8 +3,11 @@ import math
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from trading_algo.metrics import benchmark_stats, compute_metrics
+from trading_algo.metrics import (ANNUALIZATION, Measure, annualised_vol,
+                                  benchmark_stats, cagr, compute_metrics,
+                                  max_drawdown, periods_per_year, sharpe)
 
 
 def test_benchmark_stats_against_self():
@@ -56,3 +59,77 @@ def test_single_observation_defined_values_not_nan():
 
 def test_benchmark_stats_empty():
     assert benchmark_stats(pd.Series(dtype=float), pd.Series(dtype=float)) == {}
+
+
+def test_periods_per_year_derived_from_bar_spacing():
+    """THE defect this layer exists to kill: 60-minute bars annualised at 252."""
+    daily = pd.date_range("2026-01-01", periods=100, freq="B")
+    hourly = pd.date_range("2026-01-01", periods=100, freq="h")
+    minute = pd.date_range("2026-01-01", periods=100, freq="min")
+    assert periods_per_year(daily) == 252
+    assert periods_per_year(hourly) == pytest.approx(24 * 365.25)      # 8766
+    assert periods_per_year(minute) == 24 * 365.25                     # capped
+    assert periods_per_year(pd.DatetimeIndex([])) == 252               # degenerate
+
+
+def test_compute_metrics_annualises_an_hourly_book_at_its_own_spacing():
+    """Same per-bar returns, two indexes: the hourly one must annualise at
+    8766, i.e. sqrt(8766/252) ~ 5.9x the daily vol — with NO call-site change."""
+    rng = np.random.default_rng(7)
+    r = pd.Series(rng.normal(0.0002, 0.01, 500))
+    eq = 10_000.0 * (1 + r).cumprod()
+    hourly = pd.date_range("2026-01-01", periods=500, freq="h")
+    daily = pd.date_range("2026-01-01", periods=500, freq="B")
+    m_h = compute_metrics(r.set_axis(hourly), eq.set_axis(hourly))
+    m_d = compute_metrics(r.set_axis(daily), eq.set_axis(daily))
+    assert m_h["AnnVol"] == pytest.approx(m_d["AnnVol"] * math.sqrt(8766 / 252),
+                                          rel=1e-3)
+    # and an explicit convention still wins over the derived one
+    m_forced = compute_metrics(r.set_axis(hourly), eq.set_axis(hourly),
+                               periods_per_year=252)
+    assert m_forced["AnnVol"] == pytest.approx(m_d["AnnVol"], rel=1e-9)
+
+
+def test_compute_metrics_keys_are_unchanged():
+    """No consumer breaks: the dict keys are frozen by this test."""
+    rets = pd.Series([0.01, -0.004, 0.002, 0.006, -0.001],
+                     index=pd.bdate_range("2026-01-05", periods=5))
+    equity = 100.0 * (1 + rets).cumprod()
+    m = compute_metrics(rets, equity)
+    assert set(m) == {"CAGR", "AnnVol", "Sharpe (vs 3.5%)", "Sortino",
+                      "MaxDrawdown", "Calmar", "WinRate(days)",
+                      "FinalEquity (AUD)"}
+
+
+def test_measure_label_names_the_convention():
+    """A consumer cannot print a Sharpe without saying WHICH Sharpe."""
+    rets = pd.Series([0.01, -0.004, 0.002, 0.006, -0.001],
+                     index=pd.bdate_range("2026-01-05", periods=5))
+    assert sharpe(rets, periods_per_year=252,
+                  risk_free=0.035).label() == "Sharpe (vs 3.5%, 252/yr)"
+    assert sharpe(rets, periods_per_year=8766.0,
+                  risk_free=None).label() == "Sharpe (8766/yr)"
+    equity = 100.0 * (1 + rets).cumprod()
+    assert cagr(equity, periods_per_year=252).label() == "CAGR (252/yr)"
+    assert max_drawdown(equity).label() == "MaxDrawdown"   # not annualised
+
+
+def test_primitives_agree_with_compute_metrics():
+    """The dict is assembled FROM the primitives — not a parallel formula."""
+    rets = pd.Series([0.01, -0.004, 0.002, 0.006, -0.001],
+                     index=pd.bdate_range("2026-01-05", periods=5))
+    equity = 100.0 * (1 + rets).cumprod()
+    m = compute_metrics(rets, equity)
+    assert m["AnnVol"] == round(annualised_vol(rets, periods_per_year=252), 4)
+    assert m["Sharpe (vs 3.5%)"] == round(
+        sharpe(rets, periods_per_year=252, risk_free=0.035).value, 2)
+    assert m["MaxDrawdown"] == round(max_drawdown(equity).value, 4)
+    assert m["CAGR"] == round(cagr(equity, periods_per_year=252).value, 4)
+    assert isinstance(sharpe(rets, periods_per_year=252, risk_free=0.035), Measure)
+    assert ANNUALIZATION == 252
+
+
+def test_marks_still_re_exports_periods_per_year():
+    """Moving the function must not break the FX callers that import it."""
+    from trading_algo.forex import marks
+    assert marks.periods_per_year is periods_per_year

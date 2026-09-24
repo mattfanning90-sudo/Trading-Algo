@@ -20,10 +20,8 @@ from ..config import (
     RiskParams,
     lookup_registry,
 )
+from ..metrics import ANNUALIZATION  # noqa: F401  (moved to metrics.py; re-exported)
 from . import bar_quality
-
-# Daily FX bars: ~252 trading days a year (matches the equity metrics module).
-ANNUALIZATION = 252
 
 
 @dataclass(frozen=True)
