@@ -33,9 +33,9 @@ A compacted session reads this first to find where execution stopped.
 | Phase | Tasks | Status |
 |---|---|---|
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
-| 1 — measurement semantic layer | 1-4 (+3b) | 🟡 in progress — 1 done; 2, 3, 3b implemented, fix round 1 |
+| 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
 | 2 — reconciliation bridge | 5-8 | ⬜ not started |
-| 3 — conventions | 9-13 | ⬜ not started |
+| 3 — conventions | 9-13 (+13b) | ⬜ not started |
 | 4 — mechanism | 14-20 | ⬜ not started |
 | 5 — regeneration, deploy, restart | 21-26 | ⬜ not started |
 | W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
@@ -58,8 +58,23 @@ A compacted session reads this first to find where execution stopped.
   benchmark's CAGR twice via two formulas that disagreed by one day's index move.
 - **2026-09-24 — Tasks 2, 3, 3b (`bb39d92`, `ce24e5f`, `81c95f7`).** Spec ✅ on all
   three; live books' vol, drawdown and Sharpe bit-identical old vs new. Fix round 1
-  open for two test/label findings. Process note: a compaction caused a double
+  closed after one fix round. Process note: a compaction caused a double
   dispatch; no damage, and the ledger now records every dispatch before it happens.
+- **2026-09-24 — Task 4 (`eeb9062`, `ff11689`, `dae1182`).** The FX page's JavaScript
+  Sharpe is deleted; period metrics come from Python via the layer, and
+  `tests/test_metrics_single_source.py` now fails if any module computes a measure for
+  itself. Displayed numbers on `matt` moved only by the sample-vs-population std-dev
+  convention; the ALL row now equals the header tile.
+- **2026-09-24 — Task 4b inserted (plan gap), `fce7a88`..`552696b`.** The four display
+  sites the gate listed as still computing their own numbers are routed through the layer
+  and the pending list is empty. Every displayed figure on all 8 live books was
+  byte-identical before and after.
+- **2026-09-24 — Task 4c inserted, `fbd9426`..`fe616e8`.** The gate is widened to catch
+  `std()*sqrt(expr)`, two-line Sharpes and `np.maximum.accumulate`; one duplicate 252
+  removed; a variable that shadowed the `metrics` module renamed.
+- **Phase 1 complete (`fe616e8`).** Two insertions for Phase 3 were ruled in along the way:
+  **Task 13b** fixes `metrics.cagr` to count intervals rather than observations, now that
+  every CAGR routes through it. Full rulings are in the SDD ledger.
 
 ---
 
