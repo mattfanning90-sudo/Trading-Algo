@@ -1,10 +1,12 @@
 """Multi-region paper-trading engine (offline / synthetic)."""
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from trading_algo import config as cfg
+from trading_algo import metrics
 from trading_algo import paper_trade as pt
 from trading_algo import pnl
 from trading_algo.regions import get_region
@@ -432,3 +434,48 @@ def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch):
     assert after["sleeves"][region]["last_status"]["status"] != "unpriced", \
         "one dead name must not sit the whole sleeve out"
     assert after["risk_halted"] is False
+
+
+# ---- status(): the CLI's vol and drawdown are the measurement layer's -------
+def _seed_equity(account, n=22, sigma=0.01, seed=5) -> pd.Series:
+    """A book whose equity history is `n` daily marks of known returns."""
+    pt.init_account(account, capital=100_000, synthetic=True)
+    st = pt.load_state(account)
+    idx = pd.bdate_range("2026-01-02", periods=n)
+    eq = 100_000 * np.cumprod(1 + np.random.default_rng(seed).normal(0, sigma, n))
+    st["equity_history"] = [[d.strftime("%Y-%m-%d"), round(float(v), 2)]
+                            for d, v in zip(idx, eq)]
+    pt.save_state(account, st)
+    return pd.Series([v for _, v in st["equity_history"]], index=idx)
+
+
+def _status_value(capsys, account, label) -> str:
+    capsys.readouterr()
+    pt.status(account)
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if label in ln)
+    return line.split()[-1]
+
+
+def test_status_prints_the_layers_vol_and_drawdown(account, capsys):
+    """'Ann. vol' and 'Max drawdown' equal the primitives at the series' own
+    annualisation (daily marks -> 252) with the sample (ddof=1) sd."""
+    s = _seed_equity(account)
+    rets = s.pct_change().dropna()
+    vol = metrics.annualised_vol(rets, periods_per_year=metrics.periods_per_year(s.index))
+    population = rets.std(ddof=0) * np.sqrt(252)
+    assert f"{vol:.1%}" != f"{population:.1%}", "the pin must tell ddof apart"
+    assert _status_value(capsys, account, "Ann. vol") == f"{vol:.1%}"
+    assert _status_value(capsys, account, "Max drawdown") == \
+        f"{metrics.max_drawdown(s).value:.2%}"
+
+
+def test_status_routes_through_the_metrics_layer(account, capsys, monkeypatch):
+    """A local formula with the same value passes the pin above; this passes
+    only if status() CALLS the layer."""
+    _seed_equity(account)
+    monkeypatch.setattr(metrics, "annualised_vol",
+                        lambda r, *, periods_per_year: 0.4321)
+    monkeypatch.setattr(metrics, "max_drawdown",
+                        lambda e: metrics.Measure(-0.1234, "MaxDrawdown", float("nan")))
+    assert _status_value(capsys, account, "Ann. vol") == "43.2%"
+    assert _status_value(capsys, account, "Max drawdown") == "-12.34%"

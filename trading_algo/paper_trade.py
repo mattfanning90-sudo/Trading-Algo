@@ -37,8 +37,8 @@ import pandas as pd
 
 from . import config as cfg
 from . import signals as sig
-from . import (attribution, data, data_quality, fees, fx, notifications, pnl,
-               profiles, promotion, storage, strategy, tca)
+from . import (attribution, data, data_quality, fees, fx, metrics,
+               notifications, pnl, profiles, promotion, storage, strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region
 
@@ -988,8 +988,10 @@ def status(account: str) -> None:
         print(f"  Current equity   {s.iloc[-1]:,.2f} {state['base_currency']}")
         print(f"  Total return     {s.iloc[-1] / state['initial_capital_base'] - 1:+.2%}")
         if len(rets) > 20:
-            print(f"  Ann. vol         {rets.std() * np.sqrt(252):.1%}")
-            print(f"  Max drawdown     {(s / s.cummax() - 1).min():.2%}")
+            ppy = metrics.periods_per_year(s.index)     # daily marks -> 252
+            vol = metrics.annualised_vol(rets, periods_per_year=ppy)
+            print(f"  Ann. vol         {vol:.1%}")
+            print(f"  Max drawdown     {metrics.max_drawdown(s).value:.2%}")
         print(f"  Trades to date   {len(state['trades'])}")
 
     fees_by_ccy: dict[str, float] = {}
