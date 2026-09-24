@@ -32,7 +32,7 @@ A compacted session reads this first to find where execution stopped.
 
 | Phase | Tasks | Status |
 |---|---|---|
-| 0 — deploy what already exists | merge branch → `main` | ⬜ not started |
+| 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
 | 1 — measurement semantic layer | 1-4 | ⬜ not started |
 | 2 — reconciliation bridge | 5-8 | ⬜ not started |
 | 3 — conventions | 9-13 | ⬜ not started |
@@ -42,7 +42,12 @@ A compacted session reads this first to find where execution stopped.
 
 **Execution log** — one line per task, appended as it completes:
 
-_(nothing yet)_
+- **2026-09-24 — Phase 0, merge to `main` (`06464ca`).** `main` had diverged by 25 bot
+  state commits (books advancing daily, no code), so the live state was merged onto
+  the branch first and `main` then fast-forwarded. Full gate green before the push:
+  pytest 1121 passed, ruff clean, bandit 0 medium+, detect-secrets clean, regression
+  gate matches baseline, and `state/` untouched by the suite. The September
+  remediation is now deployed; the schedulers pick it up on their next run.
 
 ---
 
