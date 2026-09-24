@@ -167,8 +167,13 @@ def test_benchmark_stats_keys_are_unchanged():
 def test_benchmark_cagr_is_the_same_measure_as_compute_metrics_cagr():
     """`portfolio_backtest` returns `benchmark_metrics` and `benchmark_stats`
     in ONE dict, so the benchmark's CAGR appears twice. Two formulas made them
-    disagree on short panels (-8.87% vs -9.26% over a year); one primitive
-    makes them the same number."""
+    disagree; one primitive makes them the same number.
+
+    The gap is the first overlapping return, raised to ppy/N. On THIS
+    synthetic draw (seed 13, 252 days) the old code read 2.76% vs 1.68% — a
+    unit-test magnification, not a backtest figure. In `portfolio_backtest`
+    the first return is one day's index move, and the gap measured on
+    synthetic runs was 0.008-0.36 percentage points."""
     rng = np.random.default_rng(13)
     idx = pd.bdate_range("2026-01-05", periods=252)
     s = pd.Series(rng.normal(0.0004, 0.01, 252), index=idx)
