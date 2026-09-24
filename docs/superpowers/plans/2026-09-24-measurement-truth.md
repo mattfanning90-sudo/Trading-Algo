@@ -2,53 +2,60 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** DRAFTING IN PROGRESS — Tasks 1-8 and 14-20 are written. Tasks 9-13
-(conventions) and 21-27 (regeneration, deploy, restart, survivorship) were still
-being drafted when this file was written; see "Gaps" below. Do not start Task 9
-until it is written.
+**Goal:** Make every reported number in this repo mean what it says, so a strategy result can be told apart from a measurement artefact.
 
-**Goal:** Make every reported number in this repo mean what it says, so a strategy
-result can be told apart from a measurement artefact.
+**Architecture:** One measurement semantic layer (`metrics.py`) owns every number a human reads, enforced by a syntax-tree test. One reconciliation bridge (`attribution.py`) walks from the backtest's return to the paper book's return line by line and must sum to an identity — that identity is how every later fix is proved. Then the convention fixes, then the mechanism fixes, then regeneration, deploy and a clean book restart. Point-in-time index membership runs as a parallel wave because it never touches a live book.
 
-**Architecture:** One measurement semantic layer (`metrics.py`) that owns every
-number a human reads, enforced by an AST test; one reconciliation bridge
-(`attribution.py`) that walks from the backtest's return to the paper book's
-return line by line and must sum to an identity; then the convention and mechanism
-fixes the bridge can prove, then regeneration, deploy and a clean book restart.
-Point-in-time index membership runs as a parallel wave because it never touches a
-live book.
+**Tech Stack:** Python 3.11+, pandas, numpy, pytest. No new runtime dependencies. One new module (`trading_algo/risk_breaker.py`); everything else extends what exists.
 
-**Tech Stack:** Python 3.11+, pandas, numpy, pytest, plain stdlib elsewhere. No
-new runtime dependencies.
-
-**Spec:** `docs/superpowers/specs/2026-09-24-measurement-truth-design.md` — read it
-first; this plan argues from it and the two travel together.
+**Spec:** `docs/superpowers/specs/2026-09-24-measurement-truth-design.md` — read it first. This plan argues from it and the two travel together.
 
 ## Global Constraints
 
+Every task's requirements implicitly include this section.
+
 - **One defect, one change.** No drive-by refactoring of code a fix passes through. Adjacent problems become findings, not diffs. (Spec §13.)
-- **Fix the concept, not the call sites.** Prefer removing a special case to adding one.
-- **Every change carries its test and its number** — test first, then the bridge line it moved, before and after.
+- **Fix the concept, not the call sites.** Six Sharpe implementations are one missing definition, not six bugs. Prefer removing a special case to adding one.
+- **Every change carries its test and its number** — the test written first, then the bridge line it moved, before and after. A fix with no measured movement is not finished.
 - **A fix needing more than ~30 lines is a design signal.** Say so in the task rather than pushing through.
 - **No new module unless no existing one can host it.** `metrics.py` and `attribution.py` are the homes; `risk_breaker.py` is the one sanctioned new module.
-- **Diffs stay readable in one screen.** Matt reads every diff; that is the review mechanism.
-- **Never write to `state/`.** Any command that might must run with `FX_STATE_DIR` and `MOMENTUM_STATE_DIR` exported to a scratch directory.
-- **Python 3.11+, type hints, `from __future__ import annotations`** at the top of new modules.
+- **Diffs stay readable in one screen.** Matt reads every diff; that is the review mechanism, and it only works if each commit is one idea.
+- **Never write to `state/`.** Any command that might must run with `FX_STATE_DIR` and `MOMENTUM_STATE_DIR` exported to a scratch directory first.
+- **Python 3.11+**, type hints, `from __future__ import annotations` at the top of new modules.
+- **Tests** live in `tests/test_<module>.py`, plain pytest, no network (monkeypatch or fixtures).
 - **Every commit ends with:** `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
 
-## Line numbers are stale — re-locate before editing
+## Before you edit: line numbers in this plan are stale
 
-The drafting agents found that HEAD has moved (it is now `6fa6f84`, not `11f876e`)
-and **every line number inherited from the review is stale**. Verified real
-locations at the time of drafting:
+The drafting agents found HEAD had moved during the work and **every line number inherited from the review is stale**. Verified examples:
 
-| What | Stale reference | Actual |
+| What | Stale reference | Actual at drafting time |
 |---|---|---|
 | whole-share `int()` truncation | `paper_trade.py:476` | `paper_trade.py:598-602` |
 | micro mode | `paper_trade.py:460-469` | `paper_trade.py:548-561` |
 | paper drawdown breaker | `paper_trade.py:905-920` | `paper_trade.py:900-926` |
 
-**Grep for the code, do not trust a line number in this plan or the spec.**
+**Grep for the code. Do not trust a line number in this plan or the spec.**
+
+## Order is load-bearing
+
+Each phase changes the input to the next. Doing regeneration before conventions means doing it twice; re-baselining the regression gate before the mechanism fixes hides a real regression behind a deliberate one.
+
+| Phase | Tasks | Gate to pass |
+|---|---|---|
+| 1 — semantic layer | 1-4 | No independent metric implementation outside `metrics.py`; suite green |
+| 2 — bridge | 5-8 | Bridge identity holds to 1bp on the current books |
+| 3 — conventions | 9-13 | Bridge shows the dividend and cash-interest lines at zero |
+| 4 — mechanism | 14-20 | A test per defect; the regression gate re-baselined **once**, here, with the bridge as evidence |
+| 5 — deploy | 21-27 | Schedulers on new code; books reopened clean; PIT delta published per region |
+
+**Task 23 (the training/traded universe split) must land before Task 26 (the restart)** or the reopened FX books come back up on 16 symbols, re-creating the defect the restart exists to clear.
+
+---
+
+# Phase 1 — The instruments: a measurement semantic layer
+
+One module owns every number a human reads. Nothing later in this plan can be proved without it, and the annualisation default alone fixes the intraday-metrics defect everywhere with no call-site edits.
 
 ---
 
@@ -1015,6 +1022,12 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+# Phase 2 — The instruments: the reconciliation bridge
+
+A signed, line-by-line walk from the backtest's return to the paper book's, which must sum to an identity. This is the master test: every later task names the line it should move and proves it moved.
+
+---
+
 ### Task 5: Tracking diagnosis must match the live rebalance path
 
 **Files:**
@@ -1806,6 +1819,1250 @@ the single re-baseline spec §14 reserves for P4.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+# Phase 3 — Conventions: what both engines compute
+
+Next-day-close fills, dividends, cash interest, and the per-order commission floor. These change headline numbers deliberately. Do NOT re-baseline the regression gate here; Task 20 does it once.
+
+---
+
+### Task 9: Next-day-close fills in the backtest
+
+**Files:**
+- Modify: `trading_algo/backtest.py:1-15` (module docstring — it states the old convention)
+- Modify: `trading_algo/backtest.py:121-198` (the daily loop)
+- Test: `tests/test_backtest.py`
+- Modify (premise changed by this task): `tests/test_backtest_regression.py:47-55`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks. `fees.turnover_cost(region, turnover, buy_turnover, impact=0.0)` and `fees.idle_cash_credit(net_exposure, days, annual_rate)` as they stand today.
+- Produces: `run_backtest(...)["weights"][D]` now means **the book at D's close** (post-trade), i.e. the book that earns D+1's return. Previously it meant the book that earned D's own return. Task 5–8's bridge reads this key; nothing else in `trading_algo/` does (grepped: only tests consume it).
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_backtest.py`:
+
+```python
+def test_return_is_earned_by_the_previous_bars_book(synth_asx, asx_region):
+    """Today's return belongs to the book held THROUGH today, i.e. the one
+    recorded at yesterday's close.
+
+    A target decided at D_k's close cannot be filled at that close — that is the
+    very price that produced the signal. It is executed at D_{k+1}'s close, so
+    the first bar it earns a return on is D_{k+2}. Restated as an identity the
+    simulator must satisfy on every bar:
+
+        returns[D] == weights_hist[D_prev] . rets[D] - cost[D] + interest[D]
+
+    Before this change the right-hand book was `weights_hist[D]`, which is the
+    same thing as filling at the signal's own close.
+    """
+    import pytest
+
+    from trading_algo import config as cfg
+    from trading_algo import fees
+
+    prices, index_px = synth_asx
+    res = run_backtest(prices, index_px, asx_region, max_drawdown_stop=None)
+    weights_hist = res["weights"]
+    costs = res["costs"]
+    rets = prices.pct_change(fill_method=None)
+
+    dates = list(res["returns"].index)
+    checked = 0
+    for prev, today in zip(dates, dates[1:]):
+        book = weights_hist.get(prev)
+        if book is None or book.empty:
+            continue
+        day = rets.loc[today].reindex(book.index).fillna(0.0)
+        expected = float((book * day).sum())
+        expected -= float(costs.get(today, 0.0))
+        if cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL:
+            expected += fees.idle_cash_credit(
+                float(book.sum()), (today - prev).days, cfg.CASH_RATE_ANNUAL)
+        assert float(res["returns"].loc[today]) == pytest.approx(expected, abs=1e-12), (
+            f"bar {today.date()} was not earned by the book recorded at "
+            f"{prev.date()}'s close")
+        checked += 1
+    assert checked > 100, "fixture produced too few invested bars to prove anything"
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_backtest.py::test_return_is_earned_by_the_previous_bars_book -v`
+
+Expected: FAIL — `assert 0.0034... == approx(0.0031...)` with the message `bar 2014-xx-xx was not earned by the book recorded at 2014-xx-xx's close`. Today `weights_hist[D]` is the *pre-drift* book that earned bar D, so the previous bar's record is a different (undrifted) set of weights and the products disagree.
+
+- [ ] **Step 3: Implement**
+
+Replace the module docstring's first bullet, `trading_algo/backtest.py:4-10`:
+
+```python
+- No lookahead, next-day-CLOSE execution: weights are decided at month-end D_k
+  using data ≤ D_k, staged, and EXECUTED at the close of the next trading bar
+  D_{k+1}. They are never filled at D_k's own close — that is the price that
+  produced the signal, and no real order can touch it. The first bar a new
+  target earns a return on is therefore D_{k+2}. The drawdown breaker stages a
+  liquidation the same way, for the same reason. Targets come from the shared
+  `strategy.compute_targets` — the same function paper trading uses.
+```
+
+Replace `trading_algo/backtest.py:121-198` (the whole `for i in range(1, len(dates)):` body up to and including the drift block) with:
+
+```python
+    for i in range(1, len(dates)):
+        today = dates[i]
+
+        # --- 1. today's return is earned by the book we were ALREADY holding ---
+        # A target staged at the prior close is not in the book yet: it is filled
+        # below, at TODAY's close, so it sits out this bar.
+        day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
+        gross = float((current_w * day_rets).sum())
+        r = gross
+        # Interest on whatever was NOT invested over the day. `current_w` is the
+        # book held THROUGH today, and its NET sum is the exposure — see
+        # fees.idle_cash_credit on why net, not gross. Without this a flat book
+        # earns 0% while metrics still charge it the RISK_FREE hurdle, which is a
+        # double penalty worth +0.22 to +0.34 Sharpe (docs/SHARPE_RESEARCH.md §1).
+        if CREDIT_IDLE_CASH and CASH_RATE_ANNUAL:
+            interest = fees.idle_cash_credit(
+                float(current_w.sum()), (today - dates[i - 1]).days,
+                CASH_RATE_ANNUAL)
+            r += interest
+            total_cash_interest += interest
+
+        # Drift the held weights to today's close — that is the book the fill
+        # starts from, and the prices it happens at.
+        if not current_w.empty:
+            grown = current_w * (1 + day_rets)
+            nav_growth = 1 + gross
+            current_w = grown / nav_growth if nav_growth != 0 else grown
+
+        # --- 2. execute the staged target AT TODAY'S CLOSE --------------------
+        if pending is not None:
+            names = current_w.index.union(pending.index)
+            delta = (pending.reindex(names, fill_value=0.0)
+                     - current_w.reindex(names, fill_value=0.0))
+            turnover = float(delta.abs().sum())
+            buy_turnover = float(delta.clip(lower=0).sum())
+            # F6: per-name square-root market impact (fraction of NAV), added to
+            # the one shared cost entrypoint (R1). Zero unless IMPACT_COEF is set.
+            impact = 0.0
+            if IMPACT_COEF and advd is not None:
+                a = advd.loc[:today]
+                if len(a):
+                    a = a.iloc[-1]
+                    v = (vols_frame.loc[:today].iloc[-1]
+                         if vols_frame is not None and len(vols_frame.loc[:today])
+                         else None)
+                    nav = equity[-1]
+                    for name, dw in delta[delta.abs() > 0].items():
+                        impact += abs(dw) * fees.square_root_impact(
+                            abs(dw) * nav, a.get(name), (v.get(name) if v is not None else float("nan")),
+                            IMPACT_COEF)
+            cost = fees.turnover_cost(region, turnover, buy_turnover, impact=impact)
+            turnover_log.append((today, turnover))
+            cost_log.append((today, cost))
+            total_cost += cost
+            r -= cost
+            current_w = pending
+            pending = None
+
+        daily_ret.append(r)
+        equity.append(equity[-1] * (1 + r))
+        # The book as it stands at TODAY's close — the one that earns tomorrow's
+        # return. A freshly executed target is recorded on its EXECUTION bar.
+        weights_hist[today] = current_w
+
+        # --- drawdown circuit breaker (decision at close, execute t+1) ---
+        peak = max(peak, equity[-1])
+        if halted:
+            halt_days += 1
+            cooldown -= 1
+            if cooldown <= 0:
+                halted = False
+        elif max_drawdown_stop is not None and equity[-1] / peak - 1 <= -max_drawdown_stop:
+            halted = True
+            cooldown = cooldown_days
+            halt_events += 1
+
+        if halted:
+            pending = CASH                       # liquidate at the NEXT close
+        elif today in weight_schedule:
+            # A target decided as-of `today` (D_k) is staged now and EXECUTED at
+            # the close of D_{k+1}; it first earns a return on D_{k+2}.
+            pending = weight_schedule[today]
+```
+
+Note the three structural points, which are the whole change: the return is computed before the fill, the fill diffs against the *drifted* book, and `weights_hist` now records the post-fill close book. The drift block moved up and its local `nav` was renamed `nav_growth` so it cannot shadow the impact block's NAV, which now legitimately sits after it.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_backtest.py::test_return_is_earned_by_the_previous_bars_book -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "backtest or consistency or parity or idle_cash or impact or adv_cap or portfolio or pit_impact or walkforward or delisting or sweep"`
+
+Expected: PASS except `tests/test_backtest_regression.py::test_synthetic_backtest_matches_baseline`, whose premise this task deliberately changes — the committed baseline was produced under the old fill convention and CAGR now moves by roughly 0.4pp/yr (spec §2). Per spec §6 the baseline is re-cut **once**, after stage 3, so do not regenerate it here. Mark it as knowingly stale instead, in `tests/test_backtest_regression.py:22-26`:
+
+```python
+@pytest.mark.xfail(
+    reason="Baseline predates the next-day-close fill convention (Task 9) and "
+           "the per-order commission floor (Task 13). Re-cut once in Task 20, "
+           "with the bridge report attached — spec §6. Remove this marker there.",
+    strict=False)
+def test_synthetic_backtest_matches_baseline(current):
+    baseline = ci_regression.load_baseline()
+    drift = ci_regression.compare(baseline, current)
+    assert not drift, "synthetic backtest drifted from baseline:\n" + "\n".join(drift)
+```
+
+Also update the two docstrings in that file whose statement of the convention is now wrong — `tests/test_backtest_regression.py:47-55`, the docstring of `test_target_first_affects_equity_at_t_plus_one` (its assertions still hold and must not change):
+
+```python
+def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
+    """Execution-timing invariant: a month-end target computed as-of D_k must be
+    EXECUTED at D_{k+1}'s close, and must never be in the book at D_k or earlier
+    (no lookahead — invariant #1).
+
+    `weights_hist[D]` is the book as it stands at D's CLOSE — after any fill on
+    that bar, and therefore the book that earns bar D+1's return. So a target
+    appearing at `weights_hist[D_{k+1}]` is direct evidence that it was filled at
+    D_{k+1}'s close, one bar after the signal. Pinned here so neither the t+2 lag
+    bug nor a return to same-close fills can come back.
+    """
+```
+
+If `tests/test_circuit_breaker_trips_and_limits_drawdown` fails on the `tight["metrics"]["MaxDrawdown"] >= off[...]` line, that is a real consequence, not noise: a halted book now carries one extra bar of exposure before it can liquidate. Report it rather than loosening the assertion — it belongs to Task 14, which owns the breaker.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/backtest.py tests/test_backtest.py tests/test_backtest_regression.py
+git commit -m "fix(backtest): execute staged targets at the next bar's close
+
+A target decided at D_k's close was being filled at that same close — the
+price that produced the signal. It is now executed at D_{k+1}'s close: the
+bar's return accrues to the book actually held, the fill diffs against the
+drifted book, and weights_hist[D] becomes the book at D's close.
+
+The regression baseline moves with this and is re-cut once, later, per
+spec section 6; the gate is marked xfail until then.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 10: Next-day-close fills in the paper book
+
+**Files:**
+- Modify: `trading_algo/paper_trade.py:686-706` (add two helpers above `_should_rebalance`)
+- Modify: `trading_algo/paper_trade.py:814-873` (the per-sleeve branch of `_run_daily_locked`)
+- Test: `tests/test_paper_trade.py`
+- Modify: `tests/conftest.py` (add the `paper_cycle` fixture)
+- Modify (premise changed by this task): `tests/test_paper_trade.py`, `tests/test_consistency.py:150-187`, `tests/test_dashboard_api_book.py:15-28`, `tests/test_dashboard.py:16-22`, `tests/test_dashboard_valuation.py:8-14`, `tests/test_dashboard_terminal.py:54`, `tests/test_dashboard_colour_convention.py:305,323,398,413,496`, `tests/test_experimental_books.py:125,136,151,153,155`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces:
+  - `paper_trade._stage_target(sleeve: dict, today: str, targets: pd.Series, frozen: set[str] | None = None) -> None`
+  - `paper_trade._fill_pending(region, sleeve: dict, px: pd.Series, today: str, trade_log: list) -> bool`
+  - New sleeve state key `sleeve["pending_target"] = {"date": str, "weights": dict[str, float], "frozen": list[str]}`, absent when nothing is staged. Task 5–8's bridge reads `sleeve["pending_target"]["date"]` as the decision date and `sleeve["last_rebalance_date"]` as the **fill** date.
+  - `tests/conftest.py::paper_cycle` — `cycle(account, sessions=2) -> state`.
+
+This is the one structural change in the block. It is ~35 lines of production code, above the ~30-line signal in spec §13, and the reason is stated rather than pushed through: a decision has to survive a process restart to be filled on a later run, so it must be persisted, and persisting it is the change. There is no smaller version that still moves the fill off the decision's own bar.
+
+- [ ] **Step 1: Write the failing test**
+
+First add the shared fixture to `tests/conftest.py` (the frozen synthetic panel returns the same last bar on every call, so without it no test could ever reach a fill bar):
+
+```python
+@pytest.fixture
+def paper_cycle(monkeypatch):
+    """Advance a paper book across DISTINCT synthetic sessions.
+
+    Fills land on the bar after the decision, so a book needs two runs on two
+    different bars to open a position — and `data.synthetic_region` hands back
+    the same fixed panel on every call. This serves that panel one session
+    longer each time the book is advanced.
+
+    `cycle(account)` runs one full decide -> fill cycle. Calling
+    `paper_trade.run_daily` directly stays on the CURRENT session, which is how
+    a test reproduces the engine firing several times in one day.
+    """
+    from trading_algo import paper_trade as pt
+
+    real = pt.latest_region_data
+    clock = {"session": 0}
+    headroom = 8                      # sessions of runway before the panel ends
+
+    def advancing(region, synthetic):
+        prices, index_px = real(region, synthetic)
+        if not synthetic:
+            return prices, index_px
+        cut = min(len(prices), len(prices) - headroom + clock["session"])
+        return prices.iloc[:cut], index_px.loc[:prices.index[cut - 1]]
+
+    monkeypatch.setattr(pt, "latest_region_data", advancing)
+
+    def cycle(account, sessions=2):
+        for _ in range(sessions):
+            pt.run_daily(account, synthetic=True)
+            clock["session"] += 1
+        return pt.load_state(account)
+
+    return cycle
+```
+
+Then append to `tests/test_paper_trade.py`:
+
+```python
+def test_a_decision_fills_on_the_next_session_not_its_own(account, paper_cycle):
+    """The book decides at the latest close and fills at the NEXT one.
+
+    Filling at the close that produced the signal is not executable by any real
+    broker, and it is what made the paper book's fills disagree with the
+    backtest's staged targets.
+    """
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+
+    state = paper_cycle(account, sessions=1)          # session 1: decide only
+    sleeve = state["sleeves"]["US"]
+    assert state["trades"] == [], "a target must not fill at the close that produced it"
+    assert not sleeve["positions"]
+    pending = sleeve.get("pending_target")
+    assert pending and pending["weights"], "the target must be staged for the next close"
+    decided_on = pending["date"]
+
+    state = paper_cycle(account, sessions=1)          # session 2: fill
+    sleeve = state["sleeves"]["US"]
+    assert state["trades"], "the staged target must fill on the next session"
+    assert "pending_target" not in sleeve
+    assert sleeve["positions"]
+    for t in state["trades"]:
+        assert t["date"] > decided_on, (
+            f"{t['ticker']} filled on {t['date']}, the bar its own signal used")
+    assert sleeve["last_rebalance_date"] > decided_on
+
+
+def test_a_second_run_on_the_same_bar_does_not_fill(account, paper_cycle):
+    """The engine fires up to three times a day, once per regional close. A
+    pending target waits for a new SESSION, not merely for the next run."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    paper_cycle(account, sessions=1)
+    pt.run_daily(account, synthetic=True)             # same bar, second pass
+    state = pt.load_state(account)
+    assert state["trades"] == []
+    assert state["sleeves"]["US"].get("pending_target")
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_paper_trade.py::test_a_decision_fills_on_the_next_session_not_its_own tests/test_paper_trade.py::test_a_second_run_on_the_same_bar_does_not_fill -v`
+
+Expected: FAIL on the first assertion of each — `AssertionError: a target must not fill at the close that produced it` (`state["trades"]` is non-empty after one session, because `rebalance_sleeve` runs inline at `paper_trade.py:868`).
+
+- [ ] **Step 3: Implement**
+
+Insert immediately above `def _should_rebalance` at `trading_algo/paper_trade.py:686`:
+
+```python
+def _stage_target(sleeve: dict, today: str, targets: pd.Series,
+                  frozen: set[str] | None = None) -> None:
+    """Record a decision made at TODAY's close, for filling at the next one.
+
+    The book cannot trade at the price that produced its own signal: a target
+    decided on bar D_k is executable no earlier than D_{k+1}'s close, which is
+    exactly what `backtest.py` stages. Persisting it in the sleeve is what lets
+    the decision survive to the next run — the engine is a fresh process each
+    time, so an in-memory target would simply be lost.
+    """
+    sleeve["pending_target"] = {
+        "date": today,
+        "weights": {str(t): float(w) for t, w in targets.items()},
+        "frozen": sorted(frozen or ()),
+    }
+
+
+def _fill_pending(region, sleeve: dict, px: pd.Series, today: str,
+                  trade_log: list) -> bool:
+    """Execute the target staged on an EARLIER bar, at today's close.
+
+    Returns True when a fill was attempted. A target staged on today's own bar
+    is left alone: that is the whole convention, and the engine runs up to three
+    times a day against the same bar.
+    """
+    pending = sleeve.get("pending_target")
+    if not pending or str(pending.get("date", "")) >= today:
+        return False
+    targets = pd.Series(pending.get("weights") or {}, dtype=float)
+    rebalance_sleeve(region, sleeve, targets, px, today, trade_log,
+                     frozen=set(pending.get("frozen") or ()))
+    sleeve["last_rebalance_date"] = today          # the FILL date, not the decision's
+    sleeve.pop("pending_target", None)
+    return True
+```
+
+Then replace `trading_algo/paper_trade.py:814-873` — from `params = _account_params(state, region)` down to and including the `else: status = "held" if ...` line — with:
+
+```python
+        params = _account_params(state, region)
+        status = None                       # why the sleeve ended this run as it did
+
+        if halted and (sleeve["positions"] or sleeve.get("pending_target")):
+            # A halted book's only legal target is cash. Overwrite whatever was
+            # staged before the breaker tripped so a stale buy can never fill,
+            # and stage the liquidation for the next close — a breaker decides at
+            # a close like everything else, and cannot fill at that same close.
+            print(f"  [{k}] ⛔ drawdown halt — staging a liquidation for the "
+                  f"next close.")
+            _stage_target(sleeve, today, pd.Series(dtype=float))
+
+        # Execute the target staged on an EARLIER bar, at today's close. Every
+        # fill in this book therefore lands one session after its decision.
+        if rate_ok and _fill_pending(region, sleeve, px_today, today,
+                                     state["trades"]):
+            rebalanced_this_run = True
+
+        if halted:
+            # Do NOT stamp last_rebalance_month while halted: that would calendar-
+            # pin the sleeve flat until the next month even after the cooldown
+            # clears. Re-entry is cooldown-driven (month/date cleared on resume).
+            status = "cash:halted"
+        elif not rate_ok:
+            # No base-currency rate → the min-viable gate and the mark can't be
+            # sized. Hold cash rather than let `NaN < MIN_VIABLE` (False) fall
+            # through and trade on an unvaluable book.
+            print(f"  [{k}] ⚠ no valuation rate for {region.currency} — holding cash.")
+            notifications.notify(
+                "fx_unavailable",
+                f"[{account}] {k} valuation rate for {region.currency} unavailable "
+                f"— holding cash this run",
+                level="alert", account=account, region=k, currency=region.currency)
+            status = "cash:fx-unavailable"
+        elif _should_rebalance(sleeve, today, this_month):
+            # Reached only when rate_ok is True (the `not rate_ok` branch above
+            # was skipped), so `rate` is a positive float, not None.
+            assert rate is not None
+            eq_base_pre = sleeve_equity_local(sleeve, px_today) * rate
+            if eq_base_pre < cfg.MIN_VIABLE_EQUITY_BASE:
+                print(f"  [{k}] below min viable size "
+                      f"({eq_base_pre:,.0f} {cfg.BASE_CURRENCY}) — holding cash.")
+                status = "cash:below-min"
+            else:
+                elig, dq = data_quality.eligible(prices, region, prices.index[-1])
+                if dq.excluded:
+                    print(f"  [{k}] data-quality: freezing "
+                          + ", ".join(f"{t} ({dq.reasons[t]})" for t in sorted(dq.excluded)))
+                targets = strategy.compute_targets(prices, index_px, params,
+                                                   eligible=elig)
+                if targets.empty:
+                    reason = _empty_target_reason(prices, index_px, params, elig)
+                    print(f"  [{k}] flat — {reason} (holding cash).")
+                    status = f"cash:{reason}"
+                    # Persist WHY across the days that follow. The daily status
+                    # is overwritten with the generic 'cash:idle' on every
+                    # non-rebalance day, which erases the difference between
+                    # "the regime gate said cash" (correct, and the audit should
+                    # stay quiet) and "the feed was broken" (an emergency).
+                    sleeve["last_flat_reason"] = reason
+                else:
+                    status = "rebalanced"
+                    sleeve.pop("last_flat_reason", None)
+                _stage_target(sleeve, today, targets, frozen=dq.excluded)
+            sleeve["last_rebalance_month"] = this_month
+        else:
+            status = "held" if sleeve["positions"] else "cash:idle"
+```
+
+Three consequences worth stating in the commit: `rebalanced_this_run` now means *a fill happened*, not *a decision happened*, which is the correct gate for the cash-only allocation true-up below it; `last_rebalance_date` is stamped at the fill, `last_rebalance_month` at the decision, so `_should_rebalance`'s existing `MIN_REBALANCE_GAP_DAYS` guard keeps a month-boundary decision from landing a day after the previous fill; and a halted book overwrites its pending target before anything can fill it.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_paper_trade.py::test_a_decision_fills_on_the_next_session_not_its_own tests/test_paper_trade.py::test_a_second_run_on_the_same_bar_does_not_fill -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "paper or dashboard or consistency or experimental or alloc_rebalance or breaker_alert or verify or promotion"`
+
+Every test that opened a position with a single `run_daily` now needs a full cycle. The mechanical conversion, at each failing site: add `paper_cycle` to the test's parameters and replace `pt.run_daily(<acct>, synthetic=True)` with `paper_cycle(<acct>)`. The sites are:
+
+- `tests/test_paper_trade.py:56, 84, 99, 106, 117, 136, 151, 159, 174, 191, 207, 264, 292, 309, 330, 381, 397, 414, 429`
+- `tests/test_consistency.py:171`
+- `tests/test_dashboard.py:21`, `tests/test_dashboard_valuation.py:13`, `tests/test_dashboard_terminal.py:54`
+- `tests/test_dashboard_api_book.py:22, 24`
+- `tests/test_dashboard_colour_convention.py:305, 323, 398, 413, 496`
+- `tests/test_experimental_books.py:125, 136, 151, 153, 155`
+
+Leave `tests/test_alloc_rebalance.py:72` and `tests/test_breaker_alert.py:23, 34` alone — neither asserts on a fill.
+
+Four tests need more than the substitution, and all four are premise changes this task owns:
+
+`tests/test_paper_trade.py:49-68` — one run no longer produces a ledger:
+```python
+def test_init_refuses_to_overwrite_a_live_book(account, paper_cycle):
+    pt.init_account(account, capital=100_000, synthetic=True)
+    paper_cycle(account)                     # decide, then fill
+    before = pt.load_state(account)
+    assert before["trades"], "need a book with history to prove it is protected"
+    ...
+```
+
+`tests/test_paper_trade.py:157-168` — the halt liquidation is staged, so it needs its own cycle:
+```python
+def test_drawdown_halt_liquidates(account, paper_cycle):
+    """A halted book stages a liquidation and fills it at the NEXT close — a
+    breaker decides at a close like anything else and cannot fill at that one."""
+    pt.init_account(account, capital=300_000, synthetic=True)
+    paper_cycle(account)                             # opens positions
+    state = pt.load_state(account)
+    state["risk_halted"] = True
+    state["halt_cooldown"] = 5
+    pt.save_state(account, state)
+    state = paper_cycle(account)                     # stage, then fill the exit
+    assert all(not s["positions"] for s in state["sleeves"].values())
+    assert state["risk_halted"] is True
+```
+
+`tests/test_paper_trade.py:170-184` — keep the two bare `run_daily` calls (they must share a session) but open the book with a cycle:
+```python
+def test_cooldown_counts_market_days_not_runs(account, paper_cycle):
+    pt.init_account(account, capital=300_000, synthetic=True)
+    paper_cycle(account)
+    state = pt.load_state(account)
+    state["risk_halted"] = True
+    state["halt_cooldown"] = 3
+    state.pop("halt_last_day", None)
+    pt.save_state(account, state)
+    # Two runs land on the SAME synthetic report date -> one day of cooldown.
+    pt.run_daily(account, synthetic=True)
+    pt.run_daily(account, synthetic=True)
+    state = pt.load_state(account)
+    assert state["halt_cooldown"] == 2               # dropped by ONE, not two
+    assert state["risk_halted"] is True
+```
+
+`tests/test_consistency.py:150-187` — the spy captures the DECISION bar's prices, but the book is now built at the FILL bar's prices, so relative sizing must be checked against the prices actually executed. Those are in the ledger (`decision` is the pre-slippage close on the fill bar):
+```python
+    paper_trade.init_account("golden", 1_000_000, synthetic=True, allocations={"US": 1.0})
+    paper_cycle("golden")                    # decide, then fill
+
+    state = paper_trade.load_state("golden")
+    sleeve = state["sleeves"]["US"]
+    targets = seen["w"]
+    held = sleeve["positions"]
+
+    # No name invented outside the shared weight function.
+    assert set(held).issubset(set(targets.index))
+
+    # Sizing is compared at the prices the fills actually used — the book is
+    # built one session after the decision, so the decision bar's prices are no
+    # longer the ones it was sized at.
+    fill_px = {t["ticker"]: float(t["decision"]) for t in state["trades"]
+               if t.get("decision")}
+    if not targets.empty and held and all(t in fill_px for t in held):
+        values = {t: held[t] * fill_px[t] for t in held}
+        top_by_weight = targets.sort_values(ascending=False).index[0]
+        top_by_value = max(values, key=values.get)
+        assert top_by_weight == top_by_value, (
+            "relative sizing not preserved: paper's biggest holding isn't the "
+            "biggest compute_targets weight")
+```
+(add `paper_cycle` to that test's parameters and drop the now-unused `seen["px"]` capture from the spy).
+
+Expected after the conversions: PASS.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/paper_trade.py tests/conftest.py tests/test_paper_trade.py tests/test_consistency.py tests/test_dashboard.py tests/test_dashboard_valuation.py tests/test_dashboard_terminal.py tests/test_dashboard_api_book.py tests/test_dashboard_colour_convention.py tests/test_experimental_books.py
+git commit -m "fix(paper): fill a decision at the next close, not its own
+
+The book was executing at the same close that produced the signal, which
+no broker can do and which the backtest never did. A decision is now
+staged in the sleeve as pending_target and filled on the next session;
+last_rebalance_date records the fill, last_rebalance_month the decision.
+A halted book overwrites whatever was staged before it can fill.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11: Credit dividends in the paper ledger
+
+**Files:**
+- Modify: `trading_algo/data.py:170` (add `_download_dividends` and `dividends` after `load_prices`)
+- Modify: `trading_algo/paper_trade.py` (add `_credit_dividends` above `_should_rebalance`; call it in the sleeve loop)
+- Modify: `trading_algo/pnl.py:116-120` (`build_lots` skips non-fill rows)
+- Modify: `trading_algo/verify.py:155-165` and `trading_algo/verify.py:318-323`
+- Test: `tests/test_data_sources.py`, `tests/test_paper_trade.py`, `tests/test_pnl.py`, `tests/test_verify.py`
+
+**Interfaces:**
+- Consumes: `paper_trade._stage_target` / `_fill_pending` from Task 9–10 only in the sense that the credit runs before them in the loop; no call.
+- Produces:
+  - `data.dividends(tickers: list[str], start: str, end: str | None = None, use_cache: bool = True) -> pd.DataFrame` — index = ex-date, columns = tickers, values = cash dividend per share in the quote's own units.
+  - `data._download_dividends(tickers, start, end)` — the network seam, monkeypatched in tests.
+  - `paper_trade._credit_dividends(region, sleeve: dict, today: str, trade_log: list, synthetic: bool) -> float` (local currency).
+  - Ledger rows with `side == "DIV"`; sleeve key `sleeve["last_dividend_date"]`. Task 5–8's bridge reads the `dividends` line by summing `shares * fill` over DIV rows.
+
+This task is the block's largest: four files, because a new ledger row type is only correct if every ledger reader knows it is not a fill. Each of the three reader edits is one to three lines and none of them is a refactor of code the fix passes through.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_data_sources.py`:
+```python
+def test_dividends_are_shaped_per_ticker_and_cached(tmp_path, monkeypatch):
+    """A per-ticker dividend series, with load_prices' cache discipline: a
+    closed window is immutable history and is never re-downloaded."""
+    import pandas as pd
+    import pytest
+
+    from trading_algo import data
+
+    pytest.importorskip("pyarrow")
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+
+    idx = pd.date_range("2026-06-01", periods=3, freq="D")
+    raw = pd.DataFrame(
+        {("Dividends", "AAA"): [0.0, 0.5, 0.0],
+         ("Dividends", "BBB"): [0.0, 0.0, 0.0],
+         ("Close", "AAA"): [10.0, 10.0, 10.0],
+         ("Close", "BBB"): [20.0, 20.0, 20.0]}, index=idx)
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+
+    calls = []
+
+    def fake(tickers, start, end):
+        calls.append((tuple(tickers), start, end))
+        return raw
+
+    monkeypatch.setattr(data, "_download_dividends", fake)
+
+    df = data.dividends(["AAA", "BBB"], "2026-06-01", "2026-06-04")
+    assert list(df.columns) == ["AAA", "BBB"]
+    assert len(df) == 1, "rows with no dividend anywhere are dropped"
+    assert float(df.iloc[0]["AAA"]) == pytest.approx(0.5)
+    assert float(df.iloc[0]["BBB"]) == 0.0
+
+    data.dividends(["AAA", "BBB"], "2026-06-01", "2026-06-04")
+    assert len(calls) == 1, "a closed window must be served from cache"
+```
+
+`tests/test_paper_trade.py`:
+```python
+def test_dividends_are_credited_to_cash_and_ledgered(monkeypatch):
+    """The paper book marks at the UNADJUSTED close, so an ex-dividend drop is
+    booked as a loss while the cash never arrives — the backtest, running on
+    yfinance's adjusted series, is a total-return number. This credit is what
+    makes the two engines measure the same thing."""
+    from trading_algo.regions import get_region
+
+    region = get_region("US")
+    sleeve = {"currency": "USD", "cash": 1_000.0,
+              "positions": {"AAA": 100, "BBB": -50},
+              "last_dividend_date": "2026-06-01"}
+    div = pd.DataFrame({"AAA": [0.5], "BBB": [0.2]},
+                       index=pd.DatetimeIndex(["2026-06-10"]))
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: div)
+
+    log = []
+    got = pt._credit_dividends(region, sleeve, "2026-06-15", log, synthetic=False)
+
+    # long 100 @ 0.5 = +50; a SHORT owes the dividend: -50 @ 0.2 = -10
+    assert got == pytest.approx(40.0)
+    assert sleeve["cash"] == pytest.approx(1_040.0)
+    assert sleeve["last_dividend_date"] == "2026-06-15"
+    rows = {r["ticker"]: r for r in log}
+    assert rows["AAA"]["side"] == "DIV" and rows["AAA"]["date"] == "2026-06-10"
+    assert rows["AAA"]["commission"] == 0.0
+    assert "decision" not in rows["AAA"], "a dividend is not a fill; TCA must skip it"
+    assert rows["BBB"]["shares"] == -50
+
+
+def test_first_run_credits_nothing_and_arms_the_window(monkeypatch):
+    """With no prior mark there is no window to credit over, and back-crediting
+    a book's whole history from a feed is not something to do silently."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "USD", "cash": 1_000.0, "positions": {"AAA": 100}}
+    monkeypatch.setattr(pt.data, "dividends",
+                        lambda t, s, e: (_ for _ in ()).throw(AssertionError("no fetch")))
+    log = []
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-15", log,
+                                synthetic=False) == 0.0
+    assert sleeve["last_dividend_date"] == "2026-06-15"
+    assert log == []
+```
+
+`tests/test_pnl.py`:
+```python
+def test_a_dividend_row_is_not_a_lot():
+    """DIV moves cash, never shares. Treated as a fill it reads as a SELL and
+    would close the whole position."""
+    from trading_algo import pnl
+
+    trades = [
+        {"date": "2026-06-01", "region": "US", "ticker": "AAA", "side": "BUY",
+         "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0,
+         "currency": "USD"},
+        {"date": "2026-06-15", "region": "US", "ticker": "AAA", "side": "DIV",
+         "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
+         "currency": "USD"},
+    ]
+    open_lots, realized = pnl.build_lots(trades)
+    assert realized == []
+    assert sum(abs(lot[0]) for lot in open_lots[("US", "AAA")]) == 10
+```
+
+`tests/test_verify.py`:
+```python
+def test_a_dividend_credits_cash_without_changing_the_position():
+    """10_000 AUD at 1.5 = 6_666.67 USD funded; buy 10 @ 100 + 1 fee, then a
+    50c dividend on all 10 shares."""
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0 + 5.0,
+              "positions": {"AAPL": 10.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "AAPL", "side": "DIV",
+          "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0}],
+        {"US": sleeve}))
+    assert out == []
+
+
+def test_a_dividend_is_not_an_uncosted_trade():
+    """Invariant #2 is about fills. A dividend has no commission because nothing
+    was traded."""
+    book = equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "AAPL", "side": "DIV",
+          "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0}], {})
+    assert verify.check_costs_charged("t", book) == []
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_data_sources.py::test_dividends_are_shaped_per_ticker_and_cached tests/test_paper_trade.py::test_dividends_are_credited_to_cash_and_ledgered tests/test_paper_trade.py::test_first_run_credits_nothing_and_arms_the_window tests/test_pnl.py::test_a_dividend_row_is_not_a_lot tests/test_verify.py::test_a_dividend_credits_cash_without_changing_the_position tests/test_verify.py::test_a_dividend_is_not_an_uncosted_trade -v`
+
+Expected: FAIL — `AttributeError: module 'trading_algo.data' has no attribute '_download_dividends'` and `... has no attribute 'dividends'`; `AttributeError: module 'trading_algo.paper_trade' has no attribute '_credit_dividends'`; in `test_pnl` `KeyError: ('US', 'AAA')` (the DIV row closed the lot); in `test_verify` `assert out == []` fails with `position-mismatch`, and `check_costs_charged` returns `{'uncosted-trade'}`.
+
+- [ ] **Step 3: Implement**
+
+Add to `trading_algo/data.py`, after `load_prices` ends at line 170:
+
+```python
+def _download_dividends(tickers: list[str], start: str, end: str | None):
+    """Primary dividend source (Yahoo via yfinance). The network seam, kept
+    separate exactly like `_download_primary` so tests can replace it."""
+    import yfinance as yf  # imported lazily so the package works offline
+
+    return yf.download(tickers, start=start, end=end, actions=True,
+                       auto_adjust=False, progress=False)
+
+
+def dividends(tickers: list[str], start: str, end: str | None = None,
+              use_cache: bool = True) -> pd.DataFrame:
+    """Cash dividends per share (index=ex-date, cols=tickers). Raw Yahoo units.
+
+    Units are the quote's own — an LSE name pays pence, exactly as it is priced
+    — so the caller applies the same scale it applies to that region's prices.
+
+    Same cache discipline as `load_prices`: a closed window (`end` given) is
+    immutable history and never expires; an open-ended request means "up to now"
+    and is good for CACHE_TTL_HOURS.
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_file = _cache_path(f"div:v1:{start}:{end}:" + ",".join(sorted(tickers)))
+    if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
+        df = pd.read_parquet(cache_file)
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
+
+    raw = _download_dividends(list(tickers), start, end)
+    if raw is None or not len(raw):
+        return pd.DataFrame(columns=list(tickers))
+    cols = raw.columns
+    if isinstance(cols, pd.MultiIndex):
+        if "Dividends" not in cols.get_level_values(0):
+            return pd.DataFrame(columns=list(tickers))
+        div = raw["Dividends"]
+    elif "Dividends" in cols:
+        div = raw[["Dividends"]].rename(columns={"Dividends": tickers[0]})
+    else:
+        return pd.DataFrame(columns=list(tickers))
+    if isinstance(div, pd.Series):
+        div = div.to_frame(tickers[0])
+    div = div.reindex(columns=list(tickers)).fillna(0.0)
+    div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
+    try:
+        div.to_parquet(cache_file)
+    except Exception:
+        pass  # parquet engine optional; caching is a nicety, not a requirement
+    return div.loc[start:end]
+```
+
+Add to `trading_algo/paper_trade.py`, above `_stage_target`:
+
+```python
+def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
+                      synthetic: bool) -> float:
+    """Credit cash for dividends that went ex since the last run.
+
+    The paper book marks at the latest UNADJUSTED close, so every ex-dividend
+    price drop is booked as a loss and the cash never arrives — while the
+    backtest runs on yfinance's adjusted series and is therefore already a
+    total-return number. This is the credit that makes the two engines measure
+    the same thing.
+
+    A SHORT position OWES the dividend, so the signed share count is used and the
+    credit comes out negative for a short leg. Recorded as a `DIV` ledger row so
+    `pnl.build_lots` skips it (it moves cash, not shares) and the blotter shows
+    it; no `decision` key, because nothing was executed and TCA must not count
+    it as a fill.
+
+    Synthetic data has no dividend feed, and invariant #5 says synthetic results
+    are plumbing only — so it returns zero offline rather than inventing one.
+    """
+    last = sleeve.get("last_dividend_date")
+    sleeve["last_dividend_date"] = today
+    held = {t: sh for t, sh in sleeve["positions"].items() if sh}
+    if synthetic or not last or not held or last >= today:
+        return 0.0
+    try:
+        div = data.dividends(sorted(held), last, today)
+    except Exception as exc:
+        print(f"  [{region.key}] ⚠ dividend feed unavailable ({exc}) — "
+              f"none credited this run")
+        return 0.0
+    lo, hi = pd.Timestamp(last), pd.Timestamp(today)
+    total = 0.0
+    for t, shares in held.items():
+        if t not in div.columns:
+            continue
+        col = div[t]
+        for stamp, raw_dps in col[(col.index > lo) & (col.index <= hi)].items():
+            dps = float(raw_dps) * region.price_scale
+            if dps <= 0:
+                continue
+            amount = shares * dps
+            sleeve["cash"] += amount
+            trade_log.append({
+                "date": str(pd.Timestamp(stamp).date()), "region": region.key,
+                "ticker": t, "side": "DIV", "shares": shares,
+                "fill": round(dps, 6), "commission": 0.0, "stamp_duty": 0.0,
+                "currency": region.currency})
+            total += amount
+            print(f"    DIV  {shares:>7} {t:<10} @ {dps:.4f} "
+                  f"= {amount:>10,.2f} {region.currency}")
+    return total
+```
+
+Call it in `_run_daily_locked`, immediately after `params = _account_params(state, region)` and before the halt/fill block added in Task 10:
+
+```python
+        # Cash events first: they accrue to the book AS IT STOOD over the period,
+        # before any of this run's trades change it.
+        _credit_dividends(region, sleeve, today, state["trades"], synthetic)
+```
+
+`trading_algo/pnl.py:116-120`, inside `build_lots`:
+```python
+    for t in trades:
+        if t.get("side") not in ("BUY", "SELL"):
+            continue            # DIV and other cash events move cash, never lots
+        key = (t["region"], t["ticker"])
+```
+
+`trading_algo/verify.py:155-165`, inside `reconcile_equity`'s replay loop, as the first branch:
+```python
+        for t in trades:
+            shares = float(t.get("shares", 0))
+            fill = float(t.get("fill", 0.0))
+            fee = float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
+            if t.get("side") == "DIV":
+                cash += shares * fill    # a dividend credits cash; shares unchanged
+                continue
+            if t.get("side") == "BUY":
+```
+
+`trading_algo/verify.py:318-320`, in `check_costs_charged`:
+```python
+    trades = state.get("trades") or []
+    fills = [t for t in trades if t.get("side") in ("BUY", "SELL")]
+    free = [t for t in fills if float(t.get("commission", 0.0)) <= 0.0]
+    if not free:
+        return []
+    return [Finding(ERROR, account, "uncosted-trade",
+                    f"{len(free)} of {len(fills)} equity fills booked with zero "
+                    "commission — invariant #2 says costs are always on",
+                    {"example": free[0]})]
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_data_sources.py::test_dividends_are_shaped_per_ticker_and_cached tests/test_paper_trade.py::test_dividends_are_credited_to_cash_and_ledgered tests/test_paper_trade.py::test_first_run_credits_nothing_and_arms_the_window tests/test_pnl.py::test_a_dividend_row_is_not_a_lot tests/test_verify.py::test_a_dividend_credits_cash_without_changing_the_position tests/test_verify.py::test_a_dividend_is_not_an_uncosted_trade -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "pnl or verify or paper or data_sources or tca or dashboard"`
+
+Expected: PASS. `tests/test_verify.py::test_fractional_shares_and_free_trades_break_the_invariants` still passes — its book holds a BUY, which is still counted. No synthetic test exercises the dividend path at all (the helper returns zero offline), so no fixture moves.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/data.py trading_algo/paper_trade.py trading_algo/pnl.py trading_algo/verify.py tests/test_data_sources.py tests/test_paper_trade.py tests/test_pnl.py tests/test_verify.py
+git commit -m "feat(paper): credit dividends to the book, as the backtest already does
+
+The book marks at the unadjusted close, so every ex-dividend drop was a
+loss with no cash behind it, while the backtest runs on an adjusted
+series and is a total-return number. Dividends now land in cash on the
+ex-date as a DIV ledger row: build_lots skips it, the blotter shows it,
+and the verify reconciliation credits it without moving shares. A short
+leg pays the dividend rather than receiving it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 12: Pay interest on idle cash in the paper book
+
+**Files:**
+- Modify: `trading_algo/paper_trade.py` (add `_accrue_cash_interest` above `_stage_target`; call it in the sleeve loop)
+- Modify: `trading_algo/verify.py:180` (ledger replay must add the accrual back)
+- Test: `tests/test_idle_cash_interest.py`, `tests/test_verify.py`
+
+**Interfaces:**
+- Consumes: `fees.idle_cash_credit(net_exposure: float, days: float, annual_rate: float) -> float` — the definition `backtest.py:164` already calls. No second definition of what cash earns.
+- Produces: `paper_trade._accrue_cash_interest(sleeve: dict, px: pd.Series, today: str) -> float` (local currency); sleeve keys `sleeve["last_interest_date"]` and cumulative `sleeve["interest_accrued"]`. Task 5–8's bridge reads `interest_accrued` for the `cash_interest` line.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_idle_cash_interest.py`:
+
+```python
+# --- wired into the paper book --------------------------------------------
+def test_paper_book_earns_the_same_rate_the_backtest_pays():
+    """`full` is 72.8% cash. Paying 0% on that while the backtest credits
+    CASH_RATE_ANNUAL is ~255bps/yr of divergence against a 200bps tracking
+    budget — the single biggest engine disagreement in the review."""
+    from trading_algo import paper_trade as pt
+
+    sleeve = {"currency": "USD", "cash": 7_000.0, "positions": {"AAA": 30},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})                  # equity 10_000, 70% cash
+
+    credit = pt._accrue_cash_interest(sleeve, px, "2026-07-01")
+
+    # 30 calendar days, ACT/365, on the CASH balance only
+    assert credit == pytest.approx(7_000.0 * cfg.CASH_RATE_ANNUAL * 30 / 365)
+    assert sleeve["cash"] == pytest.approx(7_000.0 + credit)
+    assert sleeve["interest_accrued"] == pytest.approx(credit)
+    assert sleeve["last_interest_date"] == "2026-07-01"
+
+
+def test_paper_interest_is_the_backtest_definition_not_a_second_one():
+    """Same function, same answer — the point of the change is one definition."""
+    from trading_algo import paper_trade as pt
+
+    sleeve = {"currency": "USD", "cash": 2_500.0, "positions": {"AAA": 75},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})                  # equity 10_000, Σw = 0.75
+    credit = pt._accrue_cash_interest(sleeve, px, "2026-06-04")
+    assert credit == pytest.approx(
+        fees.idle_cash_credit(0.75, 3, cfg.CASH_RATE_ANNUAL) * 10_000.0)
+
+
+def test_paper_interest_does_not_double_accrue_within_one_session():
+    """The engine fires up to three times a day, once per regional close."""
+    from trading_algo import paper_trade as pt
+
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series(dtype=float)
+    first = pt._accrue_cash_interest(sleeve, px, "2026-06-02")
+    second = pt._accrue_cash_interest(sleeve, px, "2026-06-02")
+    assert first > 0 and second == 0.0
+
+
+def test_a_short_book_that_owes_cash_is_never_credited():
+    """Negative cash is a margin debit; the borrow charge is a separate,
+    unmodelled cost and must not appear here as a negative credit."""
+    from trading_algo import paper_trade as pt
+
+    sleeve = {"currency": "USD", "cash": -2_000.0, "positions": {"AAA": 120},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})
+    assert pt._accrue_cash_interest(sleeve, px, "2026-07-01") == 0.0
+```
+
+Top of that file already imports `numpy`, `pandas`, `pytest`, `cfg` and `fees`.
+
+Append to `tests/test_verify.py`:
+```python
+def test_accrued_interest_is_not_an_unledgered_write():
+    """Interest accrues straight to cash — there is no counterparty trade — so
+    the ledger replay must add it back or a correctly-credited book looks like
+    something wrote outside the ledger."""
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0 + 500.0,
+              "positions": {"AAPL": 10.0}, "interest_accrued": 500.0}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0}],
+        {"US": sleeve}))
+    assert out == []
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_idle_cash_interest.py tests/test_verify.py::test_accrued_interest_is_not_an_unledgered_write -v`
+
+Expected: FAIL — `AttributeError: module 'trading_algo.paper_trade' has no attribute '_accrue_cash_interest'` on the four new interest tests, and `assert out == []` failing with a `cash-drift` finding on the verify test (500 exceeds the `max(1.0, 0.02 * 6165)` tolerance).
+
+- [ ] **Step 3: Implement**
+
+Add to `trading_algo/paper_trade.py`, directly above `_credit_dividends`:
+
+```python
+def _accrue_cash_interest(sleeve: dict, px: pd.Series, today: str) -> float:
+    """Credit interest on the sleeve's idle cash since its last run.
+
+    Routed through the SAME `fees.idle_cash_credit` the backtest calls, so there
+    is one definition of what cash earns rather than two that can drift. ACT/365
+    on CALENDAR days, so a weekend accrues three. The sleeves sit 56-66% in cash
+    and the reported Sharpe subtracts RISK_FREE as a hurdle; paying 0% on that
+    cash while charging the full hurdle penalises the book twice
+    (docs/SHARPE_RESEARCH.md §1).
+
+    Returns the credit in the sleeve's local currency.
+    """
+    last = sleeve.get("last_interest_date")
+    sleeve["last_interest_date"] = today
+    if not (cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL) or not last:
+        return 0.0
+    try:
+        days = (date.fromisoformat(today) - date.fromisoformat(last)).days
+    except (ValueError, TypeError):
+        return 0.0
+    equity = sleeve_equity_local(sleeve, px)
+    if days <= 0 or equity <= 0:
+        return 0.0
+    # Σw, NET and signed — see fees.idle_cash_credit on why net, not gross.
+    net_exposure = (equity - float(sleeve["cash"])) / equity
+    credit = fees.idle_cash_credit(net_exposure, days, cfg.CASH_RATE_ANNUAL) * equity
+    if credit <= 0.0:
+        return 0.0
+    sleeve["cash"] += credit
+    sleeve["interest_accrued"] = sleeve.get("interest_accrued", 0.0) + credit
+    return credit
+```
+
+Call it in `_run_daily_locked`, immediately before the `_credit_dividends` call added in Task 11:
+
+```python
+        # Cash events first: they accrue to the book AS IT STOOD over the period,
+        # before any of this run's trades change it.
+        _accrue_cash_interest(sleeve, px_today, today)
+        _credit_dividends(region, sleeve, today, state["trades"], synthetic)
+```
+
+In `trading_algo/verify.py`, immediately after the replay loop and before `stored_cash` is read (`verify.py:180`):
+```python
+        pos = {k: v for k, v in pos.items() if abs(v) > 1e-9}
+        # Interest accrues straight to cash — there is no counterparty trade and
+        # so no ledger row. Add it back, or a correctly-credited book reads as an
+        # unledgered write.
+        cash += float(sleeve.get("interest_accrued", 0.0))
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_idle_cash_interest.py tests/test_verify.py::test_accrued_interest_is_not_an_unledgered_write -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "idle_cash or paper or verify or dashboard or state_schema or promotion"`
+
+Expected: PASS. `state_schema.validate_state` ignores unknown sleeve keys, so `last_interest_date` / `interest_accrued` need no migration; confirm by watching `tests/test_state_schema.py` and `tests/test_state_defaults.py` stay green.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/paper_trade.py trading_algo/verify.py tests/test_idle_cash_interest.py tests/test_verify.py
+git commit -m "feat(paper): pay interest on idle cash, through the backtest's own rule
+
+The backtest has credited fees.idle_cash_credit since 57676c4; the books
+accrued nothing. On a book that is 72.8 percent cash that alone is about
+255bps/yr of divergence against a 200bps tracking budget. Both engines
+now call the one function, on calendar days, and the verify replay adds
+the accrual back so the credit is not read as an unledgered write.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 13: Charge the per-order commission floor in the backtest
+
+**Files:**
+- Modify: `trading_algo/fees.py:48-56`
+- Modify: `trading_algo/backtest.py` (the `fees.turnover_cost(...)` call inside the execution block written in Task 9)
+- Test: `tests/test_fees.py`, `tests/test_backtest.py`
+
+**Interfaces:**
+- Consumes: `fees.commission(region, notional) -> float` (unchanged; it already applies `region.min_commission`).
+- Produces: `fees.turnover_cost(region, turnover, buy_turnover, impact=0.0, *, nav: float | None = None, n_names: int = 0) -> float`. The two new arguments are keyword-only, so every existing positional caller — including `tests/test_property_invariants.py:183-184`, which passes `impact` positionally — is unaffected.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_fees.py`:
+
+```python
+import pytest
+
+
+def test_turnover_cost_charges_the_per_order_commission_floor():
+    """July finding H3: the backtest charged commission_bps only, so a book too
+    small for bps to reach the floor was modelled as trading almost free, while
+    the paper book paid A$5 an order through fees.commission."""
+    asx = get_region("ASX")                      # 8bps, A$5 floor, no stamp duty
+    nav, n_names, turnover, buys = 10_000.0, 5, 0.5, 0.25
+
+    floored = fees.turnover_cost(asx, turnover, buys, nav=nav, n_names=n_names)
+    bps_only = fees.turnover_cost(asx, turnover, buys)
+
+    # each order is 0.5 * 10_000 / 5 = A$1,000 -> 8bps is 80c, so the floor binds
+    assert floored > bps_only
+    assert floored == pytest.approx(
+        turnover * asx.slippage_bps / 1e4
+        + n_names * asx.min_commission / nav
+        + buys * asx.stamp_duty_bps / 1e4)
+
+
+def test_large_orders_pay_bps_not_the_floor():
+    """Above the floor the model is exactly what it always was."""
+    us = get_region("US")
+    nav, n_names, turnover = 10_000_000.0, 4, 0.8
+    got = fees.turnover_cost(us, turnover, 0.0, nav=nav, n_names=n_names)
+    assert got == pytest.approx(
+        turnover * (us.commission_bps + us.slippage_bps) / 1e4)
+
+
+def test_turnover_cost_without_nav_is_unchanged():
+    """Every existing caller keeps the prior model, bit for bit."""
+    us = get_region("US")
+    assert fees.turnover_cost(us, 0.4, 0.2) == pytest.approx(
+        0.4 * fees.round_trip_cost_rate(us) + 0.2 * us.stamp_duty_bps / 1e4)
+```
+
+Append to `tests/test_backtest.py`:
+
+```python
+def test_small_book_pays_more_than_bps_because_of_the_floor(synth_asx, asx_region):
+    """Same weights, same turnover, different NAV: the per-order floor is the
+    dominant cost on a small book and invisible on a large one. Invariant #2 is
+    about charging what the book would actually pay."""
+    prices, index_px = synth_asx
+    big = run_backtest(prices, index_px, asx_region, initial_capital=10_000_000)
+    small = run_backtest(prices, index_px, asx_region, initial_capital=20_000)
+    assert small["turnover"].sum() == pytest.approx(big["turnover"].sum())
+    assert small["total_cost_fraction"] > big["total_cost_fraction"] * 1.2
+```
+
+(`tests/test_backtest.py` needs `import pytest` added at the top alongside `import numpy as np`.)
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_fees.py tests/test_backtest.py::test_small_book_pays_more_than_bps_because_of_the_floor -v`
+
+Expected: FAIL — `TypeError: turnover_cost() got an unexpected keyword argument 'nav'` on the two new fee tests, and `assert 0.0123 > 0.0148` (equal cost fractions, NAV-independent) on the backtest test.
+
+- [ ] **Step 3: Implement**
+
+Replace `trading_algo/fees.py:48-56`:
+
+```python
+def turnover_cost(region: Region, turnover: float, buy_turnover: float,
+                  impact: float = 0.0, *,
+                  nav: float | None = None, n_names: int = 0) -> float:
+    """The ONE backtest cost entrypoint (refactor R1): commission + slippage on
+    turnover, asymmetric stamp duty on buys, plus an optional market-impact term
+    (fraction of NAV) from F6.
+
+    Given `nav` and `n_names` — the book's equity and how many names the
+    rebalance actually traded — commission is charged PER ORDER through
+    `commission()`, which applies `region.min_commission`. Without them the bps
+    rate is used on its own, which is the prior model exactly, so any caller
+    that cannot size an order keeps the number it always got.
+
+    Charging bps alone (July finding H3) modelled a small book as trading almost
+    free while the paper engine paid the floor on every order.
+    """
+    duty = buy_turnover * region.stamp_duty_bps / 1e4
+    if nav and n_names > 0:
+        per_name_notional = turnover * float(nav) / n_names
+        commission_frac = n_names * commission(region, per_name_notional) / float(nav)
+        return (turnover * region.slippage_bps / 1e4
+                + commission_frac + duty + impact)
+    return turnover * round_trip_cost_rate(region) + duty + impact
+```
+
+In `trading_algo/backtest.py`, inside the execution block written in Task 9, replace the `cost = fees.turnover_cost(...)` line with:
+
+```python
+            # The per-order commission floor needs the book's size and how many
+            # names this rebalance actually moved — bps alone models a small
+            # book as trading almost free (July finding H3).
+            cost = fees.turnover_cost(
+                region, turnover, buy_turnover, impact=impact,
+                nav=equity[-1], n_names=int((delta.abs() > 0).sum()))
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_fees.py tests/test_backtest.py::test_small_book_pays_more_than_bps_because_of_the_floor -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "fees or backtest or property_invariants or portfolio or impact or sweep or walkforward or tax"`
+
+Expected: PASS, with `tests/test_backtest_regression.py::test_synthetic_backtest_matches_baseline` still xfail from Task 9 — this task moves the same number further in the same direction and the baseline is re-cut once, in Task 20. `tests/test_property_invariants.py::test_equity_turnover_cost_monotone_nonneg` must stay green unchanged: it calls `turnover_cost(region, turn, buys, impact)` positionally and the new arguments are keyword-only.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/fees.py trading_algo/backtest.py tests/test_fees.py tests/test_backtest.py
+git commit -m "fix(fees): charge the per-order commission floor in the backtest
+
+turnover_cost charged commission_bps only, so a book too small for bps
+to reach min_commission was modelled as trading almost free while the
+paper engine paid the floor on every order through fees.commission.
+Given nav and the number of names traded it now charges per order
+through that same function; without them the prior model is unchanged.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+# Phase 4 — Mechanism: what the books actually do
+
+The defects that change behaviour rather than measurement. Ends with the single, evidenced re-baselining of the regression gate.
 
 ---
 
@@ -3127,31 +4384,1190 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Gaps — not yet drafted
+# Phase 5 — Regeneration, deploy, restart, and survivorship
 
-**Tasks 9-13 — Conventions.** Next-day-close fills in `backtest.py` and
-`paper_trade.py`, dividends credited to the paper ledger, cash interest in the
-paper books via the existing `fees.idle_cash_credit`, and the per-order commission
-floor charged in the backtest. Task 10 (paper fill timing) is the one structural
-change in the block: the book must decide on the latest close and fill on the next
-run's close, which means persisting a pending target in sleeve state.
-
-**Tasks 21-27 — Regeneration, deploy, restart, survivorship.** Total-return
-benchmark; FX books out of the headline AUM via their own reporting group; the
-`TRAINING_UNIVERSE` / `DEFAULT_UNIVERSE` split (cherry-pick `f15a118`, which **must
-land before the restart** or the reopened books come up on 16 symbols); regenerate
-every published number; merge to `main`; archive and restart the books; and wire
-point-in-time membership once the data is sourced.
+Every published number rebuilt by current code, the branch merged so the schedulers run it, the books archived and reopened clean, and point-in-time membership wired when its data arrives.
 
 ---
 
-## Known deviations and concerns raised during drafting
+### Task 21: Total-return benchmark in the portfolio backtest
 
-These are the drafters' own findings, where the brief met the real code. Each is
-worth reading before starting the task it belongs to.
+**Files:**
+- Modify: `trading_algo/regions.py:36` (add one `Region` field), and the four `REGIONS` entries at `:59`, `:78`, `:96`, `:119`
+- Modify: `trading_algo/portfolio_backtest.py:116-123` (the benchmark block) and `:125-137` (the result dict)
+- Modify: `trading_algo/report.py:38`
+- Modify: `trading_algo/run_backtest.py:134`
+- Test: `tests/test_portfolio_backtest.py`
+
+**Interfaces:**
+- Consumes: `trading_algo.fx.align_fx(fx, index, currency) -> pd.Series`; `trading_algo.data.load_prices(tickers, start, end, cache_key=None, use_cache=True) -> pd.DataFrame`; `trading_algo.metrics.compute_metrics(rets, equity, risk_free=RISK_FREE, currency="AUD", periods_per_year=None) -> dict` (Task 1's signature; this task passes only `currency=`, exactly as today)
+- Produces: `Region.benchmark_ticker: str | None = None`; `portfolio_backtest.BENCHMARK_LABELS: dict[str, str]`; `portfolio_backtest._blend(index_by_region: dict[str, tuple[pd.Series, str]], union: pd.DatetimeIndex, fx_tbl: pd.DataFrame, proxies: dict[str, pd.Series]) -> pd.Series`; `portfolio_backtest._total_return_proxies(regions: list[str], start: str, end: str | None, synthetic: bool) -> dict[str, pd.Series]`; new result keys `"benchmark_kind"`, `"benchmark_label"`, `"benchmark_proxies"`, `"benchmark_price_index"`, `"benchmark_price_index_metrics"`
+
+The defect (spec §2, first bullet): `data.py:117` downloads strategy prices with `auto_adjust=True`, so the strategy compounds dividends, while `portfolio_backtest.py:116-123` builds the benchmark from the raw `^AXJO` / `^GSPC` / `^FTSE` / `^GSPTSE` price indices, which do not. The strategy is measured against a handicapped opponent. The fix is one dividend-reinvesting ETF proxy per region, with the price-index blend kept and labelled so neither can be mistaken for the other.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_portfolio_backtest.py`:
+
+```python
+# --- total-return benchmark (the strategy's own prices are auto_adjust=True) --
+def test_every_region_declares_a_total_return_proxy():
+    """A price index is not the strategy's opponent: the strategy compounds
+    dividends (data.py downloads with auto_adjust=True) and the index does not.
+    Each region names a dividend-reinvesting ETF that tracks the same market."""
+    from trading_algo.regions import REGIONS
+    assert {k: r.benchmark_ticker for k, r in REGIONS.items()} == {
+        "ASX": "STW.AX", "US": "SPY", "FTSE": "ISF.L", "TSX": "XIU.TO"}
 
 
-### From tasks1-4
+def test_blend_prefers_the_total_return_proxy_where_one_exists():
+    """`_blend` is scale-free (it takes a pct_change), so a pence-quoted proxy
+    needs no price_scale. A reinvesting proxy compounds ABOVE the price index of
+    the same market; the blend has to show that."""
+    import pandas as pd
+    from trading_algo import portfolio_backtest as pb
+
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    price = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
+    total = pd.Series([100.0, 102.0, 104.0, 106.0, 108.0], index=idx)
+    fx_tbl = pd.DataFrame({"AUD": [1.0] * 5}, index=idx)
+    by_region = {"ASX": (price, "AUD")}
+
+    price_ret = pb._blend(by_region, idx, fx_tbl, {})
+    tr_ret = pb._blend(by_region, idx, fx_tbl, {"ASX": total})
+    assert abs(float((1 + price_ret).prod()) - 1.04) < 1e-9
+    assert float((1 + tr_ret).prod()) > float((1 + price_ret).prod())
+
+
+def test_offline_benchmark_falls_back_to_the_price_index_and_says_so():
+    """Synthetic has no ETF history. Falling back is fine; falling back
+    silently is not — the label has to carry the word the reader needs."""
+    result = run_portfolio_backtest(synthetic=True, start="2018-01-01",
+                                    end="2021-01-01")
+    assert result["benchmark_kind"] == "price-index"
+    assert "NO dividends" in result["benchmark_label"]
+    assert result["benchmark_proxies"] == {}
+    assert result["benchmark"].equals(result["benchmark_price_index"])
+    assert "CAGR" in result["benchmark_price_index_metrics"]
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_portfolio_backtest.py -v -k "proxy or blend or price_index"`
+Expected: FAIL — `AttributeError: 'Region' object has no attribute 'benchmark_ticker'`, `AttributeError: module 'trading_algo.portfolio_backtest' has no attribute '_blend'`, and `KeyError: 'benchmark_kind'`.
+
+- [ ] **Step 3: Implement**
+
+In `trading_algo/regions.py`, add the field next to `constituents_file` (line 36):
+
+```python
+    constituents_file: str | None = None   # optional point-in-time membership (CSV/parquet)
+    # Dividend-REINVESTING total-return proxy for this market, used only by the
+    # portfolio benchmark. The strategy's own prices are auto_adjust=True, so a
+    # price index (`index_ticker`) is not its opponent — it is the same market
+    # with the dividends removed. Deliberately NOT in `all_tickers`: this is a
+    # yardstick, never a tradable name.
+    benchmark_ticker: str | None = None
+```
+
+and give each region its proxy (one line per entry, beside `index_ticker`):
+
+```python
+        index_ticker="^AXJO",          # S&P/ASX 200
+        benchmark_ticker="STW.AX",     # SPDR S&P/ASX 200 ETF (distributions reinvested)
+```
+```python
+        index_ticker="^GSPC",          # S&P 500
+        benchmark_ticker="SPY",        # SPDR S&P 500 ETF
+```
+```python
+        index_ticker="^FTSE",          # FTSE 100
+        benchmark_ticker="ISF.L",      # iShares Core FTSE 100 UCITS ETF
+```
+```python
+        index_ticker="^GSPTSE",        # S&P/TSX Composite
+        benchmark_ticker="XIU.TO",     # iShares S&P/TSX 60 Index ETF
+```
+
+In `trading_algo/portfolio_backtest.py`, add the two helpers and the label table just below `_sleeve_base_returns` (after line 32):
+
+```python
+# What the benchmark actually is, in words, so no consumer can print a number
+# without printing what it was measured against.
+BENCHMARK_LABELS = {
+    "total-return": "total-return ETF proxies, AUD buy & hold",
+    "price-index": "price indices only — NO dividends, AUD buy & hold",
+    "mixed": "ETF proxies where available, price index elsewhere — mixed basis",
+}
+
+
+def _blend(index_by_region: dict, union: pd.DatetimeIndex,
+           fx_tbl: pd.DataFrame, proxies: dict[str, pd.Series]) -> pd.Series:
+    """Equal-weight AUD return of one series per region. A region present in
+    `proxies` uses its total-return proxy; the rest fall back to the price
+    index. Scale-free — this takes a pct_change, so a pence-quoted proxy needs
+    no price_scale."""
+    parts = []
+    for key, (idx, ccy) in index_by_region.items():
+        px = proxies.get(key, idx)
+        mult = fx.align_fx(fx_tbl, px.index, ccy)
+        parts.append((px * mult).pct_change(fill_method=None)
+                     .reindex(union).fillna(0.0))
+    return sum(parts) / len(parts)
+
+
+def _total_return_proxies(regions: list[str], start: str, end: str | None,
+                          synthetic: bool) -> dict[str, pd.Series]:
+    """Closes of each region's dividend-reinvesting ETF proxy. Empty offline or
+    synthetic — the caller then falls back to the price index and SAYS SO."""
+    if synthetic:
+        return {}
+    want = {k: get_region(k).benchmark_ticker for k in regions
+            if get_region(k).benchmark_ticker}
+    if not want:
+        return {}
+    try:
+        df = data.load_prices(sorted(set(want.values())), start, end,
+                              cache_key=f"benchmark:{start}:{end}")
+    except Exception:
+        return {}
+    return {k: df[t].dropna() for k, t in want.items()
+            if t in df.columns and df[t].notna().any()}
+```
+
+Replace `trading_algo/portfolio_backtest.py:116-123` with:
+
+```python
+    # Benchmark: the strategy's prices are dividend-adjusted, so the benchmark
+    # must be too. PRIMARY = equal-weight dividend-reinvesting ETF proxies in
+    # AUD. The price-only index blend is kept as a clearly-labelled SECONDARY,
+    # so both are reported and neither can be read as the other.
+    proxies = _total_return_proxies(regions, start, end, synthetic)
+    bench_ret = _blend(index_by_region, union, fx_tbl, proxies)
+    price_ret = _blend(index_by_region, union, fx_tbl, {})
+    covered = [k for k in regions if k in proxies]
+    bench_kind = ("total-return" if len(covered) == len(regions)
+                  else "price-index" if not covered else "mixed")
+    bench_equity = cfg.INITIAL_CAPITAL * (1 + bench_ret).cumprod()
+    price_equity = cfg.INITIAL_CAPITAL * (1 + price_ret).cumprod()
+```
+
+and add these five keys to the returned dict, immediately after `"benchmark_stats": ...` (line 135):
+
+```python
+        "benchmark_kind": bench_kind,
+        "benchmark_label": BENCHMARK_LABELS[bench_kind],
+        "benchmark_proxies": {k: get_region(k).benchmark_ticker for k in covered},
+        "benchmark_price_index": price_equity,
+        "benchmark_price_index_metrics": compute_metrics(
+            price_ret, price_equity, currency=cfg.BASE_CURRENCY),
+```
+
+In `trading_algo/report.py:38`, change the hardcoded heading:
+
+```python
+        out += [f"## vs Benchmark ({result.get('benchmark_label', 'unlabelled')})", "",
+```
+
+In `trading_algo/run_backtest.py:134`, change the hardcoded heading:
+
+```python
+        print(f"\n  vs Benchmark ({result.get('benchmark_label', 'unlabelled')}):")
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_portfolio_backtest.py -v -k "proxy or blend or price_index"`
+Expected: PASS (3 passed)
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "portfolio or report or backtest_store or regions"`
+Expected: PASS. `tests/test_portfolio_backtest.py::test_portfolio_has_benchmark` is unchanged and must still pass — `benchmark` and `benchmark_stats` keep their names and meaning; only the series behind them changes when real data is available.
+
+Size note for the owner (spec §13): this diff is ~32 lines across four files. It is one idea — "report the benchmark the strategy actually competes with, and label both" — and splitting the label off would ship an unlabelled number for one commit, which is the exact defect. Flagging rather than pushing through silently.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/regions.py trading_algo/portfolio_backtest.py trading_algo/report.py trading_algo/run_backtest.py tests/test_portfolio_backtest.py
+git commit -m "fix(benchmark): measure the strategy against a total-return index
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 22: FX books leave the headline AUM, and say why
+
+**Files:**
+- Modify: `trading_algo/profiles.py:30-32` (reporting-group constants)
+- Modify: `trading_algo/dashboard/overview.py:83` (and its import block at `:12-15`)
+- Modify: `trading_algo/forex/fx_config.py` (add `REVIEW_NOTICE` after `ACCOUNTS`, line 317)
+- Modify: `trading_algo/dashboard/fx_api.py:348-352` (payload)
+- Modify: `trading_algo/dashboard/static/app.js:3588-3595` (FX branch of `contentHTML`)
+- Modify: `trading_algo/forex/dashboard.py:1164` (after `</header>`) and `:1806-1821` (`render` substitutions)
+- Test: `tests/test_dashboard_overview.py` (new), `tests/test_dashboard_fx_api.py` (new)
+
+**Interfaces:**
+- Consumes: `trading_algo.dashboard.overview.build_overview(regime_hints=None) -> dict`; `trading_algo.dashboard.fx_api.build_fx_snapshot(account: str) -> dict`; `trading_algo.forex.fx_book.init_account(account, capital, profile, symbols=None, bar="1d", source="yahoo", close_only_signals=None, force=False)`
+- Produces: `trading_algo.profiles.FX: str = "FX"`; `trading_algo.forex.fx_config.REVIEW_NOTICE: str`; FX snapshot key `"review_notice"`
+
+The defect (spec §15.1): `overview.py:83` reads `group = str(state.get("group") or "CORE").upper() if kind == "equity" else "CORE"` — the `else` branch forces every non-equity book into CORE, which is why four books back-testing at Sharpe −2.06 / −2.14 / −5.56 / −6.25 sum into the headline AUM. The EXPERIMENTAL equity books already have the mechanism; the FX books just never got a group.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_dashboard_overview.py`:
+
+```python
+"""The all-accounts rollup: which books move the headline AUM.
+
+CORE is the number the owner watches. An unproven book gets its own total and
+is excluded — the EXPERIMENTAL equity books already work that way. The FX books
+were forced into CORE, so four books back-testing at Sharpe -2 to -6 inflated
+the headline. They keep their own total; it is not this one.
+"""
+import pytest
+
+from trading_algo import profiles
+from trading_algo.dashboard import overview
+
+
+def _equity_state():
+    return {"initial_capital_base": 100_000.0,
+            "equity_history": [["2026-01-01", 100_000.0],
+                               ["2026-01-02", 101_000.0]],
+            "peak_equity_base": 101_000.0,
+            "sleeves": {"US": {"positions": {"AAPL": 3}}},
+            "trades": [], "group": "CORE"}
+
+
+def _fx_state():
+    return {"initial_capital": 5_000.0, "equity": 4_200.0,
+            "equity_history": [["2026-01-01", 5_000.0],
+                               ["2026-01-02", 4_200.0]],
+            "peak_equity": 5_000.0, "positions": {"EURUSD": 0.3}}
+
+
+@pytest.fixture
+def two_books(monkeypatch):
+    entries = [
+        {"key": "FULL", "account": "full", "kind": "equity", "micro": False,
+         "label": "FULL · EQUITIES", "sub": "EQUITIES · 4 REGIONS · MONTHLY"},
+        {"key": "MATT", "account": "matt", "kind": "fx", "micro": False,
+         "label": "FX · MATT", "sub": "FX + CRYPTO · DAILY BARS"},
+    ]
+    states = {"full": _equity_state(), "matt": _fx_state()}
+    monkeypatch.setattr(overview.registry, "discover_accounts", lambda: entries)
+    monkeypatch.setattr(overview, "_load", lambda e: states[e["account"]])
+    return overview.build_overview()
+
+
+def test_fx_books_report_under_their_own_group(two_books):
+    by_key = {c["key"]: c for c in two_books["accounts"]}
+    assert by_key["FULL"]["group"] == profiles.CORE
+    assert by_key["MATT"]["group"] == profiles.FX
+
+
+def test_fx_books_do_not_inflate_the_headline_aum(two_books):
+    """The headline is CORE only. The FX book's A$4,200 must not appear in it,
+    and must still be reported under a total of its own."""
+    assert two_books["totals"]["aum"] == pytest.approx(101_000.0)
+    assert two_books["totals"]["books"] == 1
+    fx_group = next(g for g in two_books["groups"] if g["name"] == profiles.FX)
+    assert fx_group["aum"] == pytest.approx(4_200.0)
+    assert fx_group["books"] == 1
+```
+
+Create `tests/test_dashboard_fx_api.py`:
+
+```python
+"""The FX snapshot must carry the review notice, with the real figures."""
+from trading_algo import paper_trade as pt
+from trading_algo.dashboard import fx_api
+from trading_algo.forex import fx_book
+from trading_algo.forex import fx_config as fxcfg
+
+
+def test_the_fx_snapshot_states_the_books_are_under_review(tmp_path, monkeypatch):
+    """Spec 15.2: the FX dashboard says plainly that these books back-test
+    negative and are under review, with the numbers. One definition, so the
+    terminal SPA and the published static page cannot drift apart."""
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    fx_book.init_account("matt", 5_000.0, "balanced")
+
+    snap = fx_api.build_fx_snapshot("matt")
+    assert snap["review_notice"] == fxcfg.REVIEW_NOTICE
+    assert "UNDER REVIEW" in fxcfg.REVIEW_NOTICE.upper()
+    for sharpe in ("−2.06", "−2.14", "−5.56", "−6.25"):
+        assert sharpe in fxcfg.REVIEW_NOTICE
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_dashboard_overview.py tests/test_dashboard_fx_api.py -v`
+Expected: FAIL — `AttributeError: module 'trading_algo.profiles' has no attribute 'FX'`, and `AttributeError: module 'trading_algo.forex.fx_config' has no attribute 'REVIEW_NOTICE'`.
+
+- [ ] **Step 3: Implement**
+
+In `trading_algo/profiles.py`, extend the group constants at line 30:
+
+```python
+# Reporting groups. CORE is the headline AUM; everything else is a side total.
+CORE = "CORE"
+EXPERIMENTAL = "EXPERIMENTAL"
+# The FX books. Not a BookProfile (those are equity presets) — a reporting group
+# they belong to by KIND, so the FX side gets the same ring-fence the geared and
+# market-neutral equity books already have.
+FX = "FX"
+```
+
+In `trading_algo/dashboard/overview.py`, add `profiles` to the import block (line 12-15):
+
+```python
+from .. import config as cfg
+from .. import paper_trade
+from .. import profiles
+from ..forex import fx_book
+from . import registry
+```
+
+and replace line 81-83:
+
+```python
+    # Reporting group: CORE books sum into the headline AUM; any other group
+    # (EXPERIMENTAL, FX) is broken out into its own separate total. FX books
+    # used to be forced to CORE, which is how four books back-testing at Sharpe
+    # −2 to −6 ended up inside the number the owner watches. They keep a total;
+    # it is not that one.
+    group = (str(state.get("group") or profiles.CORE).upper() if kind == "equity"
+             else profiles.FX)
+```
+
+In `trading_algo/forex/fx_config.py`, add after the `ACCOUNTS` dict (line 317):
+
+```python
+# What every FX surface has to say about these books, in ONE place so the
+# terminal SPA and the published static page cannot state different things.
+# Figures: docs/FULL_SYSTEM_REVIEW_2026-09.md F18, real data, HEAD code,
+# isolated state. Two known artefacts inflate them (the fixed-dollar crypto
+# spread and the breaker latch) and both are named in the text rather than
+# quietly discounted from it.
+REVIEW_NOTICE = (
+    "UNDER REVIEW — these books back-test NEGATIVE and are excluded from the "
+    "headline AUM. Backtest Sharpe: matt −2.06, partner −2.14, multiasset "
+    "−5.56, daytrader −6.25. Two known cost/risk artefacts inflate those "
+    "losses (a fixed-dollar crypto spread and a drawdown breaker that never "
+    "resets its high-water mark); with both corrected the agents' gross Sharpe "
+    "is near zero. No edge has been demonstrated. Paper money only."
+)
+```
+
+In `trading_algo/dashboard/fx_api.py`, add one key to the returned payload, next to `"sub"` (line 352):
+
+```python
+        "sub": entry["sub"],
+        "review_notice": fxcfg.REVIEW_NOTICE,
+```
+
+In `trading_algo/dashboard/static/app.js`, add the banner helper just above `function fxBookHTML(page) {` (line 2000):
+
+```javascript
+/* Spec 15.2 — every FX tab carries the same sentence, from Python. */
+function fxReviewBannerHTML(page) {
+  if (!page.review_notice) return '';
+  return `<div style="padding:10px 18px;background:#1a1206;border-bottom:1px solid ${AMB};font-size:10px;line-height:1.6;color:${AMB};letter-spacing:.04em">${esc(page.review_notice)}</div>`;
+}
+```
+
+and prefix the FX branch of `contentHTML()` (line 3588):
+
+```javascript
+  if (page.kind === 'fx') {
+    const banner = fxReviewBannerHTML(page);
+    /* POSITIONS = the ensemble's decision book, then the same book in money */
+    if (S.tab === 'POSITIONS') return banner + agentPositionsHTML(page) + fxLedgerHTML(page);
+    if (S.tab === 'BACKTEST') return banner + agentBacktestHTML(page);
+    if (S.tab === 'METHOD') return banner + agentMethodHTML(page);
+    if (S.tab === 'SWARM') return banner + swarmHTML(page);
+    return banner + agentKpisHTML(page) + agentCurveAttrHTML(page)
+      + fxBookHTML(page) + chartSectionHTML(page);
+  }
+```
+
+In `trading_algo/forex/dashboard.py`, add the placeholder immediately after `</header>` (line 1164):
+
+```html
+</header>
+<div class="review">__REVIEW__</div>
+```
+
+and add the substitution to `render()`'s `repl` dict (after the `__HALT__` entry, line 1811):
+
+```python
+        "__REVIEW__": _esc_html(fx_config.REVIEW_NOTICE),
+```
+
+If `dashboard.py` does not already import the config module under that name, use the name it does import it as; the constant is `REVIEW_NOTICE` on `trading_algo.forex.fx_config`. If no HTML-escaping helper exists in that module, substitute the literal string — it contains no `<`, `>` or `&`.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_dashboard_overview.py tests/test_dashboard_fx_api.py -v`
+Expected: PASS (3 passed)
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "dashboard or overview or fx_api or registry"`
+Expected: PASS. No existing test asserts that an FX book is in CORE — checked with `grep -rn "CORE" tests/`. If one appears, its premise is the defect and it is updated here, not worked around.
+
+- [ ] **Step 6: Commit** (two commits: the ring-fence, then what the page says)
+```bash
+git add trading_algo/profiles.py trading_algo/dashboard/overview.py tests/test_dashboard_overview.py
+git commit -m "fix(dashboard): give the FX books their own reporting group
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+
+git add trading_algo/forex/fx_config.py trading_algo/dashboard/fx_api.py trading_algo/dashboard/static/app.js trading_algo/forex/dashboard.py tests/test_dashboard_fx_api.py
+git commit -m "docs(dashboard): state on the FX books that they back-test negative
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 23: Split the training universe from the traded one
+
+**Files:**
+- Modify: `trading_algo/forex/pairs.py:100-131` and `:152-160` (via cherry-pick of `f15a118`)
+- Modify: `trading_algo/forex/__init__.py:24,32` (conflict resolution, see Step 3)
+- Modify: `trading_algo/forex/train.py:37,253-263` (via cherry-pick)
+- Modify: `tests/test_fx_pairs.py:7-12` and `:133-134` (via cherry-pick), plus the new guard test
+- Test: `tests/test_fx_pairs.py`
+
+**Interfaces:**
+- Consumes: `trading_algo.forex.fx_book.init_account(account, capital, profile, symbols=None, ...)`, `trading_algo.forex.fx_book.load_state(account) -> dict`, `trading_algo.forex.pairs.resolve_universe(name)`
+- Produces: `trading_algo.forex.pairs.TRAINING_UNIVERSE: list[str]` (16 symbols); `trading_algo.forex.pairs.DEFAULT_UNIVERSE: list[str]` narrowed to 10; `UNIVERSES["training"]`; `trading_algo.forex.TRAINING_UNIVERSE` re-export
+
+**THIS MUST LAND BEFORE TASK 26.** `fx_book.run_once` (`fx_book.py:411-416`) merges `DEFAULT_UNIVERSE` into every unlocked book as a **union** — it adds and never removes. So a book re-initialised while `DEFAULT_UNIVERSE` still holds 16 symbols reopens on 16 and can never shed them.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_fx_pairs.py`:
+
+```python
+# ---------------------------------------------------------------------------
+# The guard: a data decision must not move money
+# ---------------------------------------------------------------------------
+def test_a_fresh_unlocked_book_opens_on_the_traded_universe(tmp_path, monkeypatch):
+    """`fx_book.run_once` merges DEFAULT_UNIVERSE into every unlocked book, so a
+    symbol added to that list starts holding paper capital on the next scheduled
+    run, with no further review. The six G10 crosses were registered to give the
+    neural layer rows; they must never reach a book.
+
+    The merge is a UNION and never removes, so this only holds for a book opened
+    AFTER the split — which is exactly why the books are re-initialised.
+    """
+    from trading_algo.forex import fx_book
+
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    fx_book.init_account("guard", 5_000.0, "balanced")
+    state = fx_book.load_state("guard")
+
+    assert state["universe_locked"] is False
+    assert list(state["symbols"]) == list(pairs.DEFAULT_UNIVERSE)
+    assert len(state["symbols"]) == 10
+    assert not (set(state["symbols"]) & set(pairs.CROSSES)), \
+        "a training-only cross reached a live book"
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_fx_pairs.py::test_a_fresh_unlocked_book_opens_on_the_traded_universe -v`
+Expected: FAIL — `assert 16 == 10`, and the cross-intersection assertion fires with `{'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDNZD', 'EURAUD'}`.
+
+- [ ] **Step 3: Implement — cherry-pick `f15a118`, resolving one known conflict**
+
+```bash
+git cherry-pick f15a1188d72c516ade68d3ad1561aa15975dbcb2
+```
+
+This **will conflict in `trading_algo/forex/__init__.py` and nowhere else.** `f15a118`'s hunk carries `MetaLabeler` in its context, and this branch has since removed `MetaLabeler` along with the meta bundle. Verified: `git diff f15a118^ HEAD -- <file>` is empty for every test file the pick touches and for `docs/research/COST_AWARE_OBJECTIVE_RESULT.md`; `pairs.py` and `train.py` diverge only in regions the pick does not touch.
+
+Resolve `trading_algo/forex/__init__.py` by keeping HEAD's `MetaLabeler`-free imports and taking only the `TRAINING_UNIVERSE` addition — the final file reads:
+
+```python
+from .ml_agent import ModelBundle, NeuralAgent, default_neural_agents
+from .nn import MLP
+from .pairs import DEFAULT_UNIVERSE, PAIRS, TRAINING_UNIVERSE, get_pair
+
+__all__ = [
+    "AgentPool", "TrendAgent", "BreakoutAgent", "MeanReversionAgent",
+    "MomentumAgent", "CarryAgent", "default_agents",
+    "FXParams", "profile", "profile_names",
+    "compute_targets", "target_weights_history",
+    "PAIRS", "DEFAULT_UNIVERSE", "TRAINING_UNIVERSE", "get_pair",
+    # deep-learning layer
+    "MLP", "NeuralAgent", "ModelBundle", "default_neural_agents",
+]
+```
+
+Then:
+
+```bash
+git add trading_algo/forex/__init__.py
+git cherry-pick --continue
+```
+
+The pick brings, in `trading_algo/forex/pairs.py`, `DEFAULT_UNIVERSE: list[str] = [*PAIRS, *CRYPTO]` (10), `TRAINING_UNIVERSE: list[str] = [*DEFAULT_UNIVERSE, *CROSSES]` (16), and `UNIVERSES["training"]`; and in `trading_algo/forex/train.py`, `_load(TRAINING_UNIVERSE, ...)` for fitting with the grade taken on the `DEFAULT_UNIVERSE` slice of the same panel, because `promotion.clears_floor` is a deployment gate and its number has to describe the portfolio that actually runs.
+
+It also rewrites the two pinning tests the brief names: `tests/test_fx_pairs.py:7-12` becomes `test_default_universe_is_majors_plus_crypto` (10 symbols) and `:133-134` becomes `test_training_universe_includes_the_registered_crosses` asserting `len(pairs.TRAINING_UNIVERSE) == 16`, plus a new `test_training_universe_is_a_superset_of_what_is_traded`.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_fx_pairs.py -v`
+Expected: PASS, including the new guard test and the three universe tests the pick rewrote.
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "fx_pairs or fx_ml or multiasset or close_only or genome or fx_engine or fx_consistency"`
+Expected: PASS.
+
+`tests/test_close_only_bars.py:452` and `:467` assert `state["symbols"] == list(DEFAULT_UNIVERSE)` — both are written against the symbol and follow the narrowed list automatically; neither needs editing. (The brief expected literal pins there; there are none. The only literals were in `tests/test_fx_pairs.py`, and the cherry-pick fixes them.) `tests/test_fx_backtest.py:75` asserts `len(res["attribution"]) == len(DEFAULT_UNIVERSE)` — also symbolic. If any of these fails, do not relax it: it means something else pins 16.
+
+- [ ] **Step 6: Commit**
+```bash
+git add tests/test_fx_pairs.py
+git commit -m "test(fx): guard that a fresh book opens on the traded universe only
+
+The universe merge in fx_book.run_once is a union and never removes, so this
+holds only for a book opened after the split — which is why the books are
+re-initialised in the restart task.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+(The cherry-pick itself is already a commit; this second commit carries only the guard test.)
+
+---
+
+### Task 24: Regenerate every published number, and record the two missing findings
+
+**Files:**
+- Modify: `trading_algo/dashboard/backtest_store.py:26,119-127` (stamp the code the cache came from)
+- Modify: `docs/FORENSIC_AUDIT_2026-09.md` (append two sections before "A trap worth recording", line 363)
+- Regenerate (build outputs, committed): `state/backtest_equity.json`, `obsidian/Reference.md`, any tearsheet under `reports/`
+- Test: `tests/test_backtest_store_export.py`
+
+**Interfaces:**
+- Consumes: `trading_algo.manifest._git_commit() -> str`; `trading_algo.dashboard.backtest_store.export_equity(synthetic=False, point_in_time=False, sweep=False, report_out=None, out_path=None) -> str`
+- Produces: dashboard cache key `"git_commit"`
+
+The defect (spec §1, third row; §12 gate P5): `state/backtest_equity.json` was generated **2026-07-24** and predates the code that writes it — it has no `benchmark_stats`, no `allocations`, no `fx_rebalance_cost`, all of which `export_equity` has produced since. The cache carried no way to tell. Stamping the commit makes staleness readable instead of inferable.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_backtest_store_export.py`:
+
+```python
+def test_the_cache_records_the_code_it_was_generated_by(exported):
+    """P5's gate is 'no published number older than its code', and the cache
+    had no way to say. `state/backtest_equity.json` was written 2026-07-24 and
+    lacks three blocks the exporter has produced since; nothing could tell.
+    A commit stamp makes that readable rather than inferable."""
+    from trading_algo import manifest
+
+    assert exported["git_commit"] == manifest._git_commit()
+    assert exported["git_commit"] != "unknown"
+    assert len(exported["git_commit"]) == 40
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_backtest_store_export.py::test_the_cache_records_the_code_it_was_generated_by -v`
+Expected: FAIL — `KeyError: 'git_commit'`.
+
+- [ ] **Step 3: Implement**
+
+In `trading_algo/dashboard/backtest_store.py`, add the import beside the existing ones (line 26):
+
+```python
+from .. import config as cfg
+from .. import paper_trade
+from ..manifest import _git_commit
+from ..metrics import metric as _metric
+```
+
+and stamp it into the payload, next to `generated_at` (line 121):
+
+```python
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # The commit this cache was computed by. P5's gate is "no published
+        # number older than its code"; the July cache predated three blocks the
+        # exporter now writes and nothing on it said so.
+        "git_commit": _git_commit(),
+```
+
+In `docs/FORENSIC_AUDIT_2026-09.md`, insert these two sections immediately before `## A trap worth recording` (line 363). Both are numbers read out of the repo's own state files, not recollections:
+
+```markdown
+## The 2026-08-27 phantom liquidation (recorded here late)
+
+The whole `full` book was liquidated on a drawdown that never happened, and
+neither this document nor `LIVE_BOOK_AUDIT.md` recorded it until now. From
+`state/paper_state_full.json`, block `corrections`:
+
+| date | equity as booked | equity on real closes | FTSE sleeve as booked | FTSE sleeve corrected |
+|---|---|---|---|---|
+| 2026-08-27 | A$74,552.44 | A$99,086.23 | A$7,910.89 | A$32,444.69 |
+| 2026-08-28 | A$74,325.61 | A$98,819.82 | A$7,891.45 | A$32,385.67 |
+
+**Cause.** The FTSE sleeve was marked at cash only, on an all-NaN price row.
+Equity read A$74,552 against a true A$99,086, the 25% drawdown breaker read a
+−26.2% drawdown against a true **−2.24%**, tripped, and sixteen names were sold.
+The book sat in cash until 16 September; re-entry cost £46 of UK stamp duty.
+
+**Fix.** PR #93 — valuation now refuses an unpriced book (`paper_trade.py`
+unpriced-holdings guard). State was corrected on 2026-09-15T21:15:33Z by
+replaying holdings from the trade ledger and marking them at the real closes,
+with `risk_halted` cleared and the correction recorded in the state file.
+
+**Why it is written here.** The fix is good; the silence was not. An audit that
+does not carry its own incidents is not an audit.
+
+## The swarm permutation result: p = 0.4726
+
+From `state/permtest_matt.json`, run 2026-09-19T21:26:21 on the `matt` book,
+real data:
+
+| field | value |
+|---|---|
+| statistic | `best_holdout_sharpe` |
+| real result | **0.0599** |
+| permutations | 200 |
+| **p-value** | **0.4726** |
+| seed | 0 (held fixed across the real run and every permutation) |
+| window | 2020-04-10 → 2026-09-19, 2,354 bars |
+| window limited by | `SOLUSD` (4,840 bars dropped to get one shared timeline) |
+| search | 12 generations, population 40, 25% holdout |
+
+**What it means in plain words.** The genetic swarm's search over the `matt`
+book is indistinguishable from the same search run on shuffled data: roughly
+half of 200 fake markets produced a best genome at least as good as the real
+one. This is a statement about the *search*, not a refutation of every possible
+FX edge — and its scope is the trimmed 2020–2026 window above, not the full
+history. Method and its caveats: `docs/specs/swarm-insample-permutation.md`.
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_backtest_store_export.py::test_the_cache_records_the_code_it_was_generated_by -v`
+Expected: PASS
+
+- [ ] **Step 5: Run the affected suite, then regenerate every published number**
+
+Run: `python3 -m pytest tests/ -q -k "backtest_store or export or manifest or tearsheet"`
+Expected: PASS
+
+Then regenerate, **in this order** (each stage feeds the next, per spec §6):
+
+```bash
+# 1. the dashboard's backtest cache — real data, current code
+python -m trading_algo.dashboard.backtest_store
+
+# 2. the monthly tearsheet per live book
+mkdir -p reports
+for a in full small ultra experimental; do
+  python -m trading_algo.tearsheet --account "$a" --out "reports/${a}_2026-09.md"
+done
+
+# 3. the code-derived vault notes (obsidian/Reference.md and the vault copies)
+python tools/build_obsidian_vault.py
+python tools/build_vault_notes.py
+```
+
+Confirm the cache is no longer stale before committing:
+
+```bash
+python3 -c "
+import json, subprocess
+d = json.load(open('state/backtest_equity.json'))
+head = subprocess.run(['git','rev-parse','HEAD'], capture_output=True, text=True).stdout.strip()
+print('generated_at', d['generated_at'])
+print('git_commit  ', d['git_commit'], 'HEAD ok:', d['git_commit'] == head)
+print('has benchmark_stats:', 'benchmark_stats' in d, '| benchmark_kind:', d.get('benchmark_kind'))
+"
+```
+Expected: today's date, `HEAD ok: True`, `has benchmark_stats: True`, and `benchmark_kind: total-return` (Task 21 landed).
+
+Hand-copied numbers that this run supersedes and that must be re-read from the new cache and corrected by hand, with the new figure and its date: `docs/SHARPE_RESEARCH.md` (the sleeve Sharpe tables at lines 58, 165, 218, 350), `docs/MONTE_CARLO_RESEARCH.md` (line 237), and `CLAUDE.md`'s TSX line ("raw Sharpe 0.948, haircut 0.608, maxDD −15.6%"). Each correction states the old number, the new one, and which bridge line moved it (spec §13).
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/dashboard/backtest_store.py tests/test_backtest_store_export.py
+git commit -m "feat(backtest-store): stamp the commit a published cache came from
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+
+git add docs/FORENSIC_AUDIT_2026-09.md
+git commit -m "docs(audit): record the phantom liquidation and the permutation result
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+
+git add state/backtest_equity.json obsidian/ reports/ docs/SHARPE_RESEARCH.md docs/MONTE_CARLO_RESEARCH.md CLAUDE.md
+git commit -m "chore(published): regenerate every number on current code
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 25: Merge to main and confirm the schedulers picked up the new code
+
+**Files:**
+- No source file changes. This task moves a branch.
+
+**Interfaces:**
+- Consumes: everything Tasks 1–24 produced. Produces: nothing new.
+
+The defect (spec §2, last bullet): `.github/workflows/day-paper.yml:10` records that `schedule:` fires **only on the default branch**. `paper-trade.yml:16` (`30 21 * * 1-5`), `fx-paper.yml:22` (`0 23 * * 1-5`) and `monthly-report.yml:12` (`0 3 1 * *`) are the same. The live books have therefore been running pre-remediation code. At the time of drafting, `git log --oneline main..HEAD | wc -l` is **46** commits (the spec's "41" was counted three days earlier), plus everything this plan adds.
+
+This task changes no code, so it has no unit test. Its test is the full suite on `main` and the first scheduled run's log, both of which are run below.
+
+- [ ] **Step 1: Establish the failing condition**
+
+```bash
+git fetch origin
+echo "unmerged commits: $(git log --oneline origin/main..HEAD | wc -l)"
+git log --oneline origin/main..HEAD | head -20
+```
+Expected: a non-zero count. That number is the defect — every one of those commits is a fix the live books are not running.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/ -q` on the **branch**, then confirm the books are on old code:
+```bash
+git rev-parse HEAD origin/main
+```
+Expected: the two SHAs differ, and `origin/main` is an ancestor of `HEAD` (no divergence) — verify with `git merge-base --is-ancestor origin/main HEAD && echo "fast-forwardable"`. If that prints nothing, `main` has moved independently and this becomes a merge, not a fast-forward; resolve before continuing.
+
+- [ ] **Step 3: Implement — merge**
+
+```bash
+python3 -m pytest tests/ -q          # must be green on the branch BEFORE merging
+git checkout main
+git pull --ff-only origin main
+git merge --no-ff feat/dormant-feature-remediation -m "merge: measurement truth — the books run the fixed code
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+python3 -m pytest tests/ -q          # and green on main AFTER
+```
+
+Do **not** push until both suites are green. Then, per the repo's working preference (ask before pushing to remote), confirm with the owner and:
+
+```bash
+git push origin main
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+```bash
+git fetch origin
+echo "unmerged commits: $(git log --oneline origin/main..feat/dormant-feature-remediation | wc -l)"
+```
+Expected: `unmerged commits: 0`.
+
+- [ ] **Step 5: Confirm the schedulers are running the new code**
+
+The next scheduled fires are `day-paper` hourly at `:07` on weekdays, `paper-trade` at 21:30 UTC, and `fx-paper` at 23:00 UTC. After the first one lands:
+
+```bash
+gh run list --branch main --limit 10
+gh run view --log $(gh run list --branch main --limit 1 --json databaseId -q '.[0].databaseId') | head -40
+```
+Expected: the run's head SHA equals the merge commit, and the log shows the new code — concretely, the FX book log line reads `over 10 instruments` (Task 23's narrowed `DEFAULT_UNIVERSE`), not `over 16 instruments`. That single line is the cheapest proof the scheduler is on the merged code.
+
+Then confirm the committed state came back with it:
+```bash
+git pull --ff-only origin main
+python3 -c "
+import json, glob, os
+for p in sorted(glob.glob('state/fx_state_*.json')):
+    d = json.load(open(p))
+    print(os.path.basename(p), 'symbols:', len(d.get('symbols') or []))
+"
+```
+Expected on an **existing** book: still 10 or more — the merge alone cannot shrink a running book, because `fx_book.run_once` merges as a union. That is Task 26's job, and it is the reason Task 26 exists.
+
+- [ ] **Step 6: Commit**
+
+Nothing to commit — the merge commit created in Step 3 is this task's artefact. Record the scheduler evidence:
+```bash
+git log --oneline -1 main
+gh run list --branch main --limit 3
+```
+
+---
+
+### Task 26: Archive the books, then reopen them clean
+
+**Files:**
+- Create: `state/archive/2026-09-pre-truth/` (every state file and DB, plus `README.md`)
+- Modify: nothing in `trading_algo/`
+- Test: `tests/test_paper_trade_init.py` (new)
+
+**Interfaces:**
+- Consumes: `trading_algo.paper_trade.init_account(account, capital, synthetic, allocations=None, profile=None, force=False)`, `trading_algo.paper_trade.load_state(account) -> dict`, `trading_algo.paper_trade.STATE_DIR`, `trading_algo.config.ALLOCATIONS`; `trading_algo.forex.fx_book.init_defaults(synthetic, force=False)`
+- Produces: no new names.
+
+**Depends on Task 23.** `fx_book.run_once` merges `DEFAULT_UNIVERSE` into every unlocked book as a union, so a book reopened before the split reopens on 16 symbols and can never shed the six crosses.
+
+The books are, from disk today: `full` A$100,000 across `{ASX, US, FTSE}` at a third each, 81 trades; `small` A$1,000 US-only, 2 trades; `ultra` A$10,000 US-only `ultra` profile, 23 trades; `experimental` A$10,000 US-only `experimental` profile, 14 trades; FX `matt` A$5,000 balanced, `partner` A$5,000 conservative, `daytrader` A$10,000 intraday/60m, `multiasset` A$10,000 balanced universe-locked. `full` will come back with **four** sleeves, because `config.ALLOCATIONS` funds `ASX/US/FTSE/TSX` at 0.25 each and a fresh `--init` reads `ALLOCATIONS` (spec §8) — the running book could not, since its allocations were baked in at its own `--init`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_paper_trade_init.py`:
+
+```python
+"""What a freshly opened book is funded across.
+
+D4 restarts every book so there is one record under one set of rules. `full`
+reopens with FOUR sleeves: ALLOCATIONS funds TSX at 25% and a fresh --init
+reads ALLOCATIONS, which the running book (baked at a 3-way split) could not.
+"""
+import pytest
+
+from trading_algo import config as cfg
+from trading_algo import paper_trade as pt
+
+
+def test_a_fresh_book_is_funded_across_every_allocated_region(tmp_path, monkeypatch):
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("full", capital=100_000, synthetic=True)
+
+    state = pt.load_state("full")
+    assert set(state["sleeves"]) == set(cfg.ALLOCATIONS)
+    assert set(cfg.ALLOCATIONS) == {"ASX", "US", "FTSE", "TSX"}
+    for w in state["allocations"].values():
+        assert w == pytest.approx(0.25)
+    assert state["trades"] == []          # a fresh book starts with no record
+
+
+def test_init_refuses_to_overwrite_a_live_book(tmp_path, monkeypatch):
+    """All P&L is derived from the trade ledger, so --init over a live book
+    destroys the only record. The archive step exists because of this."""
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("full", capital=100_000, synthetic=True)
+    with pytest.raises(SystemExit):
+        pt.init_account("full", capital=100_000, synthetic=True)
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_paper_trade_init.py -v`
+Expected: both PASS on current code — this pair is a **characterisation** test, pinning the behaviour the restart relies on before the restart is performed. If `test_a_fresh_book_is_funded_across_every_allocated_region` fails with a 3-key sleeve set, `ALLOCATIONS` does not carry TSX and the restart must not proceed until it does.
+
+- [ ] **Step 3: Implement — archive, then reopen**
+
+Archive first. Nothing here is reversible once `--force` runs.
+
+```bash
+mkdir -p state/archive/2026-09-pre-truth
+cp state/paper_state_*.json state/archive/2026-09-pre-truth/
+cp state/fx_state_*.json    state/archive/2026-09-pre-truth/
+cp state/paper_books.db     state/archive/2026-09-pre-truth/
+cp state/fx_books.db        state/archive/2026-09-pre-truth/
+cp state/permtest_matt.json state/archive/2026-09-pre-truth/
+cp state/swarm_log_*.json state/champions_*.json state/archive/2026-09-pre-truth/
+ls -la state/archive/2026-09-pre-truth/
+```
+
+Write `state/archive/2026-09-pre-truth/README.md`:
+
+```markdown
+# Paper books as at 2026-09, archived before the measurement-truth restart
+
+These are the books as they stood before the restart of spec decision **D4**
+(`docs/superpowers/specs/2026-09-24-measurement-truth-design.md`). They are kept
+because P&L is derived from the trade ledger and a ledger is the only record a
+book has. **Nothing here is a performance claim.** Every one of these books was
+measured under rules the repo has since corrected.
+
+## What was wrong with them
+
+- **Dividends were never credited.** `paper_trade.py` marked positions at the
+  latest close and no code path paid a dividend into cash. Every ex-dividend
+  price drop in every book above is booked as a loss that never reversed.
+- **Cash interest was never paid.** `fees.idle_cash_credit` existed in the
+  backtester only. `full` was 72.8% cash: about 255bps/yr of pure divergence.
+- **Fills used the signal's own close** rather than the next day's, in both
+  engines. Worth roughly 0.38–0.40pp/yr of CAGR on ASX and US.
+- **Two FTSE names were priced in the wrong currency.** `CPG.L` and `IHG.L` are
+  quoted by Yahoo in USD; `regions.py` applied the blanket pence→pounds scale to
+  every FTSE name. `full` bought 593 `IHG.L` at "£1.63" (2026-06-11) and 724
+  `CPG.L` at "£0.32" (2026-07-01) against real prices near £120 and £24. Every
+  FTSE valuation in this archive is wrong by that amount.
+- **The drawdown breaker latched.** Its high-water mark never fell after a halt,
+  so a book below its old peak re-tripped after every cooldown.
+- **The 2026-08-27 phantom liquidation.** The whole `full` book was sold on a
+  −26.2% drawdown that was really −2.24%, caused by an all-NaN FTSE price row.
+  Corrected in state 2026-09-15; fixed by PR #93. Full record:
+  `docs/FORENSIC_AUDIT_2026-09.md`.
+- **`full` traded three sleeves, not four.** TSX was funded at 25% in
+  `config.ALLOCATIONS` but a running book keeps the allocations baked in at its
+  own `--init`, so it never received capital.
+- **The FX books held 16 instruments, not 10.** Six G10 crosses were registered
+  to give the neural layer training rows and reached the books as a side effect.
+- **`experimental` could not form its short leg**, so the market-neutral book was
+  not market-neutral.
+
+## Where the successors are
+
+`state/paper_state_*.json` and `state/fx_state_*.json` at the repo root, reopened
+on the same capital and the same allocations. The promotion clock
+(`MIN_PROMOTION_REBALANCES = 6`) restarts from zero: the accepted cost of D4.
+```
+
+Then reopen. **`--force` destroys the trade ledger** — do not run it until `ls state/archive/2026-09-pre-truth/` shows all eight state files plus both DBs.
+
+```bash
+python -m trading_algo.paper_trade --account full         --init --capital 100000 --force
+python -m trading_algo.paper_trade --account small        --init --capital 1000   --regions US --force
+python -m trading_algo.paper_trade --account ultra        --init --capital 10000  --profile ultra        --force
+python -m trading_algo.paper_trade --account experimental --init --capital 10000  --profile experimental --force
+
+# All four FX books come from fx_config.ACCOUNTS in one sweep; --force is
+# required because init_defaults SKIPS an existing book silently.
+python -m trading_algo.forex.paper --init --force
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+```bash
+python3 -c "
+import json, glob, os
+for p in sorted(glob.glob('state/paper_state_*.json')):
+    d = json.load(open(p))
+    print(os.path.basename(p), '| sleeves', sorted(d['sleeves']),
+          '| capital', d['initial_capital_base'], '| trades', len(d.get('trades') or []))
+for p in sorted(glob.glob('state/fx_state_*.json')):
+    d = json.load(open(p))
+    print(os.path.basename(p), '| symbols', len(d.get('symbols') or []),
+          '| capital', d.get('initial_capital'), '| trades', len(d.get('trades') or []))
+"
+```
+Expected: `paper_state_full.json | sleeves ['ASX', 'FTSE', 'TSX', 'US'] | capital 100000.0 | trades 0`; every other equity book at its stated capital with 0 trades; `fx_state_matt/partner/daytrader` at **10** symbols each (`multiasset` stays on its locked 10-symbol universe); every FX book at 0 trades.
+
+Then prove the books are healthy end to end:
+```bash
+python -m trading_algo.verify --strict
+```
+Expected: exit 0. A funded sleeve that has never traded reads `regime-off` (INFO) or `data-quality` (ERROR); on a book opened minutes ago, INFO is the correct verdict.
+
+- [ ] **Step 5: Run the affected suite**
+
+Run: `python3 -m pytest tests/ -q -k "paper_trade or init or verify or state_schema or overview"`
+Expected: PASS. Any test asserting `full` holds three sleeves has its premise deliberately changed by this task and is updated here to `set(cfg.ALLOCATIONS)` — symbolically, never to a hardcoded four.
+
+- [ ] **Step 6: Commit**
+```bash
+git add state/archive/2026-09-pre-truth/
+git commit -m "chore(state): archive the pre-truth paper books with what was wrong
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+
+git add state/ tests/test_paper_trade_init.py
+git commit -m "chore(state): reopen every paper book clean under the new rules
+
+full comes up with four sleeves: ALLOCATIONS funds TSX at 25% and a fresh
+--init reads ALLOCATIONS, which the running book could not. The promotion
+clock restarts from zero — the accepted cost of D4.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 27: Point-in-time membership, and the survivorship bias it measures
+
+**BLOCKED ON DATA. The precondition, stated explicitly:** this task cannot complete until a point-in-time index-membership file exists for each of `ASX`, `US`, `FTSE`, `TSX` in the format `constituents.py:10-16` documents — a CSV or parquet with `date,ticker` columns, one row per (snapshot, member), month-end snapshots, covering `config.START` (2012-01-01) to today, and **including names that have since been delisted**. Today no region sets `constituents_file` (`regions.py:36`), so every backtest selects from today's survivors: zero of 125 US, 56 ASX and 55 TSX names stopped printing in 14.7 years, which is not what happened.
+
+Steps 1–4 below do **not** need that data and should be done now — they build and test the per-region measurement that the data will feed. Steps 5–6 are gated on it. Spec §7's off-ramp applies per region: if one region's data cannot be sourced at sensible cost, that region publishes a *bound* instead (the equal-weight-universe versus total-return-index gap, already computed: ASX +9.4pp/yr, TSX +5.4, US +2.5, FTSE ≈0), and the block does not stall.
+
+**Files:**
+- Modify: `trading_algo/run_backtest.py:152-172` (`pit_impact` and `run_compare_pit`)
+- Modify (gated on data): `trading_algo/regions.py` — `constituents_file=` on each of the four entries
+- Modify (gated on data): `trading_algo/config.py:345` — `DELISTING_REPLACEMENT_RETURN`
+- Create (gated on data): `docs/research/SURVIVORSHIP_BIAS.md`
+- Test: `tests/test_run_backtest.py` (new)
+
+**Interfaces:**
+- Consumes: `trading_algo.portfolio_backtest.run_portfolio_backtest(regions=None, synthetic=False, start=cfg.START, end=None, point_in_time=False, params=None, allocations=None) -> dict`; `trading_algo.constituents.get_membership(region) -> MembershipTable | None`; `trading_algo.constituents.synthetic_membership(region, start, end, seed=None) -> MembershipTable`
+- Produces: `run_backtest.pit_impact(synthetic: bool) -> dict` gains a `"per_region": dict[str, dict[str, float]]` entry, each value `{"static_cagr": float, "pit_cagr": float, "delta": float}`
+
+The gap: `--compare-pit` exists but reports the **portfolio** CAGR delta only (`run_backtest.py:152-161`). The brief and spec §7.4 require the bias per region, because the off-ramp is per region and the bound differs by an order of magnitude across them.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_run_backtest.py`:
+
+```python
+"""The survivorship-bias measurement.
+
+Spec section 7: the bias is the PIT-versus-non-PIT difference, and it is
+reported PER REGION because the off-ramp is per region and the measured bound
+ranges from about zero (FTSE) to +9.4pp/yr (ASX).
+"""
+import pytest
+
+from trading_algo import config as cfg
+from trading_algo import run_backtest as rb
+
+
+@pytest.fixture(scope="module")
+def impact():
+    """Synthetic membership exercises the PIT machinery offline. Invariant 5:
+    the NUMBERS here are meaningless; only the shape is under test."""
+    return rb.pit_impact(synthetic=True)
+
+
+def test_pit_impact_reports_a_delta_for_every_funded_region(impact):
+    assert set(impact["per_region"]) == set(cfg.ALLOCATIONS)
+
+
+def test_each_regions_delta_is_its_own_two_cagrs(impact):
+    """A delta that is not the difference of the two numbers printed beside it
+    is a number nobody can check."""
+    for key, row in impact["per_region"].items():
+        assert set(row) == {"static_cagr", "pit_cagr", "delta"}
+        assert row["static_cagr"] - row["pit_cagr"] == pytest.approx(
+            row["delta"], abs=1e-12), key
+
+
+def test_the_portfolio_delta_is_still_reported(impact):
+    for k in ("static_cagr", "pit_cagr", "delta"):
+        assert isinstance(impact[k], float)
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `python3 -m pytest tests/test_run_backtest.py -v`
+Expected: FAIL — `KeyError: 'per_region'` on all three tests.
+
+- [ ] **Step 3: Implement**
+
+Replace `trading_algo/run_backtest.py:152-161` (`pit_impact`) with:
+
+```python
+def pit_impact(synthetic: bool) -> dict:
+    """F1: quantify the survivorship bias — CAGR of the static (current-universe)
+    backtest minus the point-in-time backtest, for the portfolio AND for each
+    sleeve. A positive delta is the inflation the current universe carries.
+
+    Per region because spec section 7's off-ramp is per region: a region whose
+    PIT data cannot be sourced publishes a measured BOUND instead, and the two
+    cannot share one number."""
+    static = run_portfolio_backtest(synthetic=synthetic, point_in_time=False)
+    pit = run_portfolio_backtest(synthetic=synthetic, point_in_time=True)
+    s_cagr = float(static["metrics"]["CAGR"])
+    p_cagr = float(pit["metrics"]["CAGR"])
+    per_region: dict[str, dict[str, float]] = {}
+    for key, sleeve in static["sleeves"].items():
+        if key not in pit["sleeves"]:
+            continue
+        s = float(sleeve["metrics"]["CAGR"])
+        p = float(pit["sleeves"][key]["metrics"]["CAGR"])
+        per_region[key] = {"static_cagr": s, "pit_cagr": p, "delta": s - p}
+    return {"static_cagr": s_cagr, "pit_cagr": p_cagr, "delta": s_cagr - p_cagr,
+            "per_region": per_region}
+```
+
+and extend `run_compare_pit` (line 164-172) with the per-region table, after the existing portfolio lines:
+
+```python
+    print("  (positive delta = the current universe flatters returns)")
+    if imp["per_region"]:
+        print("\n  Per sleeve (standalone, local currency):")
+        for key, row in imp["per_region"].items():
+            print(f"    {key:<5} static {row['static_cagr']:>+7.2%}  "
+                  f"PIT {row['pit_cagr']:>+7.2%}  bias {row['delta']:>+7.2%}")
+```
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `python3 -m pytest tests/test_run_backtest.py -v`
+Expected: PASS (3 passed)
+
+Then see the shape of the real output offline:
+```bash
+FX_STATE_DIR=/tmp/pit-scratch MOMENTUM_STATE_DIR=/tmp/pit-scratch \
+  python -m trading_algo.run_backtest --compare-pit --synthetic
+```
+Expected: the portfolio block, then one line per sleeve for ASX, US, FTSE, TSX, each under the `⚠ SYNTHETIC DATA` banner.
+
+- [ ] **Step 5: Run the affected suite — then, ONCE THE DATA EXISTS, wire and publish**
+
+Run: `python3 -m pytest tests/ -q -k "run_backtest or constituents or delisting or portfolio"`
+Expected: PASS.
+
+**Everything below is gated on the precondition at the top of this task.** Do not do it with fabricated membership: `constituents.synthetic_membership` is labelled "OFFLINE TESTING ONLY — it does not represent real index history" and invariant 5 forbids reporting it as performance.
+
+Once each region's `date,ticker` file is in hand, drop them under `data/constituents/` and point the four regions at them in `trading_algo/regions.py`, one line per entry beside `universe=`:
+
+```python
+        constituents_file="data/constituents/asx200.csv",
+```
+```python
+        constituents_file="data/constituents/sp500.csv",
+```
+```python
+        constituents_file="data/constituents/ftse100.csv",
+```
+```python
+        constituents_file="data/constituents/tsx60.csv",
+```
+
+Then enable the delisting correction in `trading_algo/config.py:345` — it is gated behind the PIT path (`portfolio_backtest.py:47-48`: `apply_delisting = point_in_time and cfg.DELISTING_REPLACEMENT_RETURN is not None`), so it is a perfect no-op until both are true:
+
+```python
+# Shumway's measured delisting return (~-30% NYSE/AMEX, ~-55% Nasdaq). A held
+# name that delists with no further price is booked at this return rather than
+# vanishing at its last good close, which is the single largest remaining way a
+# PIT backtest can still flatter itself.
+DELISTING_REPLACEMENT_RETURN: float | None = -0.30
+```
+
+Measure, and publish, with real data:
+
+```bash
+python -m trading_algo.run_backtest --point-in-time            # the corrected run
+python -m trading_algo.run_backtest --compare-pit              # the bias, per region
+python -m trading_algo.dashboard.backtest_store --point-in-time
+```
+
+Write `docs/research/SURVIVORSHIP_BIAS.md` carrying, for each region: the membership source and its coverage window, the number of snapshots and the number of names that were ever members versus members today, the static CAGR, the PIT CAGR, and the delta — plus, for any region that took the off-ramp, the measured bound instead (ASX +9.4pp/yr, TSX +5.4, US +2.5, FTSE ≈0) and an explicit statement that it is a bound and not a measurement. Then relabel every surviving non-PIT number in `README.md`, `CLAUDE.md` and `docs/SHARPE_RESEARCH.md` as survivorship-biased and therefore an upper bound, naming the per-region delta as the size of the bias.
+
+- [ ] **Step 6: Commit**
+```bash
+git add trading_algo/run_backtest.py tests/test_run_backtest.py
+git commit -m "feat(survivorship): report the point-in-time bias per region
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+and, once the data lands (a separate commit, so the wiring and the measurement are distinguishable):
+```bash
+git add data/constituents/ trading_algo/regions.py trading_algo/config.py docs/research/SURVIVORSHIP_BIAS.md
+git commit -m "feat(survivorship): wire point-in-time membership and publish the bias
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+# Appendix: what the drafters found when the brief met the real code
+
+Each drafter opened the files it was writing tasks about. These are the places where the brief was wrong, incomplete, or ran into something worth knowing before you start. Read the group's entries before starting its tasks.
+
+## Phase 1 — The instruments: a measurement semantic layer
 
 - CAGR has an off-by-one that the contract's `cagr(equity, *, periods_per_year)` signature forces me to preserve rather than fix. Today `metrics.py:30` computes the exponent as `252 / len(rets)` where `rets` is the DROPNA'd return series; the textbook exponent is `ppy / (len(equity) - 1)`. I verified every call site passes matched-length series — `backtest.py:200-201` (`ret_series` and `eq` both indexed `dates[1:]`), `portfolio_backtest.py:112-113` (`returns = equity.pct_change().fillna(0.0)`), `forex/fx_backtest.py:209` — so defining `cagr` with `n = len(equity)` is bit-for-bit identical TODAY, and the task says so in the docstring. But it bakes a known-wrong convention into the new primitive. It is a one-line fix worth about 0.03% of the exponent on a 14-year daily run and much more on a short paper book; it belongs in the same block, as its own task, with the bridge line it moves.
 - `metrics.benchmark_stats` (trading_algo/metrics.py:59-87) still contains four independent `* 252` and one `np.sqrt(252)` — `bench_cagr`, `strat_cagr`, `alpha` and the tracking error. It is inside metrics.py, so the AST test exempts it, and it ignores the new `periods_per_year` default entirely: the portfolio backtest's benchmark stats are hardcoded to 252 regardless of bar spacing. My brief does not cover it and I did not touch it, but it is the same defect as Task 1's, hiding behind the module boundary. It needs a task: `benchmark_stats(..., periods_per_year: float | None = None)` routed through `cagr`/`annualised_vol`.
@@ -3162,7 +5578,7 @@ worth reading before starting the task it belongs to.
 - `trading_algo/forex/fx_config.py` gains an import of `trading_algo.metrics`, a new package edge from the FX subsystem into the equity stack's measurement module. `metrics.py` imports only `.config`, numpy and pandas, so there is no cycle, but `fx_config` is imported very early by most FX modules and this is the first time it pulls in the top-level package's measurement layer. Step 5 of Task 1 is where a cycle would surface; if it does, the fallback is to leave `ANNUALIZATION = 252` defined in metrics.py only and delete the fx_config name outright (nothing but `marks.py` imported it, and `marks.py` stops needing it in the same task).
 - Task 2 changes the tearsheet's drawdown to be measured on the date-SORTED equity curve (matching `attribution.equity_returns`, which already sorts) instead of raw `equity_history` list order. Every real paper book appends chronologically so the number is identical, but a state file with out-of-order marks would now report a different max drawdown. I judged matching the returns series the right behaviour and flagged it in the task text rather than preserving the unsorted loop.
 
-### From tasks5-8
+## Phase 2 — The instruments: the reconciliation bridge
 
 - The locked signature `reconcile(paper_state, predicted_equity)` cannot compute three of its eight lines. `exposure_gap` needs the gated target gross per rebalance date, `rebalance_timing` needs the month-end counterfactual book, and `fx_translation` needs trade-date FX — all of which need price data the two arguments do not carry. Task 6 returns 0.0 for them with a note and lets the residual hold their content (which spec §5 explicitly sanctions), but the bridge will NOT close to 1bp on the real books until those three are computable. The natural seam is for Task 5's now-correct diagnosis to persist its per-sleeve (held gross, target gross, asof) into `state["tracking_diagnosis"]` on each run, which `reconcile` could then read without changing its signature. I deliberately did not add that to Task 5 — it would push a surgical fix into a state-schema change — but whoever owns the exposure-gap line will need it. Flagging so it is a decision, not a surprise.
 - The contract's return dict for `reconcile` does not list a `notes` key, but the brief requires dividends and cash_interest to "return 0.0 with a recorded note". Task 6 therefore adds `"notes": dict[str, str]` to the returned dict. Any parallel task consuming `reconcile`'s output should treat `notes` as present; `format_bridge` reads it with `report.get("notes") or {}` so an older report without it still renders.
@@ -3173,7 +5589,22 @@ worth reading before starting the task it belongs to.
 - `ci_regression.compare()` reports an unknown key as drift ("new metric not in baseline"), so Task 8's code change and its `_regression_baseline.json` hand-edit MUST land in the same commit or `test_synthetic_backtest_matches_baseline` fails. The task says so, but it is the one ordering in this group that cannot be split.
 - Task 8's `total_cost_fraction` is cumulative cost drag per SLEEVE only. There is no portfolio-level cost number in `run_portfolio_backtest`'s return dict, and computing one would mean adding an allocation-weighted sum — a new computation, out of scope for a gate fix. The four sleeve lines are sufficient: zeroing costs fires all four.
 
-### From tasks14-20
+## Phase 3 — Conventions: what both engines compute
+
+- The spec's line reference for the paper fill defect is stale at HEAD. Spec §2 and my brief both cite `paper_trade.py:523` as 'fills at the same close the decision used'; line 523 at 11f876e is inside `fit_long_short_to_lots` (`la = _fit_leg(longs, ...)`). The real sites are `trading_algo/paper_trade.py:649` (`fill = price * (1 + np.sign(delta) * region.slippage_bps / 1e4)`) and the two `rebalance_sleeve` call sites at `trading_algo/paper_trade.py:820` and `trading_algo/paper_trade.py:868`. Task 10 is written against the real ones.
+- Task 10's test churn is large and unavoidable. `data.synthetic_region` returns a FIXED panel, so every synthetic run has the same `prices.index[-1]`; a pending target guarded on 'a strictly later bar' can never fill in a test that calls `run_daily` once. 27 call sites across 8 test files (`tests/test_paper_trade.py`, `test_consistency.py:171`, `test_dashboard.py:21`, `test_dashboard_valuation.py:13`, `test_dashboard_terminal.py:54`, `test_dashboard_api_book.py:22,24`, `test_dashboard_colour_convention.py:305,323,398,413,496`, `test_experimental_books.py:125,136,151,153,155`) need the `paper_cycle` fixture. The production diff stays inside one screen; the test diff does not.
+- Task 10 delays the breaker's liquidation by one session. `trading_algo/paper_trade.py:816-822` currently liquidates a halted book in the same run; staged, it exits one close later. I chose parity with `backtest.py:186` (`pending = CASH`) deliberately — you cannot liquidate at the close that made the decision — but it is a real, if small, increase in exposure for a live book, and it may push `tests/test_backtest.py:39` (`tight MaxDrawdown >= off MaxDrawdown`) over the line on the synthetic fixture. If it does, that is a finding for Task 14 (the breaker), not something to paper over by loosening the assertion.
+- `trading_algo/ci_regression.py` runs as its own CI step (`python -m trading_algo.ci_regression --check`), so the pytest xfail I add in Task 9 does NOT keep the workflow green between Task 9 and Task 20. Whoever owns the pipeline needs to know that the 'Backtest regression gate' step is expected red for the duration of stage 2, or that step must be temporarily skipped. Spec §6 accepts the stale baseline; it does not say what CI does meanwhile.
+- Dividend double-counting is a live hazard for any future backtest-side credit. `trading_algo/data.py:117` downloads with `auto_adjust=True`, so the backtest's `pct_change` series ALREADY includes dividends — it is a total-return series. Task 11 is correct only because it credits the PAPER book, which marks at the latest unadjusted close and stores its equity history rather than recomputing it. Crediting dividends anywhere in `backtest.py` would double-count them.
+- Task 11 scales dividends by `region.price_scale`, which is wrong for exactly the two names Task 15 is about. `CPG.L` and `IHG.L` are quoted in USD but the FTSE region applies `price_scale=0.01` to every name (`trading_algo/regions.py:111`), so their dividends would be divided by 100 like their prices. After Task 15 lands, `_credit_dividends` must switch from `region.price_scale` to `regions.scale_for(region, ticker)`. Flagging it so Task 15's drafter picks up the second call site.
+- Dividend share counts are the CURRENT position, not the position held on the ex-date. `_credit_dividends` credits `sleeve['positions'][t]` for every ex-date in the window since the last run. With daily runs that window is 1-3 days and the two are almost always the same, but after a run gap (stale feed, a weekend outage) a position opened after an ex-date would be credited for it. Stated in the helper's docstring; the exact fix is a position history the book does not keep.
+- `data.dividends` reliability for ASX and LSE names is unmeasured — spec §11 lists it as an open question and Task 11 does not answer it. The helper fails soft (prints and credits nothing on any exception), so a bad feed under-credits silently rather than corrupting the book. Before P3's gate is called passed, the dividend bridge line should be checked against a broker statement or an index total-return series for at least one FTSE and one ASX name.
+- Task 11 also assumes a Yahoo ex-date always falls on a session the region's calendar considers open. If it does not, `verify.check_closed_market` (`trading_algo/verify.py:243`, which reads `t.get('ticker')` and so covers equity rows) will raise `closed-market-trade` ERROR on a DIV row and, since verify's strict gate runs after every scheduled paper run, fail the job. I did not add an exemption because I have no evidence it happens; if it fires in production the fix is to skip non-fill rows in that check, in the same shape as the `check_costs_charged` edit.
+- Task 13 sizes the commission floor off `equity[-1]`, the PRIOR close's NAV, because that is what the brief specifies and what the F6 impact block beside it already uses. Under Task 9's convention the fill happens at today's close, so the strictly correct NAV is `equity[-1] * (1 + r)`. The difference is one bar's return on a cost term and is far below the 1bp bridge tolerance, but it is an approximation rather than an identity, and both call sites should move together if anyone tightens it.
+- `sleeve['interest_accrued']` is a stored cumulative rather than a ledger row, so unlike dividends it is not reconstructible from the trade log. I chose it to avoid ~250 INT rows per sleeve per year in the blotter, and taught `verify.reconcile_equity` to add it back. The consequence: if that field is ever lost or hand-edited, the cash reconciliation silently re-balances around the wrong number, where a ledgered event could not. Task 5-8's bridge should read it and cross-check it against its own accrual rather than trusting it.
+- `rebalanced_this_run` changes meaning in Task 10, from 'a decision was made' to 'a fill happened'. It gates the cash-only allocation true-up at `trading_algo/paper_trade.py:889`. The new meaning is the right one (cash should be trued up after trading, not after deciding), but it does shift when `PAPER_ALLOCATION_REBALANCE` fires by one session for anyone who turns that flag on.
+
+## Phase 4 — Mechanism: what the books actually do
 
 - HEAD is 6fa6f84 ("docs(spec): record the implementation constraints for the measurement block"), not 11f876e as the brief states, and EVERY line number in my brief is stale. Real locations: the `int()` whole-share rounding is paper_trade.py:598-602, not :476; micro mode is paper_trade.py:548-561, not :460-469; the paper breaker is paper_trade.py:900-926, not :905-920; fees.commission is called from paper_trade.py:653. backtest.py:173-183, forex/fx_backtest.py:175-185 and forex/fx_book.py:578-589 are close enough to the brief. data.py:165 is the dropna inside load_prices, but the region-aware place to report it is load_region at data.py:203.
 - Task 15 leaves a real, verified defect unfixed by design (§13 "one defect, one change"): trading_algo/tax.py:126-137 and :170 scale DIVIDENDS by region.price_scale through a per-REGION injectable callable `price_scale(region_key) -> float`. CPG.L and IHG.L dividends are therefore still divided by 100 in the withholding-drag report. Making it per-ticker changes a signature that tests/test_tax.py:102, :125 and :134 monkeypatch with one-arg lambdas — a second defect and a second diff. Recorded as a finding in the task text.
@@ -3184,3 +5615,18 @@ worth reading before starting the task it belongs to.
 - tests/test_backtest.py:39 asserts `tight["metrics"]["MaxDrawdown"] >= off["metrics"]["MaxDrawdown"]`. Re-basing the breaker's peak (Task 14) lets a halted book re-enter, so a tight-stop run can in principle now end deeper than the no-stop run on the synthetic ASX path. I have written Task 14 Step 5 to run it first and only replace the assertion if it actually fails, with the replacement spelled out — but it is a premise that may legitimately break.
 - tests/test_paper_trade.py:196-200's _KNOWN_STATUSES already omits the "unpriced" status that paper_trade.py:804 can emit, so the set is not authoritative today. Task 19 adds "split-halt" to it; "unpriced" is left as a pre-existing finding rather than a drive-by fix.
 - Task 14's integration test (test_backtest_breaker_does_not_latch_on_a_market_that_never_recovers) asserts a halt COUNT, not that the book visibly trades again, because on the constructed path the 200-day trend filter legitimately keeps the book in cash after the crash. The "allowed to trade" claim from the brief is proved by the risk_breaker unit test instead. The integration test still separates the two behaviours cleanly (~1 halt vs ~40), but it is an indirect observable and depends on DEFAULT_PARAMS (min_history_days=300, stock_trend_ma=200, max_gross=1.0) not changing.
+
+## Phase 5 — Regeneration, deploy, restart, and survivorship
+
+- Task 21 adds `Region.benchmark_ticker`, which is NOT in the locked contract. Task 15 also edits the same dataclass block in `trading_algo/regions.py:36` to add `quote_overrides` and `scale_for`. Both additions are defaulted fields so they are semantically independent, but they touch adjacent lines and will conflict textually. Sequence Task 15 before Task 21, or expect a one-hunk merge.
+- The brief says `tests/test_close_only_bars.py:457-466` pins the wide FX universe as correct. It does not. Lines 452 and 467 assert `state["symbols"] == list(DEFAULT_UNIVERSE)` symbolically and follow the narrowed list with no edit. The only literal pins are `tests/test_fx_pairs.py:8-12` and the `assert len(pairs.DEFAULT_UNIVERSE) == 16` at `tests/test_fx_pairs.py:134`, and commit f15a118 already rewrites both. Task 23 is therefore smaller than the brief assumes.
+- The cherry-pick in Task 23 WILL conflict, in exactly one file. `git diff f15a118^ HEAD -- trading_algo/forex/__init__.py` shows this branch removed `MetaLabeler` from both the import and `__all__`, and f15a118's hunk carries `MetaLabeler` in its context lines. The resolution is given verbatim in the task. All other touched files apply: `tests/test_fx_pairs.py`, `tests/test_fx_ml.py`, `tests/test_multiasset_day.py` and `docs/research/COST_AWARE_OBJECTIVE_RESULT.md` are byte-identical to the commit's parent, and `pairs.py` / `train.py` diverge only outside the picked hunks.
+- Task 27's brief assumes the PIT-versus-non-PIT delta can simply be published. It cannot today: `run_backtest.pit_impact` (`trading_algo/run_backtest.py:152-161`) computes the PORTFOLIO CAGR delta only, with no per-sleeve breakdown, and `--compare-pit` prints three lines. A real code change is needed before any data arrives, so I made that Steps 1-4 (unblocked) and gated only the wiring and publication on data.
+- Task 24's 'docs tables' surface is materially larger than the brief implies. Hand-copied numbers live in `docs/SHARPE_RESEARCH.md` (lines 58, 165, 218, 350), `docs/MONTE_CARLO_RESEARCH.md:237` (currently UNTRACKED in git) and `CLAUDE.md`'s TSX line ('raw Sharpe 0.948, haircut 0.608, maxDD -15.6%'). None of these is generated; each must be re-read off the new cache and corrected by hand with its before/after, which is real work the brief's four commands do not cover.
+- The FX review banner has TWO rendering surfaces, not one: the terminal SPA (`trading_algo/dashboard/static/app.js`, served by `dashboard/fx_api.py`) and the PUBLISHED static page (`trading_algo/forex/dashboard.py`, which `scripts/build_site.sh` exports to `public/fx_{account}.html` on every day-paper and fx-paper run). The public one is the page a reader actually lands on. I put the text in `forex/fx_config.REVIEW_NOTICE` so both consume one definition, but it does mean Task 22 touches six files and needs two commits.
+- `state/backtest_equity.json` was generated 2026-07-24 and predates three blocks the exporter now writes (`benchmark_stats`, `allocations`, `fx_rebalance_cost`). The BACKTEST tab is currently rendering a payload shape the code no longer produces, so the staleness is not merely numerical - some fields the frontend reads are absent entirely. Worth checking the tab renders at all before and after regeneration.
+- Task 26's FX restart needs `--force`. `fx_book.init_defaults` (`forex/fx_book.py:329-337`) SKIPS an existing book silently rather than raising, unlike the equity `init_account` which raises SystemExit. Without `--force` the restart will report success and change nothing. Separately, `--force` rewrites the JSON state but I found no code path that purges the corresponding rows from `state/fx_books.db` / `state/paper_books.db`; the archive copies both DBs, but whether stale rows survive into the reopened books needs a check on the first clean run.
+- Task 21's diff is ~32 lines across four files, at the spec section 13 threshold. I judged it one idea and kept it as one commit, because splitting the label off would ship an unlabelled benchmark number for the intervening commit - which is the exact defect. Flagging per the constraint rather than pushing through silently.
+- Two facts in the brief have drifted. HEAD is 6fa6f84, not 11f876e (three doc commits landed after the review). And `git log --oneline main..HEAD | wc -l` is 46, not the spec's 41, so Task 25 merges more than the spec's risk table anticipated.
+- Confirmed the Task 23 -> Task 26 ordering the brief flags, and the mechanism is worse than 'reopen on 16': `fx_book.run_once` at `forex/fx_book.py:411-416` merges via `list(dict.fromkeys([*state["symbols"], *DEFAULT_UNIVERSE]))`, a UNION that never removes. A book reopened on 16 symbols can never shed the crosses by any later config change - only by another `--init --force`.
+
