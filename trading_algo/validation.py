@@ -32,9 +32,10 @@ from itertools import combinations
 
 import numpy as np
 
+from . import metrics
+
 _GAMMA = 0.5772156649015329   # Euler–Mascheroni
 _E = math.e
-TRADING_DAYS = 252
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,7 @@ def pbo(returns_matrix: np.ndarray, n_splits: int = 10) -> float:
 # ---------------------------------------------------------------------------
 # Equity-facing helpers (backlog F2 gate + F19 Sharpe haircut)
 # ---------------------------------------------------------------------------
-def annualise_sharpe(per_period_sr: float, periods_per_year: int = TRADING_DAYS) -> float:
+def annualise_sharpe(per_period_sr: float, periods_per_year: int = metrics.ANNUALIZATION) -> float:
     return float(per_period_sr) * math.sqrt(periods_per_year)
 
 

@@ -11,6 +11,16 @@ def rng():
 
 
 # --- P0-E: one shared implementation ---------------------------------------
+def test_no_second_annualisation_constant_in_validation():
+    """One definition of 252 in the repo, and it is metrics.ANNUALIZATION."""
+    import inspect
+
+    from trading_algo import metrics
+    assert not hasattr(val, "TRADING_DAYS")
+    default = inspect.signature(val.annualise_sharpe).parameters["periods_per_year"].default
+    assert default == metrics.ANNUALIZATION
+
+
 def test_forex_reexports_the_same_functions():
     from trading_algo.forex import validation as fx_val
     # identical function objects — no second copy of the math
