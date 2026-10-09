@@ -979,16 +979,27 @@ def test_the_bridge_rebuilds_a_staged_book_from_its_fills(account, paper_cycle):
 # decided a bar BEFORE the book's first equity date. The sleeve records that
 # bar, and the bridge's comparison opens it there.
 def _fresh_sleeve() -> dict:
-    """A sleeve exactly as `init_account` leaves it."""
+    """A sleeve exactly as `init_account` leaves it: `opened_on` seeded None,
+    i.e. a book that records its first decision and has not made it yet."""
     return {"currency": "USD", "cash": 10_000.0, "positions": {}, "cost_basis": {},
             "realized_pnl": 0.0, "last_rebalance_month": None,
-            "last_rebalance_date": None}
+            "last_rebalance_date": None, "opened_on": None}
+
+
+def _legacy_sleeve() -> dict:
+    """A sleeve saved before `opened_on` existed: no key at all. The shape of
+    live `full`'s ASX sleeve — flat, never filled a staged target."""
+    sleeve = _fresh_sleeve()
+    del sleeve["opened_on"]
+    return {**sleeve, "last_rebalance_month": "2025-11",
+            "last_rebalance_date": "2025-11-03"}
 
 
 def test_a_sleeve_records_its_first_decision_bar_once():
     """`opened_on` is the bar the sleeve FIRST staged a target on. Nothing that
     stages later moves it: a re-stage, the breaker's exit, a fill, the next
-    month's decision, or a resume clearing the rebalance pins."""
+    month's decision, or a resume clearing the rebalance pins — not even once
+    every other trace of that decision is gone."""
     us = get_region("US")
     a = us.universe[0]
     sleeve = _fresh_sleeve()
@@ -998,43 +1009,87 @@ def test_a_sleeve_records_its_first_decision_bar_once():
     pt._stage_target(sleeve, "2026-01-05", pd.Series({a: 0.4}))     # same bar again
     pt._fill_pending(us, sleeve, pd.Series({a: 100.0}), "2026-01-06", [])
     pt._stage_target(sleeve, "2026-01-07", pd.Series(dtype=float))  # breaker exit
+    pt._fill_pending(us, sleeve, pd.Series({a: 100.0}), "2026-01-08", [])
     sleeve["last_rebalance_month"] = sleeve["last_rebalance_date"] = None  # resume
+    sleeve.pop("last_decision_date")                # every other trace gone
+    assert not any(sleeve["positions"].values()) and "pending_target" not in sleeve
     pt._stage_target(sleeve, "2026-02-02", pd.Series({a: 0.5}))     # next decision
     assert sleeve["opened_on"] == "2026-01-05"
 
 
 @pytest.mark.parametrize("trace", [
+    {},                                            # flat, pins cleared by a reset
     {"positions": {"AAA": 10}},                    # holds shares
-    {"last_rebalance_date": "2025-12-01"},         # filled before (any version)
     {"last_decision_date": "2025-11-28"},          # executed a staged target
     {"pending_target": {"date": "2025-12-19", "weights": {}, "frozen": []}},
 ])
-def test_a_sleeve_that_decided_before_the_record_existed_is_never_stamped(trace):
-    """Every live book predates `opened_on`. Its next decision is NOT its first,
-    so stamping it would open the comparison months after the book really
-    did. A sleeve with any trace of an earlier decision stays without the key,
-    and the bridge falls back to the book's first equity date for it."""
-    sleeve = {**_fresh_sleeve(), **trace}
+def test_a_legacy_sleeve_is_never_stamped(trace):
+    """A sleeve without the key predates the record, so whatever it decides
+    next is NOT its first decision: stamping it would open the comparison
+    months after the book really traded. Whether any trace of its history
+    survives is irrelevant — a reset can clear them all."""
+    sleeve = {**_legacy_sleeve(), "last_rebalance_month": None,
+              "last_rebalance_date": None, **trace}
     pt._stage_target(sleeve, "2026-10-12", pd.Series({"AAA": 0.5}))
     assert "opened_on" not in sleeve
 
 
-def test_the_engine_stamps_the_first_decision_and_never_again(account, paper_cycle):
-    """Through the real daily run: the first run's decision bar is recorded, and
+def test_init_seeds_every_sleeve_and_the_engine_stamps_the_first_decision(
+        account, paper_cycle):
+    """`init_account` seeds `opened_on: None` on every sleeve (a book that will
+    record its first decision); the first run's decision bar is recorded, and
     the fill, a later run and a `--force-rebalance` reset leave it alone."""
     pt.init_account(account, capital=300_000, synthetic=True,
-                    allocations={"US": 1.0})
+                    allocations={"US": 1.0, "FTSE": 1.0})
+    assert all(sl["opened_on"] is None
+               for sl in pt.load_state(account)["sleeves"].values())
     state = paper_cycle(account, sessions=1)
-    decided = state["sleeves"]["US"]["pending_target"]["date"]
-    assert state["sleeves"]["US"]["opened_on"] == decided
+    decided = {k: sl["pending_target"]["date"] for k, sl in state["sleeves"].items()}
+    assert {k: sl["opened_on"] for k, sl in state["sleeves"].items()} == decided
 
-    state = paper_cycle(account, sessions=2)
-    for sl in state["sleeves"].values():            # what --force-rebalance does
-        sl["last_rebalance_month"] = sl["last_rebalance_date"] = None
+    paper_cycle(account, sessions=2)
+    pt.main(["--account", account, "--force-rebalance", "--synthetic"])
+    state = pt.load_state(account)
+    for k, sl in state["sleeves"].items():
+        assert sl["pending_target"]["date"] > decided[k], "re-decided"
+        assert sl["opened_on"] == decided[k], k
+
+
+def _legacy_book(account) -> None:
+    """Write a one-sleeve book in the shape saved before `opened_on` existed."""
+    legacy = {
+        "account": account, "schema_version": 2, "base_currency": "AUD",
+        "initial_capital_base": 15_000.0, "allocations": {"US": 1.0},
+        "sleeves": {"US": _legacy_sleeve()}, "trades": [],
+        "equity_history": [["2025-11-03", 15_000.0]], "sleeve_history": [],
+        "fx_snapshot": {"USD": 1.5}, "group": "CORE", "param_overrides": {},
+        "peak_equity_base": 15_000.0, "risk_halted": False}
+    with open(pt._state_file(account), "w") as f:
+        json.dump(legacy, f)
+
+
+def test_a_legacy_book_is_never_stamped_after_a_force_rebalance(account, paper_cycle):
+    """`--force-rebalance` clears the rebalance pins of a flat legacy sleeve, so
+    nothing on it shows it ever decided — and it decides again at once."""
+    _legacy_book(account)
+    pt.main(["--account", account, "--force-rebalance", "--synthetic"])
+    sleeve = pt.load_state(account)["sleeves"]["US"]
+    assert sleeve.get("pending_target"), "the reset made it decide again"
+    assert "opened_on" not in sleeve
+
+
+def test_a_legacy_book_is_never_stamped_after_a_breaker_resume(account, paper_cycle):
+    """A breaker resume clears the same pins; the next run decides again."""
+    _legacy_book(account)
+    state = pt.load_state(account)
+    state.update(risk_halted=True, halt_cooldown=1, halt_last_day="2000-01-03")
     pt.save_state(account, state)
-    state = paper_cycle(account, sessions=1)
-    assert state["sleeves"]["US"]["pending_target"]["date"] > decided, "re-decided"
-    assert state["sleeves"]["US"]["opened_on"] == decided
+    state = paper_cycle(account, sessions=1)          # the cooldown runs out
+    assert state["risk_halted"] is False
+    assert state["sleeves"]["US"]["last_rebalance_date"] is None, "resumed"
+    state = paper_cycle(account, sessions=1)          # re-enters
+    assert state["sleeves"]["US"].get("pending_target"), "re-decided"
+    assert "opened_on" not in state["sleeves"]["US"]
 
 
 def _staggered_book(account, monkeypatch, sessions=5):
@@ -1120,7 +1175,8 @@ def test_the_bridge_no_longer_finds_the_comparison_flat_while_the_book_is_invest
 def test_a_book_without_opened_on_is_compared_exactly_as_before():
     """Every legacy book has no `opened_on`: each of its sleeves opens on the
     book's first equity date, exactly Task 13c's comparison, array for array.
-    So does a sleeve the key is missing from in an otherwise recorded book."""
+    So does a sleeve seeded None (a new book's sleeve that has not decided
+    yet) next to one recorded on that same date."""
     from trading_algo.portfolio_backtest import run_portfolio_backtest
 
     opened, last = "2020-03-11", "2020-06-30"
@@ -1128,8 +1184,7 @@ def test_a_book_without_opened_on_is_compared_exactly_as_before():
     state = {"initial_capital_base": 100_000.0, "base_currency": "AUD",
              "fx_snapshot": {"AUD": 1.0}, "trades": [], "allocations": alloc,
              "param_overrides": {},
-             "sleeves": {k: {**_fresh_sleeve(), "last_rebalance_month": "2020-06",
-                             "last_rebalance_date": "2020-06-02"} for k in alloc},
+             "sleeves": {k: _legacy_sleeve() for k in alloc},
              "equity_history": [[opened, 100_000.0], [last, 101_000.0]]}
     got = pt._backtest_for_book(state, synthetic=True)
     want = run_portfolio_backtest(
@@ -1149,8 +1204,9 @@ def test_a_book_without_opened_on_is_compared_exactly_as_before():
             assert wa.keys() == wb.keys() and all(wa[d].equals(wb[d]) for d in wb)
 
     same(got, want)
-    # one sleeve recorded on the book's own first date, the others missing it
+    # one sleeve recorded on the book's own first date, one not decided yet
     state["sleeves"]["US"]["opened_on"] = opened
+    state["sleeves"]["FTSE"]["opened_on"] = None
     same(pt._backtest_for_book(state, synthetic=True), want)
 
 

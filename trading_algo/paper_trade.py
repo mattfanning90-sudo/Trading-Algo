@@ -416,6 +416,10 @@ def init_account(account: str, capital: float, synthetic: bool,
             "realized_pnl": 0.0,
             "last_rebalance_month": None,
             "last_rebalance_date": None,
+            # The bar of this sleeve's first decision, stamped once by
+            # `_stage_target`. None = not decided yet; a sleeve saved without
+            # the key predates it and is never stamped.
+            "opened_on": None,
         }
     state = {
         "account": account,
@@ -877,14 +881,13 @@ def _stage_target(sleeve: dict, today: str, targets: pd.Series,
     The FIRST target a sleeve ever stages also records its bar as `opened_on`,
     once: the bridge's comparison opens this sleeve there
     (`_backtest_for_book`). It cannot be recovered later — a skipped run breaks
-    "first fill bar minus one". A sleeve with any trace of an earlier decision
-    (a staged or executed target, a fill, a holding) predates the key, so this
-    decision is not its first: it stays without one rather than a wrong one.
+    "first fill bar minus one". `init_account` seeds the key as None, so None
+    means "a new book that has not decided yet" and is stamped here; a sleeve
+    WITHOUT the key was saved before the record existed, so its next decision
+    is not its first and it is never stamped (a `--force-rebalance` or a
+    resume can clear every other trace of its history).
     """
-    if "opened_on" not in sleeve and not (
-            sleeve.get("pending_target") or sleeve.get("last_decision_date")
-            or sleeve.get("last_rebalance_date")
-            or any((sleeve.get("positions") or {}).values())):
+    if sleeve.get("opened_on", "legacy") is None:
         sleeve["opened_on"] = today
     sleeve["pending_target"] = {
         "date": today,
@@ -1318,8 +1321,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         `initial_capital_base` split by the book's allocations. On a first run
         each sleeve decides on its OWN latest bar, so a sleeve whose bar was
         older that run opens before the book's first equity date; a sleeve
-        without the record (every book opened before it existed) opens on
-        that first equity date instead. History before a sleeve's open is
+        with no recorded bar (every book opened before the record existed, or
+        a new one that has not decided yet) opens on that first equity date. History before a sleeve's open is
         warm-up only — the signals read it, the sleeve holds nothing — and
         its first bar on or after it decides, as the book did. The per-order
         commission floor (Task 13) makes cost depend on size, so the size has
