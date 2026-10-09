@@ -1,0 +1,59 @@
+/* Momentum home screen — Midnight. Colours are named by role so a light theme
+   can swap the values later. Status is never colour alone: shape + word. */
+:root {
+  --bg: #0a0d14; --glow: #1b2a4a; --panel: rgba(255,255,255,.035);
+  --line: rgba(255,255,255,.16); --sidebar: #0e121b;
+  --text: #e7ecf5; --muted: #8a93a6; --up: #34d399; --down: #fb7185;
+  --look: #fbbf24; --act: #fb7185; --clear: #34d399;
+  --focus: #9db7ff; --select: #7aa2ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; color: var(--text);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums; }
+body { background: radial-gradient(1200px 420px at 30% -10%, var(--glow) 0%, transparent 60%), var(--bg); }
+a { color: var(--focus); }
+.app { display: grid; grid-template-columns: 250px 1fr; height: 100vh; }
+.sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 14px 10px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.sidebar h2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  margin: 14px 8px 4px; font-weight: 600; }
+.row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0;
+  border-left: 3px solid transparent; border-radius: 7px; background: none; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+.row:hover { background: rgba(255,255,255,.05); }
+.row[aria-current="true"] { background: rgba(122,162,255,.16); border-left-color: var(--select); }
+.row .chg { margin-left: auto; white-space: nowrap; }
+.row .fresh { color: var(--look); font-size: 11px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.main { overflow-y: auto; padding: 22px 28px 40px; }
+.pill { display: inline-flex; gap: 8px; align-items: center; padding: 4px 12px; border-radius: 999px;
+  font-weight: 600; border: 1px solid currentColor; }
+.pill.act { color: var(--act); } .pill.look { color: var(--look); }
+.pill.clear { color: var(--clear); } .pill.nodata { color: var(--muted); }
+.hero { font-size: 40px; font-weight: 300; letter-spacing: -.02em; margin: 14px 0 2px; }
+.hero small { font-size: 20px; }
+.up { color: var(--up); } .down { color: var(--down); } .flat, .muted { color: var(--muted); }
+.balance { font-size: 15px; color: var(--muted); }
+.chips { display: flex; gap: 6px; margin: 16px 0 8px; }
+.chip { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: rgba(122,162,255,.22); border-color: var(--select); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 16px; margin-top: 14px; }
+.panel h3 { margin: 0 0 8px; font-size: 13px; }
+.items { list-style: none; margin: 0; padding: 0; }
+.items li { padding: 6px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.items li:first-child { border-top: 0; }
+.tag { font-weight: 600; margin-right: 6px; }
+.tag.act { color: var(--act); } .tag.look { color: var(--look); }
+.chart svg { width: 100%; height: 160px; display: block; }
+.caption { color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; }
+.banner { border: 1px solid var(--look); color: var(--look); border-radius: 10px; padding: 8px 12px;
+  margin-bottom: 12px; }
+.jobs { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); }
+.jobs .bad { color: var(--act); } .jobs .unk { color: var(--look); }
+details summary { cursor: pointer; color: var(--muted); margin-top: 6px; }
+.foot { margin-top: 18px; color: var(--muted); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@media (prefers-contrast: more) { :root { --muted: #b4bccb; --line: rgba(255,255,255,.4); } }
