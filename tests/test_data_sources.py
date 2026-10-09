@@ -409,3 +409,63 @@ def test_load_single_source_never_routes(monkeypatch):
     monkeypatch.setattr(feeds, "load_routed", boom)
     panel = feeds.load(["EURUSD", "BTCUSD"], synthetic=True, source="yahoo")
     assert set(panel) == {"EURUSD", "BTCUSD"}
+
+
+# --- dividends (paper-book credit) ------------------------------------------
+def test_dividends_are_shaped_per_ticker_and_cached(tmp_path, monkeypatch):
+    """A per-ticker dividend series, with load_prices' cache discipline: a
+    closed window is immutable history and is never re-downloaded."""
+    import pandas as pd
+    import pytest
+
+    from trading_algo import data
+
+    pytest.importorskip("pyarrow")
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+
+    idx = pd.date_range("2026-06-01", periods=3, freq="D")
+    raw = pd.DataFrame(
+        {("Dividends", "AAA"): [0.0, 0.5, 0.0],
+         ("Dividends", "BBB"): [0.0, 0.0, 0.0],
+         ("Close", "AAA"): [10.0, 10.0, 10.0],
+         ("Close", "BBB"): [20.0, 20.0, 20.0]}, index=idx)
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+
+    calls = []
+
+    def fake(tickers, start, end):
+        calls.append((tuple(tickers), start, end))
+        return raw
+
+    monkeypatch.setattr(data, "_download_dividends", fake)
+
+    df = data.dividends(["AAA", "BBB"], "2026-06-01", "2026-06-04")
+    assert list(df.columns) == ["AAA", "BBB"]
+    assert len(df) == 1, "rows with no dividend anywhere are dropped"
+    assert float(df.iloc[0]["AAA"]) == pytest.approx(0.5)
+    assert float(df.iloc[0]["BBB"]) == 0.0
+
+    data.dividends(["AAA", "BBB"], "2026-06-01", "2026-06-04")
+    assert len(calls) == 1, "a closed window must be served from cache"
+
+
+def test_a_ticker_the_feed_did_not_return_is_not_read_as_paying_nothing(
+        tmp_path, monkeypatch):
+    """yfinance drops a failed name's `Dividends` column. Measured 2026-10-10:
+    MRK downloaded beside a bogus ticker came back with Dividends for MRK only
+    and an all-NaN Close for the other, while a name that downloaded and paid
+    nothing (AMD) keeps a column of zeros. Filling the gap with zeros would
+    book "paid nothing" for a name whose data never arrived."""
+    from trading_algo import data
+
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    idx = pd.date_range("2026-06-01", periods=2, freq="D")
+    raw = pd.DataFrame({("Dividends", "AAA"): [0.0, 0.5],
+                        ("Close", "AAA"): [10.0, 10.0],
+                        ("Close", "BAD"): [float("nan")] * 2}, index=idx)
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+    monkeypatch.setattr(data, "_download_dividends", lambda t, s, e: raw)
+
+    df = data.dividends(["AAA", "BAD"], "2026-06-01", "2026-06-03",
+                        use_cache=False)
+    assert list(df.columns) == ["AAA"]

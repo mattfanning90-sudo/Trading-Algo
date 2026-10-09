@@ -919,3 +919,152 @@ def test_the_bridge_rebuilds_a_staged_book_from_its_fills(account, paper_cycle):
     sleeve = state["sleeves"]["US"]
     assert cash == pytest.approx(sleeve["cash"])
     assert pos == {t: float(n) for t, n in sleeve["positions"].items()}
+
+
+# --- dividends: credited to cash, ledgered as DIV rows ----------------------
+def test_dividends_are_credited_to_cash_and_ledgered(monkeypatch):
+    """The paper book marks at the UNADJUSTED close, so an ex-dividend drop is
+    booked as a loss while the cash never arrives — the backtest, running on
+    yfinance's adjusted series, is a total-return number. This credit is what
+    makes the two engines measure the same thing."""
+    from trading_algo.regions import get_region
+
+    region = get_region("US")
+    sleeve = {"currency": "USD", "cash": 1_000.0,
+              "positions": {"AAA": 100, "BBB": -50},
+              "last_dividend_date": "2026-06-01"}
+    div = pd.DataFrame({"AAA": [0.5], "BBB": [0.2]},
+                       index=pd.DatetimeIndex(["2026-06-10"]))
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: div)
+
+    log = []
+    got = pt._credit_dividends(region, sleeve, "2026-06-15", log, synthetic=False)
+
+    # long 100 @ 0.5 = +50; a SHORT owes the dividend: -50 @ 0.2 = -10
+    assert got == pytest.approx(40.0)
+    assert sleeve["cash"] == pytest.approx(1_040.0)
+    assert sleeve["last_dividend_date"] == "2026-06-15"
+    rows = {r["ticker"]: r for r in log}
+    assert rows["AAA"]["side"] == "DIV" and rows["AAA"]["date"] == "2026-06-10"
+    assert rows["AAA"]["commission"] == 0.0
+    assert "decision" not in rows["AAA"], "a dividend is not a fill; TCA must skip it"
+    assert rows["BBB"]["shares"] == -50
+
+
+def test_first_run_credits_nothing_and_arms_the_window(monkeypatch):
+    """With no prior mark there is no window to credit over, and back-crediting
+    a book's whole history from a feed is not something to do silently."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "USD", "cash": 1_000.0, "positions": {"AAA": 100}}
+    monkeypatch.setattr(pt.data, "dividends",
+                        lambda t, s, e: (_ for _ in ()).throw(AssertionError("no fetch")))
+    log = []
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-15", log,
+                                synthetic=False) == 0.0
+    assert sleeve["last_dividend_date"] == "2026-06-15"
+    assert log == []
+
+
+def test_a_dividend_going_ex_on_this_bar_is_credited(monkeypatch):
+    """yfinance's `end` is EXCLUSIVE. Measured 2026-10-10: MRK's 0.85 ex
+    2026-09-15 is absent from a download ending 2026-09-15 and present in one
+    ending 2026-09-16. Asking for (last, today) would put a dividend going ex
+    on today's own bar in no window at all: this run cannot see it, and the
+    next run's window starts after it."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"MRK": 10},
+              "last_dividend_date": "2026-09-14"}
+    paid = pd.DataFrame({"MRK": [0.85]}, index=pd.DatetimeIndex(["2026-09-15"]))
+
+    def yahoo(tickers, start, end):             # end exclusive, as yfinance
+        return paid.loc[(paid.index >= start) & (paid.index < end)]
+
+    monkeypatch.setattr(pt.data, "dividends", yahoo)
+    log = []
+    got = pt._credit_dividends(get_region("US"), sleeve, "2026-09-15", log,
+                               synthetic=False)
+    assert got == pytest.approx(8.5)
+    assert [r["date"] for r in log] == ["2026-09-15"]
+
+
+def test_an_lse_dividend_is_scaled_like_its_price(monkeypatch):
+    """Yahoo quotes an LSE dividend in pence, as it quotes the price. Measured
+    2026-10-10: HSBA.L paid 7.4134 ex 2026-08-13 against a 1,525.8 close. The
+    sleeve keeps pounds, so 100 shares earn GBP 7.41, not GBP 741."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "GBP", "cash": 0.0, "positions": {"HSBA.L": 100},
+              "last_dividend_date": "2026-08-12"}
+    paid = pd.DataFrame({"HSBA.L": [7.4134]},
+                        index=pd.DatetimeIndex(["2026-08-13"]))
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: paid)
+    log = []
+    got = pt._credit_dividends(get_region("FTSE"), sleeve, "2026-08-13", log,
+                               synthetic=False)
+    assert got == pytest.approx(7.4134)
+    assert log[0]["fill"] == pytest.approx(0.074134)
+    assert log[0]["currency"] == "GBP"
+
+
+def test_a_feed_failure_keeps_the_window_for_the_next_run(monkeypatch):
+    """Advancing the window past a failed fetch loses every dividend in it for
+    good, because the next run's window starts after it. Keep the window, and
+    the next run credits it."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-01"}
+
+    def down(tickers, start, end):
+        raise RuntimeError("Yahoo 429")
+
+    monkeypatch.setattr(pt.data, "dividends", down)
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-15", [],
+                                synthetic=False) == 0.0
+    assert sleeve["last_dividend_date"] == "2026-06-01"
+
+    paid = pd.DataFrame({"AAA": [0.5]}, index=pd.DatetimeIndex(["2026-06-10"]))
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: paid)
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-16", [],
+                                synthetic=False) == pytest.approx(5.0)
+    assert sleeve["last_dividend_date"] == "2026-06-16"
+
+
+def test_an_earlier_or_repeated_bar_never_reopens_a_credited_window(monkeypatch):
+    """The engine runs up to three times on one bar, and a feed can briefly
+    serve an older last bar. Neither may move the window back: the next run
+    would credit the same ex-date twice."""
+    from trading_algo.regions import get_region
+
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-15"}
+    monkeypatch.setattr(pt.data, "dividends",
+                        lambda t, s, e: (_ for _ in ()).throw(AssertionError("no fetch")))
+    for bar in ("2026-06-15", "2026-06-12"):
+        assert pt._credit_dividends(get_region("US"), sleeve, bar, [],
+                                    synthetic=False) == 0.0
+        assert sleeve["last_dividend_date"] == "2026-06-15"
+
+
+def test_a_dividend_accrues_to_the_book_before_this_runs_fill(
+        account, paper_cycle, monkeypatch):
+    """A dividend that went ex since the last run belongs to the shares held
+    over that period, not to what this run's fill buys at its close — so the
+    credit runs before the staged target fills."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    seen = []
+    real = pt._credit_dividends
+
+    def spy(region, sleeve, today, trade_log, synthetic):
+        seen.append((dict(sleeve["positions"]), len(trade_log)))
+        return real(region, sleeve, today, trade_log, synthetic)
+
+    monkeypatch.setattr(pt, "_credit_dividends", spy)
+    paper_cycle(account, sessions=1)                  # decide
+    state = paper_cycle(account, sessions=1)          # fill
+    assert state["sleeves"]["US"]["positions"], "the second session must fill"
+    assert seen == [({}, 0), ({}, 0)], "the credit must see the book before the fill"
+    assert state["sleeves"]["US"]["last_dividend_date"] == state["equity_history"][-1][0]

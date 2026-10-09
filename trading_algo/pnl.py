@@ -103,6 +103,18 @@ def _trade_cost(t: dict) -> float:
     return float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
 
 
+# Ledger rows that move cash but execute nothing. A `DIV` row is a dividend:
+# `shares` is the signed position it was paid on and `fill` the cash per share,
+# so a reader that takes it for a trade sees a SELL (a BUY, on a short) at a
+# price no venue quoted. Every fill-reading consumer asks `is_fill` first.
+CASH_EVENTS = frozenset({"DIV"})
+
+
+def is_fill(t: dict) -> bool:
+    """True for an execution; False for a cash event such as a dividend."""
+    return t.get("side") not in CASH_EVENTS
+
+
 def build_lots(trades: list[dict]) -> tuple[dict, list[dict]]:
     """Replay the whole fills log FIFO.
 
@@ -114,6 +126,8 @@ def build_lots(trades: list[dict]) -> tuple[dict, list[dict]]:
     lots: dict[tuple, list] = {}
     realized: list[dict] = []
     for t in trades:
+        if not is_fill(t):
+            continue            # DIV and other cash events move cash, never lots
         key = (t["region"], t["ticker"])
         qty = int(t["shares"])
         delta = qty if t["side"] == "BUY" else -qty

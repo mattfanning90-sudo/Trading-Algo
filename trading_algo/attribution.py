@@ -24,7 +24,7 @@ from bisect import bisect_left
 import pandas as pd
 
 from . import config as cfg
-from . import fees, metrics, tca
+from . import fees, metrics, pnl, tca
 from .regions import get_region
 
 # AC4: alert when annualised tracking error exceeds this budget.
@@ -75,8 +75,8 @@ def realized_cost_drag(trades: list) -> dict:
     for t in trades:
         fill = t.get("fill")
         shares = t.get("shares", 0)
-        if not fill or not shares:
-            continue
+        if not fill or not shares or not pnl.is_fill(t):
+            continue                       # a dividend is not traded notional
         notional = float(shares) * float(fill)
         decision = t.get("decision", fill)
         slippage = abs(float(fill) - float(decision)) * float(shares)
@@ -169,7 +169,7 @@ def _window_fills(paper_state: dict, start: pd.Timestamp,
     """
     return [(t, _base_per_local(paper_state, t.get("currency")))
             for t in paper_state.get("trades") or []
-            if start < pd.Timestamp(t.get("date")) <= end
+            if start < pd.Timestamp(t.get("date")) <= end and pnl.is_fill(t)
             and t.get("shares") and t.get("fill") is not None]
 
 
@@ -225,8 +225,9 @@ def _sleeve_close(paper_state: dict, key: str,
 
     Rebuilt BACKWARD from the stored sleeve, which is the book after every
     trade: cash moves only on fills (`rebalance_sleeve` debits
-    `delta * fill + commission + stamp_duty`), so undoing each fill dated after
-    `day` recovers that close. A forward replay would need the inception FX
+    `delta * fill + commission + stamp_duty`) and dividends (a `DIV` row credits
+    `shares * fill` and moves no shares), so undoing each dated after `day`
+    recovers that close. A forward replay would need the inception FX
     rate, which the state does not keep.
     """
     sleeve = paper_state["sleeves"][key]
@@ -234,6 +235,9 @@ def _sleeve_close(paper_state: dict, key: str,
     pos = {t: float(n) for t, n in (sleeve.get("positions") or {}).items()}
     for t in paper_state.get("trades") or []:
         if t.get("region") != key or pd.Timestamp(t["date"]) <= day:
+            continue
+        if t.get("side") == "DIV":
+            cash -= float(t["shares"]) * float(t["fill"])
             continue
         delta = float(t["shares"]) * (1.0 if t.get("side") == "BUY" else -1.0)
         cash += (delta * float(t["fill"]) + float(t.get("commission") or 0.0)
@@ -426,14 +430,26 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     left_out -= len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
+    divs = [(t, _base_per_local(paper_state, t.get("currency")))
+            for t in paper_state.get("trades") or []
+            if t.get("side") == "DIV" and start < pd.Timestamp(t["date"]) <= end]
+    credited = sum(float(t["shares"]) * float(t["fill"]) * r for t, r in divs if r)
+    div_unrated = sorted({str(t.get("currency")) for t, r in divs if r is None})
     lines = {name: 0.0 for name in BRIDGE_LINES}
     lines["fill_convention"] = slip_excess / start_equity
     lines["commission_floor"] = _line_commission_floor(fills) / start_equity
 
     ccy = paper_state.get("base_currency") or "base"
     notes = {
-        "dividends": "0.0 — the paper ledger credits no dividend yet; the "
-                     "backtest's prices are already total-return",
+        "dividends": (f"0.0 — both engines include them: the backtest's prices "
+                      f"are total-return, and the paper book's DIV ledger rows "
+                      f"credited a net {credited:,.2f} {ccy} over this window "
+                      f"(a short pays its dividend)"
+                      + (f" ({', '.join(div_unrated)} rows left out — no rate in "
+                         "fx_snapshot)" if div_unrated else "")
+                      + ". A dividend the ledger does not hold (one that went ex "
+                        "before the book credited them) is not in that figure and "
+                        "sits in rebalance_timing, or in residual without it"),
         "cash_interest": "0.0 — the paper book accrues no interest on idle cash "
                          "yet; the backtest applies fees.idle_cash_credit, which "
                          "this bridge measures only from the backtest's holdings "
@@ -495,8 +511,9 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                     "(data-quality exclusions, whole-share rounding of the name "
                     "mix), which cannot be separated without per-name "
                     "counterfactual books — plus every sleeve-level cause no "
-                    "line names yet: turnover-cost differences, dividends, FX "
-                    "translation timing, bars stamped a day apart")
+                    "line names yet: turnover-cost differences, dividends the "
+                    "ledger does not hold, FX translation timing, bars stamped "
+                    "a day apart")
                 notes["residual"] = (
                     "the portfolio layer: the backtest trues its sleeves back to "
                     "target each month and pays the FX spread; the paper book "

@@ -44,7 +44,7 @@ import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 
-from . import notifications
+from . import notifications, pnl
 
 # Levels, most severe first.
 ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
@@ -122,11 +122,12 @@ def _bar_hours(state: dict) -> float:
 def reconcile_equity(account: str, state: dict) -> list[Finding]:
     """Replay every equity trade and compare against the stored sleeve.
 
-    A paper sleeve's cash is fully determined by its trades: start at the funded
+    A paper sleeve's cash is fully determined by its ledger: start at the funded
     allocation, subtract buys (plus commission and stamp duty), add sells (less
-    commission). If the replay and the stored cash disagree by more than a cent,
-    something wrote the book outside the ledger — which would make every reported
-    number downstream untrustworthy.
+    commission) and dividends (a `DIV` row, which moves no shares). If the
+    replay and the stored cash disagree by more than a cent, something wrote
+    the book outside the ledger — which would make every reported number
+    downstream untrustworthy.
     """
     found: list[Finding] = []
     sleeves = state.get("sleeves") or {}
@@ -156,6 +157,9 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
             shares = float(t.get("shares", 0))
             fill = float(t.get("fill", 0.0))
             fee = float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
+            if t.get("side") == "DIV":
+                cash += shares * fill    # a dividend credits cash; shares unchanged
+                continue
             if t.get("side") == "BUY":
                 cash -= shares * fill + fee
                 pos[t["ticker"]] = pos.get(t["ticker"], 0.0) + shares
@@ -241,6 +245,8 @@ def check_market_hours(account: str, state: dict, kind: str,
     offenders: dict[str, int] = {}
     historical: dict[str, int] = {}
     for t in state.get("trades") or []:
+        if not pnl.is_fill(t):
+            continue          # a dividend's ex-date is no order on a venue
         symbol = t.get("pair") or t.get("ticker") or "?"
         try:
             stamp = t["date"]
@@ -304,8 +310,8 @@ def check_dead_price(account: str, state: dict) -> list[Finding]:
 
 def check_whole_shares(account: str, state: dict) -> list[Finding]:
     """Invariant #4: paper equity trades are whole shares."""
-    bad = [t for t in state.get("trades") or []
-           if abs(float(t.get("shares", 0)) - round(float(t.get("shares", 0)))) > 1e-9]
+    bad = [t for t in state.get("trades") or [] if pnl.is_fill(t)
+           and abs(float(t.get("shares", 0)) - round(float(t.get("shares", 0)))) > 1e-9]
     if not bad:
         return []
     return [Finding(ERROR, account, "fractional-shares",
@@ -315,12 +321,12 @@ def check_whole_shares(account: str, state: dict) -> list[Finding]:
 
 def check_costs_charged(account: str, state: dict) -> list[Finding]:
     """Invariant #2: costs are always on. A zero-commission fill is suspicious."""
-    trades = state.get("trades") or []
-    free = [t for t in trades if float(t.get("commission", 0.0)) <= 0.0]
+    fills = [t for t in state.get("trades") or [] if pnl.is_fill(t)]
+    free = [t for t in fills if float(t.get("commission", 0.0)) <= 0.0]
     if not free:
         return []
     return [Finding(ERROR, account, "uncosted-trade",
-                    f"{len(free)} of {len(trades)} equity trades booked with zero "
+                    f"{len(free)} of {len(fills)} equity fills booked with zero "
                     "commission — invariant #2 says costs are always on",
                     {"example": free[0]})]
 

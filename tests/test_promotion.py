@@ -93,3 +93,15 @@ def test_execution_dry_run_never_gated(monkeypatch):
         pytest.fail("dry-run must not be gated")
     except Exception:
         pass   # ib_insync connection failure is expected/acceptable here
+
+
+def test_a_dividend_month_is_not_a_rebalance_month():
+    """The track record counts the months the book TRADED in. A dividend
+    arrives whether or not the book trades, so a DIV ledger row must not add
+    a month to the record the live-money gate reads."""
+    s = _ready_state(months=3)
+    s["trades"] += [{"date": f"2026-{m:02d}-20", "region": "US", "side": "DIV"}
+                    for m in (4, 5, 6, 7, 8)]
+    v = promotion.promotion_check(s, **_evidence())
+    assert v["rebalance_months"] == 3
+    assert v["checks"]["track_record"] is False

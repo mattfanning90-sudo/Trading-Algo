@@ -20,7 +20,7 @@ without an explicit, audited human override.
 from __future__ import annotations
 
 from . import config as cfg
-from . import state_schema
+from . import pnl, state_schema
 
 
 class PromotionError(Exception):
@@ -28,8 +28,10 @@ class PromotionError(Exception):
 
 
 def _distinct_rebalance_months(state: dict) -> int:
-    """How many distinct calendar months the book actually traded in."""
-    months = {t["date"][:7] for t in state.get("trades", []) if t.get("date")}
+    """How many distinct calendar months the book actually traded in. A
+    dividend arrives whether or not the book trades, so it adds no month."""
+    months = {t["date"][:7] for t in state.get("trades", [])
+              if t.get("date") and pnl.is_fill(t)}
     return len(months)
 
 

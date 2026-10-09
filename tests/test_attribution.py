@@ -713,3 +713,52 @@ def test_a_nan_or_non_positive_rate_is_no_rate(bad):
     rep = attribution.reconcile(state, _bridge_predicted())
     assert rep["lines"]["commission_floor"] == 0.0
     assert "USD" in rep["notes"]["commission_floor"]
+
+
+# --- dividends: DIV ledger rows move cash and are not fills -----------------
+def _div(date, region, ticker, shares, dps, ccy):
+    return {"date": date, "region": region, "ticker": ticker, "side": "DIV",
+            "shares": shares, "fill": dps, "commission": 0.0,
+            "stamp_duty": 0.0, "currency": ccy}
+
+
+def test_the_cash_path_undoes_a_dividend_without_moving_shares():
+    """A DIV row is cash in (out, on a short) and no shares. Rebuilding
+    backward, a dividend credited after the day comes out of that day's cash
+    and leaves every position alone. Read as a fill, its share count goes
+    back onto the position as if those shares had been sold — a long doubles,
+    a short doubles — and the exposure line is computed off that."""
+    state = {"sleeves": {"US": {"currency": "USD", "cash": 95.0,
+                                "positions": {"AAA": 10, "BBB": -50}}},
+             "trades": [_div("2026-03-04", "US", "AAA", 10, 0.5, "USD"),
+                        _div("2026-03-04", "US", "BBB", -50, 0.2, "USD")]}
+    cash, pos = attribution._sleeve_close(state, "US", pd.Timestamp("2026-03-03"))
+    assert cash == pytest.approx(100.0)              # 95 - (+5) - (-10)
+    assert pos == {"AAA": 10.0, "BBB": -50.0}
+
+
+def test_a_dividend_does_not_dilute_the_cost_drag():
+    """Cost drag is cost over TRADED notional. A DIV row's shares x fill is a
+    dividend, not turnover; counted, it would shrink every region's drag."""
+    buy = {"region": "US", "side": "BUY", "shares": 10, "decision": 100.0,
+           "fill": 100.5, "commission": 1.0, "stamp_duty": 0.0, "currency": "USD"}
+    with_div = [buy, _div("2026-03-04", "US", "AAA", 10, 0.5, "USD")]
+    assert attribution.realized_cost_drag(with_div) == \
+        attribution.realized_cost_drag([buy])
+
+
+def test_the_bridge_names_the_dividends_the_paper_credited():
+    """Both engines now include dividends — the backtest inside its
+    total-return prices, the paper as DIV rows — so the line is 0.0 and its
+    note carries the paper's amount, as stamp_duty's does: 10 x A$0.50 =
+    A$5.00. A DIV row is not a fill, so one in a currency with no rate is
+    named under dividends, not reported as a fill left out of the cost lines."""
+    state = _bridge_state(100_995.08)
+    state["trades"] += [_div("2026-03-02", "ASX", "BHP.AX", 10, 0.5, "AUD"),
+                        _div("2026-03-02", "US", "AAPL", 10, 0.25, "USD")]
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["dividends"] == 0.0
+    assert "5.00 AUD" in rep["notes"]["dividends"]
+    assert "USD" in rep["notes"]["dividends"]
+    assert "left out" not in rep["notes"].get("commission_floor", "")
+    assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)

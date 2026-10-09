@@ -170,6 +170,63 @@ def load_prices(tickers: list[str], start: str, end: str | None = None,
     return raw
 
 
+def _download_dividends(tickers: list[str], start: str, end: str | None):
+    """Primary dividend source (Yahoo via yfinance). The network seam, kept
+    separate exactly like `_download_primary` so tests can replace it."""
+    import yfinance as yf  # imported lazily so the package works offline
+
+    return yf.download(tickers, start=start, end=end, actions=True,
+                       auto_adjust=False, progress=False)
+
+
+def dividends(tickers: list[str], start: str, end: str | None = None,
+              use_cache: bool = True) -> pd.DataFrame:
+    """Cash dividends per share (index=ex-date, cols=tickers). Raw Yahoo units.
+
+    Units are the quote's own — an LSE name pays pence, exactly as it is priced
+    — so the caller applies the same scale it applies to that region's prices.
+    `end` goes to yfinance, which treats it as EXCLUSIVE.
+
+    A ticker the feed did not return is left OUT of the columns, not filled
+    with zeros: yfinance drops a failed name's `Dividends` column, and a zero
+    would read as "paid nothing". A name that downloaded keeps its column even
+    when it paid nothing in the window.
+
+    Same cache discipline as `load_prices`: a closed window (`end` given) is
+    immutable history and never expires; an open-ended request means "up to now"
+    and is good for CACHE_TTL_HOURS.
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_file = _cache_path(f"div:v1:{start}:{end}:" + ",".join(sorted(tickers)))
+    if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
+        df = pd.read_parquet(cache_file)
+        have = [t for t in tickers if t in df.columns]
+        if have:
+            return df.loc[start:end, have]
+
+    raw = _download_dividends(list(tickers), start, end)
+    if raw is None or not len(raw):
+        return pd.DataFrame()
+    cols = raw.columns
+    if isinstance(cols, pd.MultiIndex):
+        if "Dividends" not in cols.get_level_values(0):
+            return pd.DataFrame()
+        div = raw["Dividends"]
+    elif "Dividends" in cols:
+        div = raw[["Dividends"]].rename(columns={"Dividends": tickers[0]})
+    else:
+        return pd.DataFrame()
+    if isinstance(div, pd.Series):
+        div = div.to_frame(tickers[0])
+    div = div.reindex(columns=[t for t in tickers if t in div.columns]).fillna(0.0)
+    div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
+    try:
+        div.to_parquet(cache_file)
+    except Exception:
+        pass  # parquet engine optional; caching is a nicety, not a requirement
+    return div.loc[start:end]
+
+
 def load_region(region: Region, start: str, end: str | None = None,
                 use_cache: bool = True,
                 tickers: list[str] | None = None) -> tuple[pd.DataFrame, pd.Series]:

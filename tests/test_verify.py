@@ -456,3 +456,47 @@ def test_the_audit_reads_a_real_staged_book_as_waiting_not_broken(
         found = verify.verify_book("equity", "t", state, today=today)
         assert [(f.level, f.code) for f in found
                 if f.level in (verify.ERROR, verify.WARN)] == []
+
+
+# ---------------------------------------------------------------------------
+# DIVIDENDS — a DIV ledger row moves cash and is not a fill
+# ---------------------------------------------------------------------------
+def test_a_dividend_credits_cash_without_changing_the_position():
+    """10_000 AUD at 1.5 = 6_666.67 USD funded; buy 10 @ 100 + 1 fee, then a
+    50c dividend on all 10 shares."""
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0 + 5.0,
+              "positions": {"AAPL": 10.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "AAPL", "side": "DIV",
+          "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0}],
+        {"US": sleeve}))
+    assert out == []
+
+
+def test_a_dividend_is_not_an_uncosted_trade():
+    """Invariant #2 is about fills. A dividend has no commission because nothing
+    was traded."""
+    book = equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "AAPL", "side": "DIV",
+          "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0}], {})
+    assert verify.check_costs_charged("t", book) == []
+
+
+def test_a_dividend_is_not_a_fill_to_the_realism_checks():
+    """A Yahoo ex-date on a session the calendar calls shut (2026-07-04 is a
+    Saturday) would otherwise be a closed-market ERROR — and verify's strict
+    gate runs after every scheduled paper run, so one dividend could fail the
+    job. Nor is a DIV row's share count an order size the whole-share rule
+    governs. `check_dead_price` reads only FX weight rows (`pair`,
+    `delta_weight`), so a DIV row is already silent there; pinned here."""
+    div = {"date": "2026-07-04", "region": "US", "ticker": "AAPL",
+           "side": "DIV", "shares": 10.5, "fill": 0.5, "commission": 0.0,
+           "stamp_duty": 0.0}
+    book = equity_book([div, dict(div)], {})
+    assert verify.check_market_hours("t", book, "equity") == []
+    assert verify.check_whole_shares("t", book) == []
+    assert verify.check_dead_price("t", book) == []

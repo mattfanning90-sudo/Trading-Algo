@@ -48,3 +48,34 @@ def test_sell_without_matching_lot_is_ignored():
     # a sell with no prior buy (shouldn't happen for a real account) yields nothing
     _, realized = pnl.build_lots([_sell("AAA", 5, 100.0)])
     assert realized == []
+
+
+def test_a_dividend_row_is_not_a_lot():
+    """DIV moves cash, never shares. Treated as a fill it reads as a SELL and
+    would close the whole position."""
+    from trading_algo import pnl
+
+    trades = [
+        {"date": "2026-06-01", "region": "US", "ticker": "AAA", "side": "BUY",
+         "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0,
+         "currency": "USD"},
+        {"date": "2026-06-15", "region": "US", "ticker": "AAA", "side": "DIV",
+         "shares": 10, "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
+         "currency": "USD"},
+    ]
+    open_lots, realized = pnl.build_lots(trades)
+    assert realized == []
+    assert sum(abs(lot[0]) for lot in open_lots[("US", "AAA")]) == 10
+
+
+def test_a_dividend_on_a_short_is_not_a_cover():
+    """A short OWES the dividend, so its DIV row carries the signed (negative)
+    share count — which a replay reading every non-BUY as a SELL turns into a
+    BUY of 50 that covers the short."""
+    trades = [_sell("BBB", 50, 20.0, date="2026-06-01"),
+              {"date": "2026-06-15", "region": "US", "ticker": "BBB",
+               "side": "DIV", "shares": -50, "fill": 0.2, "commission": 0.0,
+               "stamp_duty": 0.0, "currency": "USD"}]
+    open_lots, realized = pnl.build_lots(trades)
+    assert realized == []
+    assert sum(lot[0] for lot in open_lots[("US", "BBB")]) == -50
