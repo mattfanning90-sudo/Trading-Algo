@@ -1047,6 +1047,60 @@ def tca_status(account: str) -> None:
         print(f"  ⚠ {a}")
 
 
+def _backtest_for_book(state: dict, synthetic: bool) -> dict:
+    """The portfolio backtest this book is compared against, like for like.
+
+    The one place `--attribution` and `--reconcile` build their comparison, so
+    the two cannot drift apart. Returns `run_portfolio_backtest`'s full result.
+    Three things make it the book's own strategy:
+
+      * REGIONS AND ALLOCATIONS are the book's (`state["allocations"]`), not
+        `config.ALLOCATIONS`, which funds a sleeve `full` does not hold.
+      * PARAMS are the paper path's (`_account_params`): the profile's overrides
+        layered on each region's defaults. `run_portfolio_backtest(params=...)`
+        replaces EVERY region's params wholesale, so a plain book passes none
+        and a profiled book passes its one layered set. It refuses when the
+        regions would end up with different params, because no single set
+        then reproduces the book.
+      * The window reaches the book's LAST equity date. On real data `end`
+        goes to yfinance, whose `end` is exclusive, so the request runs one
+        day past it; `_predicted_curve` trims anything beyond.
+
+    The profile's drawdown-breaker override is NOT reproduced: the backtest
+    applies `cfg.MAX_DRAWDOWN_STOP`, and `run_portfolio_backtest` has no seam
+    for a per-book threshold.
+    """
+    from .portfolio_backtest import run_portfolio_backtest
+
+    regions = _account_regions(state)
+    params = None
+    if state.get("param_overrides"):
+        layered = [_account_params(state, get_region(k)) for k in regions]
+        if any(p != layered[0] for p in layered[1:]):
+            raise ValueError(
+                f"the profile leaves regions {regions} with different params; "
+                "run_portfolio_backtest takes one set for every region, so it "
+                "cannot reproduce this book")
+        params = layered[0]
+    last = pd.Timestamp(state["equity_history"][-1][0])
+    return run_portfolio_backtest(
+        regions=regions, synthetic=synthetic, params=params,
+        end=(last + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+        allocations=state.get("allocations"))
+
+
+def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
+    """The backtest's equity over the book's own dates, re-based to the book's
+    starting capital. Fewer than 2 points means there is nothing to compare."""
+    eh = state["equity_history"]
+    eq = backtest["equity"]
+    window = eq[(eq.index >= pd.Timestamp(eh[0][0]))
+                & (eq.index <= pd.Timestamp(eh[-1][0]))]
+    if len(window) < 2:
+        return window
+    return window / float(window.iloc[0]) * float(state["initial_capital_base"])
+
+
 def attribution_status(account: str, synthetic: bool) -> None:
     """Live-vs-backtest tracking + attribution report for a book (F3).
 
@@ -1055,19 +1109,14 @@ def attribution_status(account: str, synthetic: bool) -> None:
     re-based to its starting equity — no hindsight refetch), compares, and alerts
     if tracking error blows the budget.
     """
-    from .portfolio_backtest import run_portfolio_backtest
-
     state = load_state(account)
     eh = state.get("equity_history", [])
     predicted = None
     if len(eh) >= 2:
         try:
-            res = run_portfolio_backtest(synthetic=synthetic, end=eh[-1][0],
-                                         allocations=state.get("allocations"))
-            eq = res["equity"]
-            window = eq[eq.index >= pd.Timestamp(eh[0][0])]
+            window = _predicted_curve(state, _backtest_for_book(state, synthetic))
             if len(window) >= 2:
-                predicted = window / float(window.iloc[0]) * float(state["initial_capital_base"])
+                predicted = window
         except Exception as exc:            # real data needs network; synthetic is offline
             print(f"  (predicted curve unavailable: {exc})")
 
@@ -1174,8 +1223,6 @@ def reconcile_status(account: str, synthetic: bool) -> None:
     the bridge's own denominator, the equity at the window start, so it reads
     the book's actual amounts rather than the return scaled by its capital.
     """
-    from .portfolio_backtest import run_portfolio_backtest
-
     state = load_state(account)
     eh = state.get("equity_history", [])
     print("=" * 52)
@@ -1185,12 +1232,8 @@ def reconcile_status(account: str, synthetic: bool) -> None:
         print("  Not enough history yet — run a daily update first.")
         return
     try:
-        res = run_portfolio_backtest(synthetic=synthetic, end=eh[-1][0],
-                                     allocations=state.get("allocations"))
-        eq = res["equity"]
-        window = eq[eq.index >= pd.Timestamp(eh[0][0])]
-        predicted = window / float(window.iloc[0]) * float(state["initial_capital_base"])
-        rep = attribution.reconcile(state, predicted)
+        res = _backtest_for_book(state, synthetic)
+        rep = attribution.reconcile(state, _predicted_curve(state, res))
     except Exception as exc:        # real data needs network; synthetic is offline
         print(f"  bridge unavailable: {exc}")
         return

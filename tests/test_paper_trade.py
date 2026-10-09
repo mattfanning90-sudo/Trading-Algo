@@ -556,3 +556,116 @@ def test_reconcile_status_prints_the_books_actual_money(monkeypatch, capsys):
     assert "bridge unavailable" not in out, out
     row = next(ln for ln in out.splitlines() if ln.startswith("paper return"))
     assert row.split()[-1] == "9,000", row
+
+
+# --- the backtest a book is compared against must be like for like ----------
+def _profiled_book(regions=("US",), overrides=None, last="2026-06-30") -> dict:
+    """A book as `--init --profile` leaves it: its own regions and allocations,
+    its profile's StrategyParams overrides, and two equity points."""
+    return {"initial_capital_base": 10_000.0, "base_currency": "AUD",
+            "fx_snapshot": {"AUD": 1.0}, "trades": [],
+            "allocations": {k: 1.0 / len(regions) for k in regions},
+            "param_overrides": dict(overrides or {}),
+            "equity_history": [["2026-01-05", 10_000.0], [last, 10_100.0]]}
+
+
+def _capture_backtest(monkeypatch, end_is_exclusive=False) -> dict:
+    """Stand in for run_portfolio_backtest and record what it was asked for.
+
+    With `end_is_exclusive` the stand-in honours yfinance's convention, which
+    the real-data path passes `end` straight through to: bars strictly BEFORE
+    `end` come back, never the bar dated `end` itself."""
+    from trading_algo import portfolio_backtest
+    seen: dict = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        end = pd.Timestamp(kw["end"])
+        idx = pd.bdate_range("2025-12-01", end, inclusive=(
+            "left" if end_is_exclusive else "both"))
+        return {"equity": pd.Series(np.linspace(1.0, 1.1, len(idx)), index=idx)}
+
+    monkeypatch.setattr(portfolio_backtest, "run_portfolio_backtest", fake)
+    return seen
+
+
+@pytest.mark.parametrize("report", ["attribution_status", "reconcile_status"])
+def test_a_profiled_book_is_bridged_against_its_own_strategy(monkeypatch, report):
+    """`ultra` trades 3x leverage and `experimental` long/short, through the
+    same compute_targets as every book, because paper layers the profile's
+    overrides on each region's defaults (`_account_params`). Bridging them
+    against a backtest built WITHOUT those overrides compares a leveraged or
+    market-neutral book with the default 1x long-only strategy — so both
+    reports must ask the backtest for the book's own per-region params."""
+    overrides = {"max_gross": 3.0, "long_short": True, "top_n": 6}
+    state = _profiled_book(overrides=overrides)
+    monkeypatch.setattr(pt, "load_state", lambda account: state)
+    seen = _capture_backtest(monkeypatch)
+
+    getattr(pt, report)("t", synthetic=True)
+
+    us = get_region("US")
+    assert seen.get("params") == us.params.with_overrides(**overrides)
+    assert seen.get("params") == pt._account_params(state, us)
+
+
+def test_a_plain_book_keeps_each_regions_own_params(monkeypatch):
+    """run_portfolio_backtest's `params` REPLACES every region's params
+    wholesale. A book with no profile must therefore pass none, so each
+    region keeps its own defaults exactly as `_account_params` leaves them."""
+    state = _profiled_book(regions=("ASX", "US", "FTSE"))
+    seen = _capture_backtest(monkeypatch)
+    pt._backtest_for_book(state, synthetic=True)
+    assert seen.get("params") is None
+
+
+def test_a_profile_over_regions_with_different_defaults_is_refused(monkeypatch):
+    """Wholesale replacement can carry ONE param set. If the book's regions
+    would end up with different params once the profile is layered on, no
+    single `params` reproduces the paper path — refuse rather than bridge
+    against a strategy the book never ran."""
+    from dataclasses import replace
+
+    from trading_algo import regions
+    us = regions.REGIONS["US"]
+    monkeypatch.setitem(regions.REGIONS, "US", replace(
+        us, params=us.params.with_overrides(top_n=3)))
+    state = _profiled_book(regions=("ASX", "US"), overrides={"max_gross": 3.0})
+    _capture_backtest(monkeypatch)
+    with pytest.raises(ValueError, match="different params"):
+        pt._backtest_for_book(state, synthetic=True)
+
+
+def test_the_backtest_runs_the_books_own_regions_and_allocations(monkeypatch):
+    """config.ALLOCATIONS funds four sleeves since TSX was added; `full`
+    holds three at a third each. The comparison is the book's own split."""
+    state = _profiled_book(regions=("ASX", "US", "FTSE"))
+    seen = _capture_backtest(monkeypatch)
+    pt._backtest_for_book(state, synthetic=True)
+    assert seen.get("regions") == ["ASX", "US", "FTSE"]
+    assert seen.get("allocations") == state["allocations"]
+    assert list(seen["allocations"]) != list(cfg.ALLOCATIONS)
+
+
+def test_the_predicted_curve_reaches_the_books_last_equity_date(monkeypatch, capsys):
+    """`end` reaches yfinance, whose `end` is EXCLUSIVE: asking for the book's
+    last date returns bars up to the day before, so the bridge window stopped
+    one day short (observed 2026-09-22 against the book's 2026-09-23). Both
+    reports must cover the book's last equity date."""
+    from trading_algo import attribution
+    state = _profiled_book(regions=("ASX", "US", "FTSE"), last="2026-06-30")
+    monkeypatch.setattr(pt, "load_state", lambda account: state)
+    _capture_backtest(monkeypatch, end_is_exclusive=True)
+
+    pt.reconcile_status("t", synthetic=True)
+    out = capsys.readouterr().out
+    assert "window 2026-01-05 -> 2026-06-30" in out, out
+
+    got = {}
+    real = attribution.attribution_report
+    monkeypatch.setattr(attribution, "attribution_report",
+                        lambda st, pred=None, *a, **k: (got.update(pred=pred),
+                                                        real(st, pred, *a, **k))[1])
+    pt.attribution_status("t", synthetic=True)
+    assert got["pred"].index[-1] == pd.Timestamp("2026-06-30")
+    assert got["pred"].index[0] == pd.Timestamp("2026-01-05")
