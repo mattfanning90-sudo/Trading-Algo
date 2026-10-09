@@ -33,7 +33,13 @@ which sets the "job missed" rules below:
   this is GitHub skipping runs, not a queue.
 
 **Approach (draft — confirm):**
-- `dashboard/sync.py` — keeps a private copy of the public repo in
+- **Placement:** the launcher and everything it needs before the readers load
+  (sync, job health, seen-file, paths) live in a new `trading_algo/home/` package.
+  They can't live in `trading_algo/dashboard/`: that package's `__init__.py` runs
+  `from .api import build_snapshot`, which imports `paper_trade`, and
+  `paper_trade.STATE_DIR` / `fx_book.STATE_DIR` are fixed at import time — so the
+  launcher must set the state directories before anything in `dashboard` loads.
+- `home/sync.py` — keeps a private copy of the public repo in
   `~/Library/Application Support/Momentum/repo` (full history, file contents
   fetched on demand), unpacks `state/*.json` for `origin/main` into
   `snapshots/<sha>/`, then points a `current` link at it in one step. Offline: keeps
@@ -42,14 +48,14 @@ which sets the "job missed" rules below:
   (from `overview.build_overview`), period changes per book, freshness, distance
   from each book's safety breaker (the breaker's own stored-peak figure), audit
   findings, job health, and one attention verdict.
-- `dashboard/jobs.py` — reads the latest scheduled runs from GitHub's public API
+- `home/jobs.py` — reads the latest scheduled runs from GitHub's public API
   (stdlib only, cached), and classifies each job using the measured delays above.
-- `dashboard/seen.py` — a small JSON file remembering when each problem was first
+- `home/seen.py` — a small JSON file remembering when each problem was first
   seen and when Matt last opened the app, so only *new* problems turn amber.
 - `verify.py` — additive: findings about one sleeve or symbol carry
   `detail["subject"]`, so "new vs known" can tell them apart.
 - `static/home.html|css|js` — the Midnight home screen; existing terminal unchanged.
-- `dashboard/home_app.py` — the launcher: sync, point `MOMENTUM_STATE_DIR` /
+- `home/__main__.py` (`python -m trading_algo.home`) — the launcher: sync, point `MOMENTUM_STATE_DIR` /
   `FX_STATE_DIR` at `current` **before** the readers are imported, start the server,
   open a native Mac window (pywebview) at `/home`, or the browser if pywebview isn't
   installed.
@@ -90,11 +96,11 @@ which sets the "job missed" rules below:
 | AC-4  | `/api/home` group totals equal `overview.build_overview()` totals for the same snapshot, to the cent. | `tests/test_home_api.py` | ☐ |
 | AC-5  | Period changes: **1D** = each book's last completed session (daily books: last mark vs the one before; the hourly book: last mark vs its last mark of the previous UTC day); **1W / 1M / ALL** = latest mark vs the last mark on or before the period start (ALL = initial capital). Totals add only measured books and say how many ("5 of 6 measured"). Hand-checked fixture values. | `tests/test_home_api.py` | ☐ |
 | AC-6  | A book with no mark in the window is "not measurable", never counted as 0. | `tests/test_home_api.py` | ☐ |
-| AC-7  | Each book carries its as-of time and a freshness state: fresh / late / stale against its own schedule (AC-9 grace rules). | `tests/test_home_api.py` | ☐ |
+| AC-7  | Each book carries its as-of time and a freshness state. Daily books: **fresh** if the last mark is ≤ 1 business day old, **late** at 2, **stale** at 3+. The hourly book: on a weekday, **stale** once more than 14 h have passed since the later of its last mark and that day's UTC midnight (so Monday morning isn't stale before the first run); at weekends, **fresh** if its last mark is from Friday or later. | `tests/test_home_api.py` | ☐ |
 | AC-8  | Distance from the breaker uses **the breaker's own figure** — equity against the book's stored peak, as `overview` already reports it — never a second drawdown calculation (the single-source guard stays green); a book is "near the breaker" once that fall reaches 60% of the book's breaker level as the engine defines it (draft — confirm, Q-1); books without a breaker never are. | `tests/test_home_api.py`, `tests/test_metrics_single_source.py` | ☐ |
 | AC-9  | Job health from the run list: daily jobs are **late** until 8.5 h after the scheduled time and **missed** after; DAYTRADER is **missed** only with no run for 14 h on a weekday; a failed latest run is **failed**; if GitHub can't be reached or rate-limits, the job is **unknown since HH:MM** — never OK. | `tests/test_home_jobs.py` (recorded API fixtures, no network) | ☐ |
-| AC-10 | Attention verdict: **act now** if any book is halted, any audit ERROR, any job failed or missed; **look soon** if any finding is new since the last open or a book is near the breaker; otherwise **clear**. Known findings are counted, not raised. | `tests/test_home_attention.py` | ☐ |
-| AC-11 | "New" is keyed by (book, code, subject) and dated by the snapshot that first carried it: a finding whose wording changes daily ("77 days" → "78 days") stays known; wiping the seen-file doesn't flood amber for findings older than the last open. | `tests/test_home_attention.py` | ☐ |
+| AC-10 | Attention verdict: **act now** if any book is halted, any audit ERROR (new or not), any job failed or missed; **look soon** if any WARN finding is new since the last open, a known finding has become more severe, or a book is near the breaker; otherwise **clear**. INFO findings are never raised; known findings are counted, not raised. | `tests/test_home_attention.py` | ☐ |
+| AC-11 | "New" is keyed by (book, code, subject): a WARN/ERROR finding is new during the app session in which it is first observed (or in which it became more severe), and known in every later session; a finding whose wording changes daily ("77 days" → "78 days") stays known. On the first run, or after the seen-file is lost, every current finding is recorded as known — nothing turns amber. | `tests/test_home_seen.py`, `tests/test_home_attention.py` | ☐ |
 | AC-12 | Findings about one sleeve or symbol carry `detail["subject"]`; all existing verify tests still pass. | `tests/test_verify.py` | ☐ |
 | AC-13 | The launcher sets the state-directory variables to `current` before importing any reader, serves `/home` and the existing terminal at `/`, and opens a native window when pywebview is installed, else the default browser. | `tests/test_home_app.py` + manual launch | ☐ |
 | AC-14 | Home screen: status shown as shape + word; every money figure has a sign and ▲/▼; hero = change for the chosen period; balance secondary; sidebar lists core and experimental books separately with their change for the chosen period; keyboard: ↑/↓ sidebar, ⌘1–9 books, ⌘0 overview, ⌘R refresh, Esc; visible focus ring. | Manual checklist + screenshot | ☐ |
@@ -130,7 +136,7 @@ pytest -q tests/test_home_sync.py tests/test_home_api.py tests/test_home_jobs.py
           tests/test_home_attention.py tests/test_home_app.py tests/test_verify.py \
           tests/test_metrics_single_source.py
 pytest -q
-python -m trading_algo.dashboard.home_app          # syncs, then opens the home screen
+python -m trading_algo.home                      # syncs, then opens the home screen
 ```
 
 ## Open questions
