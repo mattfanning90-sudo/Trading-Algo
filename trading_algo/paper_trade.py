@@ -169,13 +169,13 @@ def fx_snapshot(synthetic: bool,
     prev = prev or {}
     snap = {}
     for c in currencies:
-        rate = float(tbl[c].iloc[-1])
-        if not (rate == rate) or rate <= 0.0:            # NaN or non-positive → failed pair
-            fallback = prev.get(c)
-            if fallback is not None and fallback == fallback and fallback > 0.0:
+        rate = fx.valid_rate(tbl[c].iloc[-1])
+        if rate is None:                  # NaN, inf or non-positive → failed pair
+            fallback = fx.valid_rate(prev.get(c))
+            if fallback is not None:
                 print(f"  ⚠ FX rate for {c} unavailable this run — "
                       f"carrying forward last good {fallback:.4f}")
-                rate = float(fallback)
+                rate = fallback
             else:
                 # No usable rate — skip rather than persist a NaN (which would
                 # both corrupt state and slip past a `NaN < threshold` gate).
@@ -1045,8 +1045,8 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         px_by_region[k] = px_today
         bar_of[k] = today
         report_date = max(report_date, today)
-        rate = snap.get(region.currency)
-        rate_ok = rate is not None and rate == rate and rate > 0.0
+        rate = fx.base_per_local(snap, region.currency, cfg.BASE_CURRENCY)
+        rate_ok = rate is not None
 
         params = _account_params(state, region)
         # Cash events first: they accrue to the book AS IT STOOD over the period,

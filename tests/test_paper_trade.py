@@ -301,6 +301,44 @@ def test_fx_snapshot_carries_forward_a_failed_rate(monkeypatch):
     assert snap["GBP"] == snap["GBP"]             # the healthy pair is unaffected
 
 
+def test_an_infinite_rate_is_a_failed_pair_too(monkeypatch):
+    """1 / a zero quote is +inf, which passed the producer's `NaN or <= 0`
+    test and would fund a sleeve with 0 local cash or value it at infinity.
+    It is no rate: the last good one is carried, or the currency omitted —
+    and an infinite PRIOR is no fallback either."""
+    real = pt.fx.synthetic_fx
+
+    def broken(currencies, *a, **k):
+        tbl = real(currencies, *a, **k)
+        tbl["USD"] = float("inf")
+        return tbl
+
+    monkeypatch.setattr(pt.fx, "synthetic_fx", broken)
+    snap = pt.fx_snapshot(synthetic=True, prev={"AUD": 1.0, "USD": 1.50})
+    assert snap["USD"] == pytest.approx(1.50)
+    snap = pt.fx_snapshot(synthetic=True, prev={"AUD": 1.0, "USD": float("inf")})
+    assert "USD" not in snap
+
+
+def test_an_infinite_rate_is_not_a_valuation(account, monkeypatch, paper_cycle):
+    """The run's own valuation gate asks the same rule, as defence in depth
+    behind the producer: handed a +inf rate, the sleeve holds cash as for any
+    missing rate, and is neither sized off nor marked at an infinite base
+    value. (The state is captured rather than saved: the injected inf would
+    sit in its fx_snapshot, which the real producer no longer allows.)"""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    real = pt.fx_snapshot
+    monkeypatch.setattr(pt, "fx_snapshot", lambda *a, **kw: {
+        **real(*a, **kw), "USD": float("inf")})
+    saved = {}
+    monkeypatch.setattr(pt, "save_state", lambda account, state: saved.update(state))
+    paper_cycle(account, sessions=1)
+    assert saved["sleeves"]["US"]["last_status"]["status"] == "cash:fx-unavailable"
+    assert "pending_target" not in saved["sleeves"]["US"]
+    assert saved["equity_history"] == []
+
+
 def test_failed_fx_rate_never_poisons_equity(account, monkeypatch, paper_cycle):
     """End-to-end: a transient USD-pair failure must never write a NaN FX rate
     or NaN equity into state — the regression behind the `full` book's NaN AUM."""

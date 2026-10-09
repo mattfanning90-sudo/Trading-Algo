@@ -44,7 +44,8 @@ import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 
-from . import notifications, pnl
+from . import config as cfg
+from . import fx, notifications, pnl
 
 # Levels, most severe first.
 ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
@@ -133,7 +134,8 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
     sleeves = state.get("sleeves") or {}
     allocations = state.get("allocations") or {}
     initial = float(state.get("initial_capital_base") or 0.0)
-    fx = state.get("fx_snapshot") or {}
+    snap = state.get("fx_snapshot") or {}
+    base = state.get("base_currency") or cfg.BASE_CURRENCY
 
     by_region: dict[str, list[dict]] = {}
     for t in state.get("trades") or []:
@@ -141,8 +143,10 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
 
     for key, sleeve in sleeves.items():
         trades = by_region.get(key, [])
-        rate = fx.get(sleeve.get("currency"))
-        if not rate:
+        # The one rate rule: a NaN here made `funded` NaN and silently switched
+        # the cash check off; inf funded nothing and a negative rate less.
+        rate = fx.base_per_local(snap, sleeve.get("currency"), base)
+        if rate is None:
             found.append(Finding(
                 WARN, account, "no-fx-rate",
                 f"sleeve {key}: no {sleeve.get('currency')} rate in fx_snapshot — "

@@ -585,3 +585,18 @@ def test_interest_is_not_a_fill_to_the_realism_checks():
     assert verify.check_market_hours("t", book, "equity") == []
     assert verify.check_costs_charged("t", book) == []
     assert verify.check_whole_shares("t", book) == []
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.5, 0.0])
+def test_an_unusable_rate_is_reported_never_silently_reconciled(bad):
+    """A NaN rate made `funded` NaN, so `drift > tolerance` was False and the
+    cash check switched itself off without a word; +inf funded 0 and a
+    negative rate funded a negative sleeve. Each is no rate, and the replay
+    says so (`fx.valid_rate`, the one rule)."""
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0,
+              "positions": {"AAPL": 10.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0}],
+        {"US": sleeve}, fx_snapshot={"USD": bad}))
+    assert [(f.level, f.code) for f in out] == [(verify.WARN, "no-fx-rate")]

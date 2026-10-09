@@ -35,24 +35,36 @@ def synth_level(ccy: str) -> float:
     return _EXTRA_SYNTH_LEVEL.get(ccy, 1.0)
 
 
+def valid_rate(x) -> float | None:
+    """`x` as an FX rate when it can be one, a finite positive number; else None.
+
+    The one test of a usable rate, for every decision that needs one: the
+    snapshot producer (`paper_trade.fx_snapshot`) on a fresh quote and on
+    the prior it falls back to, and, through `base_per_local`, the paper
+    run's valuation gate, the auditor, the dashboard and the bridge. NaN
+    (a failed pair), zero, negative and infinite (1 / a zero quote) are no
+    rate: multiplied in they invent a value, divided by they fund nothing.
+    """
+    try:
+        rate = float(x)
+    except (TypeError, ValueError):
+        return None
+    return rate if math.isfinite(rate) and rate > 0 else None
+
+
 def base_per_local(snapshot: dict | None, ccy: str | None,
                    base: str) -> float | None:
     """Base units per one `ccy` from a stored rate snapshot, or None.
 
     The one rule every paper-book money figure converts by: the dashboard's
-    NET parts and the reconciliation bridge alike. 1.0 only for the base
-    currency itself; otherwise the snapshot's rate when it is a finite
-    positive number. A currency `paper_trade.fx_snapshot` omitted, or a NaN,
-    zero, negative or infinite rate, is NO rate: never parity, and never a
-    number for a caller to multiply by.
+    NET parts, the reconciliation bridge, the paper run's valuation and the
+    auditor's replay alike. 1.0 only for the base currency itself; otherwise
+    the snapshot's rate when `valid_rate` accepts it. A currency
+    `paper_trade.fx_snapshot` omitted is NO rate: never parity.
     """
     if ccy == base:
         return 1.0
-    try:
-        rate = float((snapshot or {}).get(ccy))
-    except (TypeError, ValueError):
-        return None
-    return rate if math.isfinite(rate) and rate > 0 else None
+    return valid_rate((snapshot or {}).get(ccy))
 
 
 def fx_ticker(base: str, ccy: str) -> str:

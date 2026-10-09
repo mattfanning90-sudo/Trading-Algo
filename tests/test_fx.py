@@ -58,3 +58,16 @@ def test_base_per_local_is_a_finite_positive_rate_or_none(ccy, want):
 def test_base_per_local_with_no_snapshot_prices_only_the_base():
     assert fx.base_per_local(None, "AUD", "AUD") == 1.0
     assert fx.base_per_local(None, "USD", "AUD") is None
+
+
+# --- one VALIDITY rule for every rate decision ------------------------------
+@pytest.mark.parametrize("x, want", [
+    (1.5, 1.5), ("1.5", 1.5), (1e-9, 1e-9),
+    (float("nan"), None), (float("inf"), None), (float("-inf"), None),
+    (0.0, None), (-1.5, None), (None, None), ("n/a", None), ([], None),
+])
+def test_valid_rate_is_a_finite_positive_number_or_none(x, want):
+    """What makes a number usable as an FX rate, defined once: the snapshot
+    producer, the paper run's valuation gate, the auditor, the dashboard and
+    the bridge all ask this, through `base_per_local` or directly."""
+    assert fx.valid_rate(x) == want
