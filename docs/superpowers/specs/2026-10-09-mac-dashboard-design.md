@@ -149,12 +149,14 @@ without it is a month of equity bets that can only be reconstructed, not recorde
   rank, realised volatility, trend/regime state, eligibility, final target weight,
   and the parameters in force. Read from the **same `SignalPanel` row `targets_at`
   uses** — never recomputed (invariant #3).
-- Additive field in book state, added through `state_schema.migrate_state`
-  ("additive, non-destructive"); pre-change backup of every live book; tested restore.
-- Backfill: replay past rebalances through the same function on point-in-time prices,
+- Stored in a separate append-only file per book, `state/decisions_<account>.jsonl`,
+  covering every eligible candidate; the book state format is unchanged.
+- Backfill (in D0, by Matt's decision): replay past rebalances through the same
+  function on point-in-time prices into `state/decisions_<account>.reconstructed.jsonl`,
   labelled **reconstructed**, and reconciled against the trades actually made.
-- Equity horizon definition ("until next monthly rebalance") added next to
-  `verify.signal_horizon` so the app and the audit share one definition (Q-8).
+- Spec: `docs/specs/equity-decision-record.md`.
+- The equity horizon definition ("until next monthly rebalance", Q-8) belongs to
+  project D, next to `verify.signal_horizon`.
 
 ### A — Mirror
 - Private shallow, sparse clone of the public repo (`state/` only); atomic snapshot
@@ -249,9 +251,9 @@ without it is a month of equity bets that can only be reconstructed, not recorde
   90 days (Q-4). Restore: `python -m trading_algo.mirror restore <file>`. Last resort:
   rebuild from git (loses only locally generated history: summaries, job-run history,
   audit results as seen at the time — which is what backups protect).
-- **Book state (D0):** additive field via `migrate_state`; back up every live book
-  before the first run that writes it; documented rollback (old code ignores the new
-  field); restore drill.
+- **Book state (D0):** format unchanged — records go to new files with a per-line
+  `"v"` version; back up every live book before deploy; rollback = revert the merge
+  (old code never reads the new files); restore drill.
 - **App code:** versioned builds; keep the previous 3; refuse to open a database newer
   than the build understands.
 - **Snapshots:** keep the last 10; the "current" pointer can be moved back.
