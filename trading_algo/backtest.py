@@ -24,13 +24,25 @@ from .metrics import compute_metrics
 from .regions import Region
 
 
+def first_bar_on_or_after(index: pd.DatetimeIndex, when) -> pd.Timestamp:
+    """The first bar of `index` dated on or after `when`: the bar a book opened
+    on `when` first decides at, and the bar the portfolio funds its sleeve at.
+    One definition, so the two can never pick different bars."""
+    loc = index.searchsorted(pd.Timestamp(when))
+    if loc >= len(index):
+        raise ValueError(f"no bar on or after {pd.Timestamp(when).date()} "
+                         f"(the data ends {index[-1].date()})")
+    return index[loc]
+
+
 def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                  initial_capital: float = INITIAL_CAPITAL,
                  membership=None,
                  max_drawdown_stop: float | None = MAX_DRAWDOWN_STOP,
                  cooldown_days: int = DRAWDOWN_COOLDOWN_DAYS,
                  apply_delisting: bool = False,
-                 volume: pd.DataFrame | None = None) -> dict:
+                 volume: pd.DataFrame | None = None,
+                 trade_from: pd.Timestamp | None = None) -> dict:
     """Walk-forward backtest for one sleeve.
 
     `membership` (a constituents.MembershipTable) makes selection point-in-time:
@@ -43,13 +55,26 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     `apply_delisting` (backlog F13) injects a delisting return for names whose
     price series terminates before the sample end — only meaningful with real
-    point-in-time data that includes since-delisted names."""
+    point-in-time data that includes since-delisted names.
+
+    `trade_from` runs the sleeve as a book OPENED on that date (the paper
+    bridge's comparison — see `paper_trade._backtest_for_book`). Everything
+    before it is warm-up: the signals read it, the book holds nothing, so no
+    target is staged, nothing is charged and idle cash earns NO interest (the
+    book did not exist) — equity is exactly `initial_capital` up to and
+    including the first bar on or after it. That bar is a decision bar whatever
+    the calendar says, as the paper book's first run is (`_should_rebalance`
+    with no `last_rebalance_month`); it fills at the next close like every
+    other decision, then the normal calendar resumes. None (the default) is the
+    whole-sample backtest, unchanged."""
     p = region.params
     prices = prices.dropna(how="all")
     if apply_delisting:
         from . import delisting
         prices = delisting.apply_delisting_returns(prices, region)
     rets = prices.pct_change(fill_method=None)
+    open_bar = (None if trade_from is None
+                else first_bar_on_or_after(prices.index, trade_from))
 
     # Rebalance dates = last trading day on or before each period end.
     rebal_marks = prices.resample(p.rebalance).last().index
@@ -83,11 +108,14 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     dq_excluded: set[str] = set()
-    for d in rebal_marks:
+    # A book opened mid-sample decides on its first bar, then on the calendar.
+    for d in (rebal_marks if open_bar is None else [open_bar, *rebal_marks]):
         loc_idx = prices.index.searchsorted(d, side="right") - 1
         if loc_idx < min_hist:
             continue
         asof = prices.index[loc_idx]
+        if open_bar is not None and asof < open_bar:
+            continue                             # warm-up: nothing is decided
         base_elig = membership.members_asof(asof) if membership is not None else None
         eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
         dq_excluded |= dq.excluded
@@ -132,7 +160,10 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         # fees.idle_cash_credit on why net, not gross. Without this a flat book
         # earns 0% while metrics still charge it the RISK_FREE hurdle, which is a
         # double penalty worth +0.22 to +0.34 Sharpe (docs/SHARPE_RESEARCH.md §1).
-        if CREDIT_IDLE_CASH and CASH_RATE_ANNUAL:
+        # A book opened at `open_bar` held no cash over any day ending on or
+        # before it.
+        if (CREDIT_IDLE_CASH and CASH_RATE_ANNUAL
+                and (open_bar is None or dates[i - 1] >= open_bar)):
             interest = fees.idle_cash_credit(
                 float(current_w.sum()), (today - dates[i - 1]).days,
                 CASH_RATE_ANNUAL)

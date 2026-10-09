@@ -1,5 +1,6 @@
 """Per-sleeve backtester: runs clean on synthetic data, costs always on."""
 import numpy as np
+import pandas as pd
 import pytest
 
 from trading_algo import fees
@@ -119,3 +120,88 @@ def test_small_book_pays_more_than_bps_because_of_the_floor(synth_asx, asx_regio
     small = run_backtest(prices, index_px, asx_region, initial_capital=20_000)
     assert small["turnover"].sum() == pytest.approx(big["turnover"].sum())
     assert small["total_cost_fraction"] > big["total_cost_fraction"] * 1.2
+
+
+# --- a book opened mid-sample (Task 13c) ------------------------------------
+# The comparison a paper book is bridged against is "this strategy, run by this
+# book, from the day it opened". History before that is WARM-UP: the signals
+# read it, the book holds nothing. A Saturday, mid-month: no calendar mark is
+# anywhere near it, so any decision on the next bar is the open rule's alone.
+OPENED = pd.Timestamp("2019-03-16")
+
+
+def _open_and_fill_bars(prices):
+    loc = prices.index.searchsorted(OPENED)
+    return prices.index[loc], prices.index[loc + 1]
+
+
+def test_before_trade_from_the_sleeve_holds_its_capital_untouched(synth_asx, asx_region):
+    """The book did not exist yet: no trade, no cost, no idle-cash interest. Its
+    equity is EXACTLY the capital it is funded with on every bar before it."""
+    prices, index_px = synth_asx
+    res = run_backtest(prices, index_px, asx_region, initial_capital=25_000.0,
+                       trade_from=OPENED)
+
+    before = res["equity"][res["equity"].index < OPENED]
+    assert len(before) > 1000, "the fixture must leave a long warm-up"
+    assert (before == 25_000.0).all(), before[before != 25_000.0].head()
+    assert (res["returns"][res["returns"].index < OPENED] == 0.0).all()
+    assert res["turnover"].index.min() > OPENED
+    assert res["costs"].index.min() > OPENED
+    assert all(w.empty for d, w in res["weights"].items() if d < OPENED)
+
+
+def test_the_first_bar_on_or_after_trade_from_decides_and_the_next_fills(
+        synth_asx, asx_region):
+    """Mirrors the paper book's first run: a sleeve that has never rebalanced
+    decides on its first bar whatever the calendar says (`_should_rebalance`
+    with no `last_rebalance_month`), and the fill follows the next-close
+    convention (Task 9) like every other decision."""
+    prices, index_px = synth_asx
+    open_bar, fill_bar = _open_and_fill_bars(prices)
+    res = run_backtest(prices, index_px, asx_region, initial_capital=25_000.0,
+                       max_drawdown_stop=None, trade_from=OPENED)
+
+    # decided at the open bar's close, filled at the next: nothing held, nothing
+    # earned and nothing paid on the open bar itself
+    assert res["equity"].loc[open_bar] == 25_000.0
+    assert res["weights"][open_bar].empty
+    assert res["turnover"].index[0] == fill_bar
+    assert res["turnover"].iloc[0] > 0
+    assert not res["weights"][fill_bar].empty
+
+
+def test_the_open_bar_decision_is_compute_targets_as_of_that_bar(synth_asx, asx_region):
+    """No lookahead, one weight function: the decision on the first bar is what
+    `strategy.compute_targets` returns on prices up to AND INCLUDING that bar —
+    exactly what the paper book's first run asks."""
+    from trading_algo import data_quality, strategy
+
+    prices, index_px = synth_asx
+    open_bar, fill_bar = _open_and_fill_bars(prices)
+    res = run_backtest(prices, index_px, asx_region, max_drawdown_stop=None,
+                       trade_from=OPENED)
+
+    seen = prices.loc[:open_bar]
+    elig, _dq = data_quality.eligible(seen, asx_region, open_bar)
+    expected = strategy.compute_targets(seen, index_px.loc[:open_bar],
+                                        asx_region.params, eligible=elig)
+    assert not expected.empty
+    pd.testing.assert_series_equal(res["weights"][fill_bar].sort_index(),
+                                   expected.sort_index(), check_names=False)
+
+
+def test_trading_from_the_first_bar_is_the_whole_sample_backtest(synth_asx, asx_region):
+    """`trade_from=None` is the backtest as it was. A book opened on the panel's
+    first bar must reproduce it exactly too: the open bar has no history to
+    decide on, and every later bar is live."""
+    prices, index_px = synth_asx
+    old = run_backtest(prices, index_px, asx_region)
+    for res in (run_backtest(prices, index_px, asx_region, trade_from=None),
+                run_backtest(prices, index_px, asx_region, trade_from=prices.index[0])):
+        for key in ("equity", "returns", "turnover", "costs"):
+            pd.testing.assert_series_equal(res[key], old[key], check_exact=True)
+        assert res["total_cost_fraction"] == old["total_cost_fraction"]
+        assert res["cash_interest_fraction"] == old["cash_interest_fraction"]
+        assert res["weights"].keys() == old["weights"].keys()
+        assert all(res["weights"][d].equals(old["weights"][d]) for d in old["weights"])

@@ -787,6 +787,38 @@ def test_reconcile_status_hands_the_bridge_the_backtests_holdings(monkeypatch):
     assert "equity" in (got.get("backtest") or {})
 
 
+def test_the_comparison_opens_with_the_book_at_the_books_size():
+    """Since the per-order commission floor (Task 13) the backtest's cost
+    depends on its size. Funded at `cfg.START`, the comparison had compounded to
+    1.3-5.3x the book's capital by the day the book opened, so the floor was
+    charged at the wrong size and `_predicted_curve` only re-levelled the
+    result. The comparison must instead trade FROM the book's first equity date
+    at the book's own capital: every sleeve's NAV on that date is the book's
+    funded sleeve capital to the cent, and the re-level factor is 1.0."""
+    opened, last = "2020-03-11", "2020-06-30"       # a Wednesday, mid-sample
+    state = {"initial_capital_base": 10_000.0, "base_currency": "AUD",
+             "fx_snapshot": {"AUD": 1.0}, "trades": [],
+             "allocations": {"US": 0.5, "FTSE": 0.5}, "param_overrides": {},
+             "equity_history": [[opened, 10_000.0], [last, 10_100.0]]}
+    res = pt._backtest_for_book(state, synthetic=True)
+    open_d = pd.Timestamp(opened)
+
+    for k, share in state["allocations"].items():
+        nav = float(res["sleeve_equity"].loc[open_d, k])
+        assert nav == pytest.approx(10_000.0 * share, abs=0.005), k
+        sleeve = res["sleeves"][k]
+        # funded and decided on the open bar, filled on the next — Task 9
+        assert sleeve["turnover"].index[0] > open_d, k
+        assert (sleeve["equity"].loc[:open_d] == sleeve["equity"].iloc[0]).all(), k
+
+    eq = res["equity"]
+    window = eq[(eq.index >= open_d) & (eq.index <= pd.Timestamp(last))]
+    factor = state["initial_capital_base"] / float(window.iloc[0])
+    assert factor == pytest.approx(1.0, abs=1e-12)
+    pd.testing.assert_series_equal(pt._predicted_curve(state, res), window,
+                                   check_exact=False, atol=0.005, rtol=0.0)
+
+
 # --- next-day-close fills: a decision is staged, then filled a session later --
 def test_a_decision_fills_on_the_next_session_not_its_own(account, paper_cycle):
     """The book decides at the latest close and fills at the NEXT one.

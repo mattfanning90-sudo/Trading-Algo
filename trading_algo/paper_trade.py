@@ -1225,13 +1225,18 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
 
       * REGIONS AND ALLOCATIONS are the book's (`state["allocations"]`), not
         `config.ALLOCATIONS`, which funds a sleeve `full` does not hold.
-      * CAPITAL is the book's own (`state["initial_capital_base"]`), not
-        `cfg.INITIAL_CAPITAL`. Since the per-order commission floor (Task 13)
-        made the backtest size-dependent, reproducing a small book at the
-        default 100,000 and rescaling the curve afterwards (`_predicted_curve`)
-        would charge the floor as if the book were bigger than it is — the
-        floor's bite does not scale linearly, so it has to be funded at the
-        real size, not rescaled post hoc (I-1, fix round 1).
+      * CAPITAL AND START are the book's own: the backtest TRADES FROM the
+        book's first equity date (`trade_from`) with `initial_capital_base`,
+        split by the book's allocations. History before that date is warm-up
+        only — the signals read it, the book holds nothing — and the first
+        bar on or after it decides, as the book's first run did. The per-order
+        commission floor (Task 13) makes cost depend on size, so the size has
+        to be the book's on the day the window opens: funded at the book's
+        capital in 2012 instead, the comparison had compounded to 1.3-5.3x the
+        book by its open date and charged the floor at that size, and
+        `_predicted_curve` could re-level the curve but not undo a cost that
+        depends on size. Each sleeve now stands at the book's funded sleeve
+        capital on the open date, so that re-level is a factor of 1.0.
       * PARAMS are the paper path's (`_account_params`): the profile's overrides
         layered on each region's defaults. `run_portfolio_backtest(params=...)`
         replaces EVERY region's params wholesale, so a plain book passes none
@@ -1263,7 +1268,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         regions=regions, synthetic=synthetic, params=params,
         end=(last + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
         allocations=state.get("allocations"),
-        initial_capital=state["initial_capital_base"])
+        initial_capital=state["initial_capital_base"],
+        trade_from=pd.Timestamp(state["equity_history"][0][0]))
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
@@ -1396,10 +1402,10 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
                   f"   last rebalance {lrd or 'never'}")
         except Exception as exc:                     # diagnosis must never fail the report
             print(f"    [{k}] diagnosis unavailable: {exc}")
-    print("    NOTE: the predicted curve is the tail of a backtest started at "
-          f"{cfg.START}, so it holds a mature book; this one was funded "
-          f"{(state.get('equity_history') or [['?']])[0][0]}. Different holdings "
-          "by construction — expect dispersion that is not mis-execution.")
+    print("    NOTE: the predicted curve trades from this book's first equity date "
+          f"({(state.get('equity_history') or [['?']])[0][0]}) at its capital; "
+          f"history from {cfg.START} is signal warm-up only. The two causes above "
+          "remain by construction — expect dispersion that is not mis-execution.")
 
 
 def reconcile_status(account: str, synthetic: bool) -> None:

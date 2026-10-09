@@ -17,7 +17,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import constituents, data, fx
-from .backtest import run_backtest
+from .backtest import first_bar_on_or_after, run_backtest
 from .config import StrategyParams
 from .metrics import benchmark_stats, compute_metrics
 from .regions import get_region
@@ -39,7 +39,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            point_in_time: bool = False,
                            params: StrategyParams | None = None,
                            allocations: dict[str, float] | None = None,
-                           initial_capital: float = cfg.INITIAL_CAPITAL) -> dict:
+                           initial_capital: float = cfg.INITIAL_CAPITAL,
+                           trade_from: pd.Timestamp | None = None) -> dict:
     """`params` overrides the strategy knobs for every sleeve; `allocations`
     overrides the capital split (both used by the tuner). `initial_capital` is
     in the BASE currency (AUD) — the portfolio's total starting capital, split
@@ -54,7 +55,13 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     large under-charges its own commission floor. Each sleeve is funded at
     `initial_capital * alloc[k]` (BASE currency) converted to the sleeve's own
     LOCAL currency at the FX multiplier on ITS OWN first price date (`m` is
-    "base units per 1 local unit" — see `fx.py` — so local = base / m)."""
+    "base units per 1 local unit" — see `fx.py` — so local = base / m).
+
+    `trade_from` runs the portfolio as a book OPENED that day (see
+    `run_backtest`): each sleeve is funded at the rate on its first bar on or
+    after it instead, and holds no currency before that bar, so every sleeve
+    is worth exactly `initial_capital * alloc[k]` in the base currency there.
+    None (the default) is the whole-sample backtest, unchanged."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     syn_end = end or "2026-01-01"
     # F13: apply the delisting-return correction only in the PIT path and only
@@ -93,16 +100,24 @@ def run_portfolio_backtest(regions: list[str] | None = None,
             prices, index_px = data.load_region(region, start, end, tickers=pit_tickers)
         volume = data.capacity_volume(prices, start, end, synthetic=synthetic)
         # base_per_local at the sleeve's own first price date — the rate this
-        # sleeve is actually funded at, not an arbitrary portfolio-wide date.
-        base_per_local = float(
-            fx.align_fx(fx_tbl, prices.index, region.currency).iloc[0])
+        # sleeve is actually funded at, not an arbitrary portfolio-wide date —
+        # or, for a book opened at `trade_from`, at the bar it opens on.
+        m_fund = fx.align_fx(fx_tbl, prices.index, region.currency)
+        open_bar = (None if trade_from is None else
+                    first_bar_on_or_after(prices.dropna(how="all").index, trade_from))
+        base_per_local = float(m_fund.iloc[0] if open_bar is None
+                               else m_fund.loc[open_bar])
         sleeve_capital_local = initial_capital * alloc[key] / base_per_local
         bt = run_backtest(prices, index_px, region,
                           initial_capital=sleeve_capital_local,
                           membership=membership,
-                          apply_delisting=apply_delisting, volume=volume)
+                          apply_delisting=apply_delisting, volume=volume,
+                          trade_from=trade_from)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
+        if open_bar is not None:
+            # Funded at `open_bar`'s rate: no FX move up to it is the book's.
+            bt["base_returns"].loc[:open_bar] = 0.0
         sleeves[key] = bt
         index_by_region[key] = (index_px, region.currency)
 
