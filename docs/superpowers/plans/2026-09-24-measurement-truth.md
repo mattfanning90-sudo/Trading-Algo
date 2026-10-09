@@ -34,9 +34,9 @@ A compacted session reads this first to find where execution stopped.
 |---|---|---|
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
 | 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
-| 2 — reconciliation bridge | 5-8 | ⬜ not started |
+| 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
 | 3 — conventions | 9-13 (+13b) | ⬜ not started |
-| 4 — mechanism | 14-20 | ⬜ not started |
+| 4 — mechanism | 14-20 (17 superseded) | ⬜ not started |
 | 5 — regeneration, deploy, restart | 21-26 | ⬜ not started |
 | W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
 
@@ -75,6 +75,20 @@ A compacted session reads this first to find where execution stopped.
 - **Phase 1 complete (`fe616e8`).** Two insertions for Phase 3 were ruled in along the way:
   **Task 13b** fixes `metrics.cagr` to count intervals rather than observations, now that
   every CAGR routes through it. Full rulings are in the SDD ledger.
+- **2026-10-10 — Phase 2 complete (`b2624b2`).** Task 5 made the tracking diagnosis
+  compare like with like (the real `full` book's phantom 36-point FTSE shortfall became a
+  real 5-point one). Tasks 6, 7 and 8 built the reconciliation bridge, shipped it as
+  `paper_trade --reconcile` in the monthly report, and made the regression gate fail when a
+  cost is dropped. **Task 7b (inserted)** computed the bridge's holdings lines and made the
+  comparison like for like (each book against its own strategy, allocations and last day):
+  on `full` the unexplained residual fell from about −180bp to **+15bp**, which is the
+  portfolio layer's monthly allocation true-ups. A one-sleeve book now reports its residual
+  as "not tested" rather than a false pass. Known limits: `ultra`'s comparison backtest
+  still applies a drawdown stop the book has switched off (fixed in Task 14), and
+  `experimental` needs per-name prices because it held shorts.
+- **Task 17 superseded.** Micro mode was fixed on another branch (`fix/small-micro-mode`,
+  `01fa7c7`) with Matt; cherry-picked here as `38f9ff5`. Matt kept micro mode's 0.97
+  investment level unchanged.
 
 ---
 
