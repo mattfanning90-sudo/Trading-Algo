@@ -172,6 +172,14 @@ def attention(books: list[dict], findings: list[dict], jobs: list[dict]) -> dict
                          "text": (f"{b['name']} is {abs(b['off_peak']):.1%} below its "
                                   f"peak — its safety breaker trips at "
                                   f"{b['breaker']:.0%}")})
+        # A book well behind its schedule must not hide behind "All clear"
+        # (found live 2026-10-10: EXPERIMENTAL last updated Tue 6 Oct). One
+        # session late is normal lag and stays a quiet sidebar marker.
+        if not b["halted"] and b.get("freshness") == "stale":
+            since = (b.get("as_of") or "")[:16].replace("T", " ")
+            look.append({"level": "look", "book": b["key"], "url": None,
+                         "text": (f"{b['name']} hasn't recorded a new value since "
+                                  f"{since} UTC — it's behind its schedule")})
     for f in findings:
         item = {"book": f["book"], "text": f["message"], "url": None}
         if f["level"] == "ERROR":

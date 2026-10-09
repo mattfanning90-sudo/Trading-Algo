@@ -16,6 +16,7 @@ A job GitHub can't tell us about is "unknown", never "ok".
 from __future__ import annotations
 
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -113,12 +114,25 @@ def classify(runs: list[dict], now: datetime) -> list[JobStatus]:
     return out
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """Verify GitHub against a real certificate list. python.org's Python on
+    macOS ships none (`ssl.get_default_verify_paths().cafile` is None until its
+    "Install Certificates" step is run), so a bare urlopen fails with
+    CERTIFICATE_VERIFY_FAILED (found live 2026-10-10). certifi — already
+    installed alongside `requests` — carries one."""
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 def fetch_runs(timeout: float = 10.0) -> list[dict]:
     req = urllib.request.Request(
         f"{API_RUNS}?branch=main&event=schedule&per_page=100",
         headers={"Accept": "application/vnd.github+json",
                  "User-Agent": "momentum-home"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
         return json.load(resp)["workflow_runs"]
 
 

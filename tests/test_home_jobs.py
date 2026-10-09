@@ -111,3 +111,22 @@ def test_check_caches_for_five_minutes(fresh_cache):
     assert len(calls) == 1
     jobs.check(now=now, fetch=fetch, clock=clock)
     assert len(calls) == 2
+
+
+def test_fetch_runs_verifies_https_with_a_real_certificate_list(monkeypatch):
+    """python.org Python on macOS ships with no CA list (cafile None), so a bare
+    urlopen fails CERTIFICATE_VERIFY_FAILED and every job reads "unknown"
+    forever. fetch_runs must pass an SSL context that can verify GitHub."""
+    import io
+    import json as _json
+    import ssl
+    seen = {}
+
+    def fake_urlopen(req, timeout=None, context=None):
+        seen["context"] = context
+        return io.BytesIO(_json.dumps({"workflow_runs": []}).encode())
+    monkeypatch.setattr(jobs.urllib.request, "urlopen", fake_urlopen)
+    assert jobs.fetch_runs() == []
+    assert isinstance(seen["context"], ssl.SSLContext)
+    assert seen["context"].verify_mode == ssl.CERT_REQUIRED
+    assert seen["context"].cert_store_stats()["x509_ca"] > 0

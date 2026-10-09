@@ -58,3 +58,17 @@ def test_unknown_jobs_are_flagged_not_green_and_not_alarming():
 
 def test_no_books_and_no_findings_is_nodata():
     assert verdict([], [], [job("ok")])["verdict"] == "nodata"
+
+
+def test_a_book_behind_its_schedule_is_look_soon():
+    """A book 3+ trading days without a new value must not hide behind "All
+    clear" (found live 2026-10-10: EXPERIMENTAL last updated Tue 6 Oct)."""
+    stale = {**book("EXPERIMENTAL"), "freshness": "stale", "as_of": "2026-10-06T00:00:00+00:00"}
+    out = verdict([stale])
+    assert out["verdict"] == "look"
+    assert "EXPERIMENTAL" in out["items"][0]["text"] and "2026-10-06" in out["items"][0]["text"]
+
+
+def test_a_book_one_session_late_stays_quiet():
+    late = {**book("SMALL"), "freshness": "late", "as_of": "2026-10-07T00:00:00+00:00"}
+    assert verdict([late])["verdict"] == "clear"
