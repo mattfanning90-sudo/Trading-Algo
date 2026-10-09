@@ -787,3 +787,96 @@ def test_the_dividends_note_carries_a_shorts_sign():
     state["trades"] += [_div("2026-03-02", "ASX", "BHP.AX", -50, 0.2, "AUD")]
     rep = attribution.reconcile(state, _bridge_predicted())
     assert "credited a net -10.00 AUD" in rep["notes"]["dividends"]
+
+
+# --- cash_interest nets the paper's own credit -------------------------------
+def _with_paper_interest(state, rate=0.073):
+    """Pay the US sleeve's idle USD cash as paper_trade does: each session
+    credits the cash held since the last one x rate x days / 365 as an INT
+    row, into the stored cash and every later value."""
+    us = state["sleeves"]["US"]
+    cash, paid = us["cash"], 0.0
+    days = [pd.Timestamp(r["date"]) for r in state["sleeve_history"]]
+    for i in range(1, len(days)):
+        credit = cash * rate * (days[i] - days[i - 1]).days / 365
+        cash += credit
+        paid += credit * _FX
+        state["trades"].append({
+            "date": days[i].strftime("%Y-%m-%d"), "region": "US", "ticker": "CASH",
+            "side": "INT", "shares": 1, "fill": credit, "commission": 0.0,
+            "stamp_duty": 0.0, "currency": "USD"})
+        state["sleeve_history"][i]["US"] += paid
+        state["equity_history"][i][1] += paid
+    us["cash"] = cash
+    return state
+
+
+def test_a_credit_both_engines_pay_alike_nets_to_nothing(monkeypatch):
+    """Both engines hold the US sleeve half in cash, its stock earns nothing,
+    and both now pay 7.3% on the idle half: the backtest 1bp of NAV a day,
+    the paper 16,666.67 USD x 0.073 / 365 = 3.33 USD (5.00 AUD), then 5.001
+    on the larger balance. cash_interest is the DIFFERENCE, half a tenth of
+    a cent here (the paper's balance compounds where the backtest's Σw stays
+    put), and there is nothing left for rebalance_timing. Netting nothing,
+    the line would read 10.00 AUD and timing -10.00."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.0, 0.0), us_weight=0.5)
+    state = _with_paper_interest(_paper_book(0.5, (0.0, 0.0)))
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "exposure_gap") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True
+    assert "less 10.00 AUD" in rep["notes"]["cash_interest"]
+
+
+def test_a_credit_only_the_paper_paid_is_the_papers_gain_on_the_line(monkeypatch):
+    """With the backtest's credit off, the paper's INT rows are all the line
+    holds, negative because the paper is ahead: -(5.00 + 5.001) = -10.00 AUD.
+    An INT row dated the window's START is already inside the start equity,
+    as a fill on that day is, so its 999 USD is not counted."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)
+    bt = _backtest((0.0, 0.0), us_weight=0.5)
+    state = _with_paper_interest(_paper_book(0.5, (0.0, 0.0)))
+    state["trades"].insert(0, {"date": "2026-03-02", "region": "US", "ticker": "CASH",
+                               "side": "INT", "shares": 1, "fill": 999.0,
+                               "commission": 0.0, "stamp_duty": 0.0,
+                               "currency": "USD"})
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(
+        -(5.0 + 5.001), abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True
+
+
+def test_paper_interest_with_no_rate_is_never_converted_at_parity(monkeypatch):
+    """No USD rate in the snapshot and no all-cash close to read one from: the
+    paper's USD interest cannot go into AUD. Parity would be a guess, so it
+    is left out, the line is the backtest's credit alone (10.00 AUD), and the
+    note says the INT rows were left out and where they went."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.0, 0.0), us_weight=0.5)
+    state = _with_paper_interest(_paper_book(0.5, (0.0, 0.0)))
+    del state["fx_snapshot"]["USD"]
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(10.001, abs=0.005)
+    assert "US INT rows left out" in rep["notes"]["cash_interest"]
+
+
+def test_without_the_backtest_the_note_carries_the_papers_interest():
+    """Unmeasured, the line stays 0.0 and says why; the note still names the
+    money the paper's INT rows credited in the window, as the dividends note
+    does: 2.50 AUD."""
+    state = _bridge_state(100_995.08)
+    state["trades"].append({"date": "2026-03-02", "region": "ASX", "ticker": "CASH",
+                            "side": "INT", "shares": 1, "fill": 2.5,
+                            "commission": 0.0, "stamp_duty": 0.0, "currency": "AUD"})
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["cash_interest"] == 0.0
+    assert "credited 2.50 AUD" in rep["notes"]["cash_interest"]
+    assert "left out" not in rep["notes"].get("commission_floor", "")

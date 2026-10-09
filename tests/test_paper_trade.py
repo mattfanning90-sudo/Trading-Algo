@@ -152,7 +152,7 @@ def test_min_size_gate_holds_cash(account, paper_cycle):
     pt.init_account(account, capital=300, synthetic=True)
     paper_cycle(account)
     state = pt.load_state(account)
-    assert len(state["trades"]) == 0
+    assert not any(pnl.is_fill(t) for t in state["trades"])   # interest is no trade
     assert all(not s["positions"] for s in state["sleeves"].values())
 
 
@@ -359,7 +359,7 @@ def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatc
     # (b) an unvaluable sleeve holds cash — it must NOT fall through the
     # min-viable gate and trade on a NaN valuation
     assert not state["sleeves"]["US"]["positions"], "traded on an unvaluable sleeve"
-    assert len(state["trades"]) == 0
+    assert not any(pnl.is_fill(t) for t in state["trades"])
     # (c) no NaN in the persisted equity history
     for d, eq in state["equity_history"]:
         assert eq == eq, f"NaN equity persisted on {d}"
@@ -426,7 +426,7 @@ def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch, paper_c
     before = pt.load_state(account)
     assert any(s["positions"] for s in before["sleeves"].values()), "need holdings"
     equity_rows = len(before["equity_history"])
-    trades = len(before["trades"])
+    trades = sum(1 for t in before["trades"] if pnl.is_fill(t))
 
     real = pt.latest_region_data
 
@@ -443,7 +443,8 @@ def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch, paper_c
     after = pt.load_state(account)
     assert after["risk_halted"] is False, "breaker must not trip on an unpriced book"
     assert len(after["equity_history"]) == equity_rows, "no phantom equity row"
-    assert len(after["trades"]) == trades, "must not trade off unpriced holdings"
+    assert sum(1 for t in after["trades"] if pnl.is_fill(t)) == trades, \
+        "must not trade off unpriced holdings"
 
 
 def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch, paper_cycle):
@@ -908,7 +909,7 @@ def test_a_breaker_trip_liquidates_at_the_next_close(account, paper_cycle):
 
     state = paper_cycle(account, sessions=1)          # the next close: exit
     assert not state["sleeves"]["US"]["positions"]
-    exits = state["trades"][opened:]
+    exits = [t for t in state["trades"][opened:] if pnl.is_fill(t)]
     assert exits and all(t["side"] == "SELL" and t["date"] > tripped_on
                          for t in exits)
     assert "pending_target" not in state["sleeves"]["US"]
@@ -1120,7 +1121,8 @@ def test_a_dividend_accrues_to_the_book_before_this_runs_fill(
     real = pt._credit_dividends
 
     def spy(region, sleeve, today, trade_log, synthetic, **kw):
-        seen.append((dict(sleeve["positions"]), len(trade_log)))
+        seen.append((dict(sleeve["positions"]),
+                     sum(1 for t in trade_log if pnl.is_fill(t))))
         return real(region, sleeve, today, trade_log, synthetic, **kw)
 
     monkeypatch.setattr(pt, "_credit_dividends", spy)
@@ -1312,7 +1314,7 @@ def test_status_and_compare_count_fills_not_dividends(account, paper_cycle, caps
     pt.init_account(account, capital=300_000, synthetic=True,
                     allocations={"US": 1.0})
     state = paper_cycle(account)
-    fills = len(state["trades"])
+    fills = sum(1 for t in state["trades"] if pnl.is_fill(t))   # not its INT rows
     ticker, shares = next(iter(state["sleeves"]["US"]["positions"].items()))
     state["trades"].append({"date": state["equity_history"][-1][0], "region": "US",
                             "ticker": ticker, "side": "DIV", "shares": shares,

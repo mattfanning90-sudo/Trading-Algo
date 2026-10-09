@@ -74,3 +74,168 @@ def test_credit_is_reported_and_reconciles(synth_asx, asx_region):
     res = run_backtest(prices, index_px, asx_region)
     assert "cash_interest_fraction" in res
     assert res["cash_interest_fraction"] >= 0.0
+
+
+# --- wired into the paper book --------------------------------------------
+# The paper book pays the backtest's rule through the backtest's function, on
+# the cash it held over the window since its last accrual, and books each
+# credit as an `INT` ledger row: a cash event (`pnl.CASH_EVENTS`), not a fill.
+def _accrue(sleeve, px, today, log=None):
+    from trading_algo import paper_trade as pt
+    from trading_algo.regions import get_region
+
+    return pt._accrue_cash_interest(get_region("US"), sleeve, px, today,
+                                    [] if log is None else log)
+
+
+def test_paper_book_earns_the_same_rate_the_backtest_pays():
+    """`full` is 72.8% cash. Paying 0% on that while the backtest credits
+    CASH_RATE_ANNUAL is ~255bps/yr of divergence against a 200bps tracking
+    budget — the single biggest engine disagreement in the review."""
+    sleeve = {"currency": "USD", "cash": 7_000.0, "positions": {"AAA": 30},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})                  # equity 10_000, 70% cash
+    log = []
+
+    credit = _accrue(sleeve, px, "2026-07-01", log)
+
+    # 30 calendar days, ACT/365, on the CASH balance only
+    assert credit == pytest.approx(7_000.0 * cfg.CASH_RATE_ANNUAL * 30 / 365)
+    assert sleeve["cash"] == pytest.approx(7_000.0 + credit)
+    assert sleeve["last_interest_date"] == "2026-07-01"
+    assert log == [{"date": "2026-07-01", "region": "US", "ticker": "CASH",
+                    "side": "INT", "shares": 1, "fill": credit,
+                    "commission": 0.0, "stamp_duty": 0.0, "currency": "USD"}]
+
+
+def test_paper_interest_is_the_backtest_definition_not_a_second_one():
+    """Same function, same answer — the point of the change is one definition.
+    backtest.py credits idle_cash_credit(Σw held through the bar, calendar
+    days, rate) on the NAV the bar started from; here Σw = 0.75."""
+    sleeve = {"currency": "USD", "cash": 2_500.0, "positions": {"AAA": 75},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})                  # equity 10_000, Σw = 0.75
+    credit = _accrue(sleeve, px, "2026-06-04")
+    assert credit == pytest.approx(
+        fees.idle_cash_credit(0.75, 3, cfg.CASH_RATE_ANNUAL) * 10_000.0)
+
+
+def test_a_weekend_accrues_three_days(monkeypatch):
+    """Friday's close to Monday's is one bar and three calendar days, as the
+    backtest counts it: 10,000 at 3.65% is 1.00 a day, so 3.00."""
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.0365)
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {},
+              "last_interest_date": "2026-06-05"}       # a Friday
+    assert _accrue(sleeve, pd.Series(dtype=float), "2026-06-08") == \
+        pytest.approx(3.00, abs=1e-9)                  # the Monday
+
+
+def test_paper_interest_does_not_double_accrue_within_one_session():
+    """The engine fires up to three times a day, once per regional close."""
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series(dtype=float)
+    log = []
+    first = _accrue(sleeve, px, "2026-06-02", log)
+    second = _accrue(sleeve, px, "2026-06-02", log)
+    assert first > 0 and second == 0.0
+    assert len(log) == 1
+
+
+def test_an_earlier_bar_never_moves_the_window_back():
+    """A feed can briefly serve an older last bar. Moving the window back to
+    it would pay the days since then a second time on the next run."""
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {},
+              "last_interest_date": "2026-06-10"}
+    assert _accrue(sleeve, pd.Series(dtype=float), "2026-06-08") == 0.0
+    assert sleeve["last_interest_date"] == "2026-06-10"
+    assert sleeve["cash"] == 10_000.0
+
+
+def test_the_first_run_only_arms_the_window():
+    """No prior accrual date, no window: back-paying a book's history is not
+    something to do silently (the dividend credit's rule too)."""
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {}}
+    log = []
+    assert _accrue(sleeve, pd.Series(dtype=float), "2026-06-02", log) == 0.0
+    assert sleeve["last_interest_date"] == "2026-06-02"
+    assert sleeve["cash"] == 10_000.0 and log == []
+
+
+def test_a_short_book_that_owes_cash_is_never_credited():
+    """Negative cash is a margin debit; the borrow charge is a separate,
+    unmodelled cost and must not appear here as a negative credit."""
+    sleeve = {"currency": "USD", "cash": -2_000.0, "positions": {"AAA": 120},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0})
+    log = []
+    assert _accrue(sleeve, px, "2026-07-01", log) == 0.0
+    assert sleeve["cash"] == -2_000.0 and log == []
+
+
+def test_an_interest_row_is_a_cash_event_and_never_a_fill():
+    """Every ledger reader asks `pnl.is_fill` / `pnl.is_cash_event`. An INT
+    row read as a trade is a SELL of a ticker called CASH: it would open a
+    phantom short lot."""
+    from trading_algo import pnl
+
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {},
+              "last_interest_date": "2026-06-01"}
+    log = []
+    credit = _accrue(sleeve, pd.Series(dtype=float), "2026-06-02", log)
+    (row,) = log
+    assert pnl.is_cash_event(row) and not pnl.is_fill(row)
+    assert pnl.cash_amount(row) == credit
+    assert "decision" not in row, "TCA counts a row with a decision as a fill"
+    assert pnl.build_lots(log) == ({}, [])
+
+
+def test_interest_accrues_before_this_runs_fill_on_the_cash_it_held(
+        tmp_path, monkeypatch, paper_cycle):
+    """Under the next-close fill the book decides on one bar and fills at the
+    next. The window (decision bar, fill bar] was held ALL in cash — the fill
+    happens at its end — so its credit is on the funded cash, accrued before
+    the fill and before the dividend credit. The next window is held at what
+    the fill left in cash."""
+    from trading_algo import paper_trade as pt
+    from trading_algo import pnl
+
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("t", capital=300_000, synthetic=True, allocations={"US": 1.0})
+    order = []
+    real_int, real_div = pt._accrue_cash_interest, pt._credit_dividends
+
+    def spy_int(region, sleeve, px, today, trade_log):
+        order.append(("INT", dict(sleeve["positions"])))
+        return real_int(region, sleeve, px, today, trade_log)
+
+    def spy_div(region, sleeve, today, trade_log, synthetic, **kw):
+        order.append(("DIV", dict(sleeve["positions"])))
+        return real_div(region, sleeve, today, trade_log, synthetic, **kw)
+
+    monkeypatch.setattr(pt, "_accrue_cash_interest", spy_int)
+    monkeypatch.setattr(pt, "_credit_dividends", spy_div)
+
+    funded = pt.load_state("t")["sleeves"]["US"]["cash"]
+    decided = paper_cycle("t", sessions=1)["equity_history"][-1][0]
+    state = paper_cycle("t", sessions=1)                         # the fill
+    filled = state["equity_history"][-1][0]
+    assert state["sleeves"]["US"]["positions"], "the second session must fill"
+    assert order == [("INT", {}), ("DIV", {}), ("INT", {}), ("DIV", {})]
+
+    rows = [t for t in state["trades"] if t["side"] == "INT"]
+    days = (pd.Timestamp(filled) - pd.Timestamp(decided)).days
+    assert [(t["date"], t["currency"]) for t in rows] == [(filled, "USD")]
+    assert rows[0]["fill"] == pytest.approx(
+        fees.idle_cash_credit(0.0, days, cfg.CASH_RATE_ANNUAL) * funded)
+    assert pnl.is_fill(state["trades"][-1]) and state["trades"].index(rows[0]) == 0, \
+        "the credit is booked before the fill it precedes"
+
+    held = state["sleeves"]["US"]["cash"]                        # after the fill
+    state = paper_cycle("t", sessions=1)
+    later = state["equity_history"][-1][0]
+    days = (pd.Timestamp(later) - pd.Timestamp(filled)).days
+    last = [t for t in state["trades"] if t["side"] == "INT"][-1]
+    assert last["date"] == later
+    assert last["fill"] == pytest.approx(held * cfg.CASH_RATE_ANNUAL * days / 365)

@@ -552,3 +552,36 @@ def test_a_cash_event_does_not_make_a_never_traded_sleeve_traded(monkeypatch):
     found = verify.check_liveness("t", book, "equity", NOW)
     assert [(f.level, f.code) for f in found if f.code == "never-traded"] == [
         ("ERROR", "never-traded")]
+
+
+# ---------------------------------------------------------------------------
+# INTEREST — an INT ledger row moves cash and is not a fill
+# ---------------------------------------------------------------------------
+def test_accrued_interest_is_not_an_unledgered_write():
+    """Interest accrues straight to cash with no counterparty trade, recorded
+    as an INT row (`pnl.INTEREST`, shares 1 x fill = the credit). The replay
+    must add it back as cash — not read it as a SELL of a ticker called CASH
+    (position-mismatch) — or a correctly credited book looks like something
+    wrote outside the ledger."""
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0 + 500.0,
+              "positions": {"AAPL": 10.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "CASH", "side": "INT",
+          "shares": 1, "fill": 500.0, "commission": 0.0, "stamp_duty": 0.0,
+          "currency": "USD"}],
+        {"US": sleeve}))
+    assert out == []
+
+
+def test_interest_is_not_a_fill_to_the_realism_checks():
+    """Interest accrues on the bar's date, which a Saturday-stamped bar would
+    make a closed-market ERROR, and it has no commission because nothing was
+    traded. Neither is an order."""
+    row = {"date": "2026-07-04", "region": "US", "ticker": "CASH", "side": "INT",
+           "shares": 1, "fill": 2.5, "commission": 0.0, "stamp_duty": 0.0}
+    book = equity_book([row, dict(row)], {})
+    assert verify.check_market_hours("t", book, "equity") == []
+    assert verify.check_costs_charged("t", book) == []
+    assert verify.check_whole_shares("t", book) == []

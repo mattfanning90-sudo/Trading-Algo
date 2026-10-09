@@ -10,6 +10,7 @@ import re
 
 from trading_algo import config as cfg
 from trading_algo import paper_trade as pt
+from trading_algo import pnl
 from trading_algo.dashboard import api, export, server
 
 
@@ -135,7 +136,7 @@ def _with_a_dividend(account):
                             "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
                             "currency": sleeve["currency"]})
     pt.save_state(account, state)
-    fills = [t for t in state["trades"] if t["side"] != "DIV"]
+    fills = [t for t in state["trades"] if pnl.is_fill(t)]
     return state, fills, shares * 0.5, sleeve["currency"]
 
 
@@ -150,7 +151,10 @@ def test_a_dividend_is_income_not_a_fill_on_the_dashboard(account):
     assert all(t["side"] in ("BUY", "SELL") for t in snap["blotter"])
     assert len(snap["blotter"]) == len(fills)
     assert k["n_trades"] == len(fills)
-    assert k["income_base"] == pytest.approx(amount * snap["fx"].get(ccy, 1.0), abs=0.01)
+    interest = sum(pnl.cash_amount(t) * snap["fx"][t["currency"]]
+                   for t in state["trades"] if t["side"] == "INT")
+    assert k["income_base"] == pytest.approx(
+        amount * snap["fx"].get(ccy, 1.0) + interest, abs=0.01)
 
 
 def test_net_pnl_parts_sum_to_the_whole(account):
@@ -215,6 +219,28 @@ def test_the_dashboard_and_the_bridge_convert_by_the_one_rule(monkeypatch):
     assert asked == ["USD", "GBP"]
 
 
+def test_interest_is_income_on_the_net_tile_and_never_a_trade(account):
+    """The fixture's book has run two sessions, so every sleeve's second run
+    paid interest on the cash it held since its first, as INT rows. They are
+    INCOME, converted by the one rate rule; they are in neither the trade
+    count nor the blotter; and NET's parts still sum to NET to the cent."""
+    from trading_algo import fx, pnl
+
+    state = pt.load_state(account)
+    paid = [t for t in state["trades"] if t["side"] == "INT"]
+    assert {t["region"] for t in paid} == set(state["sleeves"])
+    snap = api.build_snapshot(account, synthetic=True)
+    k = snap["kpis"]
+    want = sum(pnl.cash_amount(t) * fx.base_per_local(snap["fx"], t["currency"],
+                                                      snap["base_currency"])
+               for t in paid)
+    assert want > 0 and k["income_base"] == round(want, 2)
+    assert k["n_trades"] == sum(1 for t in state["trades"] if pnl.is_fill(t))
+    assert all(row["side"] != "INT" for row in snap["blotter"])
+    parts = k["realized_base"] + k["unrealized_base"] + k["income_base"] + k["other_base"]
+    assert round(parts, 2) == k["net_pnl_base"]
+
+
 def test_a_round_trip_with_no_rate_is_not_converted_at_parity():
     trades = [{"date": "2026-06-01", "region": "US", "ticker": "AAA", "side": "BUY",
                "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0,
@@ -247,9 +273,15 @@ def test_a_sleeve_with_no_rate_is_out_of_every_net_part_and_said_so(
     monkeypatch.setattr(pt, "fx_snapshot", lambda *a, **kw: {
         c: r for c, r in real(*a, **kw).items() if c != "USD"})
 
-    k = api.build_snapshot(account, synthetic=True)["kpis"]
+    snap = api.build_snapshot(account, synthetic=True)
+    k = snap["kpis"]
     assert k["unvalued"] == ["USD"]
-    assert k["income_base"] == 0.0
+    # the USD dividend and the USD sleeve's interest are out; the other
+    # sleeves' interest is income at their own rates
+    valued = sum(pnl.cash_amount(t) * snap["fx"][t["currency"]]
+                 for t in state["trades"]
+                 if pnl.is_cash_event(t) and t["currency"] != "USD")
+    assert k["income_base"] == round(valued, 2)
     funded = state["initial_capital_base"] * (1 - state["allocations"]["US"])
     assert k["net_pnl_base"] == pytest.approx(k["total_equity"] - funded, abs=0.01)
     parts = k["realized_base"] + k["unrealized_base"] + k["income_base"] + k["other_base"]

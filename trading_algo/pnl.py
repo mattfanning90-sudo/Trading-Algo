@@ -105,16 +105,18 @@ def _trade_cost(t: dict) -> float:
 
 # Ledger rows that move cash but execute nothing, defined once. Each records
 # the cash it moved as `shares * fill`: a `DIV` row is the signed position it
-# was paid on times the cash per share. Taken for a trade it reads as a SELL
+# was paid on times the cash per share; an `INT` row is 1 times the interest
+# credited on the sleeve's idle cash. Taken for a trade it reads as a SELL
 # (a BUY, on a short) at a price no venue quoted, so fill readers ask
 # `is_fill` and cash readers `is_cash_event` / `cash_amount`. A new event
 # joins CASH_EVENTS and no reader changes.
 DIVIDEND = "DIV"
-CASH_EVENTS = frozenset({DIVIDEND})
+INTEREST = "INT"
+CASH_EVENTS = frozenset({DIVIDEND, INTEREST})
 
 
 def is_cash_event(t: dict) -> bool:
-    """True for a row that moves cash and executes nothing (a dividend)."""
+    """True for a row that moves cash and executes nothing (dividend, interest)."""
     return t.get("side") in CASH_EVENTS
 
 

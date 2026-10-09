@@ -214,6 +214,17 @@ def _base_per_local(paper_state: dict, ccy: str | None) -> float | None:
                              paper_state.get("base_currency") or cfg.BASE_CURRENCY)
 
 
+def _window_cash(paper_state: dict, side: str, start: pd.Timestamp,
+                 end: pd.Timestamp) -> tuple[float, list[str]]:
+    """(base amount, currencies with no rate) of the `side` cash-event rows
+    dated inside (start, end], each at its `_base_per_local` rate."""
+    rows = [(t, _base_per_local(paper_state, t.get("currency")))
+            for t in paper_state.get("trades") or []
+            if t.get("side") == side and start < pd.Timestamp(t["date"]) <= end]
+    return (sum(pnl.cash_amount(t) * r for t, r in rows if r),
+            sorted({str(t.get("currency")) for t, r in rows if r is None}))
+
+
 def _sleeve_close(paper_state: dict, key: str,
                   day: pd.Timestamp) -> tuple[float, dict]:
     """(local cash, shares by ticker) for sleeve `key` at the close of `day`.
@@ -250,7 +261,7 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     day's difference splits, Brinson-style, into
 
         (g_bt - g_p) * h   exposure: invested more or less, priced at h
-        i                  the backtest's idle-cash credit (paper: none yet)
+        i                  the backtest's idle-cash credit
         the rest           what was held and when, plus every unnamed cause
 
     g is the gross invested fraction; h is what the backtest's holdings earned
@@ -272,6 +283,13 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     cash cannot be put in base. `bt_flat` counts days the backtest held
     nothing while the paper was invested: no backtest holdings price them, so
     they cannot be exposure and stay in the remainder.
+
+    `interest` is the backtest's credit LESS the paper's: the sleeve's INT
+    rows in (start, end], each put into base as the paper's cash is and
+    linked like a day of the backtest's, from the day it landed, at the
+    backtest's growth after it. A credit both engines paid alike nets to
+    nothing. `paper_interest` is the paper's part; None when the sleeve has
+    no rate to convert it at, and then it is left out, never taken at parity.
     """
     rl, rb = bt["returns"], bt["base_returns"]
     costs = bt.get("costs")
@@ -299,12 +317,15 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     why = None if rate is not None else f"no {ccy} rate in fx_snapshot for {key}'s cash"
     if any(n < 0 for _, pos in closes.values() for n in pos.values()):
         why = f"{key} held a short (cash gives only net exposure)"
+    level = fx_step.cumprod()
+
+    def cash_rate(d: pd.Timestamp) -> float:        # base per local cash on d
+        return rate * float(level.asof(d)) / float(level.asof(at))
+
     g_p: dict = {}
     if why is None:
-        level = fx_step.cumprod()
         for d, (cash, pos) in closes.items():
-            m = rate * float(level.asof(d)) / float(level.asof(at))
-            g_p[d] = 1.0 - cash * m / values[d] if any(pos.values()) else 0.0
+            g_p[d] = 1.0 - cash * cash_rate(d) / values[d] if any(pos.values()) else 0.0
 
     exposure = interest = 0.0
     bt_flat = 0
@@ -323,7 +344,17 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
         if why is None:
             exposure += (g_bt - g_p[d]) * h * link
             bt_flat += g_bt == 0 and g_p[d] > 1e-6
-    return {"v0": v0, "gap": b_end - values[days[-1]] / v0, "interest": interest,
+    credits = [t for t in paper_state.get("trades") or []
+               if t.get("region") == key and t.get("side") == pnl.INTEREST
+               and start < pd.Timestamp(t["date"]) <= end]
+    paper = None if credits and rate is None else 0.0
+    for t in credits if paper is not None else ():
+        on = pd.Timestamp(t["date"])
+        before = growth.loc[:on]
+        paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
+                  / (float(before.iloc[-1]) if len(before) else 1.0))
+    return {"v0": v0, "gap": b_end - values[days[-1]] / v0,
+            "interest": interest - (paper or 0.0), "paper_interest": paper,
             "exposure": None if why else exposure, "why": why, "bt_flat": bt_flat}
 
 
@@ -354,7 +385,7 @@ def _bps_by_sleeve(terms: dict, equity: float, part: str) -> str:
 
 
 def _line_cash_interest(terms: dict, equity: float) -> float:
-    """The backtest's idle-cash credit, less the paper's (none yet)."""
+    """The backtest's idle-cash credit, less the paper's INT rows."""
     return sum(t["v0"] / equity * t["interest"] for t in terms.values())
 
 
@@ -425,11 +456,8 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     left_out -= len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
-    divs = [(t, _base_per_local(paper_state, t.get("currency")))
-            for t in paper_state.get("trades") or []
-            if t.get("side") == pnl.DIVIDEND and start < pd.Timestamp(t["date"]) <= end]
-    credited = sum(pnl.cash_amount(t) * r for t, r in divs if r)
-    div_unrated = sorted({str(t.get("currency")) for t, r in divs if r is None})
+    credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, start, end)
+    earned, int_unrated = _window_cash(paper_state, pnl.INTEREST, start, end)
     lines = {name: 0.0 for name in BRIDGE_LINES}
     lines["fill_convention"] = slip_excess / start_equity
     lines["commission_floor"] = _line_commission_floor(fills) / start_equity
@@ -445,10 +473,12 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                       + ". A dividend the ledger does not hold (one that went ex "
                         "before the book credited them) is not in that figure and "
                         "sits in rebalance_timing, or in residual without it"),
-        "cash_interest": "0.0 — the paper book accrues no interest on idle cash "
-                         "yet; the backtest applies fees.idle_cash_credit, which "
-                         "this bridge measures only from the backtest's holdings "
-                         "(backtest=)",
+        "cash_interest": (f"0.0 — needs the backtest's per-sleeve holdings "
+                          f"(backtest=); both engines apply "
+                          f"fees.idle_cash_credit, and the paper book's INT rows "
+                          f"credited {earned:,.2f} {ccy} over this window"
+                          + (f" ({', '.join(int_unrated)} rows left out — no "
+                             "rate in fx_snapshot)" if int_unrated else "")),
         "fill_convention": f"only the shortfall beyond the modelled slippage, "
                            f"which both engines charge; the paper book paid "
                            f"{slip_paid:,.2f} {ccy} of slippage over this window "
@@ -475,11 +505,17 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                 notes[name] = f"0.0 — not measured: {why}; the gap stays in residual"
         else:
             lines["cash_interest"] = _line_cash_interest(terms, start_equity)
+            paid = sum(t["v0"] * (t["paper_interest"] or 0.0) for t in terms.values())
+            lost = [k for k, t in terms.items() if t["paper_interest"] is None]
             notes["cash_interest"] = (
                 f"the backtest's fees.idle_cash_credit on its idle fraction, "
-                f"{lines['cash_interest'] * start_equity:,.2f} {ccy} over this "
-                f"window; the paper book accrues none yet ("
-                f"{_bps_by_sleeve(terms, start_equity, 'interest')})")
+                f"less the paper book's INT rows (the same rule on its own "
+                f"cash): {lines['cash_interest'] * start_equity + paid:,.2f} "
+                f"less {paid:,.2f} {ccy} over this window ("
+                f"{_bps_by_sleeve(terms, start_equity, 'interest')})"
+                + (f"; {', '.join(lost)} INT rows left out — no rate for the "
+                   "sleeve's cash, and parity would be a guess; they stay in "
+                   "residual" if lost else ""))
             missing = [t["why"] for t in terms.values() if t["why"]]
             if missing:
                 for name in ("exposure_gap", "rebalance_timing"):

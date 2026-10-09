@@ -729,6 +729,59 @@ def _dividend_gap_alert(region, account, last: str, today: str, missing: list,
         abandoned=abandoned, window_start=last, stuck_sessions=sessions)
 
 
+def _accrue_cash_interest(region, sleeve: dict, px: pd.Series, today: str,
+                          trade_log: list) -> float:
+    """Credit interest on the cash the sleeve held since its last accrual.
+
+    The backtest's rule, applied the backtest's way. For each bar, backtest.py
+    credits
+
+        fees.idle_cash_credit(float(current_w.sum()), (today - dates[i - 1]).days,
+                              CASH_RATE_ANNUAL)
+
+    on the NAV the bar started from, where `current_w` is the book held
+    THROUGH the bar: that bar's staged fill happens after the credit. In money
+    that is the cash held over the bar x rate x calendar days / 365. Here the
+    window is (last_interest_date, today]. Nothing moves a sleeve's cash
+    between runs, so the run accrues first, before this run's dividend credit
+    and fill, on the cash as it stood over the window. Σw is 1 - cash / equity
+    and the credit is that fraction of equity, so the money is the same at
+    any close's marks. ACT/365 on CALENDAR days: a weekend accrues three, and
+    a window a stale bar held open accrues all of its days on the next good
+    run. Negative cash (a levered book's debit) earns nothing and is charged
+    nothing; the borrow cost is unmodelled (`fees.idle_cash_credit`).
+
+    The first run only arms the window, as `_credit_dividends` does: paying a
+    book's past is not something to do silently. A bar at or before the
+    window's end (the engine runs up to three times a bar) pays nothing and
+    never moves the window back.
+
+    Recorded as an `INT` ledger row, one per sleeve per paying run, with
+    shares 1 and fill the credit, so `pnl.cash_amount` reads the credit and
+    `pnl.is_fill` is False. Returns the credit in the sleeve's local currency.
+    """
+    last = sleeve.get("last_interest_date")
+    if last and last >= today:
+        return 0.0                       # this bar's window is already credited
+    sleeve["last_interest_date"] = today
+    cash, equity = float(sleeve["cash"]), sleeve_equity_local(sleeve, px)
+    if not last or not (cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL) or equity <= 0:
+        return 0.0
+    days = (date.fromisoformat(today) - date.fromisoformat(last)).days
+    # Σw, NET and signed: see fees.idle_cash_credit on why net, not gross.
+    credit = fees.idle_cash_credit(1.0 - cash / equity, days,
+                                   cfg.CASH_RATE_ANNUAL) * equity
+    if not credit > 0:
+        return 0.0
+    sleeve["cash"] = cash + credit
+    trade_log.append({
+        "date": today, "region": region.key, "ticker": "CASH", "side": pnl.INTEREST,
+        "shares": 1, "fill": credit, "commission": 0.0, "stamp_duty": 0.0,
+        "currency": region.currency})
+    print(f"    INT  {days:>3}d on {cash:>12,.2f} = {credit:>10,.2f} {region.currency}")
+    return credit
+
+
 def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
                       synthetic: bool, *, account: str | None = None,
                       px: pd.Series | None = None) -> float:
@@ -983,6 +1036,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         params = _account_params(state, region)
         # Cash events first: they accrue to the book AS IT STOOD over the period,
         # before any of this run's trades change it.
+        _accrue_cash_interest(region, sleeve, px_today, today, state["trades"])
         _credit_dividends(region, sleeve, today, state["trades"], synthetic,
                           account=account, px=px_today)
         status = None                       # why the sleeve ended this run as it did
