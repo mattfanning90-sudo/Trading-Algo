@@ -32,6 +32,11 @@ TOL = {
     "AnnVol": 0.02,
     "MaxDrawdown": 0.02,
     "Sharpe": 0.15,
+    # Cumulative cost drag, as a fraction of NAV summed over the run. TIGHT on
+    # purpose: deleting every transaction cost moves the synthetic sleeves' CAGR
+    # by only 0.0022-0.0114, well inside the 0.02 above, so CAGR alone cannot see
+    # a dropped cost. This line is what enforces invariant #2 in CI.
+    "total_cost_fraction": 1e-4,
 }
 
 
@@ -48,7 +53,11 @@ def synthetic_metrics() -> dict:
             "MaxDrawdown": pm["MaxDrawdown"],
         },
         "sleeves": {
-            k: {"CAGR": s["metrics"]["CAGR"], "MaxDrawdown": s["metrics"]["MaxDrawdown"]}
+            k: {"CAGR": s["metrics"]["CAGR"],
+                "MaxDrawdown": s["metrics"]["MaxDrawdown"],
+                # run_backtest already returns this; rounded to keep the
+                # committed baseline readable and diffable.
+                "total_cost_fraction": round(float(s["total_cost_fraction"]), 6)}
             for k, s in res["sleeves"].items()
         },
     }

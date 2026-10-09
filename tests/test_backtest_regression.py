@@ -91,3 +91,26 @@ def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
         if checked >= 3:
             break
     assert checked > 0, "no non-empty rebalance target was validated"
+
+
+def test_baseline_records_a_nonzero_cost_per_sleeve():
+    """Without a cost line in the baseline, `compare` has nothing to compare:
+    CAGR alone moves less than TOL when every transaction cost is deleted."""
+    baseline = ci_regression.load_baseline()
+    for key, sleeve in baseline["sleeves"].items():
+        assert "total_cost_fraction" in sleeve, f"{key} has no cost line"
+        assert sleeve["total_cost_fraction"] > 0, f"{key} back-tested at zero cost"
+
+
+def test_gate_fails_when_transaction_costs_are_deleted(monkeypatch):
+    """Invariant #2 (costs always on), enforced by the gate rather than by
+    convention. Deleting every transaction cost passes on CAGR/Vol/Sharpe/DD
+    alone — measured: the sleeve CAGRs move 0.0022 to 0.0114 against TOL 0.02."""
+    from trading_algo import backtest
+
+    monkeypatch.setattr(backtest.fees, "turnover_cost", lambda *a, **k: 0.0)
+    drift = ci_regression.compare(ci_regression.load_baseline(),
+                                  ci_regression.synthetic_metrics())
+    assert any("total_cost_fraction" in d for d in drift), (
+        "the gate did not notice that every transaction cost was removed: "
+        + ("\n".join(drift) or "(no drift at all)"))
