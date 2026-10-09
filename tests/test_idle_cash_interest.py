@@ -239,3 +239,67 @@ def test_interest_accrues_before_this_runs_fill_on_the_cash_it_held(
     last = [t for t in state["trades"] if t["side"] == "INT"][-1]
     assert last["date"] == later
     assert last["fill"] == pytest.approx(held * cfg.CASH_RATE_ANNUAL * days / 365)
+
+
+# --- the convention's edges: net exposure, and a halted book ---------------
+def test_a_long_short_sleeve_earns_on_its_net_cash_not_its_gross():
+    """Σw is NET (fees.idle_cash_credit): a dollar-neutral sleeve, long 10,000
+    and short 10,000 on 10,000 of equity, has all 10,000 on deposit and earns
+    the full rate on it — 10,000 x r x 30/365. Read off GROSS (2.0) it would
+    look levered and earn nothing."""
+    sleeve = {"currency": "USD", "cash": 10_000.0,
+              "positions": {"AAA": 100, "BBB": -100},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"AAA": 100.0, "BBB": 100.0})    # equity 10,000; net 0; gross 2
+    credit = _accrue(sleeve, px, "2026-07-01")
+    assert credit == pytest.approx(10_000.0 * cfg.CASH_RATE_ANNUAL * 30 / 365)
+
+
+def test_the_experimental_long_short_book_earns_on_its_short_proceeds(
+        tmp_path, monkeypatch, paper_cycle):
+    """End to end on the real long/short profile. Once it holds shorts, its
+    cash includes their proceeds and its gross is far above 1; the window's
+    credit is still that whole cash balance x r x days / 365, as the
+    backtest's net Σw pays it."""
+    from trading_algo import paper_trade as pt
+
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("e", capital=10_000, synthetic=True, profile="experimental")
+    before = paper_cycle("e")                                 # decide, then fill
+    sleeve = before["sleeves"]["US"]
+    assert any(n < 0 for n in sleeve["positions"].values()), "needs a short"
+    cash, last = sleeve["cash"], sleeve["last_interest_date"]
+
+    state = paper_cycle("e", sessions=1)
+    bar = state["equity_history"][-1][0]
+    row = [t for t in state["trades"] if t["side"] == "INT"][-1]
+    assert row["date"] == bar
+    assert row["fill"] == pytest.approx(
+        cash * cfg.CASH_RATE_ANNUAL * (pd.Timestamp(bar) - pd.Timestamp(last)).days / 365)
+
+
+def test_a_halted_book_accrues_every_session_it_sits_out(
+        tmp_path, monkeypatch, paper_cycle):
+    """The breaker parks the book in cash; the backtest credits that cash
+    every bar of the halt (its `current_w` is CASH). So does the paper: each
+    halted session books its own INT row on the cash held since the last.
+    Skipping while halted would leave the cash unpaid for those days — or pay
+    them late, in one lump, on the first run after the cooldown."""
+    from trading_algo import paper_trade as pt
+
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("h", capital=300_000, synthetic=True, allocations={"US": 1.0})
+    state = paper_cycle("h")                                  # open the book
+    state["risk_halted"], state["halt_cooldown"] = True, 10
+    pt.save_state("h", state)
+    for _ in range(3):
+        sleeve = pt.load_state("h")["sleeves"]["US"]
+        cash, last = sleeve["cash"], sleeve["last_interest_date"]
+        state = paper_cycle("h", sessions=1)
+        assert state["risk_halted"] is True
+        bar = state["equity_history"][-1][0]
+        row = [t for t in state["trades"] if t["side"] == "INT"][-1]
+        assert row["date"] == bar, "a halted session must book its own interest"
+        assert row["fill"] == pytest.approx(
+            cash * cfg.CASH_RATE_ANNUAL
+            * (pd.Timestamp(bar) - pd.Timestamp(last)).days / 365)

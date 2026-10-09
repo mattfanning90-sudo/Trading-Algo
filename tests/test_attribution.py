@@ -955,3 +955,20 @@ def test_a_comparison_sleeve_earns_nothing_before_the_bar_it_opened_on(monkeypat
     assert _aud(rep, "cash_interest") == pytest.approx(10.00, abs=0.005)
     assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
     assert rep["identity_ok"] is True
+
+
+def test_a_paper_credit_is_linked_through_the_backtests_growth_after_it(
+        monkeypatch):
+    """GRAP links each day's difference by the backtest's growth AFTER it, so
+    a paper credit landing on day 1 is carried through the backtest's day-2
+    return. Backtest US fully invested, +10% then -5% (growth 1.10, then
+    1.045), crediting nothing; the paper's INT rows are 5.00 AUD on day 1
+    and 5.001 on day 2. The line is -(5.00 x 1.045 / 1.10 + 5.001) =
+    -(4.75 + 5.001) = -9.751 AUD; unlinked it would read -10.001."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)
+    bt = _backtest((0.10, -0.05))
+    state = _with_paper_interest(_paper_book(0.5, (0.10, -0.05)))
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(
+        -(5.0 * 1.045 / 1.10 + 5.001), abs=0.005)
