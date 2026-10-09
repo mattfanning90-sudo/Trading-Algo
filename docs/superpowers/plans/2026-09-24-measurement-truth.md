@@ -35,9 +35,9 @@ A compacted session reads this first to find where execution stopped.
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
 | 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
 | 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
-| 3 — conventions | 9-13 (+13b) | 🟡 **in progress** — 9 done; 10 in review; 13, 13b in flight; 11, 12 queued behind 10 |
+| 3 — conventions | 9-13 (+13b, 12b) | 🟡 **in progress** — 9, 10, 13b done; 13 in its fix round; 11 in flight; 12, 12b queued |
 | 4 — mechanism | 14-20 (17 superseded) | ⬜ not started |
-| 5 — regeneration, deploy, restart | 21-26 | 🟡 22, 23 in flight early (FX only, isolated worktrees); 21, 24 wait for Phase 4; **25, 26 need Matt's go** |
+| 5 — regeneration, deploy, restart | 21-26 (+4d) | 🟡 22, 23 (and the inserted 4d) **done early**; 21, 24 wait for Phase 4; **25, 26 need Matt's go** |
 | W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
 
 **Execution log** — one line per task, appended as it completes:
@@ -104,6 +104,28 @@ A compacted session reads this first to find where execution stopped.
   filling; verify would have failed every new book's first run). One suspected regression
   sent to the reviewer: the tracking diagnosis (Task 5) is dated by a field whose meaning
   moved from decision date to fill date.
+- **2026-10-10 — Task 10 complete (+`c8e6334`, `ca47815`).** The suspected regression was real:
+  the tracking diagnosis asked for its target one session late. Each sleeve now keeps
+  `last_decision_date`, and the diagnosis asks at the decision and values the book at the fill.
+  The breaker's exit staging, which no test guarded, is now pinned.
+- **2026-10-10 — Task 13b (`6869d90`).** CAGR counts intervals, not observations. Every reported
+  CAGR moved by a rounding-sized amount (synthetic portfolio +0.003pp).
+- **2026-10-10 — Task 13 (`9f95e86`), in its fix round.** The backtest charges the per-order
+  minimum commission. Its review found the bigger problem around it: every sleeve backtests at
+  100,000 in its own currency while the portfolio funds about A$25k. Before the floor that made no
+  difference; now it hides about 0.6pp/yr of ASX cost. The fix round runs each sleeve at its funded
+  size and charges commission on each real order.
+- **2026-10-10 — Tasks 22, 23 and inserted 4d (FX, done early in isolated copies).** The FX books
+  have their own total and no longer sit in the headline AUM, with a review notice on both FX
+  pages (22). The traded FX universe is split from the training one (23, which must precede the
+  restart). Landing 23 exposed a latent Phase-1 defect: the FX page measured its period table off
+  the copy rounded for the chart. 4d measures it off full precision and makes the header tile the
+  ALL row itself.
+- **2026-10-10 — Task 12b inserted (Matt's migration-and-rollback rule).** Tasks 10–12 change the
+  saved book shape (`pending_target`, `last_decision_date`, DIV rows, interest keys) with no
+  schema bump, and old code would silently relabel a newer file. 12b bumps the version (upgrade
+  step), refuses a newer-than-code file, adds a downgrade step, and Task 26 must RUN the restore
+  against the pre-merge code before reopening any book.
 
 ---
 
