@@ -525,3 +525,34 @@ def test_diagnosis_uses_the_same_gate_and_date_as_the_live_path(monkeypatch, cap
     assert calls.get("eligible") == gated, "target computed outside the quality gate"
     assert calls.get("asof") == rebal, "target computed at today's bar, not the rebalance"
     assert calls.get("eligible_asof") == rebal, "quality gate assessed at the wrong date"
+
+
+def test_reconcile_flag_dispatches_to_the_bridge(monkeypatch):
+    """`--reconcile` must reach reconcile_status, alongside --tca/--attribution."""
+    seen = {}
+    monkeypatch.setattr(pt, "reconcile_status",
+                        lambda account, synthetic: seen.update(
+                            account=account, synthetic=synthetic))
+    pt.main(["--account", "full", "--reconcile", "--synthetic"])
+    assert seen == {"account": "full", "synthetic": True}
+
+
+def test_reconcile_status_prints_the_books_actual_money(monkeypatch, capsys):
+    """The money column is the book's real base-currency P&L: the paper-return
+    row must read end - start equity (9,000), not the return scaled by
+    initial_capital_base (10,000) — the build-out's costs sit between the two."""
+    from trading_algo import portfolio_backtest
+
+    state = {"initial_capital_base": 100_000.0, "base_currency": "AUD",
+             "fx_snapshot": {"AUD": 1.0}, "trades": [], "allocations": None,
+             "equity_history": [["2026-01-05", 90_000.0], ["2026-06-30", 99_000.0]]}
+    monkeypatch.setattr(pt, "load_state", lambda account: state)
+    curve = pd.Series([1.0, 1.1, 1.2],
+                      index=pd.to_datetime(["2025-12-31", "2026-01-05", "2026-06-30"]))
+    monkeypatch.setattr(portfolio_backtest, "run_portfolio_backtest",
+                        lambda **kw: {"equity": curve})
+    pt.reconcile_status("t", synthetic=True)
+    out = capsys.readouterr().out
+    assert "bridge unavailable" not in out, out
+    row = next(ln for ln in out.splitlines() if ln.startswith("paper return"))
+    assert row.split()[-1] == "9,000", row

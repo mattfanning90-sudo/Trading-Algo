@@ -62,9 +62,10 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
-            # F11 (execution TCA), F3 (live vs backtest), F10 (promotion gate).
+            # F11 (execution TCA), F3 (live vs backtest), the §5 reconciliation
+            # bridge, F10 (promotion gate).
             # Fenced: these print fixed-width tables, not markdown.
-            for report in tca attribution promotion; do
+            for report in tca attribution reconcile promotion; do
               {
                 echo "### ${report}"
                 echo '```'

@@ -48,6 +48,17 @@ def _ppy_of(idx) -> float:
     return _ppy(idx) if isinstance(idx, pd.DatetimeIndex) else float(ANNUALIZATION)
 
 
+def years_between(start, end) -> float:
+    """Calendar years from `start` to `end`: elapsed time over the 365.25-day
+    year `periods_per_year`'s sub-daily branch already divides by.
+
+    Elapsed time, not a bar count: a book that skipped a run, or a backtest on a
+    union-of-exchanges calendar, would otherwise read a different length for
+    the same window."""
+    secs = (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds()
+    return secs / (365.25 * 86400.0)
+
+
 @dataclass(frozen=True)
 class Measure:
     """One measured number plus the convention that produced it.

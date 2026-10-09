@@ -236,3 +236,15 @@ def test_compute_metrics_counts_returns_after_dropna():
     assert len(padded) == 6 and padded.isna().sum() == 1
     with pytest.raises(ValueError, match=r"after dropna"):
         compute_metrics(padded, equity.iloc[:4])
+
+
+def test_years_between_is_calendar_time():
+    """A window's length in years is elapsed calendar time over the 365.25-day
+    year periods_per_year's sub-daily branch already divides by — never a bar
+    count, which depends on which exchange calendar sampled the window."""
+    from trading_algo.metrics import years_between
+    assert years_between("2026-01-05", "2026-06-30") == pytest.approx(176 / 365.25)
+    assert years_between(pd.Timestamp("2025-01-01"),
+                         pd.Timestamp("2026-01-01")) == pytest.approx(365 / 365.25)
+    assert years_between("2026-01-05 00:00", "2026-01-05 12:00") == \
+        pytest.approx(0.5 / 365.25)                    # intraday spans count too

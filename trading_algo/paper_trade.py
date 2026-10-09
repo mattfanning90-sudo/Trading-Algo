@@ -1165,6 +1165,39 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
           "by construction — expect dispersion that is not mis-execution.")
 
 
+def reconcile_status(account: str, synthetic: bool) -> None:
+    """Print the backtest -> paper reconciliation bridge (spec §5).
+
+    Same predicted curve `--attribution` builds: a backtest over the SAME window
+    the book traded, sliced to the book's dates and re-based to its starting
+    equity — no hindsight refetch (invariant #1). The money column is priced at
+    the bridge's own denominator, the equity at the window start, so it reads
+    the book's actual amounts rather than the return scaled by its capital.
+    """
+    from .portfolio_backtest import run_portfolio_backtest
+
+    state = load_state(account)
+    eh = state.get("equity_history", [])
+    print("=" * 52)
+    print(f"  Reconciliation bridge — account '{account}'")
+    print("=" * 52)
+    if len(eh) < 2:
+        print("  Not enough history yet — run a daily update first.")
+        return
+    try:
+        res = run_portfolio_backtest(synthetic=synthetic, end=eh[-1][0],
+                                     allocations=state.get("allocations"))
+        eq = res["equity"]
+        window = eq[eq.index >= pd.Timestamp(eh[0][0])]
+        predicted = window / float(window.iloc[0]) * float(state["initial_capital_base"])
+        rep = attribution.reconcile(state, predicted)
+    except Exception as exc:        # real data needs network; synthetic is offline
+        print(f"  bridge unavailable: {exc}")
+        return
+    print(attribution.format_bridge(
+        rep, state.get("base_currency", cfg.BASE_CURRENCY), rep["start_equity"]))
+
+
 def promotion_status(account: str) -> None:
     """Show the paper->live promotion checklist for a book (F10)."""
     state = load_state(account)
@@ -1200,6 +1233,9 @@ def main(argv: list[str] | None = None) -> None:
                          "modelled slippage per region (F11)")
     ap.add_argument("--attribution", action="store_true",
                     help="live-vs-backtest tracking + attribution report (F3)")
+    ap.add_argument("--reconcile", action="store_true",
+                    help="reconciliation bridge: the signed, line-by-line walk "
+                         "from the backtest's return to this book's (spec §5)")
     ap.add_argument("--promotion", action="store_true",
                     help="paper->live promotion readiness checklist (F10)")
     ap.add_argument("--force", action="store_true",
@@ -1222,6 +1258,8 @@ def main(argv: list[str] | None = None) -> None:
         tca_status(args.account)
     elif args.attribution:
         attribution_status(args.account, args.synthetic)
+    elif args.reconcile:
+        reconcile_status(args.account, args.synthetic)
     elif args.promotion:
         promotion_status(args.account)
     elif args.force_rebalance:

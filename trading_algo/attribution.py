@@ -261,6 +261,43 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series) -> dict:
 
     residual = backtest_return - sum(lines.values()) - paper_return
     return {"start": str(start.date()), "end": str(end.date()),
+            "start_equity": start_equity,
             "backtest_return": backtest_return, "paper_return": paper_return,
             "lines": lines, "notes": notes, "residual": residual,
             "identity_ok": abs(residual) <= BRIDGE_TOLERANCE}
+
+
+def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> str:
+    """Fixed-width text table: line name, return fraction, bps/yr, base amount.
+
+    `initial` is the book's equity at the WINDOW start in `currency` — the
+    denominator every line is a fraction of (`report["start_equity"]`), so the
+    money column prints the book's actual amounts; pass 0.0 to print the return
+    and bps columns only. bps/yr divides by `metrics.years_between` (calendar
+    time) and does not compound, so it sums down the table like the return
+    column. The verdict line states whether the named lines close the identity
+    to BRIDGE_TOLERANCE, and every line's note follows it, so a reader can see
+    WHY a line is zero rather than assuming it is nothing.
+    """
+    years = max(metrics.years_between(report["start"], report["end"]), 1e-9)
+    rows = [("backtest return", report["backtest_return"])]
+    rows += [(n.replace("_", " "), report["lines"][n]) for n in BRIDGE_LINES]
+    rows += [("residual", report["residual"]), ("paper return", report["paper_return"])]
+
+    width = 22 + 11 + 10 + (14 if initial else 0)
+    out = [f"  window {report['start']} -> {report['end']} ({years:.2f} yr)",
+           "  backtest return - lines - residual = paper return "
+           "(a + line put the backtest ahead)",
+           f"{'line':<22}{'return':>11}{'bps/yr':>10}"
+           + (f"{currency:>14}" if initial else ""),
+           "-" * width]
+    for name, val in rows:
+        out.append(f"{name:<22}{val:>11.4%}{val / years * 1e4:>10.0f}"
+                   + (f"{val * initial:>14,.0f}" if initial else ""))
+    out.append("-" * width)
+    out.append(f"identity {'HOLDS' if report['identity_ok'] else 'DOES NOT HOLD'} "
+               f"— residual {report['residual'] * 1e4:+.2f}bps "
+               f"(tolerance {BRIDGE_TOLERANCE * 1e4:.0f}bp)")
+    for name, note in (report.get("notes") or {}).items():
+        out.append(f"  note [{name}] {note}")
+    return "\n".join(out)

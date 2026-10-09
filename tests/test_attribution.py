@@ -239,3 +239,57 @@ def test_bridge_converts_local_costs_at_the_books_fx_snapshot():
     assert rep["lines"]["commission_floor"] == pytest.approx(1.9e-5, abs=1e-12)
     assert rep["lines"]["stamp_duty"] == 0.0
     assert "1.00 AUD" in rep["notes"]["stamp_duty"]
+
+
+def test_format_bridge_prints_every_line_and_the_verdict():
+    rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
+    text = attribution.format_bridge(rep, "AUD", 100_000.0)
+    for name in attribution.BRIDGE_LINES:
+        assert name.replace("_", " ") in text, f"{name} missing from the table"
+    assert "backtest return" in text and "paper return" in text
+    assert "residual" in text
+    assert "identity HOLDS" in text
+    assert "AUD" in text
+    # the commission floor cost A$4.92 on a 100,000 book -> the money column
+    assert "5" in text
+
+
+def test_format_bridge_says_so_when_the_identity_fails():
+    rep = attribution.reconcile(_bridge_state(100_500.0), _bridge_predicted())
+    text = attribution.format_bridge(rep, "AUD", 100_000.0)
+    assert "identity DOES NOT HOLD" in text
+    assert "note [dividends]" in text       # the unnamed lines explain themselves
+
+
+def _row(text: str, name: str) -> list[str]:
+    return next(ln for ln in text.splitlines() if ln.startswith(name)).split()
+
+
+def test_format_bridge_annualises_in_calendar_time_through_metrics():
+    """bps/yr is the window's return over metrics.years_between — calendar time,
+    so a book that skipped a run or a backtest on a union-of-exchanges calendar
+    reads the same length for the same window. 2026-01-05 -> 2026-06-30 is 176
+    days: the 1% backtest return is 1e-2 / (176/365.25) = 207.5 bps/yr."""
+    rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
+    text = attribution.format_bridge(rep, "AUD", 100_000.0)
+    assert _row(text, "backtest return")[-2:] == ["208", "1,000"]
+    assert _row(text, "paper return")[-1] == "995"
+
+
+def test_format_bridge_without_a_capital_prints_no_money_column():
+    """initial=0.0 means 'no money column' (the docstring), not a column of
+    zeros labelled with a currency — which would read as zero money."""
+    rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
+    text = attribution.format_bridge(rep, "AUD")
+    assert "AUD" not in text.splitlines()[2]           # the header row
+    assert _row(text, "backtest return")[-2:] == ["1.0000%", "208"]
+
+
+def test_bridge_reports_the_equity_its_lines_are_fractions_of():
+    """Every line is a fraction of the book's equity at the WINDOW start — after
+    the build-out's costs, so not initial_capital_base. The money column needs
+    that denominator to print the book's actual base-currency amounts."""
+    state = _bridge_state(100_995.08)
+    state["equity_history"][0][1] = 99_830.84
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["start_equity"] == 99_830.84
