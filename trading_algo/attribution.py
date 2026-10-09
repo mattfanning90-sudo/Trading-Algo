@@ -106,9 +106,18 @@ def attribution_report(paper_state: dict, predicted_equity: pd.Series | None = N
     caller — no hindsight refetch here). `predicted_cost_fraction` is the
     backtest's modelled round-trip cost, if available, to attribute the cost
     bucket of the divergence.
+
+    Both totals are measured over the bridge's window (`_inception_window`):
+    from the book's initial capital, so the realized return and the
+    divergence are the ones `reconcile` prints for the same book.
     """
     eh = paper_state.get("equity_history", [])
-    realized_total = total_return(eh)
+    pred = (predicted_equity if predicted_equity is not None
+            and len(predicted_equity) >= 2 else None)
+    window = _inception_window(paper_state, pred)
+    if window["end"] is None and pred is not None:       # no date in common
+        pred, window = None, _inception_window(paper_state)
+    realized_total = window["paper_return"] if window["end"] is not None else 0.0
     realized_ret = equity_returns(eh)
     cost = realized_cost_drag(paper_state.get("trades", []))
 
@@ -118,9 +127,9 @@ def attribution_report(paper_state: dict, predicted_equity: pd.Series | None = N
         "n_equity_points": len(eh),
     }
 
-    if predicted_equity is not None and len(predicted_equity) >= 2:
-        pred_total = float(predicted_equity.iloc[-1] / predicted_equity.iloc[0] - 1.0)
-        pred_ret = predicted_equity.pct_change().dropna()
+    if pred is not None:
+        pred_total = window["backtest_return"]
+        pred_ret = pred.pct_change().dropna()
         te = tracking_error(realized_ret, pred_ret)
         divergence = realized_total - pred_total
         report.update({
@@ -155,6 +164,34 @@ def _commission_bps(region_key: str | None) -> float | None:
         return float(get_region(region_key).commission_bps)
     except Exception:
         return None
+
+
+def _inception_window(paper_state: dict,
+                      predicted: pd.Series | None = None) -> dict:
+    """THE window every live-vs-backtest return here is measured over, so
+    `reconcile` and `attribution_report` cannot print two different returns
+    for one book: from the book's INCEPTION, its initial capital before any
+    fill on either side, to `end`, the last date the book and `predicted`
+    both have (the book's last date when there is no `predicted`). Each
+    return is its curve at `end` over that capital. `predicted` must be in
+    the book's money from the comparison's own inception, where it holds
+    the same capital (`paper_trade._predicted_curve`). Every dated event
+    inside the window is `_through(rows, end)`.
+
+    {"dates": the dates both have, "capital", "end", "paper_return",
+    "backtest_return"}; `end` and the returns are None when no date is
+    shared, and "backtest_return" is None without `predicted`.
+    """
+    eh = paper_state.get("equity_history") or []
+    paper = pd.Series({pd.Timestamp(d): float(v) for d, v in eh}, dtype=float).sort_index()
+    pred = None if predicted is None else predicted.dropna().sort_index()
+    dates = paper.index if pred is None else paper.index.intersection(pred.index)
+    capital = float(paper_state["initial_capital_base"])
+    end = dates[-1] if len(dates) else None
+    return {"dates": dates, "capital": capital, "end": end,
+            "paper_return": None if end is None else float(paper[end]) / capital - 1.0,
+            "backtest_return": (None if end is None or pred is None
+                                else float(pred[end]) / capital - 1.0)}
 
 
 def _through(rows: list, end: pd.Timestamp) -> list:
@@ -471,17 +508,14 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     `fx_snapshot`, not the rate on the trade date; the paper keeps no FX history
     (see the `fx_translation` note).
     """
-    eh = paper_state.get("equity_history") or []
-    paper = pd.Series({pd.Timestamp(d): float(v) for d, v in eh}).sort_index()
-    pred = predicted_equity.dropna().sort_index()
-    common = paper.index.intersection(pred.index)
+    window = _inception_window(paper_state, predicted_equity)
+    common = window["dates"]
     if len(common) < 2:
         raise ValueError("bridge needs >= 2 dates common to the book and the backtest")
 
-    start, end = common[0], common[-1]
-    start_equity = float(paper_state["initial_capital_base"])     # inception
-    paper_return = float(paper.loc[end]) / start_equity - 1.0
-    backtest_return = float(pred.loc[end]) / start_equity - 1.0
+    start, end = common[0], window["end"]
+    start_equity = window["capital"]
+    paper_return, backtest_return = window["paper_return"], window["backtest_return"]
 
     fills = _window_fills(paper_state, end)
     unrated = sorted({str(t.get("currency")) for t, rate in fills if rate is None})

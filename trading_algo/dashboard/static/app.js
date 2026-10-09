@@ -1036,11 +1036,11 @@ function analyticsRowHTML(page) {
     const drag = Object.entries(a.cost_drag_by_region || {});
     attrBody = `
       <div style="display:flex;gap:18px;padding:10px 18px;border-bottom:1px solid #121212;font-size:10.5px">
-        <!-- Named for its basis: this is measured from the FIRST PERSISTED
-             MARK, while the TOTAL RETURN tile is measured from initial
-             capital. They differ by the opening rebalance's costs, so an
-             unlabelled pair could print red beside green on one screen. -->
-        <span style="color:#61805f">RETURN SINCE FIRST MARK <span style="color:${cSign(a.realized_total_return)}">${sgnPct(a.realized_total_return, 2)}</span></span>
+        <!-- Named for its basis: measured from the book's initial capital,
+             the window the reconciliation bridge uses (attribution.py
+             _inception_window), so the opening rebalance's costs are in it,
+             as they are in the TOTAL RETURN tile. -->
+        <span style="color:#61805f">RETURN SINCE INCEPTION <span style="color:${cSign(a.realized_total_return)}">${sgnPct(a.realized_total_return, 2)}</span></span>
         <span style="color:#61805f">MARKS <span style="color:#c9e8cc">${a.n_equity_points}</span></span>
       </div>
       <div style="padding:8px 18px;border-bottom:1px solid #121212;font-size:9px;color:#3d543f;line-height:1.7">DIVERGENCE VS BACKTEST · TRACKING ERROR — <span style="color:#61805f">NO BACKTEST CURVE SUPPLIED TO THIS ENDPOINT</span> (REFETCHING ONE HERE WOULD RISK LOOKAHEAD). RUN ATTRIBUTION.PY WITH A CACHED CURVE FOR THOSE TWO.</div>`

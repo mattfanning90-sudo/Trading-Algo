@@ -1412,7 +1412,7 @@ def attribution_status(account: str, synthetic: bool) -> None:
     print(f"  Live-vs-backtest attribution — account '{account}'")
     print("=" * 52)
     print(f"  Realized return   {rep['realized_total_return']:+.2%}  "
-          f"({rep['n_equity_points']} points)")
+          f"(since inception, {rep['n_equity_points']} points)")
     if "predicted_total_return" in rep:
         print(f"  Backtest return   {rep['predicted_total_return']:+.2%}")
         print(f"  Divergence        {rep['divergence']:+.2%}")

@@ -1309,6 +1309,49 @@ def test_a_one_sleeve_books_bridge_is_unchanged_from_its_first_row(account, pape
     assert rep["start_equity"] == eh[0][1]
 
 
+@pytest.mark.parametrize("book", ["legacy", "staggered"])
+def test_the_monthly_reports_attribution_and_bridge_agree(account, monkeypatch, book):
+    """The monthly report prints `--attribution` and then `--reconcile` for
+    each book. Both compare the same book with the same backtest, so they
+    must measure the same window: the paper return each prints must agree,
+    and so must attribution's divergence with the bridge's paper return less
+    its backtest return. Measured from the first ROW, attribution disagreed
+    with the bridge (which measures from inception) by the build-out: full
+    -0.07% against -0.24%.
+
+    legacy: the first row comes after a same-bar build-out (9,983.08 of
+    10,000), against a backtest that has moved by the first equity date.
+    staggered: the real engine's book whose lagging sleeves build out on the
+    first equity date, on both sides."""
+    from trading_algo import attribution, notifications
+
+    if book == "legacy":
+        state = {"initial_capital_base": 10_000.0, "base_currency": "AUD",
+                 "fx_snapshot": {"AUD": 1.0}, "trades": [],
+                 "allocations": {"US": 1.0}, "param_overrides": {},
+                 "equity_history": [["2026-01-05", 9_983.08],
+                                    ["2026-06-30", 10_100.0]]}
+        monkeypatch.setattr(pt, "load_state", lambda acct: state)
+        _capture_backtest(monkeypatch)
+    else:
+        _two_runs_a_day(account, monkeypatch, {"ASX": 1.0, "US": 1.0, "FTSE": 1.0})
+    monkeypatch.setattr(pt, "_print_tracking_diagnosis", lambda *a, **k: None)
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: {})
+    got: dict = {}
+    real_report, real_bridge = attribution.attribution_report, attribution.reconcile
+    monkeypatch.setattr(attribution, "attribution_report", lambda *a, **k: got.setdefault(
+        "attribution", real_report(*a, **k)))
+    monkeypatch.setattr(attribution, "reconcile", lambda *a, **k: got.setdefault(
+        "bridge", real_bridge(*a, **k)))
+
+    pt.attribution_status(account, synthetic=True)
+    pt.reconcile_status(account, synthetic=True)
+    a, b = got["attribution"], got["bridge"]
+    assert a["realized_total_return"] == round(b["paper_return"], 4)
+    assert a["predicted_total_return"] == round(b["backtest_return"], 4)
+    assert a["divergence"] == round(b["paper_return"] - b["backtest_return"], 4)
+
+
 def test_a_book_without_opened_on_is_compared_exactly_as_before():
     """Every legacy book has no `opened_on`: each of its sleeves opens on the
     book's first equity date, exactly Task 13c's comparison, array for array.

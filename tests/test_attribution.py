@@ -306,6 +306,24 @@ def test_bridge_measures_both_sides_from_the_books_initial_capital():
     assert rep["backtest_return"] == pytest.approx(0.01, abs=1e-12)
 
 
+def test_attribution_measures_the_bridges_window():
+    """`attribution_report` is the same live-vs-backtest comparison as the
+    bridge, so it measures the same window: from inception. The paper's
+    first row is after its build-out (99,830.84), the backtest moved by the
+    first equity date (99,900): both returns run from the initial capital,
+    with a backtest curve and without one (the dashboard passes none)."""
+    state = _bridge_state(100_995.08)
+    state["equity_history"][0][1] = 99_830.84
+    predicted = pd.Series([100_000.0, 99_900.0, 100_600.0], index=pd.to_datetime(
+        ["2026-01-02", "2026-01-05", "2026-06-30"]))
+    rep = attribution.attribution_report(state, predicted)
+    bridge = attribution.reconcile(state, predicted)
+    assert rep["realized_total_return"] == round(bridge["paper_return"], 4) == 0.0100
+    assert rep["predicted_total_return"] == round(bridge["backtest_return"], 4) == 0.0060
+    assert rep["divergence"] == 0.0040
+    assert attribution.attribution_report(state)["realized_total_return"] == 0.0100
+
+
 # --- the holdings lines: exposure_gap, cash_interest, rebalance_timing -------
 # A two-sleeve AUD book over three consecutive sessions. ASX is identical in
 # paper and backtest; every divergence is put in the US sleeve, which holds
