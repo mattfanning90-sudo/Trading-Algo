@@ -1,5 +1,6 @@
 """Per-sleeve backtester: runs clean on synthetic data, costs always on."""
 import numpy as np
+import pytest
 
 from trading_algo import fees
 from trading_algo.backtest import run_backtest
@@ -107,3 +108,14 @@ def test_return_is_earned_by_the_previous_bars_book(synth_asx, asx_region):
             f"{prev.date()}'s close")
         checked += 1
     assert checked > 100, "fixture produced too few invested bars to prove anything"
+
+
+def test_small_book_pays_more_than_bps_because_of_the_floor(synth_asx, asx_region):
+    """Same weights, same turnover, different NAV: the per-order floor is the
+    dominant cost on a small book and invisible on a large one. Invariant #2 is
+    about charging what the book would actually pay."""
+    prices, index_px = synth_asx
+    big = run_backtest(prices, index_px, asx_region, initial_capital=10_000_000)
+    small = run_backtest(prices, index_px, asx_region, initial_capital=20_000)
+    assert small["turnover"].sum() == pytest.approx(big["turnover"].sum())
+    assert small["total_cost_fraction"] > big["total_cost_fraction"] * 1.2

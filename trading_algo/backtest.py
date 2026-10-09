@@ -168,7 +168,15 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
                         impact += abs(dw) * fees.square_root_impact(
                             abs(dw) * nav, a.get(name), (v.get(name) if v is not None else float("nan")),
                             IMPACT_COEF)
-            cost = fees.turnover_cost(region, turnover, buy_turnover, impact=impact)
+            # The per-order commission floor needs the book's size and how many
+            # names this rebalance actually moved — bps alone models a small
+            # book as trading almost free (July finding H3). `equity[-1]` is the
+            # PREVIOUS close's NAV (today's own close isn't appended yet); under
+            # Task 9's next-close-fill convention the strictly correct NAV is one
+            # bar's return later, which is second order and accepted here.
+            cost = fees.turnover_cost(
+                region, turnover, buy_turnover, impact=impact,
+                nav=equity[-1], n_names=int((delta.abs() > 0).sum()))
             turnover_log.append((today, turnover))
             cost_log.append((today, cost))
             total_cost += cost

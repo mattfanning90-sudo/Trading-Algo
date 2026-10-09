@@ -46,14 +46,28 @@ def round_trip_cost_rate(region: Region) -> float:
 
 
 def turnover_cost(region: Region, turnover: float, buy_turnover: float,
-                  impact: float = 0.0) -> float:
+                  impact: float = 0.0, *,
+                  nav: float | None = None, n_names: int = 0) -> float:
     """The ONE backtest cost entrypoint (refactor R1): commission + slippage on
     turnover, asymmetric stamp duty on buys, plus an optional market-impact term
-    (fraction of NAV) from F6. With impact=0 this is exactly the prior model, so
-    the F16 regression baseline is unchanged."""
-    return (turnover * round_trip_cost_rate(region)
-            + buy_turnover * region.stamp_duty_bps / 1e4
-            + impact)
+    (fraction of NAV) from F6.
+
+    Given `nav` and `n_names` — the book's equity and how many names the
+    rebalance actually traded — commission is charged PER ORDER through
+    `commission()`, which applies `region.min_commission`. Without them the bps
+    rate is used on its own, which is the prior model exactly, so any caller
+    that cannot size an order keeps the number it always got.
+
+    Charging bps alone (July finding H3) modelled a small book as trading almost
+    free while the paper engine paid the floor on every order.
+    """
+    duty = buy_turnover * region.stamp_duty_bps / 1e4
+    if nav and n_names > 0:
+        per_name_notional = turnover * float(nav) / n_names
+        commission_frac = n_names * commission(region, per_name_notional) / float(nav)
+        return (turnover * region.slippage_bps / 1e4
+                + commission_frac + duty + impact)
+    return turnover * round_trip_cost_rate(region) + duty + impact
 
 
 def square_root_impact(order_notional: float, adv_dollar: float, vol: float,
