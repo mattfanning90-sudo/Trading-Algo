@@ -158,3 +158,28 @@ def test_start_covers_the_verified_yahoo_history():
     from trading_algo.forex import fx_config
 
     assert fx_config.START == "2003-12-01"
+
+
+# ---------------------------------------------------------------------------
+# The guard: a data decision must not move money
+# ---------------------------------------------------------------------------
+def test_a_fresh_unlocked_book_opens_on_the_traded_universe(tmp_path, monkeypatch):
+    """`fx_book.run_once` merges DEFAULT_UNIVERSE into every unlocked book, so a
+    symbol added to that list starts holding paper capital on the next scheduled
+    run, with no further review. The six G10 crosses were registered to give the
+    neural layer rows; they must never reach a book.
+
+    The merge is a UNION and never removes, so this only holds for a book opened
+    AFTER the split — which is exactly why the books are re-initialised.
+    """
+    from trading_algo.forex import fx_book
+
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    fx_book.init_account("guard", 5_000.0, "balanced")
+    state = fx_book.load_state("guard")
+
+    assert state["universe_locked"] is False
+    assert list(state["symbols"]) == list(pairs.DEFAULT_UNIVERSE)
+    assert len(state["symbols"]) == 10
+    assert not (set(state["symbols"]) & set(pairs.CROSSES)), \
+        "a training-only cross reached a live book"
