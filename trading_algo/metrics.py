@@ -128,17 +128,20 @@ def sharpe(rets: pd.Series, *, periods_per_year: float,
 def cagr(equity: pd.Series, *, periods_per_year: float) -> Measure:
     """Compound annual growth rate of an equity curve.
 
-    `n` counts equity OBSERVATIONS, not intervals — the convention this repo has
-    always used. A curve of N marks spans N-1 periods, so this runs one period
-    fast (0.03% of the exponent on a 14-year daily backtest). Preserved
-    deliberately so moving the formula here changes no published number; the
-    off-by-one is recorded as a finding, not fixed in this task.
+    The exponent is `periods_per_year / (n - 1)`: a curve of N marks has N-1
+    GAPS between them, each one period, so N-1 (not N) is the elapsed period
+    count the growth ratio `equity[-1] / equity[0]` was compounded over. (Task
+    13b fix — this repo previously keyed the exponent off N observations
+    instead, which ran one period fast: ~0.03% of the exponent on a 14-year
+    daily backtest, ~1.7% on a 60-bar sample.) A curve of fewer than 2 marks
+    has no interval to measure growth over, so this returns NaN — the same
+    guard already used for an empty curve or a zero start value.
     """
-    if len(equity) < 1 or float(equity.iloc[0]) == 0.0:
+    if len(equity) < 2 or float(equity.iloc[0]) == 0.0:
         return Measure(value=float("nan"), name="CAGR",
                        periods_per_year=float(periods_per_year), n=len(equity))
     n = len(equity)
-    value = float((equity.iloc[-1] / equity.iloc[0]) ** (periods_per_year / n) - 1.0)
+    value = float((equity.iloc[-1] / equity.iloc[0]) ** (periods_per_year / (n - 1)) - 1.0)
     return Measure(value=value, name="CAGR",
                    periods_per_year=float(periods_per_year), n=n)
 
@@ -175,18 +178,23 @@ def compute_metrics(rets: pd.Series, equity: pd.Series,
     rets = rets.dropna()
     if len(rets) == 0 or equity.iloc[0] == 0:
         return {"error": "insufficient data"}
-    # `cagr` takes its exponent from len(equity) while every other figure here
-    # is measured off `rets` — a coupling nothing enforced. Exactly two
-    # pairings are coherent: N marks against N returns (what all four
-    # production call sites pass, e.g. backtest.py's `equity[1:]`), and the N+1
-    # marks the N returns were differenced FROM (`equity.pct_change().dropna()`).
+    # `cagr` takes its exponent from len(equity) - 1 (the intervals its marks
+    # span) while every other figure here is measured off `rets` — a coupling
+    # nothing enforced. Exactly two pairings are coherent: the N+1 marks the N
+    # returns were differenced FROM (`equity.pct_change().dropna()`), where
+    # len(equity)-1 == len(rets) exactly; and N marks against N returns (what
+    # all four production call sites pass, e.g. backtest.py's `equity[1:]`),
+    # where len(equity)-1 is one interval short of len(rets) — `eq` there
+    # drops the pre-trade mark the first return was measured from, so its own
+    # growth ratio never included that return either; cagr's exponent now
+    # matches what the ratio actually spans, same as it always should have.
     # Any other pair rescales the CAGR exponent, so it fails loudly here rather
     # than printing a wrong number no reader could catch.
     if len(equity) - len(rets) not in (0, 1):
         raise ValueError(
             f"compute_metrics: equity has {len(equity)} marks but rets has "
             f"{len(rets)} after dropna. `cagr` keys its exponent off "
-            "len(equity), so an unaligned pair silently changes the CAGR; "
+            "len(equity) - 1, so an unaligned pair silently changes the CAGR; "
             "pass N equity marks against N returns, or the N+1 marks those "
             "returns were differenced from.")
 

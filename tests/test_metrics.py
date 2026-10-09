@@ -48,7 +48,11 @@ def test_single_observation_defined_values_not_nan():
     rets = pd.Series([0.02])
     equity = pd.Series([102.0])
     m = compute_metrics(rets, equity)
-    assert not math.isnan(m["CAGR"])
+    # Task 13b: a 1-mark equity curve spans zero intervals, so CAGR has no
+    # elapsed time to annualise over and is correctly NaN now (it was a
+    # masked 0.0 under the old observations-counting formula — not a value
+    # this test was entitled to pin).
+    assert math.isnan(m["CAGR"])
     assert not math.isnan(m["MaxDrawdown"])
     assert not math.isnan(m["WinRate(days)"])
     assert not math.isnan(m["FinalEquity (AUD)"])
@@ -236,6 +240,23 @@ def test_compute_metrics_counts_returns_after_dropna():
     assert len(padded) == 6 and padded.isna().sum() == 1
     with pytest.raises(ValueError, match=r"after dropna"):
         compute_metrics(padded, equity.iloc[:4])
+
+
+def test_cagr_counts_intervals_not_observations():
+    """A curve of N marks spans N-1 intervals, not N. 100 -> 110 -> 121 at
+    periods_per_year=2 is two half-year steps of +10%, i.e. one full year, so
+    the annualised rate IS the per-interval rate: CAGR must be exactly 0.21.
+    The old (observations) formula divided the exponent by 3 instead of 2:
+    1.21**(2/3) - 1 ~= 0.1355 — a different, wrong number."""
+    equity = pd.Series([100.0, 110.0, 121.0])
+    assert cagr(equity, periods_per_year=2).value == pytest.approx(0.21)
+
+
+def test_cagr_single_mark_has_no_interval():
+    """One mark spans zero intervals — there is no elapsed time to annualise
+    over, so CAGR is undefined (NaN), the same as the empty-curve guard."""
+    assert math.isnan(cagr(pd.Series([100.0]), periods_per_year=252).value)
+    assert math.isnan(cagr(pd.Series(dtype=float), periods_per_year=252).value)
 
 
 def test_years_between_is_calendar_time():
