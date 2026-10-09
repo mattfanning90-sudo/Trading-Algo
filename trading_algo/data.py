@@ -175,8 +175,17 @@ def _download_dividends(tickers: list[str], start: str, end: str | None):
     separate exactly like `_download_primary` so tests can replace it."""
     import yfinance as yf  # imported lazily so the package works offline
 
-    return yf.download(tickers, start=start, end=end, actions=True,
-                       auto_adjust=False, progress=False)
+    # yfinance swallows a failed download and returns a frame with no
+    # `Dividends` level, so retry on that, not on an exception.
+    for wait in (5, 15, None):
+        raw = yf.download(tickers, start=start, end=end, actions=True,
+                          auto_adjust=False, progress=False)
+        if (raw is not None and len(raw)
+                and "Dividends" in raw.columns.get_level_values(0)):
+            return raw
+        if wait:
+            time.sleep(wait)
+    return raw
 
 
 def dividends(tickers: list[str], start: str, end: str | None = None,

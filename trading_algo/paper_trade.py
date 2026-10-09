@@ -48,6 +48,9 @@ from .regions import REGIONS, get_region
 STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(
     os.path.dirname(__file__), "..", "state")
 MICRO_THRESHOLD = 5_000.0     # below this (local ccy) a sleeve concentrates
+# A dividend window still open after this many sessions is a feed that is not
+# coming back on its own; its alert says so.
+DIVIDEND_GAP_SESSIONS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -693,8 +696,17 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
 # ---------------------------------------------------------------------------
 # Daily run
 # ---------------------------------------------------------------------------
+def _held_at(sleeve: dict, fills: list, ticker: str, ex_date: str) -> int:
+    """Shares of `ticker` held at the OPEN of `ex_date`, which is what a
+    dividend pays on: today's position less every fill dated on or after it
+    (a fill on the ex-date itself happens at that close, after it went ex)."""
+    later = sum((1 if f["side"] == "BUY" else -1) * int(f["shares"])
+                for f in fills if f["ticker"] == ticker and f["date"] >= ex_date)
+    return int(sleeve["positions"].get(ticker, 0)) - later
+
+
 def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
-                      synthetic: bool) -> float:
+                      synthetic: bool, *, account: str | None = None) -> float:
     """Credit cash for dividends that went ex since the last run.
 
     The paper book marks at the latest UNADJUSTED close, so every ex-dividend
@@ -703,16 +715,18 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
     total-return number. This is the credit that makes the two engines measure
     the same thing.
 
-    A SHORT position OWES the dividend, so the signed share count is used and the
-    credit comes out negative for a short leg. Recorded as a `DIV` ledger row so
-    `pnl.build_lots` skips it (it moves cash, not shares) and the blotter shows
-    it; no `decision` key, because nothing was executed and TCA must not count
-    it as a fill. Shares are the CURRENT position, which is the position held
-    over the window whenever the previous run credited successfully.
+    Each dividend pays the shares held at its ex-date, read off the ledger
+    (`_held_at`); a SHORT owes it, so the signed count is used and a short's
+    credit comes out negative. Recorded as a `DIV` ledger row so
+    `pnl.build_lots` skips it (it moves cash, not shares); no `decision` key,
+    because nothing was executed and TCA must not count it as a fill.
 
-    The window is (last_dividend_date, today]. It advances only after a good
-    fetch — a failed one would otherwise lose its dividends for good — and
-    never moves backward, which would credit an ex-date twice.
+    The window is (last_dividend_date, today]. yfinance never raises on a
+    failed download — it drops the name — so the window advances only once
+    EVERY name held in it came back; until then it stays open, each run pays
+    what did come back, and an ex-date already paid is recognised by its DIV
+    row rather than paid again. A window never moves backward. A gap alerts,
+    and says so once it has been open for more than a few sessions.
 
     Synthetic data has no dividend feed, and invariant #5 says synthetic results
     are plumbing only — so it returns zero offline rather than inventing one.
@@ -720,44 +734,58 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
     last = sleeve.get("last_dividend_date")
     if last and last >= today:
         return 0.0                      # this bar's window is already credited
-    held = {t: sh for t, sh in sleeve["positions"].items() if sh}
-    if synthetic or not last or not held:
+    fills = [f for f in trade_log if f.get("region") == region.key and pnl.is_fill(f)]
+    # Every name held at any point in the window: held now, or traded inside it.
+    names = sorted({t for t, sh in sleeve["positions"].items() if sh}
+                   | {f["ticker"] for f in fills if last and f["date"] > last})
+    if synthetic or not last or not names:
         sleeve["last_dividend_date"] = today
         return 0.0
     # yfinance's `end` is exclusive: ask through the day after `today`, or a
     # name going ex on this very bar falls in no window, this run's or the next.
     end = (pd.Timestamp(today) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     try:
-        div = data.dividends(sorted(held), last, end)
-    except Exception as exc:
-        print(f"  [{region.key}] ⚠ dividend feed unavailable ({exc}) — none "
-              f"credited; the window since {last} is retried next run")
-        return 0.0
-    sleeve["last_dividend_date"] = today
-    missing = sorted(set(held) - set(div.columns))
-    if missing:
-        print(f"  [{region.key}] ⚠ no dividend data for {', '.join(missing)} — "
-              f"none credited for them over ({last}, {today}]")
+        div = data.dividends(names, last, end)
+    except Exception:
+        div = pd.DataFrame()            # same as a name that did not come back
+    paid = {(r["ticker"], r["date"]) for r in trade_log
+            if r.get("region") == region.key and r.get("side") == "DIV"
+            and r["date"] > last}
     lo, hi = pd.Timestamp(last), pd.Timestamp(today)
     total = 0.0
-    for t, shares in held.items():
-        if t not in div.columns:
-            continue
+    for t in [n for n in names if n in div.columns]:
         col = div[t]
         for stamp, raw_dps in col[(col.index > lo) & (col.index <= hi)].items():
+            ex = str(pd.Timestamp(stamp).date())
             dps = round(float(raw_dps) * region.price_scale, 6)
-            if not dps > 0:             # also refuses a NaN
+            shares = _held_at(sleeve, fills, t, ex)
+            if (t, ex) in paid or not dps > 0 or not shares:   # `not >` refuses NaN
                 continue
             amount = shares * dps
             sleeve["cash"] += amount
             trade_log.append({
-                "date": str(pd.Timestamp(stamp).date()), "region": region.key,
-                "ticker": t, "side": "DIV", "shares": shares, "fill": dps,
-                "commission": 0.0, "stamp_duty": 0.0,
-                "currency": region.currency})
+                "date": ex, "region": region.key, "ticker": t, "side": "DIV",
+                "shares": shares, "fill": dps, "commission": 0.0,
+                "stamp_duty": 0.0, "currency": region.currency})
             total += amount
             print(f"    DIV  {shares:>7} {t:<10} @ {dps:.4f} "
                   f"= {amount:>10,.2f} {region.currency}")
+    missing = [n for n in names if n not in div.columns]
+    if not missing:
+        sleeve["last_dividend_date"] = today
+        return total
+    sessions = int(np.busday_count(last, today))
+    stuck = (f" — stuck for {sessions} sessions: a feed that has not answered "
+             "this long is not coming back by itself (a renamed or delisted "
+             "name?)" if sessions > DIVIDEND_GAP_SESSIONS else "")
+    who = f"[{account}] " if account else ""
+    notifications.notify(
+        "dividend_feed_gap",
+        f"{who}{region.key}: no dividend data for {', '.join(missing)}; the "
+        f"window since {last} stays open and every dividend in it for those "
+        f"names waits{stuck}",
+        level="alert", account=account, region=region.key, missing=missing,
+        window_start=last, stuck_sessions=sessions)
     return total
 
 
@@ -933,7 +961,8 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         params = _account_params(state, region)
         # Cash events first: they accrue to the book AS IT STOOD over the period,
         # before any of this run's trades change it.
-        _credit_dividends(region, sleeve, today, state["trades"], synthetic)
+        _credit_dividends(region, sleeve, today, state["trades"], synthetic,
+                          account=account)
         status = None                       # why the sleeve ended this run as it did
         pending = sleeve.get("pending_target")
         if halted and (pending.get("weights") if pending else sleeve["positions"]):

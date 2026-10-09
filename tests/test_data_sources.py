@@ -469,3 +469,26 @@ def test_a_ticker_the_feed_did_not_return_is_not_read_as_paying_nothing(
     df = data.dividends(["AAA", "BAD"], "2026-06-01", "2026-06-03",
                         use_cache=False)
     assert list(df.columns) == ["AAA"]
+
+def test_a_total_dividend_download_failure_is_retried(monkeypatch):
+    """yfinance swallows a failed download and returns a frame with no
+    `Dividends` level — the same backoff `_download_primary` gives prices
+    applies before the run gives up on the window for today."""
+    import yfinance
+
+    from trading_algo import data
+
+    good = pd.DataFrame({("Dividends", "AAA"): [0.5], ("Close", "AAA"): [10.0]},
+                        index=pd.DatetimeIndex(["2026-06-02"]))
+    good.columns = pd.MultiIndex.from_tuples(good.columns)
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        return pd.DataFrame() if len(calls) < 3 else good
+
+    monkeypatch.setattr(yfinance, "download", flaky)
+    monkeypatch.setattr(data.time, "sleep", lambda s: None)
+    raw = data._download_dividends(["AAA"], "2026-06-01", "2026-06-03")
+    assert len(calls) == 3
+    assert "Dividends" in raw.columns.get_level_values(0)

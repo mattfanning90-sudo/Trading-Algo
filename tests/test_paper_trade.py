@@ -1058,9 +1058,9 @@ def test_a_dividend_accrues_to_the_book_before_this_runs_fill(
     seen = []
     real = pt._credit_dividends
 
-    def spy(region, sleeve, today, trade_log, synthetic):
+    def spy(region, sleeve, today, trade_log, synthetic, **kw):
         seen.append((dict(sleeve["positions"]), len(trade_log)))
-        return real(region, sleeve, today, trade_log, synthetic)
+        return real(region, sleeve, today, trade_log, synthetic, **kw)
 
     monkeypatch.setattr(pt, "_credit_dividends", spy)
     paper_cycle(account, sessions=1)                  # decide
@@ -1068,3 +1068,110 @@ def test_a_dividend_accrues_to_the_book_before_this_runs_fill(
     assert state["sleeves"]["US"]["positions"], "the second session must fill"
     assert seen == [({}, 0), ({}, 0)], "the credit must see the book before the fill"
     assert state["sleeves"]["US"]["last_dividend_date"] == state["equity_history"][-1][0]
+
+# --- the dividend window: exact entitlement, never lost, never doubled ------
+def _yahoo(paid: pd.DataFrame, calls: list | None = None):
+    """A dividend feed with yfinance's window: start inclusive, end EXCLUSIVE,
+    and only the names asked for."""
+    def fetch(tickers, start, end):
+        if calls is not None:
+            calls.append((tuple(tickers), start, end))
+        rows = paid.loc[(paid.index >= start) & (paid.index < end)]
+        return rows[[t for t in tickers if t in paid.columns]]
+    return fetch
+
+def _fill(date, ticker, side, shares, fill=100.0):
+    return {"date": date, "region": "US", "ticker": ticker, "side": side,
+            "shares": shares, "decision": fill, "fill": fill, "commission": 1.0,
+            "stamp_duty": 0.0, "currency": "USD"}
+
+def test_a_window_held_open_across_a_fill_pays_the_shares_held_at_the_ex_date(
+        monkeypatch):
+    """Entitlement is the position at the ex-date, read off the ledger: today's
+    position less every fill dated on or after it. The review's case: AAA 10
+    held; the 06-15 run could not fetch, kept the window open, and its fill
+    bought AAA to 30 and opened BBB 60 — both ex 06-15. Crediting today's
+    position paid AAA 30 and BBB 60; the shares that earned the dividend were
+    AAA 10 and BBB 0 (bought at that close, after the name went ex)."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 30, "BBB": 60},
+              "last_dividend_date": "2026-06-12"}
+    log = [_fill("2026-06-01", "AAA", "BUY", 10), _fill("2026-06-15", "AAA", "BUY", 20),
+           _fill("2026-06-15", "BBB", "BUY", 60)]
+    paid = pd.DataFrame({"AAA": [0.5], "BBB": [0.2]},
+                        index=pd.DatetimeIndex(["2026-06-15"]))
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))
+    got = pt._credit_dividends(get_region("US"), sleeve, "2026-06-16", log,
+                               synthetic=False)
+    assert got == pytest.approx(5.0)
+    assert [(r["ticker"], r["shares"]) for r in log if r["side"] == "DIV"] == [("AAA", 10)]
+
+def test_a_name_sold_inside_an_open_window_is_still_paid(monkeypatch):
+    """Sold at the close of its own ex-date while the window was held open: it
+    was held at that day's open, so the dividend is owed even though the book
+    no longer holds the name when the window is finally credited."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {},
+              "last_dividend_date": "2026-06-12"}
+    log = [_fill("2026-06-01", "AAA", "BUY", 10), _fill("2026-06-15", "AAA", "SELL", 10)]
+    paid = pd.DataFrame({"AAA": [0.5]}, index=pd.DatetimeIndex(["2026-06-15"]))
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-16", log,
+                                synthetic=False) == pytest.approx(5.0)
+
+def _alerts(monkeypatch):
+    got = []
+    monkeypatch.setattr(pt.notifications, "notify",
+                        lambda event, message, **kw: got.append((event, message, kw)))
+    return got
+
+def test_a_feed_that_returns_nothing_keeps_the_window_and_alerts(monkeypatch):
+    """yfinance never raises on a failed download: `multi._download_one`
+    catches the error and hands back an empty frame. Read as "no dividends",
+    that advanced the window and lost them for good — with only a print."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-01"}
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: pd.DataFrame())
+    alerts = _alerts(monkeypatch)
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-02", [],
+                                synthetic=False, account="full") == 0.0
+    assert sleeve["last_dividend_date"] == "2026-06-01"
+    [(event, message, kw)] = alerts
+    assert event == "dividend_feed_gap" and kw["level"] == "alert"
+    assert "AAA" in message and kw["missing"] == ["AAA"] and kw["account"] == "full"
+
+def test_a_name_the_feed_omitted_is_paid_later_and_nothing_twice(monkeypatch):
+    """Measured: yfinance drops a failed name's column and returns the rest.
+    Pay what came back now, keep the window open for the name that did not,
+    and when it arrives pay only that — the window re-reads ex-dates already
+    paid, so a paid one is recognised from its DIV row, not paid again."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10, "BBB": 20},
+              "last_dividend_date": "2026-06-01"}
+    paid = pd.DataFrame({"AAA": [0.5], "BBB": [0.2]},
+                        index=pd.DatetimeIndex(["2026-06-10"]))
+    log, region = [], get_region("US")
+    _alerts(monkeypatch)
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid[["AAA"]]))   # BBB missing
+    assert pt._credit_dividends(region, sleeve, "2026-06-15", log,
+                                synthetic=False) == pytest.approx(5.0)
+    assert sleeve["last_dividend_date"] == "2026-06-01"
+
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))
+    assert pt._credit_dividends(region, sleeve, "2026-06-16", log,
+                                synthetic=False) == pytest.approx(4.0)
+    assert sorted((r["ticker"], r["date"]) for r in log) == [
+        ("AAA", "2026-06-10"), ("BBB", "2026-06-10")]
+    assert sleeve["cash"] == pytest.approx(9.0)
+    assert sleeve["last_dividend_date"] == "2026-06-16"
+
+def test_a_window_stuck_for_more_than_a_few_sessions_says_so(monkeypatch):
+    """One missed fetch heals on the next run. A window still open sessions
+    later is a feed that is not coming back by itself (a renamed or delisted
+    name): every dividend in it waits, and the alert has to say that."""
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: pd.DataFrame())
+    alerts = _alerts(monkeypatch)
+    for today in ("2026-06-02", "2026-06-15"):           # 1 session, then 10
+        sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+                  "last_dividend_date": "2026-06-01"}
+        pt._credit_dividends(get_region("US"), sleeve, today, [], synthetic=False)
+    (_, fresh, _), (_, stuck, kw) = alerts
+    assert "stuck" not in fresh
+    assert "stuck" in stuck and kw["stuck_sessions"] == 10
