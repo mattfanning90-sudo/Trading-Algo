@@ -552,7 +552,15 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
     if long_only and equity < MICRO_THRESHOLD and not targets.empty:
         affordable = [t for t in targets.index
                       if px.get(t) and px[t] <= equity / 1.05]
-        picks = affordable[:max(1, min(3, int(equity // 40)))] if affordable else []
+        # One share fitting in the WHOLE sleeve doesn't mean it fits in a pick's
+        # share of it: three picks at a third each rounded to 0 shares and the
+        # `small` book bought nothing for months. Like `_fit_leg`, shrink the pick
+        # count in rank order — never by price — until every pick buys a share.
+        picks = []
+        for k in range(min(len(affordable), max(1, min(3, int(equity // 40)))), 0, -1):
+            if all(int((equity * (0.97 / k)) / px[t]) >= 1 for t in affordable[:k]):
+                picks = affordable[:k]
+                break
         if picks:
             targets = pd.Series(0.97 / len(picks), index=picks)
             print(f"    ⚠ micro mode: concentrating into {picks}")
