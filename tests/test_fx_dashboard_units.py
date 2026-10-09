@@ -392,28 +392,44 @@ def test_book_all_row_equals_header_tile_despite_rounding(isolated):
     assert p["book_period_metrics"]["0"] == p["book_metrics"]      # ALL == the tile
 
 
-def test_bench_period_metrics_must_use_full_precision_not_rounded_curve():
-    """Same bug, bench shape: dashboard.py builds `bench_curve` (rounded to
-    4dp, for the chart) and `bench_full` (unrounded) from one `bh_eq` series.
-    Proved at the helper level, mirroring exactly how dashboard.py constructs
-    both lists from `bh_eq` — monkeypatching the whole FX feed/panel pipeline
-    just to reach a real `bh_eq` would make this test fragile (and touch
-    unrelated code, e.g. `_signal_parts`' own `fx_data.closes` call) without
-    exercising anything this doesn't already cover."""
-    idx = pd.date_range("2026-01-01", periods=9, freq="D")
-    bh_eq = pd.Series(_task4d_curve(base=100.0), index=idx)
+def test_bench_win_rate_matches_header_tile_through_build_payload(isolated, monkeypatch):
+    """The BENCH side, through the REAL `build_payload` path — this is where
+    the original bug was actually found (Task 23's 10-symbol universe: bench
+    win rate 0.481 in the ALL row vs 0.488 in the tile).
 
-    bench_curve = [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
-                   for d, v in bh_eq.items()]                     # 4dp, for the chart
-    bench_full = [{"time": d.strftime("%Y-%m-%d"), "value": float(v)}
-                  for d, v in bh_eq.items()]                      # full precision
+    `synthetic=True` reaches the panel through `_panel()` ->
+    `fx_data.synthetic_panel(symbols)` — ONE call site. Patching that instead
+    of `fx_data.closes` matters: `_signal_parts` makes its own independent
+    `fx_data.closes(panel)` call inside `build_payload`, so patching `closes`
+    would silently redirect that unrelated computation too.
 
-    tile = dashboard._curve_metrics([p["time"] for p in bench_full],
-                                     [p["value"] for p in bench_full])
-    # the bug: the ALL row measured off the ROUNDED display curve disagrees
-    # with the tile on the tiny bar's win/loss
-    buggy_all_row = dashboard._period_metrics(bench_curve, 252)["0"]
-    assert buggy_all_row["win_rate"] != tile["win_rate"]
-    # the fix: measured off the SAME full-precision series the tile uses
-    fixed_all_row = dashboard._period_metrics(bench_full, 252)["0"]
-    assert fixed_all_row == tile
+    Every symbol's tail is forced to the SAME engineered values so the
+    cross-sectional mean in `bh_ret.mean(axis=1)` is exactly that sequence,
+    not an average across different per-symbol paths. The book's own equity
+    history is given the SAME tail dates so the bench clip
+    (`w = closes_df[closes_df.index >= start]`, the book's own start) lands
+    on exactly that window.
+    """
+    real_synthetic_panel = dashboard.fx_data.synthetic_panel
+    vals = _task4d_curve(base=100.0)
+
+    def rigged_synthetic_panel(symbols, *a, **k):
+        panel = real_synthetic_panel(symbols, *a, **k)
+        for df in panel.values():
+            tail_idx = df.index[-len(vals):]
+            for col in ("open", "high", "low", "close"):
+                df.loc[tail_idx, col] = vals
+        return panel
+
+    monkeypatch.setattr(dashboard.fx_data, "synthetic_panel", rigged_synthetic_panel)
+
+    fx_book.init_account("matt", 5_000, "balanced")
+    tail_dates = real_synthetic_panel(["EURUSD"])["EURUSD"].index[-len(vals):]
+    st = fx_book.load_state("matt")
+    st["equity_history"] = [[d.strftime("%Y-%m-%d"), 5_000.0] for d in tail_dates]
+    st["equity"] = 5_000.0
+    fx_book.save_state("matt", st)
+
+    p = dashboard.build_payload("matt", synthetic=True)
+    assert p["bench_metrics"]["win_rate"] == 0.5     # full precision: 4 of 8 bars win
+    assert p["bench_period_metrics"]["0"] == p["bench_metrics"]      # ALL == the tile
