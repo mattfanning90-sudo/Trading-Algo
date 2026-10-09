@@ -873,7 +873,19 @@ def _stage_target(sleeve: dict, today: str, targets: pd.Series,
     exactly what `backtest.py` stages. Persisting it in the sleeve is what lets
     the decision survive to the next run — the engine is a fresh process each
     time, so an in-memory target would simply be lost.
+
+    The FIRST target a sleeve ever stages also records its bar as `opened_on`,
+    once: the bridge's comparison opens this sleeve there
+    (`_backtest_for_book`). It cannot be recovered later — a skipped run breaks
+    "first fill bar minus one". A sleeve with any trace of an earlier decision
+    (a staged or executed target, a fill, a holding) predates the key, so this
+    decision is not its first: it stays without one rather than a wrong one.
     """
+    if "opened_on" not in sleeve and not (
+            sleeve.get("pending_target") or sleeve.get("last_decision_date")
+            or sleeve.get("last_rebalance_date")
+            or any((sleeve.get("positions") or {}).values())):
+        sleeve["opened_on"] = today
     sleeve["pending_target"] = {
         "date": today,
         "weights": {str(t): float(w) for t, w in targets.items()},
@@ -1301,18 +1313,23 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
 
       * REGIONS AND ALLOCATIONS are the book's (`state["allocations"]`), not
         `config.ALLOCATIONS`, which funds a sleeve `full` does not hold.
-      * CAPITAL AND START are the book's own: the backtest TRADES FROM the
-        book's first equity date (`trade_from`) with `initial_capital_base`,
-        split by the book's allocations. History before that date is warm-up
-        only — the signals read it, the book holds nothing — and the first
-        bar on or after it decides, as the book's first run did. The per-order
+      * CAPITAL AND START are the book's own: each sleeve TRADES FROM the bar
+        it first decided on (`opened_on`, recorded by `_stage_target`) with
+        `initial_capital_base` split by the book's allocations. On a first run
+        each sleeve decides on its OWN latest bar, so a sleeve whose bar was
+        older that run opens before the book's first equity date; a sleeve
+        without the record (every book opened before it existed) opens on
+        that first equity date instead. History before a sleeve's open is
+        warm-up only — the signals read it, the sleeve holds nothing — and
+        its first bar on or after it decides, as the book did. The per-order
         commission floor (Task 13) makes cost depend on size, so the size has
         to be the book's on the day the window opens: funded at the book's
         capital in 2012 instead, the comparison had compounded to 1.3-5.3x the
         book by its open date and charged the floor at that size, and
         `_predicted_curve` could re-level the curve but not undo a cost that
         depends on size. Each sleeve now stands at the book's funded sleeve
-        capital on the open date, so that re-level is a factor of 1.0.
+        capital on its open bar; when every sleeve opens on the first equity
+        date, that re-level is a factor of 1.0.
       * PARAMS are the paper path's (`_account_params`): the profile's overrides
         layered on each region's defaults. `run_portfolio_backtest(params=...)`
         replaces EVERY region's params wholesale, so a plain book passes none
@@ -1340,12 +1357,15 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
                 "cannot reproduce this book")
         params = layered[0]
     last = pd.Timestamp(state["equity_history"][-1][0])
+    first = state["equity_history"][0][0]
+    sleeves = state.get("sleeves") or {}
     return run_portfolio_backtest(
         regions=regions, synthetic=synthetic, params=params,
         end=(last + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
         allocations=state.get("allocations"),
         initial_capital=state["initial_capital_base"],
-        trade_from=pd.Timestamp(state["equity_history"][0][0]))
+        trade_from={k: pd.Timestamp((sleeves.get(k) or {}).get("opened_on") or first)
+                    for k in regions})
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
@@ -1478,8 +1498,9 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
                   f"   last rebalance {lrd or 'never'}")
         except Exception as exc:                     # diagnosis must never fail the report
             print(f"    [{k}] diagnosis unavailable: {exc}")
-    print("    NOTE: the predicted curve trades from this book's first equity date "
-          f"({(state.get('equity_history') or [['?']])[0][0]}) at its capital; "
+    print("    NOTE: the predicted curve trades each sleeve from the bar it first "
+          "decided on (or, without that record, this book's first equity date "
+          f"{(state.get('equity_history') or [['?']])[0][0]}) at its capital; "
           f"history from {cfg.START} is signal warm-up only. The two causes above "
           "remain by construction — expect dispersion that is not mis-execution.")
 

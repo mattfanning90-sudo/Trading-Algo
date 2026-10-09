@@ -972,6 +972,188 @@ def test_the_bridge_rebuilds_a_staged_book_from_its_fills(account, paper_cycle):
     assert pos == {t: float(n) for t, n in sleeve["positions"].items()}
 
 
+# --- each sleeve opens on the bar IT first decided on (Task 13d) -------------
+# On a book's first run every sleeve decides on its OWN latest bar, and the
+# book's first equity date is the latest bar of ANY sleeve. A sleeve whose bar
+# was older that run (New York has not closed when an AEST run fires) first
+# decided a bar BEFORE the book's first equity date. The sleeve records that
+# bar, and the bridge's comparison opens it there.
+def _fresh_sleeve() -> dict:
+    """A sleeve exactly as `init_account` leaves it."""
+    return {"currency": "USD", "cash": 10_000.0, "positions": {}, "cost_basis": {},
+            "realized_pnl": 0.0, "last_rebalance_month": None,
+            "last_rebalance_date": None}
+
+
+def test_a_sleeve_records_its_first_decision_bar_once():
+    """`opened_on` is the bar the sleeve FIRST staged a target on. Nothing that
+    stages later moves it: a re-stage, the breaker's exit, a fill, the next
+    month's decision, or a resume clearing the rebalance pins."""
+    us = get_region("US")
+    a = us.universe[0]
+    sleeve = _fresh_sleeve()
+    pt._stage_target(sleeve, "2026-01-05", pd.Series({a: 0.5}))
+    assert sleeve["opened_on"] == "2026-01-05"
+
+    pt._stage_target(sleeve, "2026-01-05", pd.Series({a: 0.4}))     # same bar again
+    pt._fill_pending(us, sleeve, pd.Series({a: 100.0}), "2026-01-06", [])
+    pt._stage_target(sleeve, "2026-01-07", pd.Series(dtype=float))  # breaker exit
+    sleeve["last_rebalance_month"] = sleeve["last_rebalance_date"] = None  # resume
+    pt._stage_target(sleeve, "2026-02-02", pd.Series({a: 0.5}))     # next decision
+    assert sleeve["opened_on"] == "2026-01-05"
+
+
+@pytest.mark.parametrize("trace", [
+    {"positions": {"AAA": 10}},                    # holds shares
+    {"last_rebalance_date": "2025-12-01"},         # filled before (any version)
+    {"last_decision_date": "2025-11-28"},          # executed a staged target
+    {"pending_target": {"date": "2025-12-19", "weights": {}, "frozen": []}},
+])
+def test_a_sleeve_that_decided_before_the_record_existed_is_never_stamped(trace):
+    """Every live book predates `opened_on`. Its next decision is NOT its first,
+    so stamping it would open the comparison months after the book really
+    did. A sleeve with any trace of an earlier decision stays without the key,
+    and the bridge falls back to the book's first equity date for it."""
+    sleeve = {**_fresh_sleeve(), **trace}
+    pt._stage_target(sleeve, "2026-10-12", pd.Series({"AAA": 0.5}))
+    assert "opened_on" not in sleeve
+
+
+def test_the_engine_stamps_the_first_decision_and_never_again(account, paper_cycle):
+    """Through the real daily run: the first run's decision bar is recorded, and
+    the fill, a later run and a `--force-rebalance` reset leave it alone."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    state = paper_cycle(account, sessions=1)
+    decided = state["sleeves"]["US"]["pending_target"]["date"]
+    assert state["sleeves"]["US"]["opened_on"] == decided
+
+    state = paper_cycle(account, sessions=2)
+    for sl in state["sleeves"].values():            # what --force-rebalance does
+        sl["last_rebalance_month"] = sl["last_rebalance_date"] = None
+    pt.save_state(account, state)
+    state = paper_cycle(account, sessions=1)
+    assert state["sleeves"]["US"]["pending_target"]["date"] > decided, "re-decided"
+    assert state["sleeves"]["US"]["opened_on"] == decided
+
+
+def _staggered_book(account, monkeypatch, sessions=5):
+    """A US + FTSE book whose US sleeve sees a bar one session OLDER than the
+    FTSE sleeve on every run, as an AEST run fires before New York closes. So
+    on the book's first run its two sleeves decide on different bars. Returns
+    (the state after the first run, the state after `sessions` runs)."""
+    real = pt.latest_region_data
+    clock = {"session": 0}
+
+    def serve(region, synthetic):
+        prices, index_px = real(region, synthetic)
+        cut = len(prices) - 10 + clock["session"] - (region.key == "US")
+        return prices.iloc[:cut], index_px.loc[:prices.index[cut - 1]]
+
+    monkeypatch.setattr(pt, "latest_region_data", serve)
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0, "FTSE": 1.0})
+    states = []
+    for _ in range(sessions):
+        clock["session"] += 1
+        pt.run_daily(account, synthetic=True)
+        states.append(pt.load_state(account))
+    return states[0], states[-1]
+
+
+def test_each_sleeves_comparison_opens_on_its_own_first_decision(account, monkeypatch):
+    """Each sleeve's comparison decides on the bar THAT sleeve first decided on
+    and fills on its next bar, as the book did. With one open date for the
+    whole book (the latest bar of any sleeve) the US comparison decided a bar
+    late and filled a bar after the book's US sleeve. The decision is
+    `compute_targets` on that sleeve's prices up to its open bar: no
+    lookahead, one weight function."""
+    from trading_algo import data, data_quality, strategy
+
+    first, state = _staggered_book(account, monkeypatch)
+    decided = {k: sl["pending_target"]["date"] for k, sl in first["sleeves"].items()}
+    assert decided["US"] < decided["FTSE"] == first["equity_history"][0][0], decided
+
+    res = pt._backtest_for_book(state, synthetic=True)
+    end = (pd.Timestamp(state["equity_history"][-1][0])
+           + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    for k, day in decided.items():
+        bt, open_bar = res["sleeves"][k], pd.Timestamp(day)
+        bars = bt["equity"].index
+        fill_bar = bars[bars.get_loc(open_bar) + 1]
+        book_fill = min(t["date"] for t in state["trades"] if t["region"] == k)
+        assert bt["turnover"].index[0] == fill_bar == pd.Timestamp(book_fill), (
+            f"{k}: comparison filled {bt['turnover'].index[0].date()}, "
+            f"book filled {book_fill}, decided {day}")
+        assert bt["weights"][open_bar].empty
+        assert (bt["equity"].loc[:open_bar] == bt["equity"].iloc[0]).all(), k
+
+        region = get_region(k)
+        prices, index_px = data.synthetic_region(region, start=cfg.START, end=end)
+        seen = prices.loc[:open_bar]
+        elig, _dq = data_quality.eligible(seen, region, open_bar)
+        expected = strategy.compute_targets(seen, index_px.loc[:open_bar],
+                                            region.params, eligible=elig)
+        assert not expected.empty, k
+        pd.testing.assert_series_equal(bt["weights"][fill_bar].sort_index(),
+                                       expected.sort_index(), check_names=False)
+
+        assert state["sleeves"][k]["opened_on"] == day, k   # recorded, never moved
+
+
+def test_the_bridge_no_longer_finds_the_comparison_flat_while_the_book_is_invested(
+        account, monkeypatch):
+    """The lag surfaced in the exposure-gap note: on the book's first days the
+    US comparison held nothing while the US sleeve was already invested, so
+    that day had no backtest price and fell into rebalance_timing. Opened on
+    its own first decision, the comparison is invested when the book is."""
+    from trading_algo import attribution
+
+    _first, state = _staggered_book(account, monkeypatch)
+    res = pt._backtest_for_book(state, synthetic=True)
+    rep = attribution.reconcile(state, pt._predicted_curve(state, res), backtest=res)
+    note = rep["notes"]["exposure_gap"]
+    assert "not measured" not in note, note
+    assert "held nothing" not in note, note
+
+
+def test_a_book_without_opened_on_is_compared_exactly_as_before():
+    """Every legacy book has no `opened_on`: each of its sleeves opens on the
+    book's first equity date, exactly Task 13c's comparison, array for array.
+    So does a sleeve the key is missing from in an otherwise recorded book."""
+    from trading_algo.portfolio_backtest import run_portfolio_backtest
+
+    opened, last = "2020-03-11", "2020-06-30"
+    alloc = {"ASX": 1 / 3, "US": 1 / 3, "FTSE": 1 / 3}
+    state = {"initial_capital_base": 100_000.0, "base_currency": "AUD",
+             "fx_snapshot": {"AUD": 1.0}, "trades": [], "allocations": alloc,
+             "param_overrides": {},
+             "sleeves": {k: {**_fresh_sleeve(), "last_rebalance_month": "2020-06",
+                             "last_rebalance_date": "2020-06-02"} for k in alloc},
+             "equity_history": [[opened, 100_000.0], [last, 101_000.0]]}
+    got = pt._backtest_for_book(state, synthetic=True)
+    want = run_portfolio_backtest(
+        regions=list(alloc), synthetic=True, params=None, end="2020-07-01",
+        allocations=alloc, initial_capital=100_000.0,
+        trade_from=pd.Timestamp(opened))
+
+    def same(a, b):
+        pd.testing.assert_series_equal(a["equity"], b["equity"], check_exact=True)
+        pd.testing.assert_frame_equal(a["sleeve_equity"], b["sleeve_equity"],
+                                      check_exact=True)
+        for k in alloc:
+            for key in ("equity", "returns", "turnover", "costs", "base_returns"):
+                pd.testing.assert_series_equal(a["sleeves"][k][key],
+                                               b["sleeves"][k][key], check_exact=True)
+            wa, wb = a["sleeves"][k]["weights"], b["sleeves"][k]["weights"]
+            assert wa.keys() == wb.keys() and all(wa[d].equals(wb[d]) for d in wb)
+
+    same(got, want)
+    # one sleeve recorded on the book's own first date, the others missing it
+    state["sleeves"]["US"]["opened_on"] = opened
+    same(pt._backtest_for_book(state, synthetic=True), want)
+
+
 # --- dividends: credited to cash, ledgered as DIV rows ----------------------
 def test_dividends_are_credited_to_cash_and_ledgered(monkeypatch):
     """The paper book marks at the UNADJUSTED close, so an ex-dividend drop is

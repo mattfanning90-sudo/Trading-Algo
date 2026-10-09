@@ -11,6 +11,7 @@ currencies. The result is one combined AUD equity curve plus per-sleeve detail.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 import pandas as pd
@@ -40,7 +41,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            params: StrategyParams | None = None,
                            allocations: dict[str, float] | None = None,
                            initial_capital: float = cfg.INITIAL_CAPITAL,
-                           trade_from: pd.Timestamp | None = None) -> dict:
+                           trade_from: pd.Timestamp | Mapping[str, pd.Timestamp]
+                           | None = None) -> dict:
     """`params` overrides the strategy knobs for every sleeve; `allocations`
     overrides the capital split (both used by the tuner). `initial_capital` is
     in the BASE currency (AUD) — the portfolio's total starting capital, split
@@ -61,8 +63,14 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     `run_backtest`): each sleeve is funded at the rate on its first bar on or
     after it instead, and holds no currency before that bar, so every sleeve
     is worth exactly `initial_capital * alloc[k]` in the base currency there.
-    None (the default) is the whole-sample backtest, unchanged."""
+    It is one date for every sleeve, or a mapping {region key: date} naming
+    each sleeve's own (a book whose sleeves first decided on different bars);
+    the mapping must name every sleeve. None (the default) is the
+    whole-sample backtest, unchanged."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
+    if isinstance(trade_from, Mapping) and set(regions) - set(trade_from):
+        raise ValueError(f"trade_from names no open date for "
+                         f"{sorted(set(regions) - set(trade_from))}")
     syn_end = end or "2026-01-01"
     # F13: apply the delisting-return correction only in the PIT path and only
     # when the knob is set — otherwise a perfect no-op.
@@ -103,8 +111,9 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         # sleeve is actually funded at, not an arbitrary portfolio-wide date —
         # or, for a book opened at `trade_from`, at the bar it opens on.
         m_fund = fx.align_fx(fx_tbl, prices.index, region.currency)
-        open_bar = (None if trade_from is None else
-                    first_bar_on_or_after(prices.dropna(how="all").index, trade_from))
+        opens = trade_from[key] if isinstance(trade_from, Mapping) else trade_from
+        open_bar = (None if opens is None else
+                    first_bar_on_or_after(prices.dropna(how="all").index, opens))
         base_per_local = float(m_fund.iloc[0] if open_bar is None
                                else m_fund.loc[open_bar])
         sleeve_capital_local = initial_capital * alloc[key] / base_per_local
@@ -112,7 +121,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                           initial_capital=sleeve_capital_local,
                           membership=membership,
                           apply_delisting=apply_delisting, volume=volume,
-                          trade_from=trade_from)
+                          trade_from=opens)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         if open_bar is not None:

@@ -1,4 +1,5 @@
 """Multi-sleeve portfolio backtest combined in AUD."""
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -88,3 +89,64 @@ def test_each_sleeve_funded_at_allocation_in_local_currency(monkeypatch):
     # allocation split — the FX rate must have actually been applied.
     assert captured["US"] != pytest.approx(cfg.INITIAL_CAPITAL)
     assert captured["US"] != pytest.approx(captured["FTSE"])
+
+
+# --- per-sleeve open dates (Task 13d) ---------------------------------------
+def _drifting_fx(currencies, start="2012-01-01", end="2026-01-01", base="AUD", seed=7):
+    """An FX table that moves every day, so funding a sleeve at any bar other
+    than its own open bar shows up in its LOCAL capital."""
+    idx = pd.bdate_range(start, end)
+    ramp = np.linspace(1.0, 2.0, len(idx))
+    return pd.DataFrame({c: 1.0 if c == base else ramp * {"USD": 1.5}.get(c, 2.0)
+                         for c in currencies}, index=idx)
+
+
+def test_each_sleeve_opens_on_its_own_bar(monkeypatch):
+    """`trade_from` may name each sleeve's own open date. Each sleeve is then
+    funded at ITS open bar's rate, holds nothing and earns no FX move through
+    that bar, is worth exactly its allocated capital there, decides there and
+    fills on its next bar — independently of the other sleeve's date."""
+    from trading_algo import fx
+    from trading_algo.regions import get_region
+
+    monkeypatch.setattr(fx, "synthetic_fx", _drifting_fx)
+    opened = {"US": pd.Timestamp("2020-03-10"), "FTSE": pd.Timestamp("2020-03-12")}
+    res = run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                                 end="2020-06-30", allocations={"US": 1, "FTSE": 1},
+                                 initial_capital=10_000.0, trade_from=opened)
+    rate = _drifting_fx(["USD", "GBP"], end="2020-06-30")
+    for k, day in opened.items():
+        bt = res["sleeves"][k]
+        bars = bt["equity"].index
+        assert float(res["sleeve_equity"].loc[day, k]) == pytest.approx(5_000.0, abs=1e-6)
+        local = 5_000.0 / rate.loc[day, get_region(k).currency]
+        assert np.allclose(bt["equity"].loc[:day], local, rtol=0.0, atol=1e-6), k
+        assert (bt["base_returns"].loc[:day] == 0.0).all(), k
+        assert bt["turnover"].index[0] == bars[bars.get_loc(day) + 1], k
+        assert bt["weights"][day].empty, k
+
+
+def test_one_date_for_every_sleeve_is_the_single_date_exactly():
+    """A mapping that names the same date for every sleeve is the single-date
+    comparison, array for array: the per-sleeve path adds no arithmetic."""
+    kw = dict(regions=["ASX", "US", "FTSE"], synthetic=True, end="2020-06-30",
+              allocations={"ASX": 1, "US": 1, "FTSE": 1}, initial_capital=30_000.0)
+    day = pd.Timestamp("2020-03-11")
+    one = run_portfolio_backtest(**kw, trade_from=day)
+    each = run_portfolio_backtest(**kw, trade_from={k: day for k in kw["regions"]})
+    pd.testing.assert_series_equal(each["equity"], one["equity"], check_exact=True)
+    pd.testing.assert_frame_equal(each["sleeve_equity"], one["sleeve_equity"],
+                                  check_exact=True)
+    for k in kw["regions"]:
+        for key in ("equity", "returns", "turnover", "costs", "base_returns"):
+            pd.testing.assert_series_equal(each["sleeves"][k][key],
+                                           one["sleeves"][k][key], check_exact=True)
+
+
+def test_a_mapping_that_misses_a_sleeve_is_refused():
+    """A sleeve with no open date would silently run the whole sample from
+    2012 next to sleeves opened this year. Refuse instead."""
+    with pytest.raises(ValueError, match="FTSE"):
+        run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                               end="2020-06-30", allocations={"US": 1, "FTSE": 1},
+                               trade_from={"US": pd.Timestamp("2020-03-11")})
