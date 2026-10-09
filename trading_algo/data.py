@@ -201,12 +201,15 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     would read as "paid nothing". A name that downloaded keeps its column even
     when it paid nothing in the window.
 
-    Same cache discipline as `load_prices`: a closed window (`end` given) is
-    immutable history and never expires; an open-ended request means "up to now"
-    and is good for CACHE_TTL_HOURS.
+    Cached like `load_prices`, with one exception: a window whose `end` is
+    today or later is still being written (a retry must see a late ex-date, or
+    a name that failed the first time), so it is never cached. A window wholly
+    in the past is immutable history; an open-ended one keeps CACHE_TTL_HOURS.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = _cache_path(f"div:v1:{start}:{end}:" + ",".join(sorted(tickers)))
+    use_cache = use_cache and (
+        end is None or pd.Timestamp(end) < pd.Timestamp.now().normalize())
     if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
         df = pd.read_parquet(cache_file)
         have = [t for t in tickers if t in df.columns]
@@ -230,7 +233,8 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     div = div.reindex(columns=[t for t in tickers if t in div.columns]).fillna(0.0)
     div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
     try:
-        div.to_parquet(cache_file)
+        if use_cache:
+            div.to_parquet(cache_file)
     except Exception:
         pass  # parquet engine optional; caching is a nicety, not a requirement
     return div.loc[start:end]

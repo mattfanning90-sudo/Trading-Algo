@@ -492,3 +492,25 @@ def test_a_total_dividend_download_failure_is_retried(monkeypatch):
     raw = data._download_dividends(["AAA"], "2026-06-01", "2026-06-03")
     assert len(calls) == 3
     assert "Dividends" in raw.columns.get_level_values(0)
+
+def test_a_dividend_window_reaching_today_is_never_served_from_cache(
+        tmp_path, monkeypatch):
+    """`_cache_is_fresh` calls any window with an `end` closed history, but a
+    window that reaches today is still being written: a retry under the same
+    key got the first answer back, empty if the first fetch failed."""
+    from trading_algo import data
+
+    pytest.importorskip("pyarrow")
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    now = pd.Timestamp.now().normalize()
+    raw = pd.DataFrame({("Dividends", "AAA"): [0.5], ("Close", "AAA"): [10.0]},
+                       index=pd.DatetimeIndex([now - pd.Timedelta(days=2)]))
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+    calls = []
+    monkeypatch.setattr(data, "_download_dividends",
+                        lambda t, s, e: calls.append(e) or raw)
+    start = (now - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    for end in (now, now + pd.Timedelta(days=1)):
+        for _ in range(2):
+            data.dividends(["AAA"], start, end.strftime("%Y-%m-%d"))
+    assert len(calls) == 4, "a window ending today or later must refetch"
