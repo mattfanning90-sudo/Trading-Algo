@@ -91,6 +91,19 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
         return []
 
 
+def _rate(snap_fx: dict, ccy: str | None, base: str) -> float | None:
+    """Base units per one `ccy`, or None when the snapshot cannot price it.
+
+    The one rule every money figure here converts by — the bridge's
+    (`attribution._base_per_local`): 1.0 only for the base currency itself,
+    a finite positive snapshot rate otherwise, and NO rate, never parity, for
+    a currency `paper_trade.fx_snapshot` omitted or a NaN / non-positive one."""
+    if ccy == base:
+        return 1.0
+    rate = _num(snap_fx.get(ccy))
+    return rate if rate is not None and rate > 0 else None
+
+
 def _net_parts(realized: float, unrealized: float, income: float,
                net: float) -> dict[str, float]:
     """NET P&L and the parts it splits into, in base currency.
@@ -104,16 +117,19 @@ def _net_parts(realized: float, unrealized: float, income: float,
             "other_base": round(n - r - u - i, 2), "net_pnl_base": n}
 
 
-def closed_trades(trades: list[dict], snap_fx: dict) -> dict:
+def closed_trades(trades: list[dict], snap_fx: dict,
+                  base: str = cfg.BASE_CURRENCY) -> dict:
     """FIFO round-trips derived from the fills ledger — the single source of
     truth (see `trading_algo.pnl`). Fills already include modelled slippage, so
     `net` is price P&L less both entry and exit commissions/stamp. This is the
     same reconstruction paper_trade stamps onto each sell, presented for the UI
-    with FX conversion, holding period and partial-lot notes."""
+    with FX conversion, holding period and partial-lot notes. A round trip in
+    a currency with no rate has no base amount (`net_base` None) and is out
+    of the total, never converted at parity (`_rate`)."""
     _, realized = pnl.build_lots(trades)
     rows: list[dict] = []
     for r in realized:
-        mult = snap_fx.get(r["currency"], 1.0)
+        mult = _rate(snap_fx, r["currency"], base)
         try:
             held = (date.fromisoformat(r["date"]) - date.fromisoformat(r["entry_date"])).days
         except (ValueError, TypeError):
@@ -135,17 +151,19 @@ def closed_trades(trades: list[dict], snap_fx: dict) -> dict:
             "entry": round(r["entry"], 4), "exit": round(r["exit"], 4),
             "held_days": held,
             "gross": round(r["gross"], 2), "costs": round(costs, 2),
-            "net": round(net, 2), "net_base": round(net * mult, 2),
+            "net": round(net, 2),
+            "net_base": round(net * mult, 2) if mult else None,
             "return_pct": round(net / r["entry_notional"], 4) if r["entry_notional"] else 0.0,
             "note": f"PARTIAL {r['filled']}/{r['filled'] + r['left_over']}" if r["left_over"] else "",
         })
-    rows.sort(key=lambda r: (r["date"], -abs(r["net_base"])))
+    rows.sort(key=lambda r: (r["date"], -abs(r["net_base"] or 0.0)))
     by_ccy: dict[str, float] = {}
     for r in rows:
         by_ccy[r["currency"]] = by_ccy.get(r["currency"], 0.0) + r["net"]
     return {
         "rows": rows,
-        "net_base": round(sum(r["net_base"] for r in rows), 2),
+        "net_base": round(sum(r["net_base"] for r in rows
+                              if r["net_base"] is not None), 2),
         "wins": sum(1 for r in rows if r["net"] > 0),
         "count": len(rows),
         "by_currency": [{"currency": c, "net": round(v, 2)} for c, v in by_ccy.items()],
@@ -220,7 +238,9 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # Realised P&L and open-position cost basis are both derived from the fills
     # ledger (the single source of truth), so the OVERVIEW tiles and the
     # closed-trades ledger are computed the same way and can never disagree.
-    closed = closed_trades(state["trades"], snap_fx)
+    base = state.get("base_currency", cfg.BASE_CURRENCY)
+    closed = closed_trades(state["trades"], snap_fx, base)
+    unvalued: list[str] = []      # sleeves with no rate: out of every NET part
     open_lots, _ = pnl.build_lots(state["trades"])
     basis = pnl.open_basis(open_lots)
 
@@ -244,8 +264,9 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         # OMITTED from the snapshot, so treat a missing/non-finite rate as
         # unvaluable (0) rather than let a NaN poison this sleeve's base equity
         # and the headline AUM. The sleeve still shows its local holdings.
-        raw_m = snap_fx.get(region.currency)
-        m = float(raw_m) if (raw_m is not None and raw_m == raw_m and raw_m > 0.0) else 0.0
+        m = _rate(snap_fx, region.currency, base) or 0.0
+        if not m:
+            unvalued.append(k)
         regime = ("RISK_ON"
                   if bool(signals.index_risk_on(index_px, region.params).iloc[-1])
                   else "RISK_OFF")
@@ -348,7 +369,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             + t.get("commission", 0.0) + t.get("stamp_duty", 0.0)
         if t.get("stamp_duty"):
             stamp[t["currency"]] = stamp.get(t["currency"], 0.0) + t["stamp_duty"]
-    fees_base = sum(v * snap_fx.get(c, 1.0) for c, v in fees.items())
+    fees_base = sum(v * (_rate(snap_fx, c, base) or 0.0) for c, v in fees.items())
 
     eq_hist = state.get("equity_history", [])
     # The last mark the book could actually be VALUED on. Taking eq_hist[-1]
@@ -364,9 +385,17 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # and reaches the screen as INCOME, one part of NET P&L below.
     fills = [t for t in state["trades"] if pnl.is_fill(t)]
     blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)} for t in fills]
-    income_base = sum(pnl.cash_amount(t) * snap_fx.get(t["currency"], 1.0)
+    income_base = sum(pnl.cash_amount(t) * (_rate(snap_fx, t["currency"], base) or 0.0)
                       for t in state["trades"] if pnl.is_cash_event(t))
-    net_base = total_base - initial
+    # A sleeve with no rate is valued at 0, so its share of the starting
+    # capital comes off too: NET covers the sleeves it can value, and says
+    # which it left out (`unvalued`).
+    allocs = state.get("allocations") or cfg.ALLOCATIONS
+    net_base = total_base - initial * (1.0 - sum(allocs.get(k, 0.0) for k in unvalued))
+    other_note = ("entry costs still in open positions, and the FX move on the "
+                  "funded capital" + ("; plus the FX spread paid on allocation "
+                                      "true-ups" if cfg.PAPER_ALLOCATION_REBALANCE
+                                      else ""))
 
     # A running peak INCLUDES the current mark. paper_trade only updates it on a
     # scheduled run, while this endpoint re-marks live, so today's equity could
@@ -432,6 +461,8 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "fees_base": round(fees_base, 2),
             **_net_parts(total_realized_base, total_unrealized_base,
                          income_base, net_base),
+            "other_note": other_note,
+            "unvalued": sorted({get_region(k).currency for k in unvalued}),
             # Gross = Σ|position value| / equity — the real leverage of the book
             # (a 3× book reads ~3.0; a 100/100 long-short book ~2.0). Net long
             # exposure is invested_base/equity, reported separately below.

@@ -187,3 +187,75 @@ def test_the_net_pnl_tile_shows_every_part():
     assert "sgnNum(k.net_pnl_base, 2)" in tile
     for part in ("k.realized_base", "k.unrealized_base", "k.income_base", "k.other_base"):
         assert f"sgnNum({part}, 2)" in tile, f"{part} at NET's precision"
+
+
+# --- one FX-rate rule for every NET part ------------------------------------
+def test_a_currency_the_snapshot_cannot_price_is_no_rate_never_parity():
+    """The bridge's rule (Task 7b): 1.0 only for the base currency itself. A
+    currency `fx_snapshot` omitted, or a NaN / non-positive rate, is NO rate."""
+    snap = {"USD": 1.5, "GBP": float("nan"), "CAD": 0.0}
+    assert api._rate(snap, "AUD", "AUD") == 1.0
+    assert api._rate(snap, "USD", "AUD") == 1.5
+    for ccy in ("GBP", "CAD", "JPY"):
+        assert api._rate(snap, ccy, "AUD") is None, ccy
+
+
+def test_a_round_trip_with_no_rate_is_not_converted_at_parity():
+    trades = [{"date": "2026-06-01", "region": "US", "ticker": "AAA", "side": "BUY",
+               "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0,
+               "currency": "USD"},
+              {"date": "2026-07-01", "region": "US", "ticker": "AAA", "side": "SELL",
+               "shares": 10, "fill": 110.0, "commission": 1.0, "stamp_duty": 0.0,
+               "currency": "USD"}]
+    closed = api.closed_trades(trades, {"AUD": 1.0})
+    assert closed["rows"][0]["net_base"] is None
+    assert closed["net_base"] == 0.0
+
+
+def test_a_sleeve_with_no_rate_is_out_of_every_net_part_and_said_so(
+        account, monkeypatch):
+    """The valuation priced a sleeve with no rate at 0 while REAL and INCOME
+    converted it at 1.0 — a USD amount booked as AUD. Every NET part now uses
+    the valuation's rule: the sleeve is out of REAL, OPEN, INCOME and NET
+    (its share of the starting capital comes off with its equity), and the
+    payload names the currency so the tile can say so."""
+    state = pt.load_state(account)
+    us = state["sleeves"]["US"]
+    ticker, shares = next(iter(us["positions"].items()))
+    us["cash"] += shares * 0.5
+    state["trades"].append({"date": state["equity_history"][-1][0], "region": "US",
+                            "ticker": ticker, "side": "DIV", "shares": shares,
+                            "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
+                            "currency": "USD"})
+    pt.save_state(account, state)
+    real = pt.fx_snapshot
+    monkeypatch.setattr(pt, "fx_snapshot", lambda *a, **kw: {
+        c: r for c, r in real(*a, **kw).items() if c != "USD"})
+
+    k = api.build_snapshot(account, synthetic=True)["kpis"]
+    assert k["unvalued"] == ["USD"]
+    assert k["income_base"] == 0.0
+    funded = state["initial_capital_base"] * (1 - state["allocations"]["US"])
+    assert k["net_pnl_base"] == pytest.approx(k["total_equity"] - funded, abs=0.01)
+    parts = k["realized_base"] + k["unrealized_base"] + k["income_base"] + k["other_base"]
+    assert round(parts, 2) == k["net_pnl_base"]
+
+
+def test_other_names_the_allocation_true_up_spread_when_it_is_on(account, monkeypatch):
+    """With PAPER_ALLOCATION_REBALANCE on, the FX spread paid moving cash
+    between sleeves is in NET and in no named part, so OTHER carries it."""
+    monkeypatch.setattr(cfg, "PAPER_ALLOCATION_REBALANCE", False)
+    assert "true-up" not in api.build_snapshot(account, synthetic=True)["kpis"]["other_note"]
+    monkeypatch.setattr(cfg, "PAPER_ALLOCATION_REBALANCE", True)
+    assert "true-up" in api.build_snapshot(account, synthetic=True)["kpis"]["other_note"]
+
+
+def test_the_tile_says_what_it_left_out_and_what_other_holds():
+    import pathlib
+
+    from trading_algo import dashboard
+    js = (pathlib.Path(dashboard.__file__).parent / "static" / "app.js").read_text()
+    tile = next(line for line in js.splitlines() if "NET P&amp;L" in line)
+    assert "k.other_note" in tile and "k.unvalued" in tile
+    row = next(line for line in js.splitlines() if "c.net_base" in line)
+    assert "c.net_base == null" in row, "a round trip with no rate shows a dash, not A$0.00"
