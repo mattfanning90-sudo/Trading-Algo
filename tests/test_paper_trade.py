@@ -1034,18 +1034,29 @@ def test_a_feed_failure_keeps_the_window_for_the_next_run(monkeypatch):
 
 def test_an_earlier_or_repeated_bar_never_reopens_a_credited_window(monkeypatch):
     """The engine runs up to three times on one bar, and a feed can briefly
-    serve an older last bar. Neither may move the window back: the next run
-    would credit the same ex-date twice."""
-    from trading_algo.regions import get_region
-
+    serve an older last bar. Neither may fetch again or move the window back,
+    or the next run reopens an ex-date already paid. The feed ANSWERS here:
+    a sentinel that raises is swallowed by the credit's own failure handling,
+    so a test built on one passes with the guard deleted."""
     sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
-              "last_dividend_date": "2026-06-15"}
-    monkeypatch.setattr(pt.data, "dividends",
-                        lambda t, s, e: (_ for _ in ()).throw(AssertionError("no fetch")))
+              "last_dividend_date": "2026-06-01"}
+    paid = pd.DataFrame({"AAA": [0.5]}, index=pd.DatetimeIndex(["2026-06-14"]))
+    calls, log = [], []
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid, calls))
+    region = get_region("US")
+
+    assert pt._credit_dividends(region, sleeve, "2026-06-15", log,
+                                synthetic=False) == pytest.approx(5.0)
     for bar in ("2026-06-15", "2026-06-12"):
-        assert pt._credit_dividends(get_region("US"), sleeve, bar, [],
-                                    synthetic=False) == 0.0
+        assert pt._credit_dividends(region, sleeve, bar, log, synthetic=False) == 0.0
         assert sleeve["last_dividend_date"] == "2026-06-15"
+    assert len(calls) == 1, "a bar at or before the window's end must not refetch"
+
+    assert pt._credit_dividends(region, sleeve, "2026-06-16", log,
+                                synthetic=False) == 0.0
+    assert [(r["ticker"], r["date"]) for r in log] == [("AAA", "2026-06-14")]
+    assert sleeve["cash"] == pytest.approx(5.0)
+
 
 
 def test_a_dividend_accrues_to_the_book_before_this_runs_fill(
@@ -1175,3 +1186,71 @@ def test_a_window_stuck_for_more_than_a_few_sessions_says_so(monkeypatch):
     (_, fresh, _), (_, stuck, kw) = alerts
     assert "stuck" not in fresh
     assert "stuck" in stuck and kw["stuck_sessions"] == 10
+
+def test_a_name_going_ex_on_its_fill_bar_is_paid_at_the_pre_fill_shares(monkeypatch):
+    """Decided 06-12, filled at 06-15's close; AAA and BBB both go ex 06-15.
+    Whoever holds at the ex-date's open is paid: AAA's 10 pre-fill shares, and
+    nothing for BBB, bought at that close. The run credits BEFORE it fills,
+    and the next run's window starts after 06-15, so it is paid once."""
+    region = get_region("US")
+    sleeve = {"currency": "USD", "cash": 10_000.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-12",
+              "pending_target": {"date": "2026-06-12",
+                                 "weights": {"AAA": 0.3, "BBB": 0.3}, "frozen": []}}
+    log = [_fill("2026-06-01", "AAA", "BUY", 10)]
+    paid = pd.DataFrame({"AAA": [0.5], "BBB": [0.2]},
+                        index=pd.DatetimeIndex(["2026-06-15"]))
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))
+    px = pd.Series({"AAA": 100.0, "BBB": 50.0})
+
+    pt._credit_dividends(region, sleeve, "2026-06-15", log, synthetic=False)
+    assert pt._fill_pending(region, sleeve, px, "2026-06-15", log)
+    assert sleeve["positions"]["AAA"] > 10 and sleeve["positions"]["BBB"] > 0
+    pt._credit_dividends(region, sleeve, "2026-06-16", log, synthetic=False)
+    assert [(r["ticker"], r["shares"], r["date"]) for r in log
+            if r["side"] == "DIV"] == [("AAA", 10, "2026-06-15")]
+
+def test_an_exit_on_an_ex_date_is_paid_across_a_feed_gap_end_to_end(
+        account, paper_cycle, monkeypatch):
+    """Through run_daily with the credit forced live. The book opens, trips its
+    breaker, and liquidates at the next close — the bar every name goes ex.
+    That run's feed returns nothing, so the window stays open across the exit.
+    The next run must pay the shares sold at that close (held at its open),
+    though the book now holds nothing at all."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    real = pt._credit_dividends
+    monkeypatch.setattr(
+        pt, "_credit_dividends",
+        lambda region, sleeve, today, log, synthetic, **kw:
+            real(region, sleeve, today, log, False, **kw))
+    feed = {"up": True, "ex": None}
+
+    def dividends(tickers, start, end):
+        if not feed["up"]:
+            return pd.DataFrame()
+        idx = pd.DatetimeIndex([feed["ex"]] if feed["ex"] else [])
+        return pd.DataFrame({t: [1.0] * len(idx) for t in tickers}, index=idx)
+
+    monkeypatch.setattr(pt.data, "dividends", dividends)
+    _alerts(monkeypatch)
+
+    state = paper_cycle(account)                      # open the book
+    held = dict(state["sleeves"]["US"]["positions"])
+    assert held
+    state["peak_equity_base"] = 10 * state["initial_capital_base"]
+    pt.save_state(account, state)
+    paper_cycle(account, sessions=1)                  # this close trips the breaker
+
+    feed["up"] = False
+    state = paper_cycle(account, sessions=1)          # the exit fills; feed down
+    exit_bar = state["equity_history"][-1][0]
+    assert not state["sleeves"]["US"]["positions"]
+    assert state["sleeves"]["US"]["last_dividend_date"] < exit_bar
+
+    feed.update(up=True, ex=exit_bar)
+    state = paper_cycle(account, sessions=1)
+    paid = {r["ticker"]: (r["shares"], r["date"]) for r in state["trades"]
+            if r["side"] == "DIV"}
+    assert paid == {t: (n, exit_bar) for t, n in held.items()}
+    assert state["sleeves"]["US"]["last_dividend_date"] == state["equity_history"][-1][0]
