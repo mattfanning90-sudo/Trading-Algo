@@ -460,6 +460,35 @@ def test_exposure_is_priced_without_the_backtests_cash_credit(monkeypatch):
     assert rep["identity_ok"] is True
 
 
+def test_a_day_is_priced_at_the_book_held_through_it(monkeypatch):
+    """backtest.py records weights[D] as the book at D's CLOSE, after any fill
+    on D, so day t was earned by the book recorded at the PREVIOUS bar. Here
+    the backtest tops its US sleeve up from half to fully invested at the
+    first session's close and the paper stays half invested. Day 1 the two
+    held the same half: 1bp of credit on the backtest's idle half (5.00,
+    carried through -5%: 4.75) and no exposure. Day 2 the backtest was all in
+    and the paper 27,500 / 52,500: (1 - 0.5238) x -5% on 52,500 = -1,250.00
+    of exposure. Backtest 50,000 x 1.0501 x 0.95 = 49,879.75 against paper
+    51,125 leaves nothing for timing. Read off the day's own close book, day
+    1 would look fully invested: no credit, and +1,189.88 of exposure."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.10, -0.05), us_weight=0.5)
+    us = bt["sleeves"]["US"]
+    us["weights"] = {_D[0]: pd.Series({"AAA": 0.5}),
+                     _D[1]: pd.Series({"AAA": 1.0}), _D[2]: pd.Series({"AAA": 1.0})}
+    us["returns"] = pd.Series([0.0, 0.5 * 0.10 + 0.0001, -0.05], index=_D)
+    us["base_returns"] = us["returns"].copy()
+    bt["equity"] = 50_000.0 * sum((1 + s["returns"]).cumprod()
+                                  for s in bt["sleeves"].values())
+    rep = attribution.reconcile(_paper_book(0.5, (0.10, -0.05)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(4.75, abs=0.005)
+    assert _aud(rep, "exposure_gap") == pytest.approx(-1_250.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+
+
 def test_the_backtests_trading_cost_is_not_exposure():
     """The half-invested case again, but the backtest pays 10bps of NAV to
     trade on day 1. Its holdings still earned +10%, so exposure_gap is still
@@ -525,7 +554,7 @@ def test_days_the_backtest_held_nothing_are_counted_not_priced(monkeypatch):
     monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)   # a flat day earns 0
     bt = _backtest((0.10, -0.05))
     us = bt["sleeves"]["US"]
-    us["weights"][_D[2]] = pd.Series(dtype=float)
+    us["weights"][_D[1]] = pd.Series(dtype=float)   # flat from day 1's close
     us["returns"].loc[_D[2]] = 0.0
     us["base_returns"] = us["returns"].copy()
     bt["equity"] = 50_000.0 * sum((1 + s["returns"]).cumprod()

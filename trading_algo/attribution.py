@@ -284,6 +284,9 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     b_end = float(growth.iloc[-1]) if len(idx) else 1.0
     fx_step = (1 + rb) / (1 + rl)                  # the backtest's FX move per day
     gaps = rl.index.to_series().diff().dt.days.fillna(0)
+    # backtest.py records weights[D] at D's CLOSE, after any fill on D, so day
+    # t was earned by the book recorded at the backtest's previous bar.
+    held_from = rl.index.to_series().shift(1)
     credit_on = bool(cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL)
 
     ccy = paper_state["sleeves"][key].get("currency")
@@ -307,7 +310,7 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     exposure = interest = 0.0
     bt_flat = 0
     for t in idx:
-        w = bt["weights"].get(t)
+        w = bt["weights"].get(held_from[t])
         w = w if w is not None else pd.Series(dtype=float)
         if why is None and bool((w < 0).any()):
             why = f"{key}'s backtest held a short (no paper gross to match)"
