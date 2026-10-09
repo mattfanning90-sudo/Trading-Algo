@@ -38,14 +38,34 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            end: str | None = None,
                            point_in_time: bool = False,
                            params: StrategyParams | None = None,
-                           allocations: dict[str, float] | None = None) -> dict:
+                           allocations: dict[str, float] | None = None,
+                           initial_capital: float = cfg.INITIAL_CAPITAL) -> dict:
     """`params` overrides the strategy knobs for every sleeve; `allocations`
-    overrides the capital split (both used by the tuner)."""
+    overrides the capital split (both used by the tuner). `initial_capital` is
+    in the BASE currency (AUD) — the portfolio's total starting capital, split
+    across sleeves by `allocations`/`cfg.ALLOCATIONS`.
+
+    I-1 (fix round 1): each sleeve's OWN `run_backtest` must be funded at its
+    real size, not at a flat `cfg.INITIAL_CAPITAL` in LOCAL currency regardless
+    of allocation. Before the per-order commission floor (Task 13) the backtest
+    was scale-free, so every sleeve running at the same 100,000 local-currency
+    number (vs. the ~A$25k a quarter-allocation sleeve is actually funded at)
+    didn't matter; the floor made size matter, and a sleeve backtested 4x too
+    large under-charges its own commission floor. Each sleeve is funded at
+    `initial_capital * alloc[k]` (BASE currency) converted to the sleeve's own
+    LOCAL currency at the FX multiplier on ITS OWN first price date (`m` is
+    "base units per 1 local unit" — see `fx.py` — so local = base / m)."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     syn_end = end or "2026-01-01"
     # F13: apply the delisting-return correction only in the PIT path and only
     # when the knob is set — otherwise a perfect no-op.
     apply_delisting = point_in_time and cfg.DELISTING_REPLACEMENT_RETURN is not None
+
+    # Normalise BEFORE the sleeve loop: each sleeve needs its OWN share of
+    # `initial_capital` to fund its own run_backtest call below.
+    alloc = {k: (allocations or cfg.ALLOCATIONS)[k] for k in regions}
+    tot_alloc = sum(alloc.values())
+    alloc = {k: v / tot_alloc for k, v in alloc.items()}  # normalise to 1.0
 
     sleeves: dict[str, dict] = {}
     index_by_region: dict[str, tuple] = {}
@@ -72,7 +92,14 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         else:
             prices, index_px = data.load_region(region, start, end, tickers=pit_tickers)
         volume = data.capacity_volume(prices, start, end, synthetic=synthetic)
-        bt = run_backtest(prices, index_px, region, membership=membership,
+        # base_per_local at the sleeve's own first price date — the rate this
+        # sleeve is actually funded at, not an arbitrary portfolio-wide date.
+        base_per_local = float(
+            fx.align_fx(fx_tbl, prices.index, region.currency).iloc[0])
+        sleeve_capital_local = initial_capital * alloc[key] / base_per_local
+        bt = run_backtest(prices, index_px, region,
+                          initial_capital=sleeve_capital_local,
+                          membership=membership,
                           apply_delisting=apply_delisting, volume=volume)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
@@ -84,11 +111,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     union = pd.DatetimeIndex(union)
     base_r = {k: s["base_returns"].reindex(union).fillna(0.0) for k, s in sleeves.items()}
 
-    alloc = {k: (allocations or cfg.ALLOCATIONS)[k] for k in regions}
-    tot_alloc = sum(alloc.values())
-    alloc = {k: v / tot_alloc for k, v in alloc.items()}  # normalise to 1.0
-
-    caps = {k: cfg.INITIAL_CAPITAL * alloc[k] for k in regions}
+    caps = {k: initial_capital * alloc[k] for k in regions}
     rebal_dates = (set(pd.Series(0, index=union).resample(cfg.ALLOCATION_REBALANCE)
                        .last().index) if cfg.ALLOCATION_REBALANCE else set())
 
@@ -120,7 +143,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         idx_aud_ret = (idx * mult).pct_change(fill_method=None)
         parts.append(idx_aud_ret.reindex(union).fillna(0.0))
     bench_ret = sum(parts) / len(parts)
-    bench_equity = cfg.INITIAL_CAPITAL * (1 + bench_ret).cumprod()
+    bench_equity = initial_capital * (1 + bench_ret).cumprod()
 
     return {
         "equity": equity,

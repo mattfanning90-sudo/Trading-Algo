@@ -1191,10 +1191,17 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
 
     The one place `--attribution` and `--reconcile` build their comparison, so
     the two cannot drift apart. Returns `run_portfolio_backtest`'s full result.
-    Three things make it the book's own strategy:
+    Four things make it the book's own strategy:
 
       * REGIONS AND ALLOCATIONS are the book's (`state["allocations"]`), not
         `config.ALLOCATIONS`, which funds a sleeve `full` does not hold.
+      * CAPITAL is the book's own (`state["initial_capital_base"]`), not
+        `cfg.INITIAL_CAPITAL`. Since the per-order commission floor (Task 13)
+        made the backtest size-dependent, reproducing a small book at the
+        default 100,000 and rescaling the curve afterwards (`_predicted_curve`)
+        would charge the floor as if the book were bigger than it is — the
+        floor's bite does not scale linearly, so it has to be funded at the
+        real size, not rescaled post hoc (I-1, fix round 1).
       * PARAMS are the paper path's (`_account_params`): the profile's overrides
         layered on each region's defaults. `run_portfolio_backtest(params=...)`
         replaces EVERY region's params wholesale, so a plain book passes none
@@ -1225,7 +1232,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
     return run_portfolio_backtest(
         regions=regions, synthetic=synthetic, params=params,
         end=(last + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-        allocations=state.get("allocations"))
+        allocations=state.get("allocations"),
+        initial_capital=state["initial_capital_base"])
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
