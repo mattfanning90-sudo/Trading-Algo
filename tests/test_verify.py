@@ -533,3 +533,22 @@ def test_a_short_pays_its_dividend_in_the_replay():
           "shares": -50, "fill": 2.0, "commission": 0.0, "stamp_duty": 0.0}],
         {"US": sleeve}, initial_capital_base=150.0))
     assert out == []
+
+
+def test_a_cash_event_does_not_make_a_never_traded_sleeve_traded(monkeypatch):
+    """`never-traded` asks whether the sleeve EXECUTED anything. Task 12's
+    interest accrues on a funded sleeve that has never bought a share, and an
+    interest row read as a trade hid the ERROR: [('ERROR', 'never-traded')]
+    became []."""
+    from trading_algo import pnl
+
+    monkeypatch.setattr(pnl, "CASH_EVENTS", pnl.CASH_EVENTS | {"INT"})
+    book = equity_book(
+        [{"date": "2026-07-20", "region": "ASX", "ticker": "CASH", "side": "INT",
+          "shares": 1, "fill": 12.5, "commission": 0.0, "stamp_duty": 0.0}],
+        {"ASX": {"currency": "AUD", "cash": 33_345.5, "positions": {},
+                 "last_status": {}}},
+        allocations={"ASX": 1.0})
+    found = verify.check_liveness("t", book, "equity", NOW)
+    assert [(f.level, f.code) for f in found if f.code == "never-traded"] == [
+        ("ERROR", "never-traded")]

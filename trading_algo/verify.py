@@ -455,7 +455,8 @@ def check_liveness(account: str, state: dict, kind: str,
         # A funded sleeve that has never held anything at all. `_should_rebalance`
         # fires once per calendar month, so a sleeve that reaches month-end still
         # flat has burned a whole cycle with its capital doing nothing.
-        traded = any(t.get("region") == key for t in state.get("trades") or [])
+        traded = any(t.get("region") == key and pnl.is_fill(t)
+                     for t in state.get("trades") or [])
         funded = (state.get("allocations") or {}).get(key)
         if funded and not traded:
             found.append(_never_traded_finding(account, key, sleeve, funded))
