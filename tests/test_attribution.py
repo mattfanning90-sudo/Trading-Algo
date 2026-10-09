@@ -762,3 +762,19 @@ def test_the_bridge_names_the_dividends_the_paper_credited():
     assert "USD" in rep["notes"]["dividends"]
     assert "left out" not in rep["notes"].get("commission_floor", "")
     assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)
+
+def test_the_cash_path_undoes_any_cash_event_without_a_reader_edit(monkeypatch):
+    """Cash events are defined once (`pnl.CASH_EVENTS`); Task 12's interest
+    rows join it and the bridge's cash rebuild must undo them as cash with no
+    edit here — not as a SELL that adds a phantom position."""
+    from trading_algo import pnl
+
+    monkeypatch.setattr(pnl, "CASH_EVENTS", pnl.CASH_EVENTS | {"INT"})
+    state = {"sleeves": {"US": {"currency": "USD", "cash": 102.5,
+                                "positions": {"AAA": 10}}},
+             "trades": [{"date": "2026-03-04", "region": "US", "ticker": "CASH",
+                         "side": "INT", "shares": 1, "fill": 2.5,
+                         "commission": 0.0, "stamp_duty": 0.0, "currency": "USD"}]}
+    cash, pos = attribution._sleeve_close(state, "US", pd.Timestamp("2026-03-03"))
+    assert cash == pytest.approx(100.0)
+    assert pos == {"AAA": 10.0}

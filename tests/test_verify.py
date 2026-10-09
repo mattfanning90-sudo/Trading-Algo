@@ -500,3 +500,20 @@ def test_a_dividend_is_not_a_fill_to_the_realism_checks():
     assert verify.check_market_hours("t", book, "equity") == []
     assert verify.check_whole_shares("t", book) == []
     assert verify.check_dead_price("t", book) == []
+
+def test_a_new_cash_event_replays_without_a_reader_edit(monkeypatch):
+    """Cash events are defined once (`pnl.CASH_EVENTS`). Task 12's interest
+    rows join that set and must replay as cash, not as a SELL of a ticker
+    nobody holds — with no edit to the replay."""
+    from trading_algo import pnl
+
+    monkeypatch.setattr(pnl, "CASH_EVENTS", pnl.CASH_EVENTS | {"INT"})
+    sleeve = {"currency": "USD", "cash": 6_666.666666 - 1001.0 + 2.5,
+              "positions": {"AAPL": 10.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "AAPL", "side": "BUY",
+          "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "CASH", "side": "INT",
+          "shares": 1, "fill": 2.5, "commission": 0.0, "stamp_duty": 0.0}],
+        {"US": sleeve}))
+    assert out == []

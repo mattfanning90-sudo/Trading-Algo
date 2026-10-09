@@ -103,16 +103,29 @@ def _trade_cost(t: dict) -> float:
     return float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
 
 
-# Ledger rows that move cash but execute nothing. A `DIV` row is a dividend:
-# `shares` is the signed position it was paid on and `fill` the cash per share,
-# so a reader that takes it for a trade sees a SELL (a BUY, on a short) at a
-# price no venue quoted. Every fill-reading consumer asks `is_fill` first.
-CASH_EVENTS = frozenset({"DIV"})
+# Ledger rows that move cash but execute nothing, defined once. Each records
+# the cash it moved as `shares * fill`: a `DIV` row is the signed position it
+# was paid on times the cash per share. Taken for a trade it reads as a SELL
+# (a BUY, on a short) at a price no venue quoted, so fill readers ask
+# `is_fill` and cash readers `is_cash_event` / `cash_amount`. A new event
+# joins CASH_EVENTS and no reader changes.
+DIVIDEND = "DIV"
+CASH_EVENTS = frozenset({DIVIDEND})
+
+
+def is_cash_event(t: dict) -> bool:
+    """True for a row that moves cash and executes nothing (a dividend)."""
+    return t.get("side") in CASH_EVENTS
 
 
 def is_fill(t: dict) -> bool:
     """True for an execution; False for a cash event such as a dividend."""
-    return t.get("side") not in CASH_EVENTS
+    return not is_cash_event(t)
+
+
+def cash_amount(t: dict) -> float:
+    """The cash a cash-event row moved into its sleeve (negative = out)."""
+    return float(t.get("shares", 0)) * float(t.get("fill", 0.0))
 
 
 def build_lots(trades: list[dict]) -> tuple[dict, list[dict]]:

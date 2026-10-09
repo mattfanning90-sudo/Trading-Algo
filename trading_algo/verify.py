@@ -157,8 +157,8 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
             shares = float(t.get("shares", 0))
             fill = float(t.get("fill", 0.0))
             fee = float(t.get("commission", 0.0)) + float(t.get("stamp_duty", 0.0))
-            if t.get("side") == "DIV":
-                cash += shares * fill    # a dividend credits cash; shares unchanged
+            if pnl.is_cash_event(t):
+                cash += pnl.cash_amount(t)   # e.g. a dividend; shares unchanged
                 continue
             if t.get("side") == "BUY":
                 cash -= shares * fill + fee

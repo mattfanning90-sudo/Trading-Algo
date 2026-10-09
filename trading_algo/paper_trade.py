@@ -749,7 +749,7 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
     except Exception:
         div = pd.DataFrame()            # same as a name that did not come back
     paid = {(r["ticker"], r["date"]) for r in trade_log
-            if r.get("region") == region.key and r.get("side") == "DIV"
+            if r.get("region") == region.key and r.get("side") == pnl.DIVIDEND
             and r["date"] > last}
     lo, hi = pd.Timestamp(last), pd.Timestamp(today)
     total = 0.0
@@ -764,7 +764,7 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
             amount = shares * dps
             sleeve["cash"] += amount
             trade_log.append({
-                "date": ex, "region": region.key, "ticker": t, "side": "DIV",
+                "date": ex, "region": region.key, "ticker": t, "side": pnl.DIVIDEND,
                 "shares": shares, "fill": dps, "commission": 0.0,
                 "stamp_duty": 0.0, "currency": region.currency})
             total += amount

@@ -225,9 +225,9 @@ def _sleeve_close(paper_state: dict, key: str,
 
     Rebuilt BACKWARD from the stored sleeve, which is the book after every
     trade: cash moves only on fills (`rebalance_sleeve` debits
-    `delta * fill + commission + stamp_duty`) and dividends (a `DIV` row credits
-    `shares * fill` and moves no shares), so undoing each dated after `day`
-    recovers that close. A forward replay would need the inception FX
+    `delta * fill + commission + stamp_duty`) and cash events (a dividend
+    credits `pnl.cash_amount` and moves no shares), so undoing each dated
+    after `day` recovers that close. A forward replay would need the inception FX
     rate, which the state does not keep.
     """
     sleeve = paper_state["sleeves"][key]
@@ -236,8 +236,8 @@ def _sleeve_close(paper_state: dict, key: str,
     for t in paper_state.get("trades") or []:
         if t.get("region") != key or pd.Timestamp(t["date"]) <= day:
             continue
-        if t.get("side") == "DIV":
-            cash -= float(t["shares"]) * float(t["fill"])
+        if pnl.is_cash_event(t):
+            cash -= pnl.cash_amount(t)
             continue
         delta = float(t["shares"]) * (1.0 if t.get("side") == "BUY" else -1.0)
         cash += (delta * float(t["fill"]) + float(t.get("commission") or 0.0)
@@ -432,8 +432,8 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
     divs = [(t, _base_per_local(paper_state, t.get("currency")))
             for t in paper_state.get("trades") or []
-            if t.get("side") == "DIV" and start < pd.Timestamp(t["date"]) <= end]
-    credited = sum(float(t["shares"]) * float(t["fill"]) * r for t, r in divs if r)
+            if t.get("side") == pnl.DIVIDEND and start < pd.Timestamp(t["date"]) <= end]
+    credited = sum(pnl.cash_amount(t) * r for t, r in divs if r)
     div_unrated = sorted({str(t.get("currency")) for t, r in divs if r is None})
     lines = {name: 0.0 for name in BRIDGE_LINES}
     lines["fill_convention"] = slip_excess / start_equity
