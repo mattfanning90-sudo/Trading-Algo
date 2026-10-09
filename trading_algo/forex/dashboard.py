@@ -36,7 +36,7 @@ from . import marks
 from . import news
 from .agents import AgentPool
 from .fx_book import list_accounts, load_state
-from .fx_config import FX_RISK_FREE, profile
+from .fx_config import FX_RISK_FREE, REVIEW_NOTICE, profile
 from .fx_config import profile_names
 from .fx_strategy import min_history, target_weights_history
 from .pairs import ALL_PAIRS, currencies_in, get_pair
@@ -1155,6 +1155,9 @@ section{padding:1rem 1.5rem 1.25rem}
 .hc{padding:.4rem .55rem;border-radius:8px;border:1px solid var(--bd);font-size:.72rem;
   font-family:var(--mono);min-width:82px;text-align:center;line-height:1.35}
 .hc b{font-size:.85rem}
+/* review notice — spec 15.2, same sentence as the terminal SPA (fx_config.REVIEW_NOTICE) */
+.review{padding:.6rem 1.5rem;background:#1a1206;border-bottom:1px solid var(--amber);
+  font-size:.74rem;line-height:1.5;color:var(--amber);letter-spacing:.01em}
 /* verdict banner */
 .verdict{display:flex;align-items:center;gap:.7rem;padding:.6rem 1.5rem;font-size:.86rem;
   border-bottom:1px solid var(--bd);line-height:1.4}
@@ -1198,6 +1201,7 @@ table.txn th.sortable:hover{color:var(--fg)}
   <div class="sub">base __CCY__ · updated __UPDATED__ · candlesticks, performance vs buy-and-hold, and a plain-English reason + outcome for every trade. Hover any underlined word for its meaning.</div>
   <div class="stats" id="stats"></div>
 </header>
+<div class="review">__REVIEW__</div>
 <div class="verdict" id="verdict"></div>
 
 <div class="subnav">
@@ -1837,6 +1841,7 @@ def render(payload: dict) -> str:
         "__CCY__": payload["currency"], "__UPDATED__": payload["updated"],
         "__HALT__": ' <span class="badge" style="color:#ef5350">RISK-HALTED</span>'
                     if payload["halted"] else "",
+        "__REVIEW__": REVIEW_NOTICE,
         "__LWC__": _LWC,
         "__T_BENCH__": g["Benchmark"], "__T_TILT__": g["Tilt"], "__T_OUT__": g["Outcome"],
         "__T_PSR__": g["PSR"], "__T_DD__": g["Drawdown curve"], "__T_WEDGE__": g["Cost wedge"],

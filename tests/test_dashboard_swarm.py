@@ -149,4 +149,6 @@ def test_frontend_wires_the_tab():
     assert "tabKeys.push('SWARM')" in js          # the tab appears for FX books
     assert "function swarmHTML(" in js            # the screen exists
     assert "'/api/swarm/' + key" in js            # it is fetched
-    assert "if (S.tab === 'SWARM') return swarmHTML(page)" in js   # and dispatched
+    # dispatched — prefixed with the FX review banner (spec 15.2), same as
+    # every other FX tab
+    assert "if (S.tab === 'SWARM') return banner + swarmHTML(page)" in js

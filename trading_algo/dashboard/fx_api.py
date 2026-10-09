@@ -351,6 +351,7 @@ def build_fx_snapshot(account: str) -> dict:
         "key": entry["key"],
         "label": entry["label"],
         "sub": entry["sub"],
+        "review_notice": fxcfg.REVIEW_NOTICE,
         "profile": state.get("profile", "balanced"),
         "bar": state.get("bar", "1d"),
         "source": state.get("source", ""),

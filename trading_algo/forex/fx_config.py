@@ -313,3 +313,18 @@ ACCOUNTS: dict[str, dict] = {
     "multiasset": {"capital": 10_000.0, "profile": "balanced",
                    "source": "yahoo", "symbols": MULTI_ASSET_UNIVERSE},
 }
+
+# What every FX surface has to say about these books, in ONE place so the
+# terminal SPA and the published static page cannot state different things.
+# Figures: docs/FULL_SYSTEM_REVIEW_2026-09.md F18, real data, HEAD code,
+# isolated state. Two known artefacts inflate them (the fixed-dollar crypto
+# spread and the breaker latch) and both are named in the text rather than
+# quietly discounted from it.
+REVIEW_NOTICE = (
+    "UNDER REVIEW — these books back-test NEGATIVE and are excluded from the "
+    "headline AUM. Backtest Sharpe: matt −2.06, partner −2.14, multiasset "
+    "−5.56, daytrader −6.25. Two known cost/risk artefacts inflate those "
+    "losses (a fixed-dollar crypto spread and a drawdown breaker that never "
+    "resets its high-water mark); with both corrected the agents' gross Sharpe "
+    "is near zero. No edge has been demonstrated. Paper money only."
+)

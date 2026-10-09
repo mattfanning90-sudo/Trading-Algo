@@ -1991,6 +1991,12 @@ function agentCurveAttrHTML(page) {
   </div>`;
 }
 
+/* Spec 15.2 — every FX tab carries the same sentence, from Python. */
+function fxReviewBannerHTML(page) {
+  if (!page.review_notice) return '';
+  return `<div style="padding:10px 18px;background:#1a1206;border-bottom:1px solid ${AMB};font-size:10px;line-height:1.6;color:${AMB};letter-spacing:.04em">${esc(page.review_notice)}</div>`;
+}
+
 /* ============== FX · OPEN BOOK + TRADE FEED + FINANCIAL POSITION ========= */
 /* The money half of the FX overview: what is on, what it is worth, what it
    cost, and how those add up to equity — the parity item with the equity
@@ -3586,12 +3592,13 @@ function contentHTML() {
   if (S.errors[S.account]) return errPanel(S.account);
   if (!page) return '<div class="boot">LOADING…</div>';
   if (page.kind === 'fx') {
+    const banner = fxReviewBannerHTML(page);
     /* POSITIONS = the ensemble's decision book, then the same book in money */
-    if (S.tab === 'POSITIONS') return agentPositionsHTML(page) + fxLedgerHTML(page);
-    if (S.tab === 'BACKTEST') return agentBacktestHTML(page);
-    if (S.tab === 'METHOD') return agentMethodHTML(page);
-    if (S.tab === 'SWARM') return swarmHTML(page);
-    return agentKpisHTML(page) + agentCurveAttrHTML(page)
+    if (S.tab === 'POSITIONS') return banner + agentPositionsHTML(page) + fxLedgerHTML(page);
+    if (S.tab === 'BACKTEST') return banner + agentBacktestHTML(page);
+    if (S.tab === 'METHOD') return banner + agentMethodHTML(page);
+    if (S.tab === 'SWARM') return banner + swarmHTML(page);
+    return banner + agentKpisHTML(page) + agentCurveAttrHTML(page)
       + fxBookHTML(page) + chartSectionHTML(page);
   }
   /* equity book — micro accounts get the SMALL screens */
