@@ -71,12 +71,44 @@ def test_pair_findings_name_their_pair():
     found = verify.reconcile_fx("matt", state)
     assert [(f.code, f.detail["subject"]) for f in found] == [
         ("missing-position", "EURUSD")]
+
+
+def test_weight_mismatch_names_its_pair():
+    state = {"trades": [{"date": "2026-10-09", "pair": "EURUSD",
+                         "target_weight": 0.2}], "positions": {"EURUSD": 0.1}}
+    found = verify.reconcile_fx("matt", state)
+    assert [(f.code, f.detail["subject"]) for f in found] == [
+        ("weight-mismatch", "EURUSD")]
+
+
+def test_two_sleeves_with_the_same_problem_have_distinct_subjects():
+    """Without a subject both would share the key `book|code|` and the second
+    could never show as new."""
+    state = {"sleeves": {"ASX": {"currency": "AUD", "cash": 1.0, "positions": {}},
+                         "US": {"currency": "USD", "cash": 1.0, "positions": {}}},
+             "allocations": {"ASX": 0.5, "US": 0.5}, "initial_capital_base": 1000.0,
+             "fx_snapshot": {}, "trades": []}
+    found = verify.reconcile_equity("full", state)
+    assert sorted((f.code, f.detail["subject"]) for f in found) == [
+        ("no-fx-rate", "ASX"), ("no-fx-rate", "US")]
+
+
+@pytest.mark.parametrize("extra", [
+    {"last_flat_reason": "regime-off", "last_rebalance_date": "2026-10-01"},
+    {"last_flat_reason": "data-quality", "last_rebalance_date": "2026-10-01"},
+    {},                                           # never evaluated
+    {"last_rebalance_date": "2026-10-01"},        # evaluated, no reason recorded
+])
+def test_every_never_traded_grade_names_its_sleeve(extra):
+    sleeve = {"cash": 1.0, "currency": "AUD", **extra}
+    found = verify._never_traded_finding("full", "ASX", sleeve, 0.33)
+    assert found.detail["subject"] == "ASX"
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `python3 -m pytest tests/test_verify.py -k "name_their" -v`
-Expected: FAIL with `KeyError: 'subject'`.
+Run: `python3 -m pytest tests/test_verify.py -k "name_their or names_its or distinct_subjects" -v`
+Expected: FAIL with `KeyError: 'subject'` (or `TypeError` where a finding has no detail yet).
 
 - [ ] **Step 3: Add the subject at each constructor**
 
@@ -309,6 +341,10 @@ def _commit(src: Path, files: dict[str, str], msg: str) -> str:
 def remote(tmp_path):
     src = tmp_path / "remote"
     subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+    # Let the local "server" honour partial clones, as GitHub does — otherwise
+    # git silently makes a full clone and the on-demand path is never tested.
+    for key in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
+        subprocess.run(["git", "-C", str(src), "config", key, "true"], check=True)
     _commit(src, {"state/paper_state_full.json": '{"a": 1}',
                   "state/fx_books.db": "binary",
                   "state/archive/old/paper_state_full.json": '{"old": 1}',
@@ -365,12 +401,28 @@ def test_unreachable_remote_keeps_the_last_snapshot(remote, app, tmp_path):
 
 
 def test_sync_never_touches_the_checkout_it_runs_from(remote, app):
-    def status():
-        return subprocess.run(["git", "-C", str(REPO_ROOT), "status", "--porcelain"],
-                              capture_output=True, text=True, check=True).stdout
-    before = status()
+    """Working tree, index, every branch/tag and HEAD of the repo the tests run
+    in are unchanged — a fetch that lost its `-C` would move Matt's branches."""
+    def snapshot():
+        run = lambda *a: subprocess.run(["git", "-C", str(REPO_ROOT), *a],
+                                        capture_output=True, text=True, check=True).stdout
+        return (run("status", "--porcelain"),
+                run("for-each-ref", "--format=%(refname) %(objectname)"),
+                run("rev-parse", "HEAD"))
+    before = snapshot()
     sync.sync(app, remote=f"file://{remote}")
-    assert status() == before
+    assert snapshot() == before
+
+
+def test_clone_is_partial_and_skips_non_json_contents(remote, app):
+    """Only the JSON the snapshot needs is downloaded: README.md and the SQLite
+    file's contents stay missing from the private copy."""
+    sync.sync(app, remote=f"file://{remote}")
+    listed = subprocess.run(["git", "-C", str(app.repo), "rev-list", "--objects",
+                             "--missing=print", "--all"],
+                            capture_output=True, text=True, check=True).stdout
+    missing = [line for line in listed.splitlines() if line.startswith("?")]
+    assert len(missing) >= 2          # README.md and state/fx_books.db at least
 
 
 def test_last_result_describes_current_without_network(remote, app):
@@ -482,9 +534,15 @@ class SyncResult:
     error: str | None = None
 
 
+def _env() -> dict:
+    # Never wait on a credential prompt: the repo is public, and a hung prompt
+    # would freeze the launcher until the timeout.
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True,
-                          text=True, timeout=300).stdout.strip()
+                          text=True, timeout=300, env=_env()).stdout.strip()
 
 
 def current_sha(paths: AppPaths) -> str | None:
@@ -513,17 +571,22 @@ def _unpack(paths: AppPaths, sha: str, committed_at: str) -> None:
     dest = paths.snapshots / sha
     if dest.exists():
         return
-    raw = subprocess.run(["git", "-C", str(paths.repo), "archive", sha, "state"],
-                         check=True, capture_output=True, timeout=300).stdout
+    # Name the JSON files first, so only their contents are downloaded — not the
+    # committed SQLite stores (fx_books.db is ~7 MB) on every new commit.
+    listed = _git("-C", str(paths.repo), "ls-tree", "--name-only", sha, "state/")
+    names = [n for n in listed.splitlines() if n.endswith(".json") and n.count("/") == 1]
     tmp = paths.snapshots / f".tmp-{sha}"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
-    with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
-        for member in tar.getmembers():
-            parts = member.name.split("/")
-            if (member.isfile() and len(parts) == 2 and parts[0] == "state"
-                    and parts[1].endswith(".json")):
-                (tmp / parts[1]).write_bytes(tar.extractfile(member).read())
+    if names:                     # `git archive <sha> --` with no paths = everything
+        raw = subprocess.run(["git", "-C", str(paths.repo), "archive", sha, "--", *names],
+                             check=True, capture_output=True, timeout=300,
+                             env=_env()).stdout
+        with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+            for member in tar.getmembers():
+                parts = member.name.split("/")
+                if member.isfile() and len(parts) == 2 and parts[0] == "state":
+                    (tmp / parts[1]).write_bytes(tar.extractfile(member).read())
     (tmp / ".meta.json").write_text(json.dumps(
         {"v": 1, "sha": sha, "committed_at": committed_at}))
     os.replace(tmp, dest)
@@ -554,7 +617,10 @@ def sync(paths: AppPaths, remote: str = REPO_URL) -> SyncResult:
             shutil.rmtree(paths.repo, ignore_errors=True)   # a half-made clone
             _git("clone", "--bare", "--filter=blob:none", "--quiet", remote,
                  str(paths.repo))
-        _git("-C", str(paths.repo), "fetch", "--quiet", remote,
+        # Fetch through `origin` (the partial clone's promisor remote) so the
+        # blob filter applies and later on-demand downloads know where to go.
+        _git("-C", str(paths.repo), "remote", "set-url", "origin", remote)
+        _git("-C", str(paths.repo), "fetch", "--quiet", "origin",
              "+refs/heads/main:refs/heads/main")
         sha = _git("-C", str(paths.repo), "rev-parse", "refs/heads/main")
         committed_at = _git("-C", str(paths.repo), "show", "-s", "--format=%cI", sha)
@@ -571,7 +637,7 @@ def sync(paths: AppPaths, remote: str = REPO_URL) -> SyncResult:
 - [ ] **Step 4: Run the tests**
 
 Run: `python3 -m pytest tests/test_home_sync.py -v`
-Expected: all 7 PASS. (A `filtering not recognized by server` warning from git on the local remote is expected and harmless.)
+Expected: all 8 PASS. (A `filtering not recognized by server` warning would mean the fixture's `uploadpack.allowFilter` didn't take — `test_clone_is_partial_and_skips_non_json_contents` then fails, which is the point.)
 
 - [ ] **Step 5: Commit**
 
@@ -647,6 +713,12 @@ def test_latest_failed_run_is_failed():
     got = states([run(FX, utc(2026, 10, 9, 23, 40), conclusion="failure")],
                  utc(2026, 10, 10, 8, 0))
     assert got[FX] == "failed"
+
+
+def test_cancelled_latest_run_is_looked_past():
+    runs = [run(SHARES, utc(2026, 10, 9, 22, 51)),
+            run(SHARES, utc(2026, 10, 9, 23, 30), conclusion="cancelled")]
+    assert states(runs, utc(2026, 10, 10, 8, 0))[SHARES] == "ok"
 
 
 def test_in_progress_run_is_running():
@@ -786,8 +858,11 @@ def _last_slot(now: datetime, hour: int, minute: int) -> datetime:
 def classify(runs: list[dict], now: datetime) -> list[JobStatus]:
     out: list[JobStatus] = []
     for name, (label, cadence, hour, minute) in JOBS.items():
+        # A cancelled/skipped run never did the work (GitHub cancels a queued run
+        # when a newer one arrives in the same concurrency group) — look past it.
         mine = sorted((r for r in runs
-                       if r.get("name") == name and r.get("run_started_at")),
+                       if r.get("name") == name and r.get("run_started_at")
+                       and r.get("conclusion") not in ("cancelled", "skipped")),
                       key=_start, reverse=True)
         latest = mine[0] if mine else None
         last_at = _start(latest) if latest else None
@@ -798,8 +873,11 @@ def classify(runs: list[dict], now: datetime) -> list[JobStatus]:
                                  stamp, url))
             continue
         if latest and latest.get("conclusion") in _FAILED:
+            # A run can fail AFTER the books were saved (the Pages deploy or the
+            # final audit gate), so say "check", not "the books didn't update".
             out.append(JobStatus(name, label, "failed",
-                                 f"{label} failed at {_hm(last_at)}", stamp, url))
+                                 f"{label} run failed at {_hm(last_at)} — open it to "
+                                 "check whether the books still updated", stamp, url))
             continue
         if cadence == "daily":
             slot = _last_slot(now, hour, minute)
@@ -857,7 +935,7 @@ def check(now: datetime | None = None, fetch=None,
 - [ ] **Step 4: Run the tests**
 
 Run: `python3 -m pytest tests/test_home_jobs.py -v`
-Expected: all 11 PASS.
+Expected: all 12 PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1158,6 +1236,12 @@ def test_group_totals_equal_overview(books):
     ov = overview.build_overview()
     assert [(g["name"], g["aum"]) for g in out["groups"]] == \
            [(g["name"], g["aum"]) for g in ov["groups"]]
+    # Independent cross-check: the home screen's own period sum ("since you
+    # started") must equal what overview reports as worth minus put in.
+    core = next(g for g in out["groups"] if g["name"] == "CORE")
+    ov_core = next(g for g in ov["groups"] if g["name"] == "CORE")
+    assert core["periods"]["ALL"]["change"] == round(ov_core["aum"] - ov_core["initial"], 2)
+    assert core["periods"]["ALL"]["change"] == 2430.0     # 2,500 - 70
 
 
 def test_daily_book_period_changes(books):
@@ -2206,16 +2290,19 @@ def make_app(paths: AppPaths, first: sync.SyncResult, *, port: int = 0):
 
     started = datetime.now(timezone.utc)
     previous = seen.begin_session(paths.seen, started)
-    state = {"sync": first}
+    # The first-run baseline applies to the FIRST build only: a problem that
+    # appears after ⌘R in that same first session is genuinely new.
+    state = {"sync": first, "baseline_pending": previous is None}
     lock = threading.Lock()
 
     def build(sync_now: bool = False) -> dict:
         with lock:
             if sync_now:
                 state["sync"] = sync.sync(paths)
+            baseline, state["baseline_pending"] = state["baseline_pending"], False
             return home_api.build_home(
                 jobs=jobs.check(), seen_path=paths.seen,
-                session_start=started.isoformat(), first_run=previous is None,
+                session_start=started.isoformat(), first_run=baseline,
                 last_opened=previous, now=datetime.now(timezone.utc),
                 snapshot=asdict(state["sync"]))
 
