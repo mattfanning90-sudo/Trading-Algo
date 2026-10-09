@@ -130,3 +130,21 @@ def test_fetch_runs_verifies_https_with_a_real_certificate_list(monkeypatch):
     assert isinstance(seen["context"], ssl.SSLContext)
     assert seen["context"].verify_mode == ssl.CERT_REQUIRED
     assert seen["context"].cert_store_stats()["x509_ca"] > 0
+
+
+def test_truncated_github_response_is_unknown_not_a_crash(fresh_cache):
+    """IncompleteRead/BadStatusLine are HTTPException, not OSError: unhandled,
+    they turned /api/home into a 500 and blanked the whole screen."""
+    import http.client
+    def truncated():
+        raise http.client.IncompleteRead(b"partial")
+    out = jobs.check(now=utc(2026, 10, 10, 8, 0), fetch=truncated)
+    assert {j["state"] for j in out} == {"unknown"}
+
+
+def test_a_run_stuck_in_the_queue_does_not_mask_a_missed_job():
+    """Only a run actually in progress counts as running; a queued run that
+    never starts must not hide Monday's missed slot forever."""
+    runs = [run(SHARES, utc(2026, 10, 9, 22, 51)),
+            run(SHARES, utc(2026, 10, 12, 21, 40), conclusion=None, status="queued")]
+    assert states(runs, utc(2026, 10, 13, 6, 30))[SHARES] == "missed"

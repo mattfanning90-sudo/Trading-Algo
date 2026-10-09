@@ -15,6 +15,7 @@ A job GitHub can't tell us about is "unknown", never "ok".
 """
 from __future__ import annotations
 
+import http.client
 import json
 import ssl
 import time
@@ -69,17 +70,20 @@ def _last_slot(now: datetime, hour: int, minute: int) -> datetime:
 def classify(runs: list[dict], now: datetime) -> list[JobStatus]:
     out: list[JobStatus] = []
     for name, (label, cadence, hour, minute) in JOBS.items():
-        # A cancelled/skipped run never did the work (GitHub cancels a queued run
-        # when a newer one arrives in the same concurrency group) — look past it.
+        # Only runs that did (or are doing) the work count. A cancelled/skipped
+        # run never did it (GitHub cancels a queued run when a newer one arrives
+        # in the same concurrency group), and a queued/waiting run that never
+        # starts must not read as "running" forever and hide a missed slot.
         mine = sorted((r for r in runs
                        if r.get("name") == name and r.get("run_started_at")
+                       and r.get("status") in ("completed", "in_progress")
                        and r.get("conclusion") not in ("cancelled", "skipped")),
                       key=_start, reverse=True)
         latest = mine[0] if mine else None
         last_at = _start(latest) if latest else None
         stamp = last_at.isoformat() if last_at else None
         url = latest.get("html_url") if latest else None
-        if latest and latest.get("status") != "completed":
+        if latest and latest.get("status") == "in_progress":
             out.append(JobStatus(name, label, "running", f"{label} is running now",
                                  stamp, url))
             continue
@@ -147,7 +151,10 @@ def check(now: datetime | None = None, fetch=None,
     if not fresh:
         try:
             runs = fetch()
-        except (urllib.error.URLError, OSError, ValueError, KeyError):
+        # http.client.HTTPException (IncompleteRead, BadStatusLine) is not an
+        # OSError: a truncated reply must read "unknown", not blank the screen.
+        except (urllib.error.URLError, OSError, ValueError, KeyError,
+                http.client.HTTPException):
             since = _hm(_cache["ok_at"] or now)
             return [asdict(JobStatus(name, label, "unknown",
                                      f"{label}: GitHub status unknown since {since}"))

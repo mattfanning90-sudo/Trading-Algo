@@ -35,15 +35,20 @@ class SyncResult:
     error: str | None = None
 
 
+FETCH_TIMEOUT = 60      # a routine sync moves a few KB; the first clone keeps 300 s
+
+
 def _env() -> dict:
-    # Never wait on a credential prompt: the repo is public, and a hung prompt
-    # would freeze the launcher until the timeout.
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    # Never wait on a credential prompt (the repo is public), and abandon a
+    # stalled connection — a half-up VPN or captive portal — after 20 s below
+    # 1 KB/s, so a bad network shows "offline" instead of a frozen launch.
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0",
+            "GIT_HTTP_LOW_SPEED_LIMIT": "1000", "GIT_HTTP_LOW_SPEED_TIME": "20"}
 
 
-def _git(*args: str) -> str:
+def _git(*args: str, timeout: int = 300) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True,
-                          text=True, timeout=300, env=_env()).stdout.strip()
+                          text=True, timeout=timeout, env=_env()).stdout.strip()
 
 
 def current_sha(paths: AppPaths) -> str | None:
@@ -86,7 +91,8 @@ def _unpack(paths: AppPaths, sha: str, committed_at: str) -> None:
     if wanted:
         try:
             _git("-C", str(paths.repo), "fetch", "--quiet", "--no-tags",
-                 "--filter=blob:none", "origin", *(oid for _, oid in wanted))
+                 "--filter=blob:none", "origin", *(oid for _, oid in wanted),
+                 timeout=FETCH_TIMEOUT)
         except subprocess.CalledProcessError:
             pass       # e.g. a full clone already holds them; reading below decides
     tmp = paths.snapshots / f".tmp-{sha}"
@@ -131,7 +137,7 @@ def sync(paths: AppPaths, remote: str = REPO_URL) -> SyncResult:
         # blob filter applies and later on-demand downloads know where to go.
         _git("-C", str(paths.repo), "remote", "set-url", "origin", remote)
         _git("-C", str(paths.repo), "fetch", "--quiet", "origin",
-             "+refs/heads/main:refs/heads/main")
+             "+refs/heads/main:refs/heads/main", timeout=FETCH_TIMEOUT)
         sha = _git("-C", str(paths.repo), "rev-parse", "refs/heads/main")
         committed_at = _git("-C", str(paths.repo), "show", "-s", "--format=%cI", sha)
         _unpack(paths, sha, committed_at)

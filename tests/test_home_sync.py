@@ -118,3 +118,23 @@ def test_last_result_describes_current_without_network(remote, app):
     res = sync.last_result(app, "sync skipped")
     assert res.sha == first.sha and res.committed_at == first.committed_at
     assert res.error == "sync skipped" and not res.offline
+
+
+def test_a_stalled_network_gives_up_quickly(remote, app, monkeypatch):
+    """A half-up VPN or captive portal must not hold the launch for minutes:
+    git abandons a connection slower than 1 KB/s for 20 s, and fetch steps
+    time out within a minute."""
+    calls = []
+    real = subprocess.run
+
+    def spy(args, **kw):
+        calls.append((args, kw))
+        return real(args, **kw)
+    monkeypatch.setattr(sync.subprocess, "run", spy)
+    sync.sync(app, remote=f"file://{remote}")
+    net = [(a, kw) for a, kw in calls if "fetch" in a or "clone" in a]
+    assert net
+    for a, kw in net:
+        assert kw["env"]["GIT_HTTP_LOW_SPEED_LIMIT"] == "1000"
+        assert kw["env"]["GIT_HTTP_LOW_SPEED_TIME"] == "20"
+    assert all(kw["timeout"] <= 60 for a, kw in net if "fetch" in a)
