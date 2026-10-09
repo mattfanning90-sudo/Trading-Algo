@@ -603,3 +603,84 @@ def test_bridge_counts_a_fill_on_the_windows_last_day():
     state["trades"][0]["date"] = "2026-06-30"
     rep = attribution.reconcile(state, _bridge_predicted())
     assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)
+
+
+# --- a one-sleeve book: the identity cannot fail, so it must not certify ----
+def _one_sleeve(state: dict, bt: dict) -> tuple[dict, dict]:
+    """The same book and backtest with the ASX sleeve removed: US only."""
+    state = {**state, "allocations": {"US": 1.0},
+             "sleeves": {"US": state["sleeves"]["US"]},
+             "sleeve_history": [{"date": r["date"], "US": r["US"]}
+                                for r in state["sleeve_history"]],
+             "equity_history": [[r["date"], r["US"]]
+                                for r in state["sleeve_history"]]}
+    us = bt["sleeves"]["US"]
+    return state, {"equity": 50_000.0 * (1 + us["returns"]).cumprod(),
+                   "sleeves": {"US": us}}
+
+
+def test_a_one_sleeve_book_says_its_zero_residual_proves_nothing():
+    """With one sleeve there is no portfolio layer, and rebalance_timing is
+    that sleeve's whole remainder, so the residual is zero by construction —
+    `ultra` printed 'identity HOLDS' while its backtest sat behind a breaker
+    the book has switched off. The identity was not tested, so it must not
+    read as a pass, and the table must say so in plain words."""
+    state, bt = _one_sleeve(_paper_book(0.5, (0.10, -0.05)),
+                            _backtest((0.08, -0.05)))
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert rep["residual"] == pytest.approx(0.0, abs=1e-12)
+    assert rep["identity_ok"] is None
+    assert "one sleeve" in rep["notes"]["residual"]
+    text = attribution.format_bridge(rep, "AUD", rep["start_equity"])
+    assert "identity HOLDS" not in text
+    assert ("zero by construction for a one-sleeve book and is not evidence "
+            "the comparison is like for like") in text
+
+
+def test_a_multi_sleeve_or_unmeasured_book_keeps_its_verdict():
+    """The caveat belongs only where the identity cannot fail: two sleeves
+    leave a portfolio layer to test, and a one-sleeve book bridged without
+    the holdings lines leaves its whole gap in the residual."""
+    bt = _backtest((0.10, -0.05))
+    rep = attribution.reconcile(_paper_book(0.5, (0.10, -0.05)), bt["equity"],
+                                backtest=bt)
+    assert rep["identity_ok"] is True
+    assert "one-sleeve" not in attribution.format_bridge(rep, "AUD", 1.0)
+
+    state, bt1 = _one_sleeve(_paper_book(0.5, (0.10, -0.05)),
+                             _backtest((0.08, -0.05)))
+    rep = attribution.reconcile(state, bt1["equity"])
+    assert rep["identity_ok"] is False
+    assert "one-sleeve" not in attribution.format_bridge(rep, "AUD", 1.0)
+
+
+def test_an_unrated_fill_note_says_where_its_cost_went():
+    """A fill left out of the cost lines is still inside its sleeve's return.
+    With the holdings lines measured, rebalance_timing is each sleeve's gap
+    less every other line, so the cost lands THERE; without them, in the
+    residual. Here USD is missing from the snapshot but the US sleeve has an
+    all-cash close, which gives it its own rate, so the lines are measured."""
+    bt = _backtest((0.10, -0.05))
+    state = _paper_book(0.0, (0.10, -0.05), buy_on_d1=25_000.0)
+    del state["fx_snapshot"]["USD"]
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert rep["notes"]["exposure_gap"].startswith("a different invested")
+    assert "USD" in rep["notes"]["commission_floor"]
+    assert "rebalance_timing" in rep["notes"]["commission_floor"]
+    rep = attribution.reconcile(state, bt["equity"])
+    assert "residual" in rep["notes"]["commission_floor"]
+    assert "rebalance_timing" not in rep["notes"]["commission_floor"]
+
+
+@pytest.mark.parametrize("bad", [float("nan"), 0.0, -1.5])
+def test_a_nan_or_non_positive_rate_is_no_rate(bad):
+    """`fx_snapshot` must never carry a NaN (paper_trade skips it), but the
+    bridge must not trust that: a NaN, zero or negative rate is no rate, not
+    parity — the US$0.98 floor excess stays out of the line."""
+    state = _bridge_state(100_995.08)
+    state["fx_snapshot"]["USD"] = bad
+    state["trades"][0].update({"region": "US", "ticker": "AAPL",
+                               "commission": 1.0, "currency": "USD"})
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == 0.0
+    assert "USD" in rep["notes"]["commission_floor"]

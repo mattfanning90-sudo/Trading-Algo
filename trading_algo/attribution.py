@@ -453,12 +453,7 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                           "in rebalance_timing, or in residual without it",
     }
 
-    if unrated:
-        why = (f"{left_out} fill(s) in {', '.join(unrated)} left out — no rate "
-               "in fx_snapshot, and parity would be a guess")
-        for name in ("fill_convention", "commission_floor", "stamp_duty"):
-            notes[name] = "; ".join(filter(None, (notes.get(name), why)))
-
+    timed = one_sleeve = False          # rebalance_timing measured; one sleeve
     if backtest is not None:
         terms, why = _holdings_terms(paper_state, backtest, start, end)
         if why:
@@ -503,13 +498,32 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                     "the portfolio layer: the backtest trues its sleeves back to "
                     "target each month and pays the FX spread; the paper book "
                     "funds once and drifts")
+                timed, one_sleeve = True, len(terms) == 1
+                if one_sleeve:
+                    notes["residual"] = (
+                        "zero by construction — one sleeve, so there is no "
+                        "portfolio layer and rebalance_timing is the sleeve's "
+                        "whole remainder; it tests nothing")
+
+    if unrated:
+        # Inside its sleeve's return but in no line: the remainder holds it.
+        where = "rebalance_timing" if timed else "residual"
+        why = (f"{left_out} fill(s) in {', '.join(unrated)} left out — no rate "
+               f"in fx_snapshot, and parity would be a guess; their cost "
+               f"stays in {where}")
+        for name in ("fill_convention", "commission_floor", "stamp_duty"):
+            notes[name] = "; ".join(filter(None, (notes.get(name), why)))
 
     residual = backtest_return - sum(lines.values()) - paper_return
+    # A one-sleeve book with measured holdings cannot fail the identity, so
+    # None — "not tested" — rather than a pass that certifies nothing, or a
+    # failure that did not happen. None is falsy: a gate reads it as not ok.
     return {"start": str(start.date()), "end": str(end.date()),
             "start_equity": start_equity,
             "backtest_return": backtest_return, "paper_return": paper_return,
             "lines": lines, "notes": notes, "residual": residual,
-            "identity_ok": abs(residual) <= BRIDGE_TOLERANCE}
+            "identity_ok": (None if one_sleeve
+                            else abs(residual) <= BRIDGE_TOLERANCE)}
 
 
 def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> str:
@@ -521,8 +535,10 @@ def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> 
     and bps columns only. bps/yr divides by `metrics.years_between` (calendar
     time) and does not compound, so it sums down the table like the return
     column. The verdict line states whether the named lines close the identity
-    to BRIDGE_TOLERANCE, and every line's note follows it, so a reader can see
-    WHY a line is zero rather than assuming it is nothing.
+    to BRIDGE_TOLERANCE — or, for a one-sleeve book whose residual is zero by
+    construction (`identity_ok` None), that it was not tested — and every
+    line's note follows it, so a reader can see WHY a line is zero rather than
+    assuming it is nothing.
     """
     years = max(metrics.years_between(report["start"], report["end"]), 1e-9)
     rows = [("backtest return", report["backtest_return"])]
@@ -540,9 +556,14 @@ def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> 
         out.append(f"{name:<22}{val:>11.4%}{val / years * 1e4:>10.0f}"
                    + (f"{val * initial:>14,.0f}" if initial else ""))
     out.append("-" * width)
-    out.append(f"identity {'HOLDS' if report['identity_ok'] else 'DOES NOT HOLD'} "
+    ok = report["identity_ok"]
+    verdict = "NOT TESTED" if ok is None else "HOLDS" if ok else "DOES NOT HOLD"
+    out.append(f"identity {verdict} "
                f"— residual {report['residual'] * 1e4:+.2f}bps "
                f"(tolerance {BRIDGE_TOLERANCE * 1e4:.0f}bp)")
+    if ok is None:
+        out.append("  the residual is zero by construction for a one-sleeve book "
+                   "and is not evidence the comparison is like for like")
     for name, note in (report.get("notes") or {}).items():
         out.append(f"  note [{name}] {note}")
     return "\n".join(out)
