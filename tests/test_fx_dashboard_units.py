@@ -356,3 +356,64 @@ def test_period_metrics_slice_each_window():
     assert len({round(v, 4) for v in want.values()}) == 4    # windows distinguishable
     for key, ret in want.items():
         assert pm[key]["total_return"] == round(float(ret), 4), key
+
+
+# ---- Task 4d: ALL row and header tile are one computation on one series ----
+# Regression for the bug at 4337c96: `_curve_metrics` (the header tile) ran on
+# the FULL-PRECISION equity/bench series, but `_period_metrics` (the period
+# table) ran on the `*_curve` list already rounded to 4dp for the chart. A bar
+# whose TRUE return is tiny but positive (here +0.0000003, same order as the
+# brief's 100.00000 -> 100.00003) rounds to a flat 0.0 bar at 4dp and silently
+# drops out of the win-rate there, while the tile — reading the unrounded
+# series — counts it as a win. Engineered so the two sides can only agree if
+# they measure the SAME (full-precision) series.
+_TASK4D_RETS = (0.02, -0.015, 0.01, -0.02, 0.0, 0.0000003, 0.0, 0.015)
+
+
+def _task4d_curve(base=100.0):
+    vals = [base]
+    for r in _TASK4D_RETS:
+        vals.append(vals[-1] * (1 + r))
+    return vals
+
+
+def test_book_all_row_equals_header_tile_despite_rounding(isolated):
+    """The real code path: inject an equity history with the engineered tiny
+    bar and check the dashboard's own payload, not a hand-rolled copy of it."""
+    fx_book.init_account("matt", 5_000, "balanced")
+    vals = _task4d_curve(base=100.0)   # base is eqh[0][1] -> curve rebases to itself
+    dates = pd.date_range("2026-01-01", periods=len(vals), freq="D")
+    st = fx_book.load_state("matt")
+    st["equity_history"] = [[d.strftime("%Y-%m-%d"), v] for d, v in zip(dates, vals)]
+    st["equity"] = vals[-1]
+    fx_book.save_state("matt", st)
+    p = dashboard.build_payload("matt", synthetic=True)
+    assert p["book_metrics"]["win_rate"] == 0.5     # full precision: 4 of 8 bars win
+    assert p["book_period_metrics"]["0"] == p["book_metrics"]      # ALL == the tile
+
+
+def test_bench_period_metrics_must_use_full_precision_not_rounded_curve():
+    """Same bug, bench shape: dashboard.py builds `bench_curve` (rounded to
+    4dp, for the chart) and `bench_full` (unrounded) from one `bh_eq` series.
+    Proved at the helper level, mirroring exactly how dashboard.py constructs
+    both lists from `bh_eq` — monkeypatching the whole FX feed/panel pipeline
+    just to reach a real `bh_eq` would make this test fragile (and touch
+    unrelated code, e.g. `_signal_parts`' own `fx_data.closes` call) without
+    exercising anything this doesn't already cover."""
+    idx = pd.date_range("2026-01-01", periods=9, freq="D")
+    bh_eq = pd.Series(_task4d_curve(base=100.0), index=idx)
+
+    bench_curve = [{"time": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
+                   for d, v in bh_eq.items()]                     # 4dp, for the chart
+    bench_full = [{"time": d.strftime("%Y-%m-%d"), "value": float(v)}
+                  for d, v in bh_eq.items()]                      # full precision
+
+    tile = dashboard._curve_metrics([p["time"] for p in bench_full],
+                                     [p["value"] for p in bench_full])
+    # the bug: the ALL row measured off the ROUNDED display curve disagrees
+    # with the tile on the tiny bar's win/loss
+    buggy_all_row = dashboard._period_metrics(bench_curve, 252)["0"]
+    assert buggy_all_row["win_rate"] != tile["win_rate"]
+    # the fix: measured off the SAME full-precision series the tile uses
+    fixed_all_row = dashboard._period_metrics(bench_full, 252)["0"]
+    assert fixed_all_row == tile

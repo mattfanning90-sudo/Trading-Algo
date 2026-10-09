@@ -279,6 +279,11 @@ def _curve_metrics(dates, values, *, ppy: float | None = None) -> dict:
 def _period_metrics(curve: list, ppy: float) -> dict:
     """The metrics table for each period button, computed HERE.
 
+    `curve` must be the FULL-PRECISION series, never a copy rounded for
+    display — the "0" (ALL) entry has to be usable as the header tile itself,
+    and a bar whose true return is tiny but real (e.g. +0.00003%) would round
+    to exactly 0.0 on a 4dp display curve and silently drop out of a win-rate.
+
     The page used to recompute Sharpe, vol and drawdown in JavaScript on the
     sliced curve, with its own hardcoded cash rate and a POPULATION standard
     deviation — two different numbers for one curve. The slice happens in Python
@@ -907,14 +912,20 @@ def build_payload(account, synthetic=False, bars=180):
 
     eq = state.get("equity", state["initial_capital"])
     eqh = state.get("equity_history", [])
-    book_curve, book_metrics = [], {}
+    # book_curve/bench_curve below are rounded to 4dp FOR THE CHART ONLY.
+    # book_full/bench_full carry the same points at full precision and are
+    # what every displayed figure (header tile AND the period table) is
+    # measured from — a bar whose true return is tiny but real (e.g.
+    # +0.00003%) must not round to exactly 0.0 and silently drop out of a
+    # win-rate just because the chart rounds it.
+    book_curve, book_full = [], []
     if eqh:
         base = eqh[0][1] or state["initial_capital"]
         book_curve = [{"time": d, "value": round(100.0 * v / base, 4)} for d, v in eqh]
-        book_metrics = _curve_metrics([d for d, _ in eqh], [v for _, v in eqh])
+        book_full = [{"time": d, "value": float(v)} for d, v in eqh]
 
     closes_df = fx_data.closes(panel)
-    bench_curve, bench_metrics = [], {}
+    bench_curve, bench_full = [], []
     bench_ppy = 252
     if not closes_df.empty:
         # Honest day-one comparison: clip the buy-and-hold benchmark to the book's
@@ -937,8 +948,8 @@ def build_payload(account, synthetic=False, bars=180):
         bh_eq = 100.0 * bh_eq / bh_eq.iloc[0]            # start exactly at 100
         bench_curve = [{"time": d.strftime(tfmt), "value": round(float(v), 4)}
                        for d, v in bh_eq.items()]
-        bench_metrics = _curve_metrics([d.strftime(tfmt) for d in bh_eq.index],
-                                       list(bh_eq.values))
+        bench_full = [{"time": d.strftime(tfmt), "value": float(v)}
+                      for d, v in bh_eq.items()]
         try:
             # Annualisation for _period_metrics' bench column: the bench curve's
             # own bar spacing (252 on the daily panel, ~8766 on a true 60m one).
@@ -988,6 +999,17 @@ def build_payload(account, synthetic=False, bars=180):
         except Exception:
             pass
 
+    # The header tile and the ALL row of the 1W/1M/3M/ALL table describe the
+    # SAME curve, so they must be the SAME computation: _period_metrics runs
+    # once per curve on its full-precision series (book_full/bench_full, never
+    # the 4dp-rounded book_curve/bench_curve built for the chart), and the
+    # tile IS that result's "0" (ALL) entry — not a second call that could
+    # drift from it.
+    book_period_metrics = _period_metrics(book_full, book_ppy)
+    bench_period_metrics = _period_metrics(bench_full, bench_ppy)
+    book_metrics = book_period_metrics.get("0", {})
+    bench_metrics = bench_period_metrics.get("0", {})
+
     return {
         "account": account, "profile": state.get("profile", "balanced"),
         "currency": state.get("currency", "AUD"),
@@ -1001,8 +1023,8 @@ def build_payload(account, synthetic=False, bars=180):
                       for k, v in sorted(state.get("positions", {}).items(),
                                          key=lambda kv: -abs(kv[1]))],
         "book_curve": book_curve, "book_metrics": book_metrics,
-        "book_period_metrics": _period_metrics(book_curve, book_ppy),
-        "bench_period_metrics": _period_metrics(bench_curve, bench_ppy),
+        "book_period_metrics": book_period_metrics,
+        "bench_period_metrics": bench_period_metrics,
         "book_ppy": book_ppy, "bench_ppy": bench_ppy, "signal_note": signal_note,
         "bench_curve": bench_curve, "bench_metrics": bench_metrics,
         "transactions": txn,
