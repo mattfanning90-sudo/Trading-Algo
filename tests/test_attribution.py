@@ -1,6 +1,7 @@
 """Backlog F3: live-vs-backtest tracking + attribution."""
 import numpy as np
 import pandas as pd
+import pytest
 
 from trading_algo import attribution, metrics
 
@@ -113,3 +114,128 @@ def test_tracking_error_honours_an_explicit_convention():
 def test_no_second_annualisation_constant_in_attribution():
     """One definition of 252 in the repo, and it is metrics.ANNUALIZATION."""
     assert not hasattr(attribution, "TRADING_DAYS")
+
+
+def _bridge_state(end_equity: float) -> dict:
+    """A book whose ONLY divergence from the backtest is the commission floor.
+
+    One ASX buy: 10 shares at 10.00 = 100 notional. The backtest charges
+    commission_bps (8bps) = 0.08; the paper book paid the A$5 min_commission
+    floor. The excess is 4.92 AUD, i.e. 4.92e-5 of a 100,000 AUD book.
+    decision == fill, so there is no implementation shortfall.
+    """
+    return {
+        "initial_capital_base": 100_000.0,
+        "base_currency": "AUD",
+        "fx_snapshot": {"AUD": 1.0},
+        "equity_history": [["2026-01-05", 100_000.0], ["2026-06-30", end_equity]],
+        "trades": [{"date": "2026-02-02", "region": "ASX", "ticker": "BHP.AX",
+                    "side": "BUY", "shares": 10, "decision": 10.0, "fill": 10.0,
+                    "commission": 5.0, "stamp_duty": 0.0, "currency": "AUD"}],
+    }
+
+
+def _bridge_predicted() -> pd.Series:
+    return pd.Series([100_000.0, 101_000.0],
+                     index=pd.to_datetime(["2026-01-05", "2026-06-30"]))
+
+
+def test_bridge_reports_exactly_the_named_lines():
+    rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
+    assert tuple(rep["lines"]) == attribution.BRIDGE_LINES
+    assert rep["start"] == "2026-01-05" and rep["end"] == "2026-06-30"
+    # dividends and cash interest are not credited to the paper book yet; they
+    # must read zero AND say why, rather than silently absorbing the divergence.
+    assert rep["lines"]["dividends"] == 0.0
+    assert rep["lines"]["cash_interest"] == 0.0
+    assert rep["notes"]["dividends"] and rep["notes"]["cash_interest"]
+
+
+def test_bridge_identity_holds_when_every_cause_is_named():
+    """backtest_return - sum(lines) - paper_return == residual, and the residual
+    is inside tolerance when the only divergence is an explained one."""
+    rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)
+    identity = (rep["backtest_return"] - sum(rep["lines"].values())
+                - rep["paper_return"])
+    assert rep["residual"] == pytest.approx(identity, abs=1e-15)
+    assert abs(rep["residual"]) <= attribution.BRIDGE_TOLERANCE
+    assert rep["identity_ok"] is True
+
+
+def test_bridge_puts_an_unexplained_gap_in_the_residual():
+    """A divergence no line accounts for must land in residual and fail the
+    identity — never be absorbed into a line to make the table balance."""
+    rep = attribution.reconcile(_bridge_state(100_500.0), _bridge_predicted())
+    assert rep["identity_ok"] is False
+    assert rep["residual"] == pytest.approx(0.01 - 4.92e-5 - 0.005, abs=1e-12)
+
+
+def test_bridge_counts_the_floor_excess_only_above_the_modelled_bps():
+    """A trade large enough that commission_bps exceeds the floor contributes
+    nothing: there is no divergence from the backtest's model to explain."""
+    state = _bridge_state(101_000.0)
+    state["trades"][0].update({"shares": 100_000, "fill": 10.0,
+                               "commission": 800.0})   # 1,000,000 * 8bps
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == 0.0
+    # ...and the zero is the comparison, not a skipped trade: A$5 over the
+    # modelled 800 on the same fill is counted.
+    state["trades"][0]["commission"] = 805.0
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == pytest.approx(5e-5, abs=1e-12)
+
+
+def test_bridge_refuses_a_window_it_cannot_walk():
+    state = _bridge_state(100_995.08)
+    apart = pd.Series([100_000.0, 101_000.0],
+                      index=pd.to_datetime(["2027-01-05", "2027-06-30"]))
+    with pytest.raises(ValueError, match="common"):
+        attribution.reconcile(state, apart)
+    # A freshly initialised book has an EMPTY equity_history: refuse it too,
+    # rather than report a bridge over nothing.
+    with pytest.raises(ValueError, match="common"):
+        attribution.reconcile({**state, "equity_history": []}, _bridge_predicted())
+
+
+def test_bridge_nets_the_slippage_both_engines_charge():
+    """The paper sim fills at decision * (1 + slippage_bps), exactly the slippage
+    the backtest's round_trip_cost_rate charges. Both engines pay it, so
+    fill_convention reads zero and the paid amount goes in its note; only a
+    fill away from the modelled slippage puts one engine ahead of the other."""
+    state = _bridge_state(100_995.08)
+    state["trades"][0]["fill"] = 10.01          # ASX models 10bps a side
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["fill_convention"] == pytest.approx(0.0, abs=1e-12)
+    assert "0.10 AUD" in rep["notes"]["fill_convention"]
+    # A live fill 5bps worse than modelled: 10 shares * 10.00 * 5bps = A$0.05.
+    state["trades"][0]["fill"] = 10.015
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["fill_convention"] == pytest.approx(0.05 / 100_000, abs=1e-12)
+
+
+def test_bridge_leaves_out_trades_already_inside_the_start_equity():
+    """equity_history is stamped AFTER a run's trades, so a trade dated on the
+    window's first day is already inside the start equity. Counting its cost
+    again would double it — and on a real book that day is the build-out."""
+    state = _bridge_state(100_995.08)
+    state["trades"][0]["date"] = "2026-01-05"
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == 0.0
+
+
+def test_bridge_converts_local_costs_at_the_books_fx_snapshot():
+    """A FTSE buy pays its floor and stamp duty in GBP; the bridge reports both
+    in the base currency via the snapshot's base-per-local multiplier. Stamp
+    duty is charged by both engines, so its line is zero and its note says
+    what was paid."""
+    state = _bridge_state(100_995.08)
+    state["fx_snapshot"] = {"AUD": 1.0, "GBP": 2.0}
+    state["trades"][0].update({"region": "FTSE", "ticker": "SHEL.L",
+                               "commission": 1.0, "stamp_duty": 0.5,
+                               "currency": "GBP"})
+    rep = attribution.reconcile(state, _bridge_predicted())
+    # FTSE: £1 floor vs 5bps of £100 = £0.05 modelled -> £0.95 = A$1.90.
+    assert rep["lines"]["commission_floor"] == pytest.approx(1.9e-5, abs=1e-12)
+    assert rep["lines"]["stamp_duty"] == 0.0
+    assert "1.00 AUD" in rep["notes"]["stamp_duty"]
