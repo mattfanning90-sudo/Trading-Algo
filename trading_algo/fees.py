@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
+
 from .regions import Region
 
 
@@ -47,24 +49,37 @@ def round_trip_cost_rate(region: Region) -> float:
 
 def turnover_cost(region: Region, turnover: float, buy_turnover: float,
                   impact: float = 0.0, *,
-                  nav: float | None = None, n_names: int = 0) -> float:
+                  nav: float | None = None,
+                  orders: pd.Series | None = None) -> float:
     """The ONE backtest cost entrypoint (refactor R1): commission + slippage on
     turnover, asymmetric stamp duty on buys, plus an optional market-impact term
     (fraction of NAV) from F6.
 
-    Given `nav` and `n_names` — the book's equity and how many names the
-    rebalance actually traded — commission is charged PER ORDER through
-    `commission()`, which applies `region.min_commission`. Without them the bps
-    rate is used on its own, which is the prior model exactly, so any caller
-    that cannot size an order keeps the number it always got.
+    Given `nav` (the book's equity) and `orders` (the per-name |Δw| of every
+    name whose weight actually changed this rebalance, nonzero only), commission
+    is the EXACT per-order charge — Σ_i commission(region, |Δw_i| · nav) / nav,
+    one call to `commission()` (which applies `region.min_commission`) per order
+    — not an average. An uneven rebalance (one order too small for bps to clear
+    the floor, one large enough it doesn't) is charged floor + bps·large, never
+    2·max(bps·avg, floor): averaging a tiny order's floor into a big order's bps
+    would under-charge it (M-1). Without `nav`/`orders` (every pre-existing
+    caller) the bps rate is used on its own, which is the prior model exactly,
+    so any caller that cannot size the individual orders keeps the number it
+    always got.
 
     Charging bps alone (July finding H3) modelled a small book as trading almost
-    free while the paper engine paid the floor on every order.
+    free. The paper engine ALSO skips "dust" trims below a notional floor
+    (`paper_trade.py`) — that is a HOLDINGS difference between the two engines
+    (the paper book is left still holding a sliver the backtest would have
+    sold), already accounted for by the reconciliation bridge's holdings lines.
+    It is not a cost to imitate here: every entry in `orders` is a trade the
+    backtest itself actually placed.
     """
     duty = buy_turnover * region.stamp_duty_bps / 1e4
-    if nav and n_names > 0:
-        per_name_notional = turnover * float(nav) / n_names
-        commission_frac = n_names * commission(region, per_name_notional) / float(nav)
+    if nav and orders is not None and len(orders) > 0:
+        commission_frac = sum(
+            commission(region, abs(float(dw)) * float(nav)) for dw in orders
+        ) / float(nav)
         return (turnover * region.slippage_bps / 1e4
                 + commission_frac + duty + impact)
     return turnover * round_trip_cost_rate(region) + duty + impact
