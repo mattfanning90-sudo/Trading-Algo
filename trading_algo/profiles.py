@@ -30,6 +30,10 @@ from . import config as cfg
 # Reporting groups. CORE is the headline AUM; everything else is a side total.
 CORE = "CORE"
 EXPERIMENTAL = "EXPERIMENTAL"
+# The FX books. Not a BookProfile (those are equity presets) — a reporting group
+# they belong to by KIND, so the FX side gets the same ring-fence the geared and
+# market-neutral equity books already have.
+FX = "FX"
 
 
 @dataclass(frozen=True)

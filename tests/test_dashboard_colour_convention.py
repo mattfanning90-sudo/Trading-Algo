@@ -37,7 +37,7 @@ import re
 import pytest
 
 import trading_algo.paper_trade as pt
-from trading_algo import dashboard
+from trading_algo import dashboard, profiles
 from trading_algo.dashboard import api, fx_api, overview
 from trading_algo.forex import fx_book
 
@@ -357,7 +357,11 @@ def test_an_unmeasurable_sleeve_month_says_so_instead_of_reporting_flat():
 def test_an_unmeasurable_book_is_excluded_from_the_day_total_and_counted(books):
     """`nan > -1` is False, so FULL — 77% of core AUM — contributed EXACTLY ZERO
     to a headline that still read as a complete day P&L, and `nan < 0` is False
-    so it counted as not-red."""
+    so it counted as not-red.
+
+    Both fixture books here are FX (written via `fx_book._state_file`), so they
+    land in the FX reporting group, not CORE — read the group total, not the
+    (now empty) CORE headline."""
     good = {"account": "aa", "currency": "AUD", "profile": "balanced", "bar": "1d",
             "initial_capital": 5000.0, "equity": 4950.0, "positions": {},
             "last_close": {}, "peak_equity": 5000.0, "trades": [], "decisions": {},
@@ -376,7 +380,7 @@ def test_an_unmeasurable_book_is_excluded_from_the_day_total_and_counted(books):
     assert cards["BB"]["day"] is None, "unmeasurable must not be reported as flat"
     assert all(math.isfinite(v) for v in cards["BB"]["spark"])
 
-    t = ov["totals"]
+    t = next(g for g in ov["groups"] if g["name"] == profiles.FX)
     assert (t["books"], t["day_books"], t["books_red"]) == (2, 1, 1)
     assert t["day_aud"] == pytest.approx(4950.0 * -0.01 / 0.99, abs=0.01)
 

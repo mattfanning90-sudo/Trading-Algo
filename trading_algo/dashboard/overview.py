@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from .. import config as cfg
 from .. import paper_trade
+from .. import profiles
 from ..forex import fx_book
 from . import registry
 
@@ -79,8 +80,12 @@ def _card(entry: dict, state: dict) -> dict | None:
         status, tone = "CLEAR", "ok"
 
     # Reporting group: CORE books sum into the headline AUM; any other group
-    # (e.g. EXPERIMENTAL) is broken out into its own separate total.
-    group = str(state.get("group") or "CORE").upper() if kind == "equity" else "CORE"
+    # (EXPERIMENTAL, FX) is broken out into its own separate total. FX books
+    # used to be forced to CORE, which is how four books back-testing at Sharpe
+    # −2 to −6 ended up inside the number the owner watches. They keep a total;
+    # it is not that one.
+    group = (str(state.get("group") or profiles.CORE).upper() if kind == "equity"
+             else profiles.FX)
 
     # The card colours this line by `ret` — equity against INITIAL CAPITAL,
     # since inception — so the line has to DRAW that measurement. hist[-40:] was

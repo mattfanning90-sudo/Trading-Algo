@@ -109,11 +109,20 @@ def test_fx_snapshot_contract(books):
 # overview
 # ---------------------------------------------------------------------------
 def test_overview_totals(books):
+    """FULL is the only CORE book here; MATT is FX and reports under its own
+    group, excluded from the headline — see test_dashboard_overview.py for the
+    dedicated coverage of that split."""
     ov = overview.build_overview()
-    assert ov["totals"]["books"] == 2
-    aum = sum(c["equity"] for c in ov["accounts"])
-    assert ov["totals"]["aum"] == pytest.approx(aum)
-    assert sum(c["share"] for c in ov["accounts"]) == pytest.approx(1.0, abs=0.01)
+    full = next(c for c in ov["accounts"] if c["key"] == "FULL")
+    matt = next(c for c in ov["accounts"] if c["key"] == "MATT")
+    assert full["group"] == "CORE" and matt["group"] == "FX"
+    assert ov["totals"]["books"] == 1
+    assert ov["totals"]["aum"] == pytest.approx(full["equity"])
+    fx_group = next(g for g in ov["groups"] if g["name"] == "FX")
+    assert fx_group["aum"] == pytest.approx(matt["equity"])
+    # share is computed WITHIN each (single-book) group here, so both are 1.0
+    assert full["share"] == pytest.approx(1.0, abs=0.01)
+    assert matt["share"] == pytest.approx(1.0, abs=0.01)
     keys = {c["key"] for c in ov["accounts"]}
     assert keys == {"FULL", "MATT"}
 
