@@ -71,6 +71,15 @@ def _card(entry: dict, state: dict) -> dict | None:
            if len(hist) > 1 and hist[-2][1] else None)
     off_peak = equity / peak - 1.0 if peak else 0.0
     halted = bool(state.get("risk_halted", False))
+    # The breaker's own level, read from the engine that applies it — never a
+    # second copy of the rule. None = this book has no breaker (e.g. `ultra`).
+    if kind == "equity":
+        breaker = paper_trade._account_drawdown_stop(state)
+    else:
+        try:
+            breaker = fx_book._params(state).max_drawdown_stop
+        except KeyError:                 # an unknown profile name
+            breaker = None
     micro = entry.get("micro", False)
 
     if halted:
@@ -111,6 +120,8 @@ def _card(entry: dict, state: dict) -> dict | None:
         "spark": ([initial] + pts) if initial and hist else pts,
         "status": status, "status_tone": tone,
         "halted": halted,
+        "off_peak": round(off_peak, 6),
+        "breaker": breaker,
         "n_line": n_line,
     }
 
