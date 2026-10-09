@@ -48,14 +48,14 @@ def account(tmp_path, monkeypatch):
     return "test"
 
 
-def test_init_refuses_to_overwrite_a_live_book(account):
+def test_init_refuses_to_overwrite_a_live_book(account, paper_cycle):
     """--init builds a FRESH book with an empty trade ledger, and every P&L
     number is derived from that ledger — so re-running the documented
     `--init` line on a funded account would destroy the only record of it.
     forex.fx_book.init_account has always guarded this; the equity side must too.
     """
     pt.init_account(account, capital=100_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)                     # decide, then fill
     before = pt.load_state(account)
     assert before["trades"], "need a book with history to prove it is protected"
 
@@ -81,9 +81,9 @@ def test_init_splits_into_sleeves(account):
         assert s["positions"] == {}
 
 
-def test_daily_run_marks_and_persists(account):
+def test_daily_run_marks_and_persists(account, paper_cycle):
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
 
     assert state["equity_history"], "equity history should be recorded"
@@ -96,16 +96,16 @@ def test_daily_run_marks_and_persists(account):
             assert isinstance(shares, int)
 
 
-def test_state_is_json_roundtrippable(account):
+def test_state_is_json_roundtrippable(account, paper_cycle):
     pt.init_account(account, capital=100_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     raw = json.loads(open(pt._state_file(account)).read())
     assert raw["base_currency"] == cfg.BASE_CURRENCY
 
 
-def test_force_rebalance_resets_months(account):
+def test_force_rebalance_resets_months(account, paper_cycle):
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     for s in state["sleeves"].values():
         s["last_rebalance_month"] = None
@@ -114,9 +114,9 @@ def test_force_rebalance_resets_months(account):
     pt.run_daily(account, synthetic=True)
 
 
-def test_cost_basis_derived_from_fills(account):
+def test_cost_basis_derived_from_fills(account, paper_cycle):
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     # The stored fields stay at their empty defaults — they are not the source of
     # truth. Basis and realised P&L are derived from the fills ledger.
@@ -128,14 +128,14 @@ def test_cost_basis_derived_from_fills(account):
             assert basis.get((k, t), 0) > 0
 
 
-def test_single_region_account(account):
+def test_single_region_account(account, paper_cycle):
     """A US-only account holds just one sleeve and runs cleanly."""
     pt.init_account(account, capital=1_000, synthetic=True, allocations={"US": 1.0})
     state = pt.load_state(account)
     assert list(state["sleeves"]) == ["US"]
     assert list(state["allocations"]) == ["US"]
     assert abs(state["allocations"]["US"] - 1.0) < 1e-9
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     assert state["equity_history"][-1][1] > 0
     # only USD trades, never ASX/FTSE
@@ -147,33 +147,34 @@ def test_init_rejects_unknown_region(account):
         pt.init_account(account, capital=1000, synthetic=True, allocations={"XYZ": 1.0})
 
 
-def test_min_size_gate_holds_cash(account):
+def test_min_size_gate_holds_cash(account, paper_cycle):
     # split three ways a tiny account sits below the viability floor → no trades
     pt.init_account(account, capital=300, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     assert len(state["trades"]) == 0
     assert all(not s["positions"] for s in state["sleeves"].values())
 
 
-def test_drawdown_halt_liquidates(account):
+def test_drawdown_halt_liquidates(account, paper_cycle):
+    """A halted book stages a liquidation and fills it at the NEXT close — a
+    breaker decides at a close like anything else and cannot fill at that one."""
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)            # opens positions
+    paper_cycle(account)                             # opens positions
     state = pt.load_state(account)
     state["risk_halted"] = True                      # force the breaker on
     state["halt_cooldown"] = 5
     pt.save_state(account, state)
-    pt.run_daily(account, synthetic=True)
-    state = pt.load_state(account)
+    state = paper_cycle(account)                     # stage, then fill the exit
     assert all(not s["positions"] for s in state["sleeves"].values())  # all cash
     assert state["risk_halted"] is True              # still halted (cooldown remains)
 
 
-def test_cooldown_counts_market_days_not_runs(account):
+def test_cooldown_counts_market_days_not_runs(account, paper_cycle):
     """The engine fires several times a day; the drawdown cooldown must decrement
     per distinct report date, not per run."""
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     state["risk_halted"] = True
     state["halt_cooldown"] = 3
@@ -187,10 +188,10 @@ def test_cooldown_counts_market_days_not_runs(account):
     assert state["risk_halted"] is True
 
 
-def test_micro_account_does_not_crash(account):
+def test_micro_account_does_not_crash(account, paper_cycle):
     """A tiny account can't afford the full book — must handle gracefully."""
     pt.init_account(account, capital=100, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     assert state["equity_history"][-1][1] >= 0
 
@@ -243,11 +244,11 @@ _KNOWN_STATUSES = {
 }
 
 
-def test_every_sleeve_records_a_status(account):
+def test_every_sleeve_records_a_status(account, paper_cycle):
     """Each run stamps every sleeve with a machine-readable reason for its state,
     so an idle sleeve (e.g. ASX sitting in cash) is diagnosable, not silent."""
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     for k, s in state["sleeves"].items():
         st = s.get("last_status")
@@ -300,11 +301,11 @@ def test_fx_snapshot_carries_forward_a_failed_rate(monkeypatch):
     assert snap["GBP"] == snap["GBP"]             # the healthy pair is unaffected
 
 
-def test_failed_fx_rate_never_poisons_equity(account, monkeypatch):
+def test_failed_fx_rate_never_poisons_equity(account, monkeypatch, paper_cycle):
     """End-to-end: a transient USD-pair failure must never write a NaN FX rate
     or NaN equity into state — the regression behind the `full` book's NaN AUM."""
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)                 # establishes a good snapshot
+    paper_cycle(account)                 # establishes a good snapshot
     good_usd = pt.load_state(account)["fx_snapshot"]["USD"]
     assert good_usd == good_usd                            # sanity: not NaN
 
@@ -321,7 +322,7 @@ def test_failed_fx_rate_never_poisons_equity(account, monkeypatch):
         assert eq == eq, f"NaN equity persisted on {date}"
 
 
-def test_unfunded_region_paper_init_succeeds(account):
+def test_unfunded_region_paper_init_succeeds(account, paper_cycle):
     """An account funded on a registered-but-UNFUNDED region (TSX/CAD — absent
     from cfg.ALLOCATIONS by design) must open cleanly. fx_snapshot has to size
     its currency set off THIS account's regions, not the global ALLOCATIONS,
@@ -332,12 +333,12 @@ def test_unfunded_region_paper_init_succeeds(account):
     assert state["sleeves"]["TSX"]["currency"] == "CAD"
     assert state["sleeves"]["TSX"]["cash"] > 0             # funded in local CAD
     assert "CAD" in state["fx_snapshot"]                   # its rate was snapshotted
-    pt.run_daily(account, synthetic=True)                 # a full daily cycle runs
+    paper_cycle(account)                 # a full daily cycle runs
     state = pt.load_state(account)
     assert state["equity_history"][-1][1] > 0
 
 
-def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatch):
+def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatch, paper_cycle):
     """A failed pair with NO prior good rate must not (a) persist a NaN FX rate,
     nor (b) bypass the hold-cash path via `NaN < MIN_VIABLE` — the sleeve cannot
     be valued, so it holds cash and never trades on a NaN mark."""
@@ -349,7 +350,7 @@ def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatc
     pt.save_state(account, state)
 
     _break_one_pair(monkeypatch, "USD")                   # USD 403s, nothing to carry
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
 
     # (a) no NaN rate is ever persisted
@@ -364,13 +365,13 @@ def test_failed_pair_no_prior_holds_cash_and_persists_no_nan(account, monkeypatc
         assert eq == eq, f"NaN equity persisted on {d}"
 
 
-def test_post_halt_re_entry_follows_cooldown_not_calendar(account):
+def test_post_halt_re_entry_follows_cooldown_not_calendar(account, paper_cycle):
     """When the drawdown cooldown clears, the sleeve must be able to re-enter on
     the next run — NOT be stuck flat until the next calendar month. The halted
     branch must not stamp last_rebalance_month=this_month (which would calendar-
     block re-entry for the rest of the month)."""
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     month = state["equity_history"][-1][0][:7]
 
@@ -407,7 +408,7 @@ def test_staleness_gate_flags_old_bars_but_not_weekends():
     assert pt._is_stale(region, old, now=mon) is True
 
 
-def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch):
+def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch, paper_cycle):
     """A sleeve whose holdings have no price must not be valued at cash-only.
 
     This is what forced the live `full` book into liquidation on 2026-08-27: the
@@ -421,7 +422,7 @@ def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch):
     mark the valuation incomplete, leave the breaker and history untouched.
     """
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)             # open positions
+    paper_cycle(account)             # open positions
     before = pt.load_state(account)
     assert any(s["positions"] for s in before["sleeves"].values()), "need holdings"
     equity_rows = len(before["equity_history"])
@@ -437,7 +438,7 @@ def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch):
         return prices, index_px
 
     monkeypatch.setattr(pt, "latest_region_data", blank_last_row)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
 
     after = pt.load_state(account)
     assert after["risk_halted"] is False, "breaker must not trip on an unpriced book"
@@ -445,7 +446,7 @@ def test_unpriced_holdings_never_reach_the_breaker(account, monkeypatch):
     assert len(after["trades"]) == trades, "must not trade off unpriced holdings"
 
 
-def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch):
+def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch, paper_cycle):
     """A single permanently-unpriced name must not sit the sleeve out forever.
 
     Guards the fix above from over-reaching: a delisted holding never prices
@@ -454,7 +455,7 @@ def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch):
     outage worth sitting out.
     """
     pt.init_account(account, capital=300_000, synthetic=True)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
     state = pt.load_state(account)
     region = next(k for k, s in state["sleeves"].items() if s["positions"])
     dead = sorted(state["sleeves"][region]["positions"])[0]
@@ -469,7 +470,7 @@ def test_one_dead_holding_does_not_freeze_the_sleeve(account, monkeypatch):
         return prices, index_px
 
     monkeypatch.setattr(pt, "latest_region_data", one_dead_name)
-    pt.run_daily(account, synthetic=True)
+    paper_cycle(account)
 
     after = pt.load_state(account)
     assert after["sleeves"][region]["last_status"]["status"] != "unpriced", \
@@ -729,3 +730,131 @@ def test_reconcile_status_hands_the_bridge_the_backtests_holdings(monkeypatch):
     monkeypatch.setattr(attribution, "reconcile", spy)
     pt.reconcile_status("t", synthetic=True)
     assert "equity" in (got.get("backtest") or {})
+
+
+# --- next-day-close fills: a decision is staged, then filled a session later --
+def test_a_decision_fills_on_the_next_session_not_its_own(account, paper_cycle):
+    """The book decides at the latest close and fills at the NEXT one.
+
+    Filling at the close that produced the signal is not executable by any real
+    broker, and it is what made the paper book's fills disagree with the
+    backtest's staged targets.
+    """
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+
+    state = paper_cycle(account, sessions=1)          # session 1: decide only
+    sleeve = state["sleeves"]["US"]
+    assert state["trades"] == [], "a target must not fill at the close that produced it"
+    assert not sleeve["positions"]
+    pending = sleeve.get("pending_target")
+    assert pending and pending["weights"], "the target must be staged for the next close"
+    decided_on = pending["date"]
+
+    state = paper_cycle(account, sessions=1)          # session 2: fill
+    sleeve = state["sleeves"]["US"]
+    assert state["trades"], "the staged target must fill on the next session"
+    assert "pending_target" not in sleeve
+    assert sleeve["positions"]
+    for t in state["trades"]:
+        assert t["date"] > decided_on, (
+            f"{t['ticker']} filled on {t['date']}, the bar its own signal used")
+    assert sleeve["last_rebalance_date"] > decided_on
+
+
+def test_a_second_run_on_the_same_bar_does_not_fill(account, paper_cycle):
+    """The engine fires up to three times a day, once per regional close. A
+    pending target waits for a new SESSION, not merely for the next run."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    paper_cycle(account, sessions=1)
+    pt.run_daily(account, synthetic=True)             # same bar, second pass
+    state = pt.load_state(account)
+    assert state["trades"] == []
+    assert state["sleeves"]["US"].get("pending_target")
+
+
+def test_a_breaker_trip_liquidates_at_the_next_close(account, paper_cycle):
+    """The breaker decides at a close like a rebalance does, so its exit fills
+    at the NEXT session's close — `backtest.py` stages CASH the same way. It
+    must not fill at the close that tripped it, and must not wait an extra
+    session (or for the cooldown) either."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    state = paper_cycle(account)                      # open the book
+    assert state["sleeves"]["US"]["positions"]
+    state["peak_equity_base"] = 10 * state["initial_capital_base"]   # a -90% book
+    pt.save_state(account, state)
+
+    state = paper_cycle(account, sessions=1)          # this close trips the breaker
+    assert state["risk_halted"] is True
+    tripped_on = state["equity_history"][-1][0]
+    assert state["sleeves"]["US"]["positions"], "no exit at the tripping close"
+    opened = len(state["trades"])
+
+    pt.run_daily(account, synthetic=True)             # same bar again: still no exit
+    assert len(pt.load_state(account)["trades"]) == opened
+
+    state = paper_cycle(account, sessions=1)          # the next close: exit
+    assert not state["sleeves"]["US"]["positions"]
+    exits = state["trades"][opened:]
+    assert exits and all(t["side"] == "SELL" and t["date"] > tripped_on
+                         for t in exits)
+    assert "pending_target" not in state["sleeves"]["US"]
+    assert state["risk_halted"] is True               # the cooldown is still running
+
+
+def test_a_book_saved_before_staging_existed_loads_and_runs(account, paper_cycle):
+    """Every live book on disk predates `pending_target`. A missing key means
+    nothing is pending: the book loads, validates and runs as it always did."""
+    us = get_region("US")
+    a, b = us.universe[:2]
+    legacy = {                                        # the shape d490a15 wrote
+        "account": account, "schema_version": 2, "base_currency": "AUD",
+        "initial_capital_base": 10_000.0, "allocations": {"US": 1.0},
+        "sleeves": {"US": {
+            "currency": "USD", "cash": 50_000.0, "positions": {a: 10, b: 20},
+            "cost_basis": {}, "realized_pnl": 0.0,
+            "last_rebalance_month": "2025-12", "last_rebalance_date": "2025-12-01",
+            "last_status": {"date": "2025-12-19", "status": "held",
+                            "positions": 2, "flat_since": None}}},
+        "trades": [], "equity_history": [["2025-12-19", 10_000.0]],
+        "sleeve_history": [], "fx_snapshot": {"USD": 1.5},
+        "group": "CORE", "param_overrides": {}, "peak_equity_base": 10_000.0,
+        "risk_halted": False}
+    with open(pt._state_file(account), "w") as f:
+        json.dump(legacy, f)
+
+    sleeve = pt.load_state(account)["sleeves"]["US"]
+    assert pt._fill_pending(us, sleeve, pd.Series(dtype=float), "2025-12-22",
+                            []) is False
+
+    state = paper_cycle(account, sessions=1)          # same month: nothing to do
+    sleeve = state["sleeves"]["US"]
+    assert sleeve["positions"] == {a: 10, b: 20}
+    assert state["trades"] == []
+    assert "pending_target" not in sleeve
+
+
+def test_the_bridge_rebuilds_a_staged_book_from_its_fills(account, paper_cycle):
+    """The reconciliation bridge rebuilds each paper close from the ledger
+    (`attribution._sleeve_close`). A staged target moves no cash and no shares,
+    so the decision close must come back as the funded, all-cash sleeve — and
+    its mark must be that cash — with the build-out landing on the fill bar."""
+    from trading_algo import attribution
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    funded = pt.load_state(account)["sleeves"]["US"]["cash"]
+    state = paper_cycle(account)
+    (decided, _), (filled, _) = state["equity_history"]
+    assert {t["date"] for t in state["trades"]} == {filled}
+
+    cash, pos = attribution._sleeve_close(state, "US", pd.Timestamp(decided))
+    assert cash == pytest.approx(funded) and not any(pos.values())
+    rate = state["fx_snapshot"]["USD"]
+    assert state["sleeve_history"][0]["US"] == pytest.approx(funded * rate, abs=0.01)
+
+    cash, pos = attribution._sleeve_close(state, "US", pd.Timestamp(filled))
+    sleeve = state["sleeves"]["US"]
+    assert cash == pytest.approx(sleeve["cash"])
+    assert pos == {t: float(n) for t, n in sleeve["positions"].items()}

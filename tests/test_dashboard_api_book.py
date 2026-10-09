@@ -14,14 +14,14 @@ from trading_algo.dashboard import api
 
 
 @pytest.fixture()
-def books(tmp_path, monkeypatch):
+def books(tmp_path, monkeypatch, paper_cycle):
     """One default book, one `ultra`-profile book (3x gross, breaker DISABLED),
     and one funded-but-never-traded book."""
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     pt.init_account("ultra", capital=10_000, synthetic=True, profile="ultra")
-    pt.run_daily("ultra", synthetic=True)
+    paper_cycle("ultra")
     pt.init_account("fresh", capital=10_000, synthetic=True,
                     allocations={"US": 1.0})       # no run_daily -> zero trades
     return tmp_path

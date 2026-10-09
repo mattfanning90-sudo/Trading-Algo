@@ -115,25 +115,25 @@ def acct(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_ultra_book_disables_breaker_and_gears(acct):
+def test_ultra_book_disables_breaker_and_gears(acct, paper_cycle):
     pt.init_account("ultra", capital=10_000, synthetic=True, profile="ultra")
     state = pt.load_state("ultra")
     assert state["group"] == "EXPERIMENTAL"
     assert state["max_drawdown_stop"] is None
     assert pt._account_drawdown_stop(state) is None
     assert state["param_overrides"]["max_gross"] == 3.0
-    pt.run_daily("ultra", synthetic=True)                     # must run cleanly
+    paper_cycle("ultra")                     # must run cleanly
     state = pt.load_state("ultra")
     assert state["equity_history"][-1][1] > 0
     assert all(sh > 0 for s in state["sleeves"].values()
                for sh in s["positions"].values())             # long-only
 
 
-def test_experimental_book_opens_shorts(acct):
+def test_experimental_book_opens_shorts(acct, paper_cycle):
     pt.init_account("experimental", capital=10_000, synthetic=True, profile="experimental")
     state = pt.load_state("experimental")
     assert state["group"] == "EXPERIMENTAL"
-    pt.run_daily("experimental", synthetic=True)
+    paper_cycle("experimental")
     state = pt.load_state("experimental")
     shares = [sh for s in state["sleeves"].values() for sh in s["positions"].values()]
     assert any(sh < 0 for sh in shares), "market-neutral book must hold shorts"
@@ -143,16 +143,16 @@ def test_experimental_book_opens_shorts(acct):
 
 
 # --- dashboard overview group split ---------------------------------------
-def test_overview_ringfences_experimental(acct, monkeypatch):
+def test_overview_ringfences_experimental(acct, monkeypatch, paper_cycle):
     from trading_algo.dashboard import overview, registry
     monkeypatch.setattr(registry.fx_book, "STATE_DIR", str(acct))
     # one CORE book + two EXPERIMENTAL books
     pt.init_account("full", capital=100_000, synthetic=True, allocations={"US": 1.0})
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     pt.init_account("ultra", capital=10_000, synthetic=True, profile="ultra")
-    pt.run_daily("ultra", synthetic=True)
+    paper_cycle("ultra")
     pt.init_account("experimental", capital=10_000, synthetic=True, profile="experimental")
-    pt.run_daily("experimental", synthetic=True)
+    paper_cycle("experimental")
 
     ov = overview.build_overview()
     groups = {g["name"]: g for g in ov["groups"]}

@@ -6,11 +6,11 @@ from trading_algo.dashboard import api
 
 
 @pytest.fixture
-def account(tmp_path, monkeypatch):
+def account(tmp_path, monkeypatch, paper_cycle):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
     name = "dashval"
     pt.init_account(name, capital=300_000, synthetic=True)
-    pt.run_daily(name, synthetic=True)
+    paper_cycle(name)
     return name
 
 

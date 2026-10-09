@@ -147,7 +147,7 @@ def test_backtest_applies_compute_targets_weights_bit_for_bit(synth_asx, asx_reg
     assert checked > 0, "no non-empty rebalance target was validated"
 
 
-def test_paper_sizes_only_from_compute_targets(monkeypatch, tmp_path):
+def test_paper_sizes_only_from_compute_targets(monkeypatch, tmp_path, paper_cycle):
     """Paper trading acts only on names/sizing from compute_targets.
 
     A spy captures exactly what compute_targets returned; the opened book may not
@@ -161,26 +161,34 @@ def test_paper_sizes_only_from_compute_targets(monkeypatch, tmp_path):
     def spy(prices, index_prices, p, asof=None, eligible=None):
         w = real(prices, index_prices, p, asof=asof, eligible=eligible)
         seen["w"] = w
-        seen["px"] = prices.iloc[-1]
         return w
 
     monkeypatch.setattr(paper_trade, "STATE_DIR", str(tmp_path))
     monkeypatch.setattr(strategy, "compute_targets", spy)
 
     paper_trade.init_account("golden", 1_000_000, synthetic=True, allocations={"US": 1.0})
-    paper_trade.run_daily("golden", synthetic=True)
+    paper_cycle("golden")                    # decide, then fill
 
-    sleeve = paper_trade.load_state("golden")["sleeves"]["US"]
-    targets, px = seen["w"], seen["px"]
+    state = paper_trade.load_state("golden")
+    sleeve = state["sleeves"]["US"]
+    targets = seen["w"]
     held = sleeve["positions"]
+
+    # A book that never filled would pass everything below vacuously.
+    assert held and not targets.empty, "the cycle must open a book"
 
     # No name invented outside the shared weight function.
     assert set(held).issubset(set(targets.index))
 
-    if not targets.empty and held:
-        values = {t: held[t] * float(px[t]) for t in held}
-        top_by_weight = targets.sort_values(ascending=False).index[0]
-        top_by_value = max(values, key=values.get)
-        assert top_by_weight == top_by_value, (
-            "relative sizing not preserved: paper's biggest holding isn't the "
-            "biggest compute_targets weight")
+    # Sizing is compared at the prices the fills actually used — the book is
+    # built one session after the decision, so the decision bar's prices are no
+    # longer the ones it was sized at.
+    fill_px = {t["ticker"]: float(t["decision"]) for t in state["trades"]
+               if t.get("decision")}
+    assert all(t in fill_px for t in held), "every holding has a fill price"
+    values = {t: held[t] * fill_px[t] for t in held}
+    top_by_weight = targets.sort_values(ascending=False).index[0]
+    top_by_value = max(values, key=values.get)
+    assert top_by_weight == top_by_value, (
+        "relative sizing not preserved: paper's biggest holding isn't the "
+        "biggest compute_targets weight")

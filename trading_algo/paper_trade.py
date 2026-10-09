@@ -7,9 +7,11 @@ whole-share lots, the per-region fee schedule (commission floor + UK stamp duty)
 and slippage. Combined equity is reported in the base currency via current FX.
 
 State persists per account in a SQLite store (paper_books.db), with a
-paper_state_{account}.json copy dual-written as a fallback. Each sleeve trades
-only on the first run of a new month (mirroring the backtest's month-end signal
--> next-day execution).
+paper_state_{account}.json copy dual-written as a fallback. Each sleeve decides
+on the first run of a new month and stages that target in its state
+(`pending_target`); it fills at the close of the next session the sleeve's data
+shows, never at the close that produced it — the same next-close convention as
+`backtest.py`. A drawdown-breaker exit is staged and filled the same way.
 
 Note vs the portfolio backtest: this sim funds each sleeve ONCE and lets
 allocations drift (the realistic "fund each sub-account, run it" model). The
@@ -20,7 +22,7 @@ Usage
     python -m trading_algo.paper_trade --init --capital 100000   # open account
     python -m trading_algo.paper_trade                           # daily run
     python -m trading_algo.paper_trade --status                  # report
-    python -m trading_algo.paper_trade --force-rebalance         # rebalance now
+    python -m trading_algo.paper_trade --force-rebalance         # decide now, fill next session
     python -m trading_algo.paper_trade --compare micro full
     (append --synthetic to run fully offline)
 """
@@ -691,6 +693,43 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
 # ---------------------------------------------------------------------------
 # Daily run
 # ---------------------------------------------------------------------------
+def _stage_target(sleeve: dict, today: str, targets: pd.Series,
+                  frozen: set[str] | None = None) -> None:
+    """Record a decision made at TODAY's close, for filling at the next one.
+
+    The book cannot trade at the price that produced its own signal: a target
+    decided on bar D_k is executable no earlier than D_{k+1}'s close, which is
+    exactly what `backtest.py` stages. Persisting it in the sleeve is what lets
+    the decision survive to the next run — the engine is a fresh process each
+    time, so an in-memory target would simply be lost.
+    """
+    sleeve["pending_target"] = {
+        "date": today,
+        "weights": {str(t): float(w) for t, w in targets.items()},
+        "frozen": sorted(frozen or ()),
+    }
+
+
+def _fill_pending(region, sleeve: dict, px: pd.Series, today: str,
+                  trade_log: list) -> bool:
+    """Execute the target staged on an EARLIER bar, at today's close.
+
+    Returns True when a fill was attempted. A target staged on today's own bar
+    is left alone: that is the whole convention, and the engine runs up to three
+    times a day against the same bar. A sleeve with no `pending_target` — every
+    book saved before staging existed — has nothing to fill.
+    """
+    pending = sleeve.get("pending_target")
+    if not pending or str(pending.get("date", "")) >= today:
+        return False
+    targets = pd.Series(pending.get("weights") or {}, dtype=float)
+    rebalance_sleeve(region, sleeve, targets, px, today, trade_log,
+                     frozen=set(pending.get("frozen") or ()))
+    sleeve["last_rebalance_date"] = today          # the FILL date, not the decision's
+    sleeve.pop("pending_target", None)
+    return True
+
+
 def _should_rebalance(sleeve: dict, today: str, this_month: str) -> bool:
     """Whether a sleeve should rebalance on this run.
 
@@ -749,6 +788,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
     combined = 0.0
     breakdown = {}
     px_by_region: dict = {}
+    bar_of: dict[str, str] = {}  # each sleeve's own bar this run (a trip stages on it)
     rebalanced_this_run = False
     all_valued = True            # every sleeve had a fresh bar AND a usable FX rate
     for k in _account_regions(state):
@@ -816,18 +856,31 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             # so keep trading — only the valuation is held back.
 
         px_by_region[k] = px_today
+        bar_of[k] = today
         report_date = max(report_date, today)
         rate = snap.get(region.currency)
         rate_ok = rate is not None and rate == rate and rate > 0.0
 
         params = _account_params(state, region)
         status = None                       # why the sleeve ended this run as it did
+        pending = sleeve.get("pending_target")
+        if halted and (pending.get("weights") if pending else sleeve["positions"]):
+            # A halted book's only legal target is cash. The trip itself staged
+            # the exit (below); this catches anything else — a stale buy staged
+            # before the trip, or a book halted before staging existed — and
+            # overwrites it so it can never fill. An exit already staged is left
+            # alone, or re-dating it every run would keep it from ever filling.
+            print(f"  [{k}] ⛔ drawdown halt — staging a liquidation for the "
+                  f"next close.")
+            _stage_target(sleeve, today, pd.Series(dtype=float))
+
+        # Execute the target staged on an EARLIER bar, at today's close. Every
+        # fill in this book therefore lands one session after its decision.
+        if rate_ok and _fill_pending(region, sleeve, px_today, today,
+                                     state["trades"]):
+            rebalanced_this_run = True
+
         if halted:
-            if sleeve["positions"]:
-                print(f"  [{k}] ⛔ drawdown halt — liquidating to cash.")
-                rebalance_sleeve(region, sleeve, pd.Series(dtype=float),
-                                 px_today, today, state["trades"])
-                sleeve["last_rebalance_date"] = today
             # Do NOT stamp last_rebalance_month while halted: that would calendar-
             # pin the sleeve flat until the next month even after the cooldown
             # clears. Re-entry is cooldown-driven (month/date cleared on resume).
@@ -844,7 +897,6 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                 level="alert", account=account, region=k, currency=region.currency)
             status = "cash:fx-unavailable"
         elif _should_rebalance(sleeve, today, this_month):
-            rebalanced_this_run = True
             # Reached only when rate_ok is True (the `not rate_ok` branch above
             # was skipped), so `rate` is a positive float, not None.
             assert rate is not None
@@ -873,9 +925,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                 else:
                     status = "rebalanced"
                     sleeve.pop("last_flat_reason", None)
-                rebalance_sleeve(region, sleeve, targets, px_today, today,
-                                 state["trades"], frozen=dq.excluded)
-                sleeve["last_rebalance_date"] = today
+                _stage_target(sleeve, today, targets, frozen=dq.excluded)
             sleeve["last_rebalance_month"] = this_month
         else:
             status = "held" if sleeve["positions"] else "cash:idle"
@@ -930,6 +980,15 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
                   f"{stop:.0%} stop — halting for "
                   f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
+            # The breaker decides at this close, as a rebalance does, so its exit
+            # is staged here on each sleeve's own bar and fills at that sleeve's
+            # NEXT close — `backtest.py` stages CASH the same way. It replaces
+            # anything staged earlier this run. A complete valuation means every
+            # sleeve was priced this run, so each has a bar.
+            for k, bar in bar_of.items():
+                sl = state["sleeves"][k]
+                if sl["positions"] or sl.get("pending_target"):
+                    _stage_target(sl, bar, pd.Series(dtype=float))
         else:
             state["risk_halted"] = False
 

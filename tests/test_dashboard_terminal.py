@@ -47,11 +47,11 @@ FX_STATE = {
 
 
 @pytest.fixture()
-def books(tmp_path, monkeypatch):
+def books(tmp_path, monkeypatch, paper_cycle):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
     monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     with open(os.path.join(str(tmp_path), "fx_state_matt.json"), "w") as f:
         json.dump(FX_STATE, f)
     return tmp_path

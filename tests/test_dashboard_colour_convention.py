@@ -292,7 +292,7 @@ def test_num_keeps_only_finite_numbers():
     assert overview._num(3.0) == 3.0
 
 
-def test_storage_refuses_to_persist_an_unvaluable_mark(books):
+def test_storage_refuses_to_persist_an_unvaluable_mark(books, paper_cycle):
     """The FIRST line of defence, and the strongest: a non-finite mark can no
     longer be written at all — `storage.db_save` dumps with `allow_nan=False`,
     so it raises rather than emitting a bare `NaN` token that is not valid JSON.
@@ -302,14 +302,14 @@ def test_storage_refuses_to_persist_an_unvaluable_mark(books):
     storage layer was hardened — refusing the write is strictly better than
     cleaning up after it, because the bad value never enters the ledger."""
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     state = pt.load_state("full")
     state["equity_history"].append(["2026-07-21", float("nan")])
     with pytest.raises(ValueError, match="not JSON compliant"):
         pt.save_state("full", state)
 
 
-def test_a_legacy_nan_on_disk_cannot_make_the_payload_invalid_json(books):
+def test_a_legacy_nan_on_disk_cannot_make_the_payload_invalid_json(books, paper_cycle):
     """The SECOND line of defence, still required: books written BEFORE the
     storage hardening already carry unvaluable marks on disk, and those files
     are read, not rewritten. A bare `NaN` reaching the browser makes
@@ -320,7 +320,7 @@ def test_a_legacy_nan_on_disk_cannot_make_the_payload_invalid_json(books):
     Written straight to the JSON file (and the DB dropped so the fallback path
     is used), because `save_state` now correctly refuses to produce this state."""
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     state = pt.load_state("full")
     state["equity_history"].append(["2026-07-21", float("nan")])
     state["sleeve_history"].append({"date": "2026-07-21", "US": float("nan")})
@@ -381,7 +381,7 @@ def test_an_unmeasurable_book_is_excluded_from_the_day_total_and_counted(books):
     assert t["day_aud"] == pytest.approx(4950.0 * -0.01 / 0.99, abs=0.01)
 
 
-def test_off_peak_can_never_be_positive(books):
+def test_off_peak_can_never_be_positive(books, paper_cycle):
     """A running peak includes the current mark. paper_trade only persists it on
     a scheduled run while the dashboard re-marks live, so the equity page
     rendered 'OFF-PEAK +89.96%' in green — impossible for a real book."""
@@ -395,7 +395,7 @@ def test_off_peak_can_never_be_positive(books):
     assert fx_api.build_fx_snapshot("cc")["off_peak"] <= 0.0
 
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     state = pt.load_state("full")
     state["peak_equity_base"] = 1.0
     pt.save_state("full", state)
@@ -403,14 +403,14 @@ def test_off_peak_can_never_be_positive(books):
 
 
 # ---- the DAY column describes the POSITION, not the instrument -------------
-def test_day_change_is_the_positions_move_not_the_instruments(books):
+def test_day_change_is_the_positions_move_not_the_instruments(books, paper_cycle):
     """The bug already fixed for `unrealized_pct` three lines below, whose own
     comment describes it ('a short marked +44% green next to −A$202 red'). The
     fix never reached the column to its left, so EXPERIMENTAL rendered 6 of 7
     rows with DAY the opposite colour to the money in the same row."""
     pt.init_account("experimental", capital=10_000, synthetic=True,
                     profile="experimental")
-    pt.run_daily("experimental", synthetic=True)
+    paper_cycle("experimental")
     snap = api.build_snapshot("experimental", synthetic=True)
     rows = [p for s in snap["sleeves"] for p in s["positions"]]
     shorts = [p for p in rows if p["shares"] < 0]
@@ -484,7 +484,7 @@ def test_a_round_trip_with_no_move_claims_no_side():
 
 
 # ---- an unpriced holding is unpriced, not worthless -----------------------
-def test_an_unpriced_holding_is_held_at_cost_not_marked_to_zero(books):
+def test_an_unpriced_holding_is_held_at_cost_not_marked_to_zero(books, paper_cycle):
     """data.load_region does not forward-fill and delisting.py deliberately
     terminates a dead series, so a NaN tail on a held name is a DESIGNED state.
     _safe_price's 0.0 then printed '−100.00%' on the row and quietly subtracted
@@ -493,7 +493,7 @@ def test_an_unpriced_holding_is_held_at_cost_not_marked_to_zero(books):
     assert "priced = mark > 0.0" in src
     assert "price = mark if priced else avg" in src
     pt.init_account("full", capital=300_000, synthetic=True)
-    pt.run_daily("full", synthetic=True)
+    paper_cycle("full")
     snap = api.build_snapshot("full", synthetic=True)
     rows = [p for s in snap["sleeves"] for p in s["positions"]]
     assert rows and all("priced" in p for p in rows), "the screen cannot em-dash what it is not told"
