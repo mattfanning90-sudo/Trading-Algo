@@ -573,3 +573,33 @@ def test_holdings_lines_stay_zero_without_a_backtest():
         assert rep["lines"][name] == 0.0
         assert rep["notes"][name]
 
+
+# --- fills: a currency with no rate, and the window's last day -------------
+def test_a_fill_in_a_currency_with_no_rate_is_not_converted_at_parity():
+    """`paper_trade.fx_snapshot` OMITS a currency with no prior good rate
+    (a new CAD sleeve on its first failed fetch). A US$1 floor on a US$100
+    buy against 2bps modelled is a US$0.98 excess — but with no USD rate,
+    converting it at 1.0 would book A$0.98 that never existed. Leave it out
+    of the line, name the currency, and let it land in the residual."""
+    state = _bridge_state(100_995.08)
+    state["trades"][0].update({"region": "US", "ticker": "AAPL",
+                               "commission": 1.0, "currency": "USD"})
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == 0.0
+    assert "USD" in rep["notes"]["commission_floor"]
+    assert "USD" in rep["notes"]["fill_convention"]
+    # ...and the base currency itself still converts at exactly 1.0
+    state["trades"][0]["currency"] = "AUD"
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == pytest.approx(0.98e-5, abs=1e-12)
+
+
+def test_bridge_counts_a_fill_on_the_windows_last_day():
+    """End equity is stamped AFTER that day's trades, so a fill dated on the
+    window's last day is inside the end equity and its cost belongs in the
+    bridge. Excluding it (`< end`) would leave the A$4.92 floor excess in the
+    residual."""
+    state = _bridge_state(100_995.08)
+    state["trades"][0]["date"] = "2026-06-30"
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)

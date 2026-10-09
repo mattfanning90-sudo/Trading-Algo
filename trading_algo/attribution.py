@@ -158,15 +158,16 @@ def _commission_bps(region_key: str | None) -> float | None:
 
 
 def _window_fills(paper_state: dict, start: pd.Timestamp,
-                  end: pd.Timestamp) -> list[tuple[dict, float]]:
+                  end: pd.Timestamp) -> list[tuple[dict, float | None]]:
     """Each fill dated inside (start, end], with its base-per-local FX rate.
 
-    A fill dated `start` is left out: equity is stamped AFTER a run's trades, so
-    its cost is already inside the start equity (on a real book that day is the
-    build-out). The rate is the book's CURRENT `fx_snapshot` (see `reconcile`).
+    Equity is stamped AFTER a run's trades, so a fill dated `start` is already
+    inside the start equity (on a real book that day is the build-out) and is
+    left out, while a fill dated `end` is inside the end equity and is counted.
+    The rate is the book's CURRENT `fx_snapshot` (see `reconcile`), or None for
+    a currency the snapshot has no rate for (`_base_per_local`).
     """
-    snap = paper_state.get("fx_snapshot") or {}
-    return [(t, float(snap.get(t.get("currency")) or 1.0))
+    return [(t, _base_per_local(paper_state, t.get("currency")))
             for t in paper_state.get("trades") or []
             if start < pd.Timestamp(t.get("date")) <= end
             and t.get("shares") and t.get("fill") is not None]
@@ -416,6 +417,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     start_equity = float(paper.loc[start])
 
     fills = _window_fills(paper_state, start, end)
+    unrated = sorted({str(t.get("currency")) for t, rate in fills if rate is None})
+    left_out = len(fills)
+    fills = [(t, rate) for t, rate in fills if rate is not None]
+    left_out -= len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
     lines = {name: 0.0 for name in BRIDGE_LINES}
@@ -447,6 +452,12 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                           "bridge's current-rate approximation for fills) sits "
                           "in rebalance_timing, or in residual without it",
     }
+
+    if unrated:
+        why = (f"{left_out} fill(s) in {', '.join(unrated)} left out — no rate "
+               "in fx_snapshot, and parity would be a guess")
+        for name in ("fill_convention", "commission_floor", "stamp_duty"):
+            notes[name] = "; ".join(filter(None, (notes.get(name), why)))
 
     if backtest is not None:
         terms, why = _holdings_terms(paper_state, backtest, start, end)
