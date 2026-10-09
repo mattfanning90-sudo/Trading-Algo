@@ -845,6 +845,12 @@ def test_a_breaker_trip_liquidates_at_the_next_close(account, paper_cycle):
     assert state["risk_halted"] is True
     tripped_on = state["equity_history"][-1][0]
     assert state["sleeves"]["US"]["positions"], "no exit at the tripping close"
+    # The trip itself stages the exit, dated the bar that tripped. Left to the
+    # next run's halted branch it would be dated that run's bar instead, and
+    # fill a session later than backtest.py's.
+    for k, sl in state["sleeves"].items():
+        assert sl.get("pending_target") == {
+            "date": tripped_on, "weights": {}, "frozen": []}, k
     opened = len(state["trades"])
 
     pt.run_daily(account, synthetic=True)             # same bar again: still no exit
