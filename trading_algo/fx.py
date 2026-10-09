@@ -10,6 +10,7 @@ the pair "BASE+C=X" as "C per 1 BASE", so m = 1 / that quote.
 from __future__ import annotations
 
 import hashlib
+import math
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,26 @@ def synth_level(ccy: str) -> float:
         if r.currency == ccy and r.synthetic_fx_anchor is not None:
             return r.synthetic_fx_anchor
     return _EXTRA_SYNTH_LEVEL.get(ccy, 1.0)
+
+
+def base_per_local(snapshot: dict | None, ccy: str | None,
+                   base: str) -> float | None:
+    """Base units per one `ccy` from a stored rate snapshot, or None.
+
+    The one rule every paper-book money figure converts by: the dashboard's
+    NET parts and the reconciliation bridge alike. 1.0 only for the base
+    currency itself; otherwise the snapshot's rate when it is a finite
+    positive number. A currency `paper_trade.fx_snapshot` omitted, or a NaN,
+    zero, negative or infinite rate, is NO rate: never parity, and never a
+    number for a caller to multiply by.
+    """
+    if ccy == base:
+        return 1.0
+    try:
+        rate = float((snapshot or {}).get(ccy))
+    except (TypeError, ValueError):
+        return None
+    return rate if math.isfinite(rate) and rate > 0 else None
 
 
 def fx_ticker(base: str, ccy: str) -> str:

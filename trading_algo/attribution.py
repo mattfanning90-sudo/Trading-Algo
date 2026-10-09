@@ -24,7 +24,7 @@ from bisect import bisect_left
 import pandas as pd
 
 from . import config as cfg
-from . import fees, metrics, pnl, tca
+from . import fees, fx, metrics, pnl, tca
 from .regions import get_region
 
 # AC4: alert when annualised tracking error exceeds this budget.
@@ -206,17 +206,12 @@ def _line_commission_floor(fills: list[tuple[dict, float]]) -> float:
 def _base_per_local(paper_state: dict, ccy: str | None) -> float | None:
     """Base units per 1 `ccy`, from the book's CURRENT `fx_snapshot`, or None.
 
-    1.0 only for the book's base currency. `paper_trade.fx_snapshot` omits a
-    currency that has no prior good rate, so a missing key means "no rate",
-    never "parity": guessing 1.0 would convert at a made-up rate.
+    The rule is `fx.base_per_local`, the dashboard's too; this only reads the
+    snapshot and base off the book. A missing key means "no rate", never
+    "parity": guessing 1.0 would convert at a made-up rate.
     """
-    if ccy == (paper_state.get("base_currency") or cfg.BASE_CURRENCY):
-        return 1.0
-    try:
-        rate = float((paper_state.get("fx_snapshot") or {}).get(ccy))
-    except (TypeError, ValueError):
-        return None
-    return rate if rate > 0 else None              # NaN > 0 is False
+    return fx.base_per_local(paper_state.get("fx_snapshot"), ccy,
+                             paper_state.get("base_currency") or cfg.BASE_CURRENCY)
 
 
 def _sleeve_close(paper_state: dict, key: str,

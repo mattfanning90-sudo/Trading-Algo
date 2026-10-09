@@ -190,14 +190,29 @@ def test_the_net_pnl_tile_shows_every_part():
 
 
 # --- one FX-rate rule for every NET part ------------------------------------
-def test_a_currency_the_snapshot_cannot_price_is_no_rate_never_parity():
-    """The bridge's rule (Task 7b): 1.0 only for the base currency itself. A
-    currency `fx_snapshot` omitted, or a NaN / non-positive rate, is NO rate."""
-    snap = {"USD": 1.5, "GBP": float("nan"), "CAD": 0.0}
-    assert api._rate(snap, "AUD", "AUD") == 1.0
-    assert api._rate(snap, "USD", "AUD") == 1.5
-    for ccy in ("GBP", "CAD", "JPY"):
-        assert api._rate(snap, ccy, "AUD") is None, ccy
+def test_the_dashboard_and_the_bridge_convert_by_the_one_rule(monkeypatch):
+    """Both readers route through `fx.base_per_local` (the rule itself is
+    pinned in test_fx): swap it and the dashboard's round trip and the
+    bridge's rate both move with it. A USD round trip that netted 18.00 USD
+    converts at the swapped rule's 2.0 to 36.00 AUD."""
+    from trading_algo import attribution, fx
+
+    asked = []
+
+    def rule(snapshot, ccy, base):
+        asked.append(ccy)
+        return 2.0
+
+    monkeypatch.setattr(fx, "base_per_local", rule)
+    trades = [{"date": "2026-06-01", "region": "US", "ticker": "AAA", "side": "BUY",
+               "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0,
+               "currency": "USD"},
+              {"date": "2026-07-01", "region": "US", "ticker": "AAA", "side": "SELL",
+               "shares": 10, "fill": 102.0, "commission": 1.0, "stamp_duty": 0.0,
+               "currency": "USD"}]
+    assert api.closed_trades(trades, {"AUD": 1.0})["net_base"] == pytest.approx(36.0)
+    assert attribution._base_per_local({"base_currency": "AUD"}, "GBP") == 2.0
+    assert asked == ["USD", "GBP"]
 
 
 def test_a_round_trip_with_no_rate_is_not_converted_at_parity():

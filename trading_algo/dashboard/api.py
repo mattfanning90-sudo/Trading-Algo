@@ -91,19 +91,6 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
         return []
 
 
-def _rate(snap_fx: dict, ccy: str | None, base: str) -> float | None:
-    """Base units per one `ccy`, or None when the snapshot cannot price it.
-
-    The one rule every money figure here converts by — the bridge's
-    (`attribution._base_per_local`): 1.0 only for the base currency itself,
-    a finite positive snapshot rate otherwise, and NO rate, never parity, for
-    a currency `paper_trade.fx_snapshot` omitted or a NaN / non-positive one."""
-    if ccy == base:
-        return 1.0
-    rate = _num(snap_fx.get(ccy))
-    return rate if rate is not None and rate > 0 else None
-
-
 def _net_parts(realized: float, unrealized: float, income: float,
                net: float) -> dict[str, float]:
     """NET P&L and the parts it splits into, in base currency.
@@ -125,11 +112,11 @@ def closed_trades(trades: list[dict], snap_fx: dict,
     same reconstruction paper_trade stamps onto each sell, presented for the UI
     with FX conversion, holding period and partial-lot notes. A round trip in
     a currency with no rate has no base amount (`net_base` None) and is out
-    of the total, never converted at parity (`_rate`)."""
+    of the total, never converted at parity (`fx.base_per_local`)."""
     _, realized = pnl.build_lots(trades)
     rows: list[dict] = []
     for r in realized:
-        mult = _rate(snap_fx, r["currency"], base)
+        mult = fx.base_per_local(snap_fx, r["currency"], base)
         try:
             held = (date.fromisoformat(r["date"]) - date.fromisoformat(r["entry_date"])).days
         except (ValueError, TypeError):
@@ -264,7 +251,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         # OMITTED from the snapshot, so treat a missing/non-finite rate as
         # unvaluable (0) rather than let a NaN poison this sleeve's base equity
         # and the headline AUM. The sleeve still shows its local holdings.
-        m = _rate(snap_fx, region.currency, base) or 0.0
+        m = fx.base_per_local(snap_fx, region.currency, base) or 0.0
         if not m:
             unvalued.append(k)
         regime = ("RISK_ON"
@@ -369,7 +356,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             + t.get("commission", 0.0) + t.get("stamp_duty", 0.0)
         if t.get("stamp_duty"):
             stamp[t["currency"]] = stamp.get(t["currency"], 0.0) + t["stamp_duty"]
-    fees_base = sum(v * (_rate(snap_fx, c, base) or 0.0) for c, v in fees.items())
+    fees_base = sum(v * (fx.base_per_local(snap_fx, c, base) or 0.0) for c, v in fees.items())
 
     eq_hist = state.get("equity_history", [])
     # The last mark the book could actually be VALUED on. Taking eq_hist[-1]
@@ -385,7 +372,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # and reaches the screen as INCOME, one part of NET P&L below.
     fills = [t for t in state["trades"] if pnl.is_fill(t)]
     blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)} for t in fills]
-    income_base = sum(pnl.cash_amount(t) * (_rate(snap_fx, t["currency"], base) or 0.0)
+    income_base = sum(pnl.cash_amount(t) * (fx.base_per_local(snap_fx, t["currency"], base) or 0.0)
                       for t in state["trades"] if pnl.is_cash_event(t))
     # A sleeve with no rate is valued at 0, so its share of the starting
     # capital comes off too: NET covers the sleeves it can value, and says
