@@ -158,3 +158,14 @@ def test_a_mapping_that_misses_a_sleeve_is_refused():
         run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
                                end="2020-06-30", allocations={"US": 1, "FTSE": 1},
                                trade_from={"US": pd.Timestamp("2020-03-11")})
+
+
+def test_a_mapping_with_no_date_for_a_sleeve_is_refused():
+    """`{"FTSE": None}` names the sleeve but gives it no open date, and None
+    means "the whole sample" — FTSE would silently trade from 2012 beside a US
+    sleeve opened this year. Refused like a missing key, naming the sleeve."""
+    with pytest.raises(ValueError, match="FTSE"):
+        run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                               end="2020-06-30", allocations={"US": 1, "FTSE": 1},
+                               trade_from={"US": pd.Timestamp("2020-03-11"),
+                                           "FTSE": None})

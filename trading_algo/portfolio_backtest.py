@@ -65,12 +65,14 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     is worth exactly `initial_capital * alloc[k]` in the base currency there.
     It is one date for every sleeve, or a mapping {region key: date} naming
     each sleeve's own (a book whose sleeves first decided on different bars);
-    the mapping must name every sleeve. None (the default) is the
-    whole-sample backtest, unchanged."""
+    the mapping must give every sleeve a date — a missing key or a None value
+    is refused, since None would run that sleeve over the whole sample. None
+    (the default) is the whole-sample backtest, unchanged."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
-    if isinstance(trade_from, Mapping) and set(regions) - set(trade_from):
-        raise ValueError(f"trade_from names no open date for "
-                         f"{sorted(set(regions) - set(trade_from))}")
+    undated = ([k for k in regions if trade_from.get(k) is None]
+               if isinstance(trade_from, Mapping) else [])
+    if undated:
+        raise ValueError(f"trade_from names no open date for {sorted(undated)}")
     syn_end = end or "2026-01-01"
     # F13: apply the delisting-return correction only in the PIT path and only
     # when the knob is set — otherwise a perfect no-op.
