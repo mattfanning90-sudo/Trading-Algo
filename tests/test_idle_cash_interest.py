@@ -163,15 +163,34 @@ def test_the_first_run_only_arms_the_window():
     assert sleeve["cash"] == 10_000.0 and log == []
 
 
-def test_a_short_book_that_owes_cash_is_never_credited():
-    """Negative cash is a margin debit; the borrow charge is a separate,
-    unmodelled cost and must not appear here as a negative credit."""
+def test_a_levered_long_that_owes_cash_is_never_credited():
+    """Long 12,000 on 10,000 of equity (Σw = 1.2) borrows 2,000: negative cash
+    is a margin debit. The borrow charge is a separate, unmodelled cost and
+    must not appear here as a negative credit."""
     sleeve = {"currency": "USD", "cash": -2_000.0, "positions": {"AAA": 120},
               "last_interest_date": "2026-06-01"}
     px = pd.Series({"AAA": 100.0})
     log = []
     assert _accrue(sleeve, px, "2026-07-01", log) == 0.0
     assert sleeve["cash"] == -2_000.0 and log == []
+
+
+def test_a_net_short_books_proceeds_earn_the_full_rate_in_both_engines():
+    """Under the net convention a short's proceeds sit in cash and earn the
+    full rate. Short 5,000 on 10,000 of equity is 15,000 of cash: Σw = -0.5,
+    idle 1.5. The backtest pays idle_cash_credit on the NET sum of its signed
+    weights times its NAV; the paper pays the same on its sleeve. Both are
+    15,000 x r x 30 / 365. (A real broker usually pays a lower rebate on
+    short proceeds; neither engine models that.)"""
+    sleeve = {"currency": "USD", "cash": 15_000.0, "positions": {"BBB": -50},
+              "last_interest_date": "2026-06-01"}
+    px = pd.Series({"BBB": 100.0})                  # equity 10,000; Σw = -0.5
+    paper = _accrue(sleeve, px, "2026-07-01")
+    current_w = pd.Series({"BBB": -0.5})            # the backtest's book
+    backtest = fees.idle_cash_credit(float(current_w.sum()), 30,
+                                     cfg.CASH_RATE_ANNUAL) * 10_000.0
+    assert paper == pytest.approx(backtest)
+    assert paper == pytest.approx(15_000.0 * cfg.CASH_RATE_ANNUAL * 30 / 365)
 
 
 def test_an_interest_row_is_a_cash_event_and_never_a_fill():
