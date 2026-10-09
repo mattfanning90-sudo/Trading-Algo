@@ -1,13 +1,13 @@
 """Per-sleeve walk-forward backtest (one region, local currency).
 
 Design principles (the invariants from CLAUDE.md):
-- No lookahead, true t+1: weights are decided at month-end D_k using data ≤ D_k,
-  staged, and first affect the book (and therefore returns) on the very next
-  trading bar D_{k+1} — never on or before D_k. A target is staged on the same
-  bar it is decided (keyed off `today`), so it drives returns exactly one bar
-  later, matching the drawdown-breaker branch and the same-day paper engine.
-  Targets come from the shared `strategy.compute_targets` — the same function
-  paper trading uses.
+- No lookahead, next-day-CLOSE execution: weights are decided at month-end D_k
+  using data ≤ D_k, staged, and EXECUTED at the close of the next trading bar
+  D_{k+1}. They are never filled at D_k's own close — that is the price that
+  produced the signal, and no real order can touch it. The first bar a new
+  target earns a return on is therefore D_{k+2}. The drawdown breaker stages a
+  liquidation the same way, for the same reason. Targets come from the shared
+  `strategy.compute_targets` — the same function paper trading uses.
 - Costs always on: commission + slippage charged on turnover every rebalance,
   plus UK stamp duty on the buy side (asymmetric).
 - Returns are fractional, so the series is currency-agnostic; the portfolio
@@ -121,9 +121,32 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     for i in range(1, len(dates)):
         today = dates[i]
 
-        # Apply the target staged on the prior bar at today's prices (t+1
-        # execution): a signal decided as-of D_{k} moves the book on D_{k+1}.
-        cost = 0.0
+        # --- 1. today's return is earned by the book we were ALREADY holding ---
+        # A target staged at the prior close is not in the book yet: it is filled
+        # below, at TODAY's close, so it sits out this bar.
+        day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
+        gross = float((current_w * day_rets).sum())
+        r = gross
+        # Interest on whatever was NOT invested over the day. `current_w` is the
+        # book held THROUGH today, and its NET sum is the exposure — see
+        # fees.idle_cash_credit on why net, not gross. Without this a flat book
+        # earns 0% while metrics still charge it the RISK_FREE hurdle, which is a
+        # double penalty worth +0.22 to +0.34 Sharpe (docs/SHARPE_RESEARCH.md §1).
+        if CREDIT_IDLE_CASH and CASH_RATE_ANNUAL:
+            interest = fees.idle_cash_credit(
+                float(current_w.sum()), (today - dates[i - 1]).days,
+                CASH_RATE_ANNUAL)
+            r += interest
+            total_cash_interest += interest
+
+        # Drift the held weights to today's close — that is the book the fill
+        # starts from, and the prices it happens at.
+        if not current_w.empty:
+            grown = current_w * (1 + day_rets)
+            nav_growth = 1 + gross
+            current_w = grown / nav_growth if nav_growth != 0 else grown
+
+        # --- 2. execute the staged target AT TODAY'S CLOSE --------------------
         if pending is not None:
             names = current_w.index.union(pending.index)
             delta = (pending.reindex(names, fill_value=0.0)
@@ -149,25 +172,14 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
             turnover_log.append((today, turnover))
             cost_log.append((today, cost))
             total_cost += cost
+            r -= cost
             current_w = pending
             pending = None
 
-        day_rets = rets.loc[today].reindex(current_w.index).fillna(0.0)
-        r = float((current_w * day_rets).sum()) - cost
-        # Interest on whatever was NOT invested at the open. `current_w` is the
-        # start-of-day book (the pending target was applied above), and its NET sum
-        # is the exposure — see fees.idle_cash_credit on why net, not gross.
-        # Without this a flat book earns 0% while metrics still charge it the
-        # RISK_FREE hurdle, which is a double penalty worth +0.22 to +0.34 Sharpe
-        # (docs/SHARPE_RESEARCH.md §1).
-        if CREDIT_IDLE_CASH and CASH_RATE_ANNUAL:
-            interest = fees.idle_cash_credit(
-                float(current_w.sum()), (today - dates[i - 1]).days,
-                CASH_RATE_ANNUAL)
-            r += interest
-            total_cash_interest += interest
         daily_ret.append(r)
         equity.append(equity[-1] * (1 + r))
+        # The book as it stands at TODAY's close — the one that earns tomorrow's
+        # return. A freshly executed target is recorded on its EXECUTION bar.
         weights_hist[today] = current_w
 
         # --- drawdown circuit breaker (decision at close, execute t+1) ---
@@ -183,19 +195,11 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
             halt_events += 1
 
         if halted:
-            pending = CASH                       # liquidate / stay flat next day
+            pending = CASH                       # liquidate at the NEXT close
         elif today in weight_schedule:
-            # True t+1: a target decided as-of `today` (D_k) is staged now and
-            # first affects the book — and thus returns — on the NEXT bar D_{k+1}.
-            # Keying off `today` (not `yday`) matches the halted branch above and
-            # the same-day paper engine; keying off `yday` delayed it to D_{k+2}.
+            # A target decided as-of `today` (D_k) is staged now and EXECUTED at
+            # the close of D_{k+1}; it first earns a return on D_{k+2}.
             pending = weight_schedule[today]
-
-        # Drift held weights with the day's returns.
-        if not current_w.empty:
-            grown = current_w * (1 + day_rets)
-            nav = 1 + float((current_w * day_rets).sum())
-            current_w = grown / nav if nav != 0 else grown
 
     ret_series = pd.Series(daily_ret, index=dates[1:])
     eq = pd.Series(equity[1:], index=dates[1:])

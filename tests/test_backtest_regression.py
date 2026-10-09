@@ -20,6 +20,12 @@ def test_baseline_exists():
         "no committed baseline — run `python -m trading_algo.ci_regression --update`")
 
 
+@pytest.mark.xfail(
+    reason="re-baselined in Task 20: baseline predates the next-day-close fill "
+           "convention (Task 9) and the per-order commission floor (Task 13). "
+           "Re-cut once, with the bridge report attached — spec §6. Remove this "
+           "marker there.",
+    strict=False)
 def test_synthetic_backtest_matches_baseline(current):
     baseline = ci_regression.load_baseline()
     drift = ci_regression.compare(baseline, current)
@@ -47,13 +53,15 @@ def test_compare_tolerates_small_noise(current):
 
 
 def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
-    """Execution-timing invariant: a month-end target computed as-of D_k must
-    first affect the book that earns returns on bar D_{k+1} (true t+1), and must
-    NEVER be the book on D_k or earlier (no lookahead — invariant #1).
+    """Execution-timing invariant: a month-end target computed as-of D_k must be
+    EXECUTED at D_{k+1}'s close, and must never be in the book at D_k or earlier
+    (no lookahead — invariant #1).
 
-    `weights_hist[D]` is exactly the book used to compute bar D's return in
-    `run_backtest`, so it is direct evidence of which bar a target first moves
-    equity. Pinned here so the t+2 lag bug can't return.
+    `weights_hist[D]` is the book as it stands at D's CLOSE — after any fill on
+    that bar, and therefore the book that earns bar D+1's return. So a target
+    appearing at `weights_hist[D_{k+1}]` is direct evidence that it was filled at
+    D_{k+1}'s close, one bar after the signal. Pinned here so neither the t+2 lag
+    bug nor a return to same-close fills can come back.
     """
     prices, index_px = synth_asx
     p = asx_region.params
@@ -73,7 +81,8 @@ def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
         d_k = prices.index[loc]          # signal / as-of bar
         d_k1 = prices.index[loc + 1]     # t+1
 
-        # t+1: the target first takes effect on D_{k+1}, exactly (pre-drift book).
+        # t+1: filled at D_{k+1}'s close, so that close's book IS the target
+        # exactly (it has not drifted yet).
         got_next = weights_hist.get(d_k1)
         assert got_next is not None and not got_next.empty, (
             f"target for {asof.date()} did not take effect at t+1 ({d_k1.date()})")

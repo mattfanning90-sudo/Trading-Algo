@@ -63,3 +63,47 @@ def test_ftse_stamp_duty_raises_cost(synth_asx):
     if r_asx["turnover"].sum() > 0:
         assert fees.stamp_duty(ftse, 1.0) > fees.stamp_duty(asx, 1.0)
         assert r_ftse["total_cost_fraction"] >= r_asx["total_cost_fraction"]
+
+
+def test_return_is_earned_by_the_previous_bars_book(synth_asx, asx_region):
+    """Today's return belongs to the book held THROUGH today, i.e. the one
+    recorded at yesterday's close.
+
+    A target decided at D_k's close cannot be filled at that close — that is the
+    very price that produced the signal. It is executed at D_{k+1}'s close, so
+    the first bar it earns a return on is D_{k+2}. Restated as an identity the
+    simulator must satisfy on every bar:
+
+        returns[D] == weights_hist[D_prev] . rets[D] - cost[D] + interest[D]
+
+    Before this change the right-hand book was `weights_hist[D]`, which is the
+    same thing as filling at the signal's own close.
+    """
+    import pytest
+
+    from trading_algo import config as cfg
+    from trading_algo import fees
+
+    prices, index_px = synth_asx
+    res = run_backtest(prices, index_px, asx_region, max_drawdown_stop=None)
+    weights_hist = res["weights"]
+    costs = res["costs"]
+    rets = prices.pct_change(fill_method=None)
+
+    dates = list(res["returns"].index)
+    checked = 0
+    for prev, today in zip(dates, dates[1:]):
+        book = weights_hist.get(prev)
+        if book is None or book.empty:
+            continue
+        day = rets.loc[today].reindex(book.index).fillna(0.0)
+        expected = float((book * day).sum())
+        expected -= float(costs.get(today, 0.0))
+        if cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL:
+            expected += fees.idle_cash_credit(
+                float(book.sum()), (today - prev).days, cfg.CASH_RATE_ANNUAL)
+        assert float(res["returns"].loc[today]) == pytest.approx(expected, abs=1e-12), (
+            f"bar {today.date()} was not earned by the book recorded at "
+            f"{prev.date()}'s close")
+        checked += 1
+    assert checked > 100, "fixture produced too few invested bars to prove anything"
