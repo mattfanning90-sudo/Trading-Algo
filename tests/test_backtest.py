@@ -205,3 +205,30 @@ def test_trading_from_the_first_bar_is_the_whole_sample_backtest(synth_asx, asx_
         assert res["cash_interest_fraction"] == old["cash_interest_fraction"]
         assert res["weights"].keys() == old["weights"].keys()
         assert all(res["weights"][d].equals(old["weights"][d]) for d in old["weights"])
+
+
+def test_the_breaker_peak_opens_at_the_capital_the_book_opened_with(
+        synth_asx, asx_region):
+    """A book opened at `trade_from` has no history above its capital: the
+    breaker's peak is `initial_capital` on the open bar, then the running high
+    of the book's own closes. So with a tight stop the open decision still
+    fills on the next bar, and the first halt fires on the first close that is
+    `stop` below max(capital, every close since) — no earlier and no later.
+    The stop is tight enough that this fixture breaches it within weeks of the
+    open, before any rebalance could take the book to cash on its own."""
+    prices, index_px = synth_asx
+    open_bar, fill_bar = _open_and_fill_bars(prices)
+    capital, stop = 25_000.0, 0.02
+    res = run_backtest(prices, index_px, asx_region, initial_capital=capital,
+                       max_drawdown_stop=stop, trade_from=OPENED)
+
+    assert not res["weights"][fill_bar].empty, "halted at the open"
+    eq = res["equity"]
+    peak = eq.cummax().clip(lower=capital)
+    breach = eq.index[(eq / peak - 1 <= -stop).to_numpy()]
+    assert len(breach) and res["drawdown_halts"] >= 1, "the fixture must breach"
+    first = breach[0]
+    exit_bar = eq.index[eq.index.get_loc(first) + 1]
+    held = [d for d in eq.index if fill_bar <= d <= first]
+    assert all(not res["weights"][d].empty for d in held), "halted before the breach"
+    assert res["weights"][exit_bar].empty, "no exit at the close after the breach"
