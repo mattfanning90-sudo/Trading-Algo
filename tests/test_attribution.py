@@ -778,3 +778,12 @@ def test_the_cash_path_undoes_any_cash_event_without_a_reader_edit(monkeypatch):
     cash, pos = attribution._sleeve_close(state, "US", pd.Timestamp("2026-03-03"))
     assert cash == pytest.approx(100.0)
     assert pos == {"AAA": 10.0}
+
+
+def test_the_dividends_note_carries_a_shorts_sign():
+    """A short OWES its dividend, so the net the paper's DIV rows credited can
+    be negative and the note must say so: 50 short x A$0.20 = -A$10.00."""
+    state = _bridge_state(100_995.08)
+    state["trades"] += [_div("2026-03-02", "ASX", "BHP.AX", -50, 0.2, "AUD")]
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert "credited a net -10.00 AUD" in rep["notes"]["dividends"]

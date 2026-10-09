@@ -1392,3 +1392,59 @@ def test_the_run_hands_the_credit_its_bar_and_its_account(
     assert isinstance(kw["px"], pd.Series)
     assert set(kw["px"].index) >= set(state["sleeves"]["US"]["positions"])
     assert kw["px"].notna().any()
+
+
+# --- coverage: region scoping and the gap limit ------------------------------
+def _row(region, date, ticker, side, shares, fill=100.0):
+    return {"date": date, "region": region, "ticker": ticker, "side": side,
+            "shares": shares, "fill": fill, "commission": 0.0 if side == "DIV" else 1.0,
+            "stamp_duty": 0.0, "currency": "AUD" if region == "ASX" else "USD"}
+
+
+def test_a_dividend_paid_in_another_sleeve_does_not_count_here(monkeypatch):
+    """The DIV rows that mark an ex-date as paid are this sleeve's own: the
+    same ticker and date in another region's ledger is another holding."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-01"}
+    log = [_row("ASX", "2026-06-10", "AAA", "DIV", 5, 0.5)]
+    paid = pd.DataFrame({"AAA": [0.5]}, index=pd.DatetimeIndex(["2026-06-10"]))
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-15", log,
+                                synthetic=False) == pytest.approx(5.0)
+
+
+def test_another_sleeves_fills_move_neither_this_entitlement_nor_its_names(monkeypatch):
+    """Entitlement and the window's names read this region's fills only. An
+    ASX fill of the same ticker after the ex-date is not a US share, and a
+    name only the ASX sleeve traded is not one the US feed is asked for."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-01"}
+    log = [_row("ASX", "2026-06-12", "AAA", "BUY", 100),
+           _row("ASX", "2026-06-05", "ZZZ", "BUY", 7)]
+    paid = pd.DataFrame({"AAA": [0.5]}, index=pd.DatetimeIndex(["2026-06-10"]))
+    calls = []
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid, calls))
+    assert pt._credit_dividends(get_region("US"), sleeve, "2026-06-15", log,
+                                synthetic=False) == pytest.approx(5.0)
+    assert [c[0] for c in calls] == [("AAA",)]
+
+
+def test_the_gap_turns_stuck_and_abandons_only_past_the_limit(monkeypatch):
+    """At exactly DIVIDEND_GAP_SESSIONS the gap is still ordinary; one session
+    more and it is "stuck" (a name with a price) or abandoned (one without)."""
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: pd.DataFrame())
+    alerts = _alerts(monkeypatch)
+    start = pd.Timestamp("2026-06-01")                         # a Monday
+    for n in (pt.DIVIDEND_GAP_SESSIONS, pt.DIVIDEND_GAP_SESSIONS + 1):
+        today = (start + pd.offsets.BDay(n)).strftime("%Y-%m-%d")
+        for px in (pd.Series({"AAA": 50.0}), pd.Series(dtype=float)):
+            sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+                      "last_dividend_date": "2026-06-01"}
+            pt._credit_dividends(get_region("US"), sleeve, today, [],
+                                 synthetic=False, px=px)
+            past, priced = n > pt.DIVIDEND_GAP_SESSIONS, bool(len(px))
+            _, message, kw = alerts[-1]
+            assert kw["stuck_sessions"] == n
+            assert ("stuck" in message) == (past and priced), (n, priced)
+            assert ("abandoned" in message) == (past and not priced), (n, priced)
+            assert (sleeve["last_dividend_date"] == today) == (past and not priced)
