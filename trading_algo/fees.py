@@ -76,7 +76,7 @@ def turnover_cost(region: Region, turnover: float, buy_turnover: float,
     backtest itself actually placed.
     """
     duty = buy_turnover * region.stamp_duty_bps / 1e4
-    if nav and orders is not None and len(orders) > 0:
+    if nav is not None and nav > 0 and orders is not None and len(orders) > 0:
         commission_frac = sum(
             commission(region, abs(float(dw)) * float(nav)) for dw in orders
         ) / float(nav)

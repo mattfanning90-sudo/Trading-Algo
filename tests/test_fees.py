@@ -99,3 +99,15 @@ def test_turnover_cost_exact_per_order_not_averaged():
     averaged_commission = 2 * fees.commission(asx, turnover * nav / 2) / nav
     assert exact_commission > averaged_commission * 1.2
     assert exact > turnover * asx.slippage_bps / 1e4 + averaged_commission
+
+
+def test_turnover_cost_guards_on_nonpositive_nav():
+    """M-3: the per-order branch must require nav > 0, not just truthy — a
+    `nav` of 0 (or, in principle, negative) must fall back to the bps model
+    rather than divide by a non-positive number."""
+    us = get_region("US")
+    orders = pd.Series([0.2, 0.2])
+    assert fees.turnover_cost(us, 0.4, 0.0, nav=0.0, orders=orders) == pytest.approx(
+        fees.turnover_cost(us, 0.4, 0.0))
+    assert fees.turnover_cost(us, 0.4, 0.0, nav=-100.0, orders=orders) == pytest.approx(
+        fees.turnover_cost(us, 0.4, 0.0))
