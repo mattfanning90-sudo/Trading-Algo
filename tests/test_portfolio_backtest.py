@@ -124,6 +124,14 @@ def test_each_sleeve_opens_on_its_own_bar(monkeypatch):
         assert (bt["base_returns"].loc[:day] == 0.0).all(), k
         assert bt["turnover"].index[0] == bars[bars.get_loc(day) + 1], k
         assert bt["weights"][day].empty, k
+        # from its OWN open on, the sleeve's base value is its local value at
+        # each day's rate (up to the month-end true-up), so no FX move after
+        # its open bar is dropped because ANOTHER sleeve opened later
+        live = bars[(bars >= day) & (bars < pd.Timestamp("2020-03-31"))]
+        ccy = get_region(k).currency
+        assert np.allclose(res["sleeve_equity"].loc[live, k],
+                           bt["equity"].loc[live] * rate.loc[live, ccy],
+                           rtol=1e-12, atol=0.0), k
 
 
 def test_one_date_for_every_sleeve_is_the_single_date_exactly():
