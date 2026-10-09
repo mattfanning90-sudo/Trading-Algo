@@ -402,3 +402,57 @@ def test_a_sleeve_that_was_never_evaluated_is_an_error():
     out = verify.check_liveness(
         "full", _flat_book(_flat_sleeve(None, evaluated=False)), "equity", FLAT_NOW)
     assert _levels(out).get("never-traded") == verify.ERROR
+
+
+# ---------------------------------------------------------------------------
+# STAGED — a decision waiting for its next-close fill is not a fault
+# ---------------------------------------------------------------------------
+# Paper books decide at one close and fill at the next, so the run that DECIDES
+# leaves a funded sleeve with no trades and no positions — only a staged
+# `pending_target`. That is the designed execution lag, and `verify` runs after
+# every scheduled paper run behind a strict gate.
+def _staged_book():
+    sleeve = {"currency": "USD", "cash": 6_666.67, "positions": {},
+              "last_rebalance_month": "2026-07", "last_rebalance_date": None,
+              "pending_target": {"date": "2026-07-24",
+                                 "weights": {"AAPL": 0.5}, "frozen": []},
+              "last_status": {"date": "2026-07-24", "status": "rebalanced",
+                              "positions": 0, "flat_since": None}}
+    return equity_book([], {"US": sleeve})
+
+
+def test_a_staged_target_is_neither_a_position_nor_a_trade():
+    assert verify.reconcile_equity("t", _staged_book()) == []
+
+
+def test_a_sleeve_awaiting_its_first_fill_is_not_never_traded():
+    lv = _levels(verify.check_liveness("t", _staged_book(), "equity", NOW))
+    assert lv.get("awaiting-fill") == verify.INFO
+    assert "never-traded" not in lv
+    assert "pinned-flat" not in lv
+
+
+def test_a_staged_exit_still_leaves_a_flat_sleeve_pinned():
+    """Only a staged BUY is about to change a flat sleeve. An empty staged target
+    leaves it flat, so the calendar pin is still real."""
+    book = _staged_book()
+    book["sleeves"]["US"]["pending_target"]["weights"] = {}
+    book["trades"] = [{"date": "2026-07-01", "region": "US", "ticker": "SLV",
+                       "side": "BUY", "shares": 3, "fill": 60.0,
+                       "commission": 1.0, "stamp_duty": 0.0}]
+    assert "pinned-flat" in codes(verify.check_liveness("t", book, "equity", NOW))
+
+
+def test_the_audit_reads_a_real_staged_book_as_waiting_not_broken(
+        tmp_path, monkeypatch, paper_cycle):
+    """End to end on a book `paper_trade` actually wrote: no ERROR or WARN on
+    the run that decides, and once it fills the ledger still explains it."""
+    from trading_algo import paper_trade as pt
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    pt.init_account("t", capital=300_000, synthetic=True, allocations={"US": 1.0})
+    for _ in range(2):                                 # decided, then filled
+        state = paper_cycle("t", sessions=1)
+        today = datetime.fromisoformat(state["equity_history"][-1][0])
+        found = verify.verify_book("equity", "t", state, today=today)
+        assert [(f.level, f.code) for f in found
+                if f.level in (verify.ERROR, verify.WARN)] == []

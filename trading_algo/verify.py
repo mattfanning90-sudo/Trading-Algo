@@ -355,6 +355,18 @@ def _flat_reason(sleeve: dict) -> str | None:
     return None
 
 
+def _staged_buy(sleeve: dict) -> str | None:
+    """The decision date of a staged target that holds something, else None.
+
+    `paper_trade` decides at one close and fills at the next, so between those
+    runs a sleeve can be flat and untraded with a non-empty `pending_target`.
+    That target is NOT a position or a trade — the ledger replay never reads it
+    — but it does mean the sleeve is about to stop being flat.
+    """
+    pending = sleeve.get("pending_target") or {}
+    return str(pending.get("date")) if pending.get("weights") else None
+
+
 def _never_traded_finding(account: str, key: str, sleeve: dict,
                           funded: float) -> Finding:
     """Grade a funded-but-never-traded sleeve on the evidence in its own state.
@@ -365,10 +377,18 @@ def _never_traded_finding(account: str, key: str, sleeve: dict,
     broken" trains its reader to ignore it.
     """
     reason = _flat_reason(sleeve)
-    evaluated = sleeve.get("last_rebalance_date")
+    staged = _staged_buy(sleeve)
     what = (f"sleeve {key} is funded ({funded:.0%} of the book, "
             f"{sleeve.get('cash', 0):,.0f} {sleeve.get('currency')}) and has "
             "never executed a single trade")
+    if staged:
+        return Finding(
+            INFO, account, "awaiting-fill",
+            f"{what} yet — it decided on {staged} and that target fills at the "
+            "next close, the book's designed one-session execution lag")
+    # A decision is an evaluation even before its fill stamps the date.
+    evaluated = (sleeve.get("last_rebalance_date")
+                 or (sleeve.get("pending_target") or {}).get("date"))
     if reason in _BY_DESIGN_FLAT:
         return Finding(
             INFO, account, "flat-by-design",
@@ -440,7 +460,7 @@ def check_liveness(account: str, state: dict, kind: str,
         stamped = sleeve.get("last_rebalance_month")
         asof = status.get("date")
         if (funded and stamped and asof and stamped == asof[:7]
-                and not sleeve.get("positions")):
+                and not sleeve.get("positions") and not _staged_buy(sleeve)):
             found.append(Finding(
                 WARN, account, "pinned-flat",
                 f"sleeve {key} holds nothing and is already stamped for "
