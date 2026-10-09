@@ -278,3 +278,58 @@ def test_a_closed_backtest_window_is_not_judged_stale(monkeypatch):
                         lambda *a, **k: _panel_for(region, old))
     data.load_region(region, "2019-01-01", "2020-06-30")
     assert [p for p in got if p["event"] == "stale_panel"] == []
+
+
+# ---------------------------------------------------------------------------
+# missing_names — a ticker that never loaded at all (no column, not a bad one)
+# ---------------------------------------------------------------------------
+# `assess` judges COLUMNS, so it is blind to a name that has none: data.py's
+# load_prices ends with dropna(axis=1, how="all"), so a delisted, renamed or
+# mistyped ticker in universes.py loses its column and simply ceases to exist.
+# A broken universe then reads as a smaller universe, not a broken one.
+@pytest.fixture
+def captured_alerts(monkeypatch):
+    from trading_algo import notifications
+    got = []
+    notifications.register_channel("cap", got.append)
+    monkeypatch.setattr(cfg, "NOTIFY_CHANNEL", "cap")
+    return got
+
+
+def test_missing_names_reports_a_ticker_that_never_loaded(us, captured_alerts):
+    """`assess` judges COLUMNS, so a ticker whose download failed is invisible
+    to it — data.load_prices drops the all-NaN column and the name ceases to
+    exist. A delisted or mistyped symbol in universes.py then looks like a
+    smaller universe rather than a broken one."""
+    df = _clean_frame(cols=("A", "B"))
+    report = data_quality.missing_names(us, df, ["A", "B", "GONE", "ALSOGONE"])
+    assert report.excluded == {"GONE", "ALSOGONE"}
+    assert "no data" in report.reasons["GONE"]
+    alerts = [p for p in captured_alerts if p["event"] == "dead_tickers"]
+    assert len(alerts) == 1
+    assert alerts[0]["level"] == "alert"
+    assert sorted(alerts[0]["tickers"]) == ["ALSOGONE", "GONE"]
+
+
+def test_missing_names_is_silent_when_everything_loaded(us, captured_alerts):
+    df = _clean_frame(cols=("A", "B"))
+    report = data_quality.missing_names(us, df, ["A", "B"])
+    assert report.excluded == set()
+    assert not [p for p in captured_alerts if p["event"] == "dead_tickers"]
+
+
+def test_load_region_reports_the_names_it_dropped(monkeypatch, us, captured_alerts):
+    """The drop happens inside load_prices; load_region is where the region is
+    known, so that is where it is reported."""
+    import pandas as pd
+
+    from trading_algo import data
+
+    idx = pd.bdate_range("2026-06-01", periods=5)
+    # "DEAD" was requested but never came back.
+    frame = pd.DataFrame({"AAPL": 200.0, "^GSPC": 5000.0}, index=idx)
+    monkeypatch.setattr(data, "load_prices", lambda *a, **k: frame.copy())
+    data.load_region(us, "2026-06-01", tickers=["AAPL", "DEAD"])
+    alerts = [p for p in captured_alerts if p["event"] == "dead_tickers"]
+    assert len(alerts) == 1 and alerts[0]["tickers"] == ["DEAD"]
+    assert alerts[0]["region"] == "US"

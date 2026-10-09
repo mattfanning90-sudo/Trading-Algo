@@ -176,6 +176,32 @@ def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:
     return report
 
 
+def missing_names(region, prices: pd.DataFrame, requested: list[str]) -> QualityReport:
+    """Requested names with no column at all — they never loaded.
+
+    `assess` judges COLUMNS. A ticker whose download failed has none:
+    `data.load_prices` drops the all-NaN column and the name simply ceases to
+    exist, so a delisted, renamed or mistyped symbol in `universes.py` reads as
+    a smaller universe rather than a broken one. Returns a report flagging
+    exactly those names and alerts once per call, so a dead ticker is visible
+    in the run log and in the notification channel instead of nowhere.
+    """
+    absent = [t for t in requested if t not in prices.columns]
+    report = QualityReport()
+    for t in absent:
+        report.flag(t, "no data loaded")
+    if absent:
+        from . import notifications
+        key = getattr(region, "key", "?")
+        notifications.notify(
+            "dead_tickers",
+            f"{key}: {len(absent)} universe name(s) returned no data and were "
+            f"dropped: {', '.join(absent)} — a delisted, renamed or mistyped "
+            "symbol in universes.py, not a smaller universe",
+            level="alert", region=getattr(region, "key", None), tickers=absent)
+    return report
+
+
 def eligible(prices: pd.DataFrame, region, asof: pd.Timestamp,
              base: set | None = None) -> tuple[set | None, QualityReport]:
     """The eligible candidate set after the quality gate, and the report.

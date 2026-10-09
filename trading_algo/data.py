@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
+from . import data_quality
 from .regions import Region
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
@@ -271,6 +272,9 @@ def load_region(region: Region, start: str, end: str | None = None,
     # was actually wrong. A day with no tradeable price is not a session.
     # The index keeps its own calendar; callers reindex it onto `prices`.
     prices = prices.dropna(how="all")
+    # A requested ticker with no column never loaded — `load_prices` drops the
+    # all-NaN column and it vanishes. Report it here, where the region is known.
+    data_quality.missing_names(region, prices, universe)
     _warn_if_stale(region, prices, end)
     return prices, index_px
 
