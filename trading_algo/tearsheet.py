@@ -20,6 +20,7 @@ from . import attribution
 from . import config as cfg
 from . import metrics
 from . import paper_trade
+from . import pnl
 
 
 def _annualised(equity_history: list) -> dict:
@@ -74,7 +75,8 @@ def account_tearsheet(state: dict, as_of: str | None = None) -> str:
                 f"| Ann. vol ({ppy:g}/yr) | {stats['ann_vol']:.1%} |",
                 f"| {stats['sharpe_label']} | {stats['sharpe']} |"]
     out += [f"| Equity points | {len(eh)} |",
-            f"| Trades to date | {len(state.get('trades', []))} |", ""]
+            f"| Trades to date | "
+            f"{sum(1 for t in state.get('trades', []) if pnl.is_fill(t))} |", ""]
 
     # Per-sleeve holdings
     out += ["## Sleeves", "", "| Sleeve | Cash | Positions |", "|---|---|---|"]

@@ -1160,7 +1160,7 @@ def status(account: str) -> None:
             vol = metrics.annualised_vol(rets, periods_per_year=ppy)
             print(f"  Ann. vol         {vol:.1%}")
             print(f"  Max drawdown     {metrics.max_drawdown(s).value:.2%}")
-        print(f"  Trades to date   {len(state['trades'])}")
+        print(f"  Trades to date   {sum(1 for t in state['trades'] if pnl.is_fill(t))}")
 
     fees_by_ccy: dict[str, float] = {}
     for t in state["trades"]:
@@ -1187,7 +1187,8 @@ def compare(accounts: list[str]) -> None:
         s = load_state(name)
         eq = s["equity_history"][-1][1] if s["equity_history"] else s["initial_capital_base"]
         print(f"{name:<10} {s['initial_capital_base']:>14,.0f} {eq:>14,.2f} "
-              f"{eq / s['initial_capital_base'] - 1:>+8.2%} {len(s['trades']):>7}")
+              f"{eq / s['initial_capital_base'] - 1:>+8.2%} "
+              f"{sum(1 for t in s['trades'] if pnl.is_fill(t)):>7}")
 
 
 # ---------------------------------------------------------------------------

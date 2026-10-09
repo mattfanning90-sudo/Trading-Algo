@@ -120,3 +120,55 @@ def test_server_404_for_missing_account(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# --- cash events: a dividend is income, never a fill on any screen ----------
+def _with_a_dividend(account):
+    """The cycled book plus one 0.50 dividend on a held name, credited to cash
+    exactly as paper_trade books it (a DIV row; shares unchanged)."""
+    state = pt.load_state(account)
+    key, sleeve = next((k, s) for k, s in state["sleeves"].items() if s["positions"])
+    ticker, shares = next(iter(sleeve["positions"].items()))
+    sleeve["cash"] += shares * 0.5
+    state["trades"].append({"date": state["equity_history"][-1][0], "region": key,
+                            "ticker": ticker, "side": "DIV", "shares": shares,
+                            "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
+                            "currency": sleeve["currency"]})
+    pt.save_state(account, state)
+    fills = [t for t in state["trades"] if t["side"] != "DIV"]
+    return state, fills, shares * 0.5, sleeve["currency"]
+
+
+def test_a_dividend_is_income_not_a_fill_on_the_dashboard(account):
+    """The SPA builds its blotter, trade feed, LAST FILL and fill counts from
+    `blotter`, so the payload carries fills only; the dividend reaches the
+    screen as INCOME, a part of NET P&L. Task 12's interest rows (~250 a year
+    per sleeve) take the same path and so can reach no count or list."""
+    state, fills, amount, ccy = _with_a_dividend(account)
+    snap = api.build_snapshot(account, synthetic=True)
+    k = snap["kpis"]
+    assert all(t["side"] in ("BUY", "SELL") for t in snap["blotter"])
+    assert len(snap["blotter"]) == len(fills)
+    assert k["n_trades"] == len(fills)
+    assert k["income_base"] == pytest.approx(amount * snap["fx"].get(ccy, 1.0), abs=0.01)
+
+
+def test_net_pnl_parts_sum_to_the_whole(account):
+    """REAL + OPEN never summed to NET (measured on the live `full` book:
+    +75.93 + 27.86 against -169.62): open lots' entry costs and the FX
+    translation of the funded capital sit in neither. INCOME takes the cash
+    events, and OTHER names what is left, so the parts add up."""
+    _with_a_dividend(account)
+    k = api.build_snapshot(account, synthetic=True)["kpis"]
+    parts = k["realized_base"] + k["unrealized_base"] + k["income_base"] + k["other_base"]
+    assert parts == pytest.approx(k["net_pnl_base"], abs=0.02)
+
+
+def test_the_net_pnl_tile_shows_every_part():
+    import pathlib
+
+    from trading_algo import dashboard
+    js = (pathlib.Path(dashboard.__file__).parent / "static" / "app.js").read_text()
+    tile = next(line for line in js.splitlines() if "NET P&amp;L" in line)
+    for part in ("k.realized_base", "k.unrealized_base", "k.income_base", "k.other_base"):
+        assert part in tile, part

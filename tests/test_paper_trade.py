@@ -1254,3 +1254,23 @@ def test_an_exit_on_an_ex_date_is_paid_across_a_feed_gap_end_to_end(
             if r["side"] == "DIV"}
     assert paid == {t: (n, exit_bar) for t, n in held.items()}
     assert state["sleeves"]["US"]["last_dividend_date"] == state["equity_history"][-1][0]
+
+def test_status_and_compare_count_fills_not_dividends(account, paper_cycle, capsys):
+    """'Trades to date' and the compare table count executions. A dividend
+    row is cash income; it must not read as a trade."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    state = paper_cycle(account)
+    fills = len(state["trades"])
+    ticker, shares = next(iter(state["sleeves"]["US"]["positions"].items()))
+    state["trades"].append({"date": state["equity_history"][-1][0], "region": "US",
+                            "ticker": ticker, "side": "DIV", "shares": shares,
+                            "fill": 0.5, "commission": 0.0, "stamp_duty": 0.0,
+                            "currency": "USD"})
+    state["sleeves"]["US"]["cash"] += shares * 0.5
+    pt.save_state(account, state)
+    capsys.readouterr()
+    pt.status(account)
+    assert f"Trades to date   {fills}\n" in capsys.readouterr().out
+    pt.compare([account])
+    assert capsys.readouterr().out.rstrip().endswith(f" {fills}")

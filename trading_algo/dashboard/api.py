@@ -346,8 +346,14 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     initial = state["initial_capital_base"]
     benchmark_curve = _benchmark_curve(index_by_region, eq_hist, initial, synthetic)
 
-    blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)}
-               for t in state["trades"]]
+    # Fills only: the SPA builds its blotter, trade feed, LAST FILL and fill
+    # counts off this list. A cash event (a dividend) is income, not a trade,
+    # and reaches the screen as INCOME, one part of NET P&L below.
+    fills = [t for t in state["trades"] if pnl.is_fill(t)]
+    blotter = [{**t, "value": round(t["shares"] * t["fill"], 2)} for t in fills]
+    income_base = sum(pnl.cash_amount(t) * snap_fx.get(t["currency"], 1.0)
+                      for t in state["trades"] if pnl.is_cash_event(t))
+    net_base = total_base - initial
 
     # A running peak INCLUDES the current mark. paper_trade only updates it on a
     # scheduled run, while this endpoint re-marks live, so today's equity could
@@ -404,7 +410,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "day_change": round(total_base / prev_equity - 1, 4) if prev_equity else 0.0,
             "day_change_base": round(total_base - prev_equity, 2),
             "target_vol": params.target_vol,      # this book's, not the global
-            "n_trades": len(state["trades"]),
+            "n_trades": len(fills),
             "n_positions": n_positions,
             "cash_pct": round(total_cash_base / denom, 4),
             # --- total financial position (all in base currency) ---
@@ -413,7 +419,13 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "fees_base": round(fees_base, 2),
             "realized_base": round(total_realized_base, 2),
             "unrealized_base": round(total_unrealized_base, 2),
-            "net_pnl_base": round(total_base - initial, 2),
+            "income_base": round(income_base, 2),
+            # What NET holds that the three above do not: entry costs still in
+            # open lots, and the FX move on the funded capital. Named, so the
+            # parts add up to NET instead of leaving the gap unexplained.
+            "other_base": round(net_base - total_realized_base
+                                - total_unrealized_base - income_base, 2),
+            "net_pnl_base": round(net_base, 2),
             # Gross = Σ|position value| / equity — the real leverage of the book
             # (a 3× book reads ~3.0; a 100/100 long-short book ~2.0). Net long
             # exposure is invested_base/equity, reported separately below.

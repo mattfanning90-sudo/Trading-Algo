@@ -10,7 +10,7 @@ import math
 from datetime import datetime, timezone
 
 from .. import config as cfg
-from .. import paper_trade
+from .. import paper_trade, pnl
 from .. import profiles
 from ..forex import fx_book
 from . import registry
@@ -48,7 +48,8 @@ def _card(entry: dict, state: dict) -> dict | None:
         peak = float(state.get("peak_equity_base") or equity or 1.0)
         n_positions = sum(len(s.get("positions") or {})
                           for s in (state.get("sleeves") or {}).values())
-        n_line = f"{n_positions} POSITIONS · {len(state.get('trades') or [])} TRADES"
+        fills = sum(1 for t in state.get("trades") or [] if pnl.is_fill(t))
+        n_line = f"{n_positions} POSITIONS · {fills} TRADES"
     else:
         initial = float(state.get("initial_capital") or 0.0)
         equity = _num(state.get("equity")) or (hist[-1][1] if hist else initial)

@@ -55,3 +55,15 @@ def test_fx_books_do_not_inflate_the_headline_aum(two_books):
     fx_group = next(g for g in two_books["groups"] if g["name"] == profiles.FX)
     assert fx_group["aum"] == pytest.approx(4_200.0)
     assert fx_group["books"] == 1
+
+
+def test_a_books_trade_count_is_fills_not_cash_events(monkeypatch):
+    """A dividend is not a trade. Task 12's interest rows would otherwise add
+    ~250 'trades' a year per sleeve to the card."""
+    state = _equity_state()
+    state["trades"] = [{"date": "2026-01-01", "side": "BUY"},
+                       {"date": "2026-01-02", "side": "DIV"}]
+    entry = {"key": "FULL", "account": "full", "kind": "equity", "micro": False,
+             "label": "FULL", "sub": ""}
+    card = overview._card(entry, state)
+    assert card["n_line"].endswith("1 TRADES")

@@ -89,3 +89,11 @@ def test_tearsheet_annualises_an_hourly_history_at_its_own_spacing():
         metrics.sharpe(rets, periods_per_year=ppy,
                        risk_free=cfg.RISK_FREE).value, 2)
     assert stats["sharpe_label"] == f"Sharpe (vs {cfg.RISK_FREE:.1%}, {ppy:g}/yr)"
+
+
+def test_trades_to_date_counts_fills_not_dividends():
+    s = _state()
+    s["trades"].append({"region": "US", "ticker": "AAPL", "side": "DIV",
+                        "shares": 10, "fill": 0.5, "commission": 0.0,
+                        "currency": "USD"})
+    assert "| Trades to date | 1 |" in tearsheet.account_tearsheet(s)
