@@ -514,3 +514,23 @@ def test_a_dividend_window_reaching_today_is_never_served_from_cache(
         for _ in range(2):
             data.dividends(["AAA"], start, end.strftime("%Y-%m-%d"))
     assert len(calls) == 4, "a window ending today or later must refetch"
+
+
+def test_a_partial_dividend_result_is_never_cached(tmp_path, monkeypatch):
+    """A closed window is cached for good, so caching an answer that is
+    missing a name would serve the gap back on every retry under that key.
+    Only a result with every requested ticker is cached."""
+    from trading_algo import data
+
+    pytest.importorskip("pyarrow")
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    raw = pd.DataFrame({("Dividends", "AAA"): [0.5], ("Close", "AAA"): [10.0],
+                        ("Close", "BAD"): [float("nan")]},
+                       index=pd.DatetimeIndex(["2026-06-02"]))
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+    calls = []
+    monkeypatch.setattr(data, "_download_dividends",
+                        lambda t, s, e: calls.append(e) or raw)
+    for _ in range(2):
+        data.dividends(["AAA", "BAD"], "2026-06-01", "2026-06-03")
+    assert len(calls) == 2, "a partial answer must be fetched again"

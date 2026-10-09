@@ -204,8 +204,10 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
 
     Cached like `load_prices`, with one exception: a window whose `end` is
     today or later is still being written (a retry must see a late ex-date, or
-    a name that failed the first time), so it is never cached. A window wholly
-    in the past is immutable history; an open-ended one keeps CACHE_TTL_HOURS.
+    a name that failed the first time), so it is never cached; nor is an
+    answer missing any requested name, which a retry would otherwise get back.
+    A window wholly in the past is immutable history; an open-ended one keeps
+    CACHE_TTL_HOURS.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = _cache_path(f"div:v1:{start}:{end}:" + ",".join(sorted(tickers)))
@@ -234,7 +236,7 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     div = div.reindex(columns=[t for t in tickers if t in div.columns]).fillna(0.0)
     div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
     try:
-        if use_cache:
+        if use_cache and len(div.columns) == len(tickers):   # never a partial answer
             div.to_parquet(cache_file)
     except Exception:
         pass  # parquet engine optional; caching is a nicety, not a requirement
