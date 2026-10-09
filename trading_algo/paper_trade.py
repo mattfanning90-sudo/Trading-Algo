@@ -705,8 +705,33 @@ def _held_at(sleeve: dict, fills: list, ticker: str, ex_date: str) -> int:
     return int(sleeve["positions"].get(ticker, 0)) - later
 
 
+def _dividend_gap_alert(region, account, last: str, today: str, missing: list,
+                        abandoned: list, sessions: int) -> None:
+    """The alert for a dividend window held open: what it waits for, "stuck"
+    once that has gone on for more than a few sessions, and what it gave up."""
+    waiting = [n for n in missing if n not in abandoned]
+    parts = []
+    if waiting:
+        stuck = (f" — stuck for {sessions} sessions: a feed that has not "
+                 "answered this long is not coming back by itself (a renamed "
+                 "or delisted name?)" if sessions > DIVIDEND_GAP_SESSIONS else "")
+        parts.append(f"no dividend data for {', '.join(waiting)}; the window "
+                     f"since {last} stays open and every dividend in it for "
+                     f"those names waits{stuck}")
+    if abandoned:
+        parts.append(f"abandoned {', '.join(abandoned)}: no dividend data for "
+                     f"{sessions} sessions and no price either, so any dividend "
+                     f"owed in ({last}, {today}] is not credited")
+    who = f"[{account}] " if account else ""
+    notifications.notify(
+        "dividend_feed_gap", f"{who}{region.key}: " + "; ".join(parts),
+        level="alert", account=account, region=region.key, missing=missing,
+        abandoned=abandoned, window_start=last, stuck_sessions=sessions)
+
+
 def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
-                      synthetic: bool, *, account: str | None = None) -> float:
+                      synthetic: bool, *, account: str | None = None,
+                      px: pd.Series | None = None) -> float:
     """Credit cash for dividends that went ex since the last run.
 
     The paper book marks at the latest UNADJUSTED close, so every ex-dividend
@@ -726,7 +751,11 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
     EVERY name held in it came back; until then it stays open, each run pays
     what did come back, and an ex-date already paid is recognised by its DIV
     row rather than paid again. A window never moves backward. A gap alerts,
-    and says so once it has been open for more than a few sessions.
+    and says so once it has been open for more than a few sessions. Past that,
+    a missing name with no usable close in `px` (this bar) either is gone, not
+    late — a dead held name is frozen and never sold, a sold one stays in the
+    window's names — so it is abandoned, named in the alert, and the window
+    moves on rather than waiting for good.
 
     Synthetic data has no dividend feed, and invariant #5 says synthetic results
     are plumbing only — so it returns zero offline rather than inventing one.
@@ -771,21 +800,14 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
             print(f"    DIV  {shares:>7} {t:<10} @ {dps:.4f} "
                   f"= {amount:>10,.2f} {region.currency}")
     missing = [n for n in names if n not in div.columns]
-    if not missing:
+    sessions = int(np.busday_count(last, today)) if missing else 0
+    abandoned = ([n for n in missing if not px.get(n, 0) > 0]   # NaN: no close
+                 if px is not None and sessions > DIVIDEND_GAP_SESSIONS else [])
+    if missing:
+        _dividend_gap_alert(region, account, last, today, missing, abandoned,
+                            sessions)
+    if len(abandoned) == len(missing):
         sleeve["last_dividend_date"] = today
-        return total
-    sessions = int(np.busday_count(last, today))
-    stuck = (f" — stuck for {sessions} sessions: a feed that has not answered "
-             "this long is not coming back by itself (a renamed or delisted "
-             "name?)" if sessions > DIVIDEND_GAP_SESSIONS else "")
-    who = f"[{account}] " if account else ""
-    notifications.notify(
-        "dividend_feed_gap",
-        f"{who}{region.key}: no dividend data for {', '.join(missing)}; the "
-        f"window since {last} stays open and every dividend in it for those "
-        f"names waits{stuck}",
-        level="alert", account=account, region=region.key, missing=missing,
-        window_start=last, stuck_sessions=sessions)
     return total
 
 
@@ -962,7 +984,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         # Cash events first: they accrue to the book AS IT STOOD over the period,
         # before any of this run's trades change it.
         _credit_dividends(region, sleeve, today, state["trades"], synthetic,
-                          account=account)
+                          account=account, px=px_today)
         status = None                       # why the sleeve ended this run as it did
         pending = sleeve.get("pending_target")
         if halted and (pending.get("weights") if pending else sleeve["positions"]):

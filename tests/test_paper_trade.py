@@ -1237,6 +1237,7 @@ def test_a_window_stuck_for_more_than_a_few_sessions_says_so(monkeypatch):
     assert "stuck" not in fresh
     assert "stuck" in stuck and kw["stuck_sessions"] == 10
 
+
 def test_a_name_going_ex_on_its_fill_bar_is_paid_at_the_pre_fill_shares(monkeypatch):
     """Decided 06-12, filled at 06-15's close; AAA and BBB both go ex 06-15.
     Whoever holds at the ex-date's open is paid: AAA's 10 pre-fill shares, and
@@ -1324,3 +1325,70 @@ def test_status_and_compare_count_fills_not_dividends(account, paper_cycle, caps
     assert f"Trades to date   {fills}\n" in capsys.readouterr().out
     pt.compare([account])
     assert capsys.readouterr().out.rstrip().endswith(f" {fills}")
+
+
+# --- a window that can never close is released, and says why ---------------
+def _sessions(start, end):
+    return [d.strftime("%Y-%m-%d") for d in pd.bdate_range(start, end)]
+
+
+def test_a_dead_name_with_no_price_is_abandoned_and_the_window_closes(monkeypatch):
+    """The review's probe: the window opened at 01-05; DEAD was sold the next
+    day and then its feed died, so it stayed in the window's names (traded
+    inside it) and the window stuck at 01-05 through 06-30 with an alert every
+    run. Past the gap, a name with no usable close on this bar either is
+    abandoned — named — and the window moves on."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"LIVE": 10},
+              "last_dividend_date": "2026-01-05"}
+    log = [_fill("2026-01-02", "DEAD", "BUY", 5), _fill("2026-01-06", "DEAD", "SELL", 5),
+           _fill("2026-01-02", "LIVE", "BUY", 10)]
+    paid = pd.DataFrame({"LIVE": [0.5]}, index=pd.DatetimeIndex(["2026-03-02"]))
+    monkeypatch.setattr(pt.data, "dividends", _yahoo(paid))       # never has DEAD
+    alerts = _alerts(monkeypatch)
+    px = pd.Series({"LIVE": 50.0})                                 # DEAD: no close
+    for day in _sessions("2026-01-06", "2026-06-30"):
+        pt._credit_dividends(get_region("US"), sleeve, day, log, synthetic=False,
+                             px=px)
+    assert sleeve["last_dividend_date"] == "2026-06-30"
+    assert len(alerts) == pt.DIVIDEND_GAP_SESSIONS + 1
+    _, message, kw = alerts[-1]
+    assert "abandoned" in message and "no price either" in message
+    assert kw["abandoned"] == ["DEAD"]
+    assert [(r["ticker"], r["date"]) for r in log if r["side"] == "DIV"] == [
+        ("LIVE", "2026-03-02")]
+
+
+def test_a_name_that_still_has_a_price_is_never_abandoned(monkeypatch):
+    """A name the market still prices is alive: only its dividend feed is
+    failing, and the dividend is owed. It keeps the window open, however long."""
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 10},
+              "last_dividend_date": "2026-06-01"}
+    monkeypatch.setattr(pt.data, "dividends", lambda t, s, e: pd.DataFrame())
+    alerts = _alerts(monkeypatch)
+    pt._credit_dividends(get_region("US"), sleeve, "2026-06-30", [], synthetic=False,
+                         px=pd.Series({"AAA": 50.0}))
+    assert sleeve["last_dividend_date"] == "2026-06-01"
+    (_, message, kw), = alerts
+    assert "stuck" in message and "abandoned" not in message and not kw["abandoned"]
+
+
+def test_the_run_hands_the_credit_its_bar_and_its_account(
+        account, paper_cycle, monkeypatch):
+    """The abandon rule reads this bar's closes and the alert names the book:
+    both come from the call in run_daily, so pin that they arrive."""
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    seen = []
+    real = pt._credit_dividends
+
+    def spy(region, sleeve, today, log, synthetic, **kw):
+        seen.append(kw)
+        return real(region, sleeve, today, log, synthetic, **kw)
+
+    monkeypatch.setattr(pt, "_credit_dividends", spy)
+    state = paper_cycle(account, sessions=1)
+    [kw] = seen
+    assert kw["account"] == account
+    assert isinstance(kw["px"], pd.Series)
+    assert set(kw["px"].index) >= set(state["sleeves"]["US"]["positions"])
+    assert kw["px"].notna().any()
