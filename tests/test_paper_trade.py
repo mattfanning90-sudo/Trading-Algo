@@ -787,14 +787,28 @@ def test_reconcile_status_hands_the_bridge_the_backtests_holdings(monkeypatch):
     assert "equity" in (got.get("backtest") or {})
 
 
-def test_the_comparison_opens_with_the_book_at_the_books_size():
+def test_the_comparison_opens_with_the_book_at_the_books_size(monkeypatch):
     """Since the per-order commission floor (Task 13) the backtest's cost
     depends on its size. Funded at `cfg.START`, the comparison had compounded to
     1.3-5.3x the book's capital by the day the book opened, so the floor was
     charged at the wrong size and `_predicted_curve` only re-levelled the
     result. The comparison must instead trade FROM the book's first equity date
     at the book's own capital: every sleeve's NAV on that date is the book's
-    funded sleeve capital to the cent, and the re-level factor is 1.0."""
+    funded sleeve capital to the cent, and the re-level factor is 1.0.
+
+    The FX rate drifts across the sample, so a sleeve funded at any bar other
+    than the open bar holds the wrong LOCAL amount — the amount the floor is
+    charged against — even where its base-currency value happens to agree."""
+    from trading_algo import fx
+
+    def drifting_fx(currencies, start="2012-01-01", end="2026-01-01",
+                    base="AUD", seed=7):
+        idx = pd.bdate_range(start, end)
+        ramp = np.linspace(1.0, 2.0, len(idx))
+        return pd.DataFrame({c: 1.0 if c == base else ramp * {"USD": 1.5}.get(c, 2.0)
+                             for c in currencies}, index=idx)
+
+    monkeypatch.setattr(fx, "synthetic_fx", drifting_fx)
     opened, last = "2020-03-11", "2020-06-30"       # a Wednesday, mid-sample
     state = {"initial_capital_base": 10_000.0, "base_currency": "AUD",
              "fx_snapshot": {"AUD": 1.0}, "trades": [],
@@ -802,11 +816,15 @@ def test_the_comparison_opens_with_the_book_at_the_books_size():
              "equity_history": [[opened, 10_000.0], [last, 10_100.0]]}
     res = pt._backtest_for_book(state, synthetic=True)
     open_d = pd.Timestamp(opened)
+    rate = drifting_fx(["USD", "GBP"], end="2020-07-01").loc[open_d]
 
     for k, share in state["allocations"].items():
         nav = float(res["sleeve_equity"].loc[open_d, k])
         assert nav == pytest.approx(10_000.0 * share, abs=0.005), k
         sleeve = res["sleeves"][k]
+        local = float(sleeve["equity"].loc[open_d])
+        ccy = get_region(k).currency
+        assert local == pytest.approx(10_000.0 * share / rate[ccy], abs=0.005), k
         # funded and decided on the open bar, filled on the next — Task 9
         assert sleeve["turnover"].index[0] > open_d, k
         assert (sleeve["equity"].loc[:open_d] == sleeve["equity"].iloc[0]).all(), k
