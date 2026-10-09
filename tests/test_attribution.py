@@ -972,3 +972,22 @@ def test_a_paper_credit_is_linked_through_the_backtests_growth_after_it(
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
     assert _aud(rep, "cash_interest") == pytest.approx(
         -(5.0 * 1.045 / 1.10 + 5.001), abs=0.005)
+
+
+def test_each_cash_interest_note_says_which_figure_it_gives(monkeypatch):
+    """The same INT rows read two ways. Measured against the backtest, the
+    note gives what the line subtracts: each credit LINKED through the
+    backtest's growth after it (5.00 x 1.045 / 1.10 + 5.001 = 9.75 AUD).
+    Without it, the RAW sum the rows booked, at the current snapshot (5.00 +
+    5.001 = 10.00 AUD). Under one wording the two read as a contradiction."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)
+    bt = _backtest((0.10, -0.05))
+    state = _with_paper_interest(_paper_book(0.5, (0.10, -0.05)))
+    measured = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert "less 9.75 AUD" in measured["notes"]["cash_interest"]
+    assert "linked" in measured["notes"]["cash_interest"]
+    raw = attribution.reconcile(state, bt["equity"])
+    assert "credited 10.00 AUD" in raw["notes"]["cash_interest"]
+    assert "raw sum" in raw["notes"]["cash_interest"]
+    assert "unlinked" in raw["notes"]["cash_interest"]
