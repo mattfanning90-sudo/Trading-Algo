@@ -35,9 +35,9 @@ A compacted session reads this first to find where execution stopped.
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
 | 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
 | 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
-| 3 — conventions | 9-13 (+13b) | ⬜ not started |
+| 3 — conventions | 9-13 (+13b) | 🟡 **in progress** — 9 done; 10 in review; 13, 13b in flight; 11, 12 queued behind 10 |
 | 4 — mechanism | 14-20 (17 superseded) | ⬜ not started |
-| 5 — regeneration, deploy, restart | 21-26 | ⬜ not started |
+| 5 — regeneration, deploy, restart | 21-26 | 🟡 22, 23 in flight early (FX only, isolated worktrees); 21, 24 wait for Phase 4; **25, 26 need Matt's go** |
 | W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
 
 **Execution log** — one line per task, appended as it completes:
@@ -89,6 +89,21 @@ A compacted session reads this first to find where execution stopped.
 - **Task 17 superseded.** Micro mode was fixed on another branch (`fix/small-micro-mode`,
   `01fa7c7`) with Matt; cherry-picked here as `38f9ff5`. Matt kept micro mode's 0.97
   investment level unchanged.
+- **2026-10-10 — Phase 3 starts: the regression gate is EXPECTED red until Task 20**, and the
+  branch must not be pushed until then.
+- **2026-10-10 — Task 9 (`5d61ec8`, `d490a15`).** The backtest fills a target at the NEXT bar's
+  close (D3). Real data, survivorship-biased upper bound: CAGR ASX −0.36pp, US −0.41pp,
+  FTSE +0.15pp, TSX −0.06pp — the ~0.4pp/yr D3 priced in. The bridge now prices each day at the
+  book held THROUGH it (the convention change redefined what a day's weights mean). Reviewed:
+  spec ✅; a hand walk of every decision bar across 12 seeds found no lookahead. Two minors
+  flagged for the final review: the convention is pinned by one test, and the identity test
+  skips empty-book bars.
+- **2026-10-10 — Task 10 implemented (`d326825`, `4337c96`), in review.** Each paper sleeve
+  persists a `pending_target` and fills it at a later run's close. Three departures from the
+  brief, each proven by a failing test (fixture clock order; the breaker's exit was never
+  filling; verify would have failed every new book's first run). One suspected regression
+  sent to the reviewer: the tracking diagnosis (Task 5) is dated by a field whose meaning
+  moved from decision date to fill date.
 
 ---
 
