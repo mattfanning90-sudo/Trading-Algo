@@ -91,6 +91,19 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
         return []
 
 
+def _net_parts(realized: float, unrealized: float, income: float,
+               net: float) -> dict[str, float]:
+    """NET P&L and the parts it splits into, in base currency.
+
+    Each part is rounded to the cent FIRST and OTHER is taken from the rounded
+    parts, so the parts shown sum exactly to the NET shown. OTHER is what NET
+    holds that the named parts do not: entry costs still in open lots, and the
+    FX move on the funded capital."""
+    r, u, i, n = (round(v, 2) for v in (realized, unrealized, income, net))
+    return {"realized_base": r, "unrealized_base": u, "income_base": i,
+            "other_base": round(n - r - u - i, 2), "net_pnl_base": n}
+
+
 def closed_trades(trades: list[dict], snap_fx: dict) -> dict:
     """FIFO round-trips derived from the fills ledger — the single source of
     truth (see `trading_algo.pnl`). Fills already include modelled slippage, so
@@ -417,15 +430,8 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
             "invested_base": round(total_invested_base, 2),
             "cash_base": round(total_cash_base, 2),
             "fees_base": round(fees_base, 2),
-            "realized_base": round(total_realized_base, 2),
-            "unrealized_base": round(total_unrealized_base, 2),
-            "income_base": round(income_base, 2),
-            # What NET holds that the three above do not: entry costs still in
-            # open lots, and the FX move on the funded capital. Named, so the
-            # parts add up to NET instead of leaving the gap unexplained.
-            "other_base": round(net_base - total_realized_base
-                                - total_unrealized_base - income_base, 2),
-            "net_pnl_base": round(net_base, 2),
+            **_net_parts(total_realized_base, total_unrealized_base,
+                         income_base, net_base),
             # Gross = Σ|position value| / equity — the real leverage of the book
             # (a 3× book reads ~3.0; a 100/100 long-short book ~2.0). Net long
             # exposure is invested_base/equity, reported separately below.

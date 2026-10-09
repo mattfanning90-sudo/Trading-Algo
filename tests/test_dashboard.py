@@ -161,7 +161,21 @@ def test_net_pnl_parts_sum_to_the_whole(account):
     _with_a_dividend(account)
     k = api.build_snapshot(account, synthetic=True)["kpis"]
     parts = k["realized_base"] + k["unrealized_base"] + k["income_base"] + k["other_base"]
-    assert parts == pytest.approx(k["net_pnl_base"], abs=0.02)
+    assert round(parts, 2) == k["net_pnl_base"]
+
+
+def test_net_pnl_parts_are_exact_to_the_cent():
+    """Rounding each part on its own and OTHER from the unrounded values is
+    off by a cent: 0.004 three times gives parts 0.00 + 0.00 + 0.00 + 0.00
+    against a NET of 0.01. Round the parts first and take OTHER from them."""
+    parts = api._net_parts(0.004, 0.004, 0.004, 0.012)
+    assert parts["net_pnl_base"] == 0.01
+    assert [parts[k] for k in ("realized_base", "unrealized_base", "income_base")] \
+        == [0.0, 0.0, 0.0]
+    assert parts["other_base"] == 0.01
+    total = sum(parts[k] for k in ("realized_base", "unrealized_base",
+                                   "income_base", "other_base"))
+    assert round(total, 2) == parts["net_pnl_base"]
 
 
 def test_the_net_pnl_tile_shows_every_part():
@@ -170,5 +184,6 @@ def test_the_net_pnl_tile_shows_every_part():
     from trading_algo import dashboard
     js = (pathlib.Path(dashboard.__file__).parent / "static" / "app.js").read_text()
     tile = next(line for line in js.splitlines() if "NET P&amp;L" in line)
+    assert "sgnNum(k.net_pnl_base, 2)" in tile
     for part in ("k.realized_base", "k.unrealized_base", "k.income_base", "k.other_base"):
-        assert part in tile, part
+        assert f"sgnNum({part}, 2)" in tile, f"{part} at NET's precision"
