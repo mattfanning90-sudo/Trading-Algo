@@ -86,8 +86,8 @@ Measured 2026-10-09 unless noted. Each is a reason for a decision above.
     sig.realised_vol(...)`) and `strategy.targets_at` ("**The one weight formula**"),
     but are not saved.
 - **Attribution sources.** Equity `sleeve_history` is a daily list of per-region values
-  (e.g. `{'date': '2026-10-09', 'ASX': 33333.33, 'US': 35003.4, 'FTSE': 31702.46}`;
-  units to confirm, Q-2). FX `cumulative.by_pair` holds per-pair P&L in AUD since its
+  in A$ (e.g. `{'date': '2026-10-09', 'ASX': 33333.33, 'US': 35003.4, 'FTSE': 31702.46}`;
+  settled, see Q-2). FX `cumulative.by_pair` holds per-pair P&L in AUD since its
   `from` date (FX·Matt: since 2026-07-28); differencing it between commits gives exact
   per-pair window P&L.
 - **Signal horizon is already defined** by `verify.signal_horizon` (mean of the
@@ -296,8 +296,9 @@ without it is a month of equity bets that can only be reconstructed, not recorde
 
 - **Q-1** Does FMP's free plan include the economic calendar? If not, decide on a paid
   plan or drop scheduled releases (headline news via Claude remains).
-- **Q-2** Are `sleeve_history` values in A$ or the sleeve's local currency? Labels
-  and attribution depend on it (invariant #6).
+- ~~**Q-2** Are `sleeve_history` values in A$ or local currency?~~ **Settled
+  2026-10-09:** A$ (base). `paper_trade.py` writes `round(v[2], 2)` where
+  `v = (eq_local, currency, eq_base)`.
 - **Q-3** "Near the breaker" threshold — measure on real drawdown history before
   choosing.
 - **Q-4** Backup retention (proposed 14 nightly / 90-day pre-migration).
