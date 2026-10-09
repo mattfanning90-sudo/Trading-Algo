@@ -517,3 +517,19 @@ def test_a_new_cash_event_replays_without_a_reader_edit(monkeypatch):
           "shares": 1, "fill": 2.5, "commission": 0.0, "stamp_duty": 0.0}],
         {"US": sleeve}))
     assert out == []
+
+def test_a_short_pays_its_dividend_in_the_replay():
+    """A short OWES the dividend: its DIV row carries the signed share count,
+    so the replay's `shares * fill` comes out negative. 150 AUD at 1.5 = 100
+    USD funded; short 50 @ 20 (+1,000, 1 fee), then 2.00 a share owed on the
+    50 short = -100. A replay that credited it (+100) is 200 out, well past
+    the 2% cash tolerance; one that moved the short is a position mismatch."""
+    sleeve = {"currency": "USD", "cash": 100.0 + 1_000.0 - 1.0 - 100.0,
+              "positions": {"BBB": -50.0}}
+    out = verify.reconcile_equity("t", equity_book(
+        [{"date": "2026-07-06", "region": "US", "ticker": "BBB", "side": "SELL",
+          "shares": 50, "fill": 20.0, "commission": 1.0, "stamp_duty": 0.0},
+         {"date": "2026-07-20", "region": "US", "ticker": "BBB", "side": "DIV",
+          "shares": -50, "fill": 2.0, "commission": 0.0, "stamp_duty": 0.0}],
+        {"US": sleeve}, initial_capital_base=150.0))
+    assert out == []
