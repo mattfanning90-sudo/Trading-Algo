@@ -19,9 +19,12 @@ LOCAL currency (invariant #6) — sleeves are not blended across currencies here
 """
 from __future__ import annotations
 
+from bisect import bisect_left
+
 import pandas as pd
 
-from . import metrics, tca
+from . import config as cfg
+from . import fees, metrics, tca
 from .regions import get_region
 
 # AC4: alert when annualised tracking error exceeds this budget.
@@ -199,7 +202,176 @@ def _line_commission_floor(fills: list[tuple[dict, float]]) -> float:
     return excess
 
 
-def reconcile(paper_state: dict, predicted_equity: pd.Series) -> dict:
+def _base_per_local(paper_state: dict, ccy: str | None) -> float | None:
+    """Base units per 1 `ccy`, from the book's CURRENT `fx_snapshot`, or None.
+
+    1.0 only for the book's base currency. `paper_trade.fx_snapshot` omits a
+    currency that has no prior good rate, so a missing key means "no rate",
+    never "parity": guessing 1.0 would convert at a made-up rate.
+    """
+    if ccy == (paper_state.get("base_currency") or cfg.BASE_CURRENCY):
+        return 1.0
+    try:
+        rate = float((paper_state.get("fx_snapshot") or {}).get(ccy))
+    except (TypeError, ValueError):
+        return None
+    return rate if rate > 0 else None              # NaN > 0 is False
+
+
+def _sleeve_close(paper_state: dict, key: str,
+                  day: pd.Timestamp) -> tuple[float, dict]:
+    """(local cash, shares by ticker) for sleeve `key` at the close of `day`.
+
+    Rebuilt BACKWARD from the stored sleeve, which is the book after every
+    trade: cash moves only on fills (`rebalance_sleeve` debits
+    `delta * fill + commission + stamp_duty`), so undoing each fill dated after
+    `day` recovers that close. A forward replay would need the inception FX
+    rate, which the state does not keep.
+    """
+    sleeve = paper_state["sleeves"][key]
+    cash = float(sleeve.get("cash") or 0.0)
+    pos = {t: float(n) for t, n in (sleeve.get("positions") or {}).items()}
+    for t in paper_state.get("trades") or []:
+        if t.get("region") != key or pd.Timestamp(t["date"]) <= day:
+            continue
+        delta = float(t["shares"]) * (1.0 if t.get("side") == "BUY" else -1.0)
+        cash += (delta * float(t["fill"]) + float(t.get("commission") or 0.0)
+                 + float(t.get("stamp_duty") or 0.0))
+        pos[t["ticker"]] = pos.get(t["ticker"], 0.0) - delta
+    return cash, pos
+
+
+def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
+                  start: pd.Timestamp, end: pd.Timestamp) -> dict:
+    """One sleeve's backtest-minus-paper gap, and the parts the lines name.
+
+    `values` maps each paper date in [start, end] to the sleeve's base value.
+    Every term is a fraction of the sleeve's window-start value. Each backtest
+    day's difference splits, Brinson-style, into
+
+        (g_bt - g_p) * h   exposure: invested more or less, priced at h
+        i                  the backtest's idle-cash credit (paper: none yet)
+        the rest           what was held and when, plus every unnamed cause
+
+    g is the gross invested fraction; h is what the backtest's holdings earned
+    per unit invested, BEFORE its trading cost and cash credit (neither is a
+    property of being invested). Days are linked GRAP-style, each scaled by the
+    paper's growth before it and the backtest's after, so the parts sum to the
+    sleeve's compounded gap: a sleeve whose ONLY difference is exposure puts
+    all of its gap in exposure, where an unlinked daily sum leaves a
+    compounding cross term behind.
+
+    The paper's g is 1 - cash/value at its last close before the day, from
+    `_sleeve_close`, and held there until its next run. Local cash goes into
+    base along the backtest's own FX path, levelled to the sleeve's OWN rate on
+    its latest all-cash close in the window (value / cash is exactly that
+    day's rate); only a sleeve never flat in the window falls back to the
+    book's snapshot, its one stored rate. A flat close is g = 0 outright.
+    `exposure` is None, with `why`, when the cash path cannot give g: a short's
+    proceeds sit in cash, so cash says only NET exposure; and with no rate the
+    cash cannot be put in base. `bt_flat` counts days the backtest held
+    nothing while the paper was invested: no backtest holdings price them, so
+    they cannot be exposure and stay in the remainder.
+    """
+    rl, rb = bt["returns"], bt["base_returns"]
+    costs = bt.get("costs")
+    costs = costs if costs is not None else pd.Series(dtype=float)
+    days = sorted(values)
+    v0 = values[days[0]]
+    idx = rl.index[(rl.index > start) & (rl.index <= end)]
+    growth = (1 + rb.loc[idx]).cumprod()
+    b_end = float(growth.iloc[-1]) if len(idx) else 1.0
+    fx_step = (1 + rb) / (1 + rl)                  # the backtest's FX move per day
+    gaps = rl.index.to_series().diff().dt.days.fillna(0)
+    credit_on = bool(cfg.CREDIT_IDLE_CASH and cfg.CASH_RATE_ANNUAL)
+
+    ccy = paper_state["sleeves"][key].get("currency")
+    closes = {d: _sleeve_close(paper_state, key, d) for d in days[:-1]}
+    flat = [d for d, (cash, pos) in closes.items()
+            if cash > 0 and not any(pos.values())]
+    if flat:                                       # all cash: value / cash IS the rate
+        rate, at = values[flat[-1]] / closes[flat[-1]][0], flat[-1]
+    else:
+        rate, at = _base_per_local(paper_state, ccy), end
+    why = None if rate is not None else f"no {ccy} rate in fx_snapshot for {key}'s cash"
+    if any(n < 0 for _, pos in closes.values() for n in pos.values()):
+        why = f"{key} held a short (cash gives only net exposure)"
+    g_p: dict = {}
+    if why is None:
+        level = fx_step.cumprod()
+        for d, (cash, pos) in closes.items():
+            m = rate * float(level.asof(d)) / float(level.asof(at))
+            g_p[d] = 1.0 - cash * m / values[d] if any(pos.values()) else 0.0
+
+    exposure = interest = 0.0
+    bt_flat = 0
+    for t in idx:
+        w = bt["weights"].get(t)
+        w = w if w is not None else pd.Series(dtype=float)
+        if why is None and bool((w < 0).any()):
+            why = f"{key}'s backtest held a short (no paper gross to match)"
+        g_bt = float(w.abs().sum())
+        i = (fees.idle_cash_credit(float(w.sum()), float(gaps[t]),
+                                   cfg.CASH_RATE_ANNUAL) if credit_on else 0.0)
+        h = (float(rl[t]) + float(costs.get(t, 0.0)) - i) / g_bt if g_bt > 0 else 0.0
+        d = days[bisect_left(days, t) - 1]         # the paper's last close before t
+        link = float(fx_step[t]) * values[d] / v0 * b_end / float(growth[t])
+        interest += i * link
+        if why is None:
+            exposure += (g_bt - g_p[d]) * h * link
+            bt_flat += g_bt == 0 and g_p[d] > 1e-6
+    return {"v0": v0, "gap": b_end - values[days[-1]] / v0, "interest": interest,
+            "exposure": None if why else exposure, "why": why, "bt_flat": bt_flat}
+
+
+def _holdings_terms(paper_state: dict, backtest: dict, start: pd.Timestamp,
+                    end: pd.Timestamp) -> tuple[dict, str | None]:
+    """Every sleeve's `_sleeve_terms`, or ({}, why) when one cannot be had —
+    all or nothing, so no sleeve's gap is half-named while another's is not."""
+    rows = [r for r in paper_state.get("sleeve_history") or []
+            if start <= pd.Timestamp(r["date"]) <= end]
+    bts = backtest.get("sleeves") or {}
+    terms: dict = {}
+    for key in paper_state.get("sleeves") or {}:
+        values = {pd.Timestamp(r["date"]): float(r[key]) for r in rows
+                  if r.get(key) is not None}
+        if key not in bts:
+            return {}, f"the backtest carries no {key} sleeve"
+        if start not in values or end not in values or values[start] <= 0:
+            return {}, f"sleeve_history has no {key} value on {start.date()} and {end.date()}"
+        terms[key] = _sleeve_terms(paper_state, bts[key], key, values, start, end)
+    if not terms:
+        return {}, "the book records no sleeves"
+    return terms, None
+
+
+def _bps_by_sleeve(terms: dict, equity: float, part: str) -> str:
+    return ", ".join(f"{k} {t['v0'] / equity * t[part] * 1e4:+.1f}bp"
+                     for k, t in terms.items())
+
+
+def _line_cash_interest(terms: dict, equity: float) -> float:
+    """The backtest's idle-cash credit, less the paper's (none yet)."""
+    return sum(t["v0"] / equity * t["interest"] for t in terms.values())
+
+
+def _line_exposure_gap(terms: dict, equity: float) -> float:
+    """Return missed (+) or gained (-) by holding a different invested
+    fraction than the backtest, priced at the backtest's own holdings."""
+    return sum(t["v0"] / equity * t["exposure"] for t in terms.values())
+
+
+def _line_rebalance_timing(terms: dict, equity: float, lines: dict) -> float:
+    """The rest of every sleeve's gap once each other line is taken out.
+
+    Every other line is a sleeve-level cause, inside the sleeves' returns, so
+    taking them out here leaves the residual with the portfolio layer only."""
+    gap = sum(t["v0"] / equity * t["gap"] for t in terms.values())
+    return gap - sum(v for n, v in lines.items() if n != "rebalance_timing")
+
+
+def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
+              backtest: dict | None = None) -> dict:
     """Walk from the backtest's total return to the paper book's, line by line.
 
     Every line is a SIGNED return fraction of the book's equity at the window
@@ -216,10 +388,20 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series) -> dict:
     `residual` rather than being absorbed into a line — spec §5 sets NO target
     for the residual; the honest sequence is fix, measure, then judge.
 
-    Local-currency amounts are converted with the book's CURRENT `fx_snapshot`,
-    not the rate on the trade date; that approximation is part of what the
-    `fx_translation` line will eventually carry, and until then it sits in the
-    residual.
+    `backtest` is the `run_portfolio_backtest` result `predicted_equity` came
+    from — the SAME regions, allocations, params and window as the book. With
+    it, the holdings lines are measured from its per-sleeve weights and
+    returns (see `_sleeve_terms`): `cash_interest`, `exposure_gap`, and
+    `rebalance_timing`. The last is each sleeve's gap less every other line,
+    so it is the one place an unnamed SLEEVE-level cause can hide, and its
+    note lists what it carries; the residual is then the portfolio layer
+    alone (the backtest trues sleeves to target monthly while the paper funds
+    once and drifts). Without `backtest`, or when a sleeve's holdings cannot
+    be had, those lines stay 0.0, say why, and leave the gap in residual.
+
+    Local-currency fill amounts are converted with the book's CURRENT
+    `fx_snapshot`, not the rate on the trade date; the paper keeps no FX history
+    (see the `fx_translation` note).
     """
     eh = paper_state.get("equity_history") or []
     paper = pd.Series({pd.Timestamp(d): float(v) for d, v in eh}).sort_index()
@@ -245,19 +427,71 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series) -> dict:
         "dividends": "0.0 — the paper ledger credits no dividend yet; the "
                      "backtest's prices are already total-return",
         "cash_interest": "0.0 — the paper book accrues no interest on idle cash "
-                         "yet; the backtest applies fees.idle_cash_credit",
+                         "yet; the backtest applies fees.idle_cash_credit, which "
+                         "this bridge measures only from the backtest's holdings "
+                         "(backtest=)",
         "fill_convention": f"only the shortfall beyond the modelled slippage, "
                            f"which both engines charge; the paper book paid "
                            f"{slip_paid:,.2f} {ccy} of slippage over this window "
                            f"(fills that record a decision price)",
         "stamp_duty": f"0.0 — both engines charge it; the paper book paid "
                       f"{duty:,.2f} {ccy} over this window",
-        "exposure_gap": "0.0 — needs the gated target as of each rebalance, "
-                        "which needs prices this signature does not carry",
-        "rebalance_timing": "0.0 — needs the month-end counterfactual book",
-        "fx_translation": "0.0 — both engines translate; the difference (and "
-                          "this bridge's current-rate approximation) is not yet isolated",
+        "exposure_gap": "0.0 — needs the backtest's per-sleeve holdings "
+                        "(backtest=)",
+        "rebalance_timing": "0.0 — measured with exposure_gap, from the "
+                            "backtest's per-sleeve holdings (backtest=)",
+        "fx_translation": "0.0 — not derivable: the paper book keeps only its "
+                          "latest fx_snapshot, not the rate each run translated "
+                          "at. Recording that rate per run would make this line "
+                          "computable; until then the difference (and this "
+                          "bridge's current-rate approximation for fills) sits "
+                          "in rebalance_timing, or in residual without it",
     }
+
+    if backtest is not None:
+        terms, why = _holdings_terms(paper_state, backtest, start, end)
+        if why:
+            for name in ("cash_interest", "exposure_gap", "rebalance_timing"):
+                notes[name] = f"0.0 — not measured: {why}; the gap stays in residual"
+        else:
+            lines["cash_interest"] = _line_cash_interest(terms, start_equity)
+            notes["cash_interest"] = (
+                f"the backtest's fees.idle_cash_credit on its idle fraction, "
+                f"{lines['cash_interest'] * start_equity:,.2f} {ccy} over this "
+                f"window; the paper book accrues none yet ("
+                f"{_bps_by_sleeve(terms, start_equity, 'interest')})")
+            missing = [t["why"] for t in terms.values() if t["why"]]
+            if missing:
+                for name in ("exposure_gap", "rebalance_timing"):
+                    notes[name] = (f"0.0 — not measured: {'; '.join(missing)}; "
+                                   "the gap stays in residual")
+            else:
+                lines["exposure_gap"] = _line_exposure_gap(terms, start_equity)
+                lines["rebalance_timing"] = _line_rebalance_timing(
+                    terms, start_equity, lines)
+                idle = sum(t["bt_flat"] for t in terms.values())
+                notes["exposure_gap"] = (
+                    "a different invested fraction from the backtest's, priced "
+                    "at what its holdings earned per unit invested; the "
+                    "paper's fraction is rebuilt from its cash path ("
+                    f"{_bps_by_sleeve(terms, start_equity, 'exposure')})"
+                    + (f"; on {idle} sleeve-day(s) the backtest held nothing "
+                       "while the paper was invested, so there is no backtest "
+                       "price for that exposure and it stays in "
+                       "rebalance_timing" if idle else ""))
+                notes["rebalance_timing"] = (
+                    "the rest of each sleeve's gap ("
+                    f"{_bps_by_sleeve(terms, start_equity, 'gap')}) after every "
+                    "other line: rebalance-date mismatch AND name selection "
+                    "(data-quality exclusions, whole-share rounding of the name "
+                    "mix), which cannot be separated without per-name "
+                    "counterfactual books — plus every sleeve-level cause no "
+                    "line names yet: turnover-cost differences, dividends, FX "
+                    "translation timing, bars stamped a day apart")
+                notes["residual"] = (
+                    "the portfolio layer: the backtest trues its sleeves back to "
+                    "target each month and pays the FX spread; the paper book "
+                    "funds once and drifts")
 
     residual = backtest_return - sum(lines.values()) - paper_return
     return {"start": str(start.date()), "end": str(end.date()),

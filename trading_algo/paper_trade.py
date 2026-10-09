@@ -1233,7 +1233,8 @@ def reconcile_status(account: str, synthetic: bool) -> None:
         return
     try:
         res = _backtest_for_book(state, synthetic)
-        rep = attribution.reconcile(state, _predicted_curve(state, res))
+        rep = attribution.reconcile(state, _predicted_curve(state, res),
+                                    backtest=res)
     except Exception as exc:        # real data needs network; synthetic is offline
         print(f"  bridge unavailable: {exc}")
         return

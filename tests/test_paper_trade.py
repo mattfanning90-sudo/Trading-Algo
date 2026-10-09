@@ -669,3 +669,22 @@ def test_the_predicted_curve_reaches_the_books_last_equity_date(monkeypatch, cap
     pt.attribution_status("t", synthetic=True)
     assert got["pred"].index[-1] == pd.Timestamp("2026-06-30")
     assert got["pred"].index[0] == pd.Timestamp("2026-01-05")
+
+
+def test_reconcile_status_hands_the_bridge_the_backtests_holdings(monkeypatch):
+    """The holdings lines need the backtest's per-sleeve weights and returns,
+    so --reconcile must pass the result it already computed."""
+    from trading_algo import attribution
+    state = _profiled_book(regions=("ASX", "US", "FTSE"))
+    monkeypatch.setattr(pt, "load_state", lambda account: state)
+    _capture_backtest(monkeypatch)
+    got = {}
+    real = attribution.reconcile
+
+    def spy(st, pred, **kw):
+        got.update(kw)
+        return real(st, pred, **kw)
+
+    monkeypatch.setattr(attribution, "reconcile", spy)
+    pt.reconcile_status("t", synthetic=True)
+    assert "equity" in (got.get("backtest") or {})

@@ -293,3 +293,283 @@ def test_bridge_reports_the_equity_its_lines_are_fractions_of():
     state["equity_history"][0][1] = 99_830.84
     rep = attribution.reconcile(state, _bridge_predicted())
     assert rep["start_equity"] == 99_830.84
+
+
+# --- the holdings lines: exposure_gap, cash_interest, rebalance_timing -------
+# A two-sleeve AUD book over three consecutive sessions. ASX is identical in
+# paper and backtest; every divergence is put in the US sleeve, which holds
+# its cash in USD at a flat 1.5 AUD per USD, so base and local returns agree
+# and a wrong conversion of the cash shows up as a wrong invested fraction.
+_D = pd.to_datetime(["2026-03-02", "2026-03-03", "2026-03-04"])
+_FX = 1.5
+_ASX_RETS = (0.02, 0.01)
+
+
+def _paper_book(us_invested, us_rets, *, buy_on_d1=0.0, positions=None):
+    """Paper: each sleeve starts at 50,000 AUD. The US sleeve holds
+    `us_invested` of it in stock earning `us_rets`, the rest as USD cash;
+    `buy_on_d1` AUD of that cash goes into stock at the second session's
+    close. The stored sleeve is the book AFTER every trade, as on disk, so its
+    positions agree with the ledger: 10 AAA held from the start if invested,
+    10 more if it bought."""
+    asx = [50_000.0]
+    for r in _ASX_RETS:
+        asx.append(asx[-1] * (1 + r))
+    cash, held = 50_000.0 * (1 - us_invested), 50_000.0 * us_invested
+    us = [cash + held]
+    for i, r in enumerate(us_rets):
+        held *= 1 + r
+        if i == 0 and buy_on_d1:
+            held, cash = held + buy_on_d1, cash - buy_on_d1
+        us.append(cash + held)
+    trades = []
+    if buy_on_d1:
+        px = buy_on_d1 / _FX / 10
+        trades.append({"date": "2026-03-03", "region": "US", "ticker": "AAA",
+                       "side": "BUY", "shares": 10, "decision": px, "fill": px,
+                       "commission": 0.0, "stamp_duty": 0.0, "currency": "USD"})
+    days = [d.strftime("%Y-%m-%d") for d in _D]
+    return {
+        "initial_capital_base": 100_000.0, "base_currency": "AUD",
+        "fx_snapshot": {"AUD": 1.0, "USD": _FX},
+        "allocations": {"ASX": 0.5, "US": 0.5},
+        "sleeves": {"ASX": {"currency": "AUD", "cash": 0.0,
+                            "positions": {"BHP.AX": 100}},
+                    "US": {"currency": "USD", "cash": cash / _FX,
+                           "positions": positions or {
+                               "AAA": 10 * bool(us_invested) + 10 * bool(buy_on_d1)}}},
+        "equity_history": [[d, a + u] for d, a, u in zip(days, asx, us)],
+        "sleeve_history": [{"date": d, "ASX": a, "US": u}
+                           for d, a, u in zip(days, asx, us)],
+        "trades": trades,
+    }
+
+
+def _backtest(us_rets, us_weight=1.0):
+    """A run_portfolio_backtest-shaped result. Each sleeve's daily return is
+    its weight times its holdings' return plus the backtest's idle-cash credit
+    — the same composition backtest.py books. Two sessions cannot reach a
+    month-end true-up, so the portfolio is the start-weighted hold."""
+    from trading_algo import config as cfg
+    from trading_algo import fees
+
+    def sleeve(rets, weight, name):
+        credit = (fees.idle_cash_credit(weight, 1, cfg.CASH_RATE_ANNUAL)
+                  if cfg.CREDIT_IDLE_CASH else 0.0)
+        r = pd.Series([0.0, *[weight * h + credit for h in rets]], index=_D)
+        return {"returns": r, "base_returns": r.copy(),
+                "costs": pd.Series(dtype=float),
+                "weights": {d: pd.Series({name: weight}) for d in _D}}
+
+    sleeves = {"ASX": sleeve(_ASX_RETS, 1.0, "BHP.AX"),
+               "US": sleeve(us_rets, us_weight, "AAA")}
+    equity = 50_000.0 * sum((1 + s["returns"]).cumprod() for s in sleeves.values())
+    return {"equity": equity, "sleeves": sleeves}
+
+
+def _aud(rep, line):
+    """A line in the money column's units: AUD on the window-start equity."""
+    return rep["lines"][line] * rep["start_equity"]
+
+
+def test_exposure_gap_is_the_half_the_paper_sleeve_did_not_hold():
+    """Backtest US fully invested: 50,000 x 1.10 x 0.95 = 52,250. Paper US half
+    in cash: 25,000 + 25,000 x 1.10 x 0.95 = 51,125. The holdings earned the
+    same return in both, so the whole 1,125.00 AUD is the half the paper did
+    not hold — exposure_gap, to the cent, and nothing for rebalance_timing.
+
+    (Summing (g_bt - g_p) * r day by day without linking gives 1,309.52 here
+    and pushes -184.52 into rebalance_timing in a case with no timing at all.)"""
+    rep = attribution.reconcile(_paper_book(0.5, (0.10, -0.05)),
+                                _backtest((0.10, -0.05))["equity"],
+                                backtest=_backtest((0.10, -0.05)))
+    assert _aud(rep, "exposure_gap") == pytest.approx(1_125.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "cash_interest") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True
+    assert rep["residual"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_matching_exposure_with_different_holdings_is_all_rebalance_timing():
+    """Both fully invested; the paper's names earned +8% where the backtest's
+    earned +10%. 50,000 x 1.10 x 0.95 = 52,250 against 50,000 x 1.08 x 0.95 =
+    51,300: the 950.00 AUD gap is what was held, not how much, so it is all
+    rebalance_timing and exposure_gap is zero."""
+    bt = _backtest((0.10, -0.05))
+    rep = attribution.reconcile(_paper_book(1.0, (0.08, -0.05)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "exposure_gap") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(950.00, abs=0.005)
+    assert rep["identity_ok"] is True
+
+
+def test_the_cash_path_is_rebuilt_from_the_ledger(monkeypatch):
+    """The stored sleeve is the book AFTER every trade: fully invested. The
+    paper was half in cash until it bought at the second session's close, so
+    it missed half of the +10% day only: backtest 52,250 against paper
+    (25,000 + 27,500) x 0.95 = 49,875. All 2,375.00 AUD is exposure_gap. Read
+    off today's cash alone, the sleeve looks fully invested on both days and
+    the gap would be mislabelled timing."""
+    bt = _backtest((0.10, -0.05))
+    rep = attribution.reconcile(
+        _paper_book(0.5, (0.10, -0.05), buy_on_d1=25_000.0), bt["equity"],
+        backtest=bt)
+    assert _aud(rep, "exposure_gap") == pytest.approx(2_375.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+
+
+def test_cash_interest_is_the_backtests_credit_on_its_idle_cash(monkeypatch):
+    """Both engines hold the US sleeve half in cash and its stock earns
+    nothing. The backtest credits fees.idle_cash_credit on the idle half —
+    0.5 x 7.3% / 365 = 1bp a day — and the paper book credits nothing yet:
+    25,000 x ((1.0001)^2 - 1) ... of the 50,000 sleeve = 10.0005 AUD, all of
+    it cash_interest. Priced into the holdings return instead, it would read
+    as exposure (or, stripped and dropped, as timing)."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.0, 0.0), us_weight=0.5)
+    rep = attribution.reconcile(_paper_book(0.5, (0.0, 0.0)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(
+        50_000.0 * (1.0001 ** 2 - 1), abs=0.005)
+    assert _aud(rep, "exposure_gap") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True
+
+
+def test_exposure_is_priced_without_the_backtests_cash_credit(monkeypatch):
+    """The shape of `full`'s ASX sleeve: the backtest half invested, the paper
+    all cash. The backtest's US sleeve makes 0.5 x +10% plus 1bp of credit,
+    then 0.5 x -5% plus 1bp: 50,000 x 1.0501 x 0.9751 = 51,197.63 against the
+    paper's 50,000. Of that 1,197.63 AUD, the credit is day 1's 5.00 carried
+    through day 2's -2.49% (4.88) plus day 2's 5.00 = 9.88 of cash_interest;
+    exposure_gap is the other 1,187.75. Dividing the backtest's WHOLE return
+    by its invested half would double the credit into exposure instead."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.10, -0.05), us_weight=0.5)
+    rep = attribution.reconcile(_paper_book(0.0, (0.0, 0.0)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(
+        50_000.0 * 0.0001 * (0.9751 + 1), abs=0.005)
+    assert _aud(rep, "exposure_gap") == pytest.approx(
+        50_000.0 * (0.5 * 0.10 * 0.9751 - 0.5 * 0.05), abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True
+
+
+def test_the_backtests_trading_cost_is_not_exposure():
+    """The half-invested case again, but the backtest pays 10bps of NAV to
+    trade on day 1. Its holdings still earned +10%, so exposure_gap is still
+    1,125.00; the cost the paper did not pay (10bps carried through -5%:
+    50,000 x 0.001 x 0.95 = 47.50) is a turnover difference, and lands in
+    rebalance_timing as the paper's gain."""
+    bt = _backtest((0.10, -0.05))
+    us = bt["sleeves"]["US"]
+    us["costs"] = pd.Series({_D[1]: 0.001})
+    us["returns"].loc[_D[1]] -= 0.001
+    us["base_returns"] = us["returns"].copy()
+    bt["equity"] = 50_000.0 * sum((1 + s["returns"]).cumprod()
+                                  for s in bt["sleeves"].values())
+    rep = attribution.reconcile(_paper_book(0.5, (0.10, -0.05)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "exposure_gap") == pytest.approx(1_125.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(-47.50, abs=0.005)
+    assert rep["identity_ok"] is True
+
+
+def test_an_all_cash_close_gives_the_sleeve_its_own_exact_rate():
+    """The paper keeps only its LATEST rate, which can be days past the window
+    (on `full` it came from a run that stamped no equity). On a close where a
+    sleeve holds nothing, its base value IS cash x rate, so value / cash is
+    that day's exact rate — the sleeve's own record, preferred over the
+    snapshot. Here the snapshot is wrong (2.0) and the US sleeve starts all
+    cash at 1.5, buying half at the second close: backtest 52,250 against
+    paper 25,000 + 25,000 x 0.95 = 48,750, all 3,500.00 AUD of it exposure."""
+    bt = _backtest((0.10, -0.05))
+    state = _paper_book(0.0, (0.10, -0.05), buy_on_d1=25_000.0)
+    state["fx_snapshot"]["USD"] = 2.0
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "exposure_gap") == pytest.approx(3_500.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+
+
+def test_a_flat_close_is_uninvested_whatever_the_rate():
+    """The US sleeve holds nothing throughout, while its 33,333.33 USD moves
+    from 1.5 to 1.6 AUD on the paper's own marks and the backtest's FX path
+    stays flat — the two disagree, as they do on `full` by up to 1.6%. A close
+    with no positions is g = 0 by definition, never a rate's echo: exposure is
+    the backtest's holdings linked over the paper's growth, 50,000 x (0.10 x
+    0.95 - 0.05 x 53,333.33 / 50,000) = 2,083.33 AUD. The FX gain the paper
+    made is not exposure; it stays in rebalance_timing."""
+    bt = _backtest((0.10, -0.05))
+    state = _paper_book(0.0, (0.0, 0.0))
+    us = 50_000.0 / _FX * 1.6
+    for row, eq in zip(state["sleeve_history"][1:], state["equity_history"][1:]):
+        row["US"] = us
+        eq[1] = row["ASX"] + us
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert _aud(rep, "exposure_gap") == pytest.approx(
+        50_000.0 * (0.10 * 0.95 - 0.05 * us / 50_000.0), abs=0.005)
+
+
+def test_days_the_backtest_held_nothing_are_counted_not_priced(monkeypatch):
+    """`ultra`'s backtest sits out most of its window behind the 25% breaker
+    the paper book has switched off. On such a day the paper is invested and
+    the backtest holds nothing, so there is no backtest holdings return to
+    price the difference at: the day stays in rebalance_timing, and the
+    exposure note says how many days that was."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)   # a flat day earns 0
+    bt = _backtest((0.10, -0.05))
+    us = bt["sleeves"]["US"]
+    us["weights"][_D[2]] = pd.Series(dtype=float)
+    us["returns"].loc[_D[2]] = 0.0
+    us["base_returns"] = us["returns"].copy()
+    bt["equity"] = 50_000.0 * sum((1 + s["returns"]).cumprod()
+                                  for s in bt["sleeves"].values())
+    rep = attribution.reconcile(_paper_book(0.5, (0.10, -0.05)), bt["equity"],
+                                backtest=bt)
+    assert "on 1 sleeve-day(s) the backtest held nothing" in rep["notes"]["exposure_gap"]
+    assert rep["identity_ok"] is True
+
+
+def test_a_sleeve_holding_shorts_gets_no_exposure_line():
+    """Cash says only NET exposure: a short's proceeds sit in cash. A sleeve
+    that held a short has an unknowable gross from its cash path, so the
+    holdings lines are not computed — they read zero and say why, and the gap
+    stays in the residual rather than being priced on the wrong exposure."""
+    bt = _backtest((0.10, -0.05))
+    state = _paper_book(0.5, (0.10, -0.05),
+                        positions={"AAA": 10, "ZZZ": -5})
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert rep["lines"]["exposure_gap"] == 0.0
+    assert rep["lines"]["rebalance_timing"] == 0.0
+    assert "short" in rep["notes"]["exposure_gap"]
+    assert "US" in rep["notes"]["exposure_gap"]
+    assert rep["residual"] == pytest.approx(0.01125, abs=1e-12)
+
+
+def test_a_sleeve_with_no_rate_gets_no_exposure_line():
+    """Without a USD rate the paper's USD cash cannot be put in AUD, so its
+    invested fraction is unknown. Do not guess parity: name the currency and
+    leave the gap in the residual."""
+    bt = _backtest((0.10, -0.05))
+    state = _paper_book(0.5, (0.10, -0.05))
+    state["fx_snapshot"] = {"AUD": 1.0}
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert rep["lines"]["exposure_gap"] == 0.0
+    assert rep["lines"]["rebalance_timing"] == 0.0
+    assert "USD" in rep["notes"]["exposure_gap"]
+
+
+def test_holdings_lines_stay_zero_without_a_backtest():
+    """Every existing caller passes no backtest; its bridge is unchanged."""
+    state = _paper_book(0.5, (0.10, -0.05))
+    rep = attribution.reconcile(state, _backtest((0.10, -0.05))["equity"])
+    for name in ("exposure_gap", "rebalance_timing", "cash_interest"):
+        assert rep["lines"][name] == 0.0
+        assert rep["notes"][name]
+
