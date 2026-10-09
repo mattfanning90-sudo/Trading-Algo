@@ -569,6 +569,61 @@ def test_diagnosis_uses_the_same_gate_and_date_as_the_live_path(monkeypatch, cap
     assert calls.get("eligible_asof") == rebal, "quality gate assessed at the wrong date"
 
 
+
+def test_diagnosis_asks_at_the_decision_bar_and_marks_at_the_fill(
+        account, paper_cycle, monkeypatch, capsys):
+    """A paper book decides at one close and fills at the NEXT, so the two
+    halves of the diagnosis live on different bars. The target must be asked
+    where the live rebalance asked it — the DECISION bar — and the positions
+    marked where they were executed — the FILL bar. Asking at the fill bar
+    sizes a target the book never chose; on real panels that put a 0.35-0.79pp
+    median gap into the printed exposure, and 5-10 regime flips per sleeve
+    printed a 0% target against a 50-89% invested book."""
+    from trading_algo import data, data_quality, strategy
+
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"US": 1.0})
+    state = paper_cycle(account)                      # decide, then fill
+    (decided, _), (filled, _) = state["equity_history"]
+    decided, filled = pd.Timestamp(decided), pd.Timestamp(filled)
+    sleeve = state["sleeves"]["US"]
+
+    region = get_region("US")
+    px, ix = data.synthetic_region(region)            # the bars the book traded on
+    monkeypatch.setattr(data, "load_region", lambda *a, **k: (px, ix))
+    calls = {}
+    real_elig, real_targets = data_quality.eligible, strategy.compute_targets
+
+    def elig_spy(prices, reg, asof, base=None):
+        calls["eligible_asof"] = asof
+        return real_elig(prices, reg, asof, base)
+
+    def targets_spy(prices, index_prices, p, asof=None, eligible=None, capacity=None):
+        calls["target_asof"] = asof
+        return real_targets(prices, index_prices, p, asof=asof, eligible=eligible,
+                            capacity=capacity)
+
+    monkeypatch.setattr(data_quality, "eligible", elig_spy)
+    monkeypatch.setattr(strategy, "compute_targets", targets_spy)
+
+    def held_at(bar):
+        invested = sum(n * float(px[t].loc[bar])
+                       for t, n in sleeve["positions"].items())
+        return f"{invested / (invested + sleeve['cash']):6.1%}"
+
+    assert held_at(decided) != held_at(filled), "the fixture cannot tell the bars apart"
+
+    capsys.readouterr()
+    pt._print_tracking_diagnosis(account, state)
+    out = capsys.readouterr().out
+    assert "diagnosis unavailable" not in out, out
+    assert calls.get("target_asof") == decided, "target asked at the fill bar"
+    assert calls.get("eligible_asof") == decided, "quality gate read at the fill bar"
+    line = next(ln for ln in out.splitlines() if "[US]" in ln)
+    assert f"held gross {held_at(filled)}" in line, (
+        f"positions not marked at the fill bar {filled.date()}: {line}")
+
+
 def test_reconcile_flag_dispatches_to_the_bridge(monkeypatch):
     """`--reconcile` must reach reconcile_status, alongside --tca/--attribution."""
     seen = {}

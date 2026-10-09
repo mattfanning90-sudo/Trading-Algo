@@ -726,6 +726,7 @@ def _fill_pending(region, sleeve: dict, px: pd.Series, today: str,
     rebalance_sleeve(region, sleeve, targets, px, today, trade_log,
                      frozen=set(pending.get("frozen") or ()))
     sleeve["last_rebalance_date"] = today          # the FILL date, not the decision's
+    sleeve["last_decision_date"] = str(pending["date"])   # ...kept: the diagnosis asks there
     sleeve.pop("pending_target", None)
     return True
 
@@ -1243,36 +1244,47 @@ def _print_tracking_diagnosis(account: str, state: dict) -> None:
     from . import data, data_quality, strategy
     from .regions import get_region
 
+    def bar(index, day):
+        """The last bar on or before `day`; the latest bar when there is none."""
+        if day:
+            loc = index.searchsorted(pd.Timestamp(day), side="right") - 1
+            if loc >= 0:
+                return index[loc]
+        return index[-1]
+
     print("  Tracking-error diagnosis (before blaming execution):")
     for k, sl in (state.get("sleeves") or {}).items():
         try:
             region = get_region(k)
             px, ix = data.load_region(region, cfg.START)
             # Ask exactly what the live rebalance asked (see run_daily): the
-            # gated candidate set, as of the bar the book was actually built on.
-            # Today's bar with no gate compares two different questions and
-            # invents an exposure gap.
-            asof = px.index[-1]
+            # gated candidate set, as of the DECISION bar. Then mark the book at
+            # the FILL bar, where it was executed — a decision fills one session
+            # later. Asking at today's bar, or at the fill bar, with or without
+            # the gate, compares two different questions and invents an
+            # exposure gap. A book saved before decisions were recorded has one
+            # date for both; and a fill date cleared on resume or by
+            # --force-rebalance takes its decision date with it.
             lrd = sl.get("last_rebalance_date")
-            if lrd:
-                loc = px.index.searchsorted(pd.Timestamp(lrd), side="right") - 1
-                if loc >= 0:
-                    asof = px.index[loc]
-            elig, _dq = data_quality.eligible(px, region, asof)
-            # Positions have not moved since `asof` (rebalances are monthly), so
-            # marking them at the as-of bar is the book as executed.
-            invested = sum(n * float(px[t].loc[asof])
+            filled = bar(px.index, lrd)
+            decided = bar(px.index, (sl.get("last_decision_date") if lrd else None)
+                          or lrd)
+            elig, _dq = data_quality.eligible(px, region, decided)
+            # Positions have not moved since the fill (rebalances are monthly),
+            # so marking them at the fill bar is the book as executed.
+            invested = sum(n * float(px[t].loc[filled])
                            for t, n in (sl.get("positions") or {}).items()
                            if t in px.columns)
             eq = invested + float(sl.get("cash", 0.0))
             target = strategy.compute_targets(
                 px, ix, _account_params(state, region),
-                asof=asof, eligible=elig).abs().sum()
+                asof=decided, eligible=elig).abs().sum()
             held = invested / eq if eq else 0.0
             gap = (held / target - 1.0) if target else 0.0
             print(f"    [{k}] held gross {held:6.1%} vs target {target:6.1%}"
-                  f"  ({gap:+.0%} of target)   as of {asof.date()}"
-                  f"   last rebalance {sl.get('last_rebalance_date') or 'never'}")
+                  f"  ({gap:+.0%} of target)   target as of {decided.date()},"
+                  f" held as of {filled.date()}"
+                  f"   last rebalance {lrd or 'never'}")
         except Exception as exc:                     # diagnosis must never fail the report
             print(f"    [{k}] diagnosis unavailable: {exc}")
     print("    NOTE: the predicted curve is the tail of a backtest started at "
