@@ -67,7 +67,19 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     each sleeve's own (a book whose sleeves first decided on different bars);
     the mapping must give every sleeve a date — a missing key or a None value
     is refused, since None would run that sleeve over the whole sample. None
-    (the default) is the whole-sample backtest, unchanged."""
+    (the default) is the whole-sample backtest, unchanged.
+
+    FX BEFORE A SLEEVE'S OWN OPEN: its base returns are zeroed through its
+    open bar, so until then the sleeve is pinned at `initial_capital *
+    alloc[k]` in the BASE currency — its cash carries no currency move. The
+    paper book's cash is held in LOCAL currency from `--init`, so it does
+    carry that move. With per-sleeve dates the two differ only over days
+    after the bridge window opens (the book's first equity date) and before
+    the sleeve's own open bar. Today that is about zero: a sleeve's
+    `opened_on` is on or before the first equity date, unless its first
+    decision came after the book's first complete valuation (the
+    min-viable-size gate held it in cash). There, the paper's FX move on
+    that cash is not in the comparison and lands in the bridge's remainder."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     undated = ([k for k in regions if trade_from.get(k) is None]
                if isinstance(trade_from, Mapping) else [])
