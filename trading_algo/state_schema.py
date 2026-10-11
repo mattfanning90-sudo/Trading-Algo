@@ -69,15 +69,19 @@ class StateValidationError(Exception):
     """Raised when a state file fails validation and the caller fails safe."""
 
 
+def _is_version(v) -> bool:
+    """A version number: a whole number from 1 up (a bool is not one)."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
 def _unknown_version(state: dict) -> bool:
     """True for a stamp this code did not write and cannot upgrade: newer than
-    STATE_SCHEMA_VERSION, or not a version number (versions start at 1). No
-    stamp at all is a pre-schema file, which migrates."""
+    STATE_SCHEMA_VERSION, or not a version number. No stamp at all is a
+    pre-schema file, which migrates."""
     v = state.get("schema_version")
     if v is None:
         return False
-    return not (isinstance(v, int) and not isinstance(v, bool)
-                and 1 <= v <= STATE_SCHEMA_VERSION)
+    return not (_is_version(v) and v <= STATE_SCHEMA_VERSION)
 
 
 def _is_number(x) -> bool:
@@ -120,11 +124,17 @@ def validate_state(state) -> list[str]:
     if _unknown_version(state):
         # Alone: this code's rules cannot judge a shape it does not know.
         v = state["schema_version"]
-        return [f"the file is schema v{v} but this code reads v{STATE_SCHEMA_VERSION} "
-                "and older: it was written by newer code, and this code would misread "
-                "it. It is left as it is. Run code at that version or newer, or restore "
-                "the backup taken before that code first ran (see state_schema, "
-                "'Rollback')."]
+        if _is_version(v):
+            return [f"the file is schema v{v} but this code reads v{STATE_SCHEMA_VERSION} "
+                    "and older: it was written by newer code, and this code would "
+                    "misread it. It is left as it is. Run code at that version or newer, "
+                    "or restore the backup taken before that code first ran (see "
+                    "state_schema, 'Rollback')."]
+        return [f"the file has an unrecognised schema stamp {v!r}: this code reads "
+                f"v1 to v{STATE_SCHEMA_VERSION}, or no stamp at all. No code in this "
+                "lineage writes that, so the file was edited or written elsewhere. It is "
+                "left as it is. To go on, restore the book's backup (see state_schema, "
+                "'Rollback'), or correct the stamp once you know which code wrote it."]
 
     errs: list[str] = []
     if not isinstance(state.get("account"), str):

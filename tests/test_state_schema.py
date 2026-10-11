@@ -277,6 +277,7 @@ def test_a_file_newer_than_the_code_is_left_alone_and_refused(monkeypatch, tmp_p
     assert f"schema v{newer_v}" in msg
     assert f"reads v{state_schema.STATE_SCHEMA_VERSION}" in msg
     assert "newer code" in msg and "restore" in msg
+    assert "unrecognised" not in msg
     on_disk = json.loads((tmp_path / "paper_state_newer.json").read_text())
     assert on_disk == before                         # nothing written back
 
@@ -298,6 +299,19 @@ def test_a_stamp_that_is_not_a_version_number_is_refused(stamp):
     s["schema_version"] = stamp
     assert migrate_state(s)[0]["schema_version"] == stamp
     assert any("schema" in e for e in validate_state(s))
+
+
+@pytest.mark.parametrize("stamp, shown", [("3", "'3'"), (True, "True"), (3.0, "3.0"),
+                                           (0, "0"), (-1, "-1")])
+def test_an_unrecognised_stamp_is_named_as_one_not_as_newer_code(stamp, shown):
+    """Only a whole number above the code's version was written by newer code.
+    A "3" or a True was written by nothing in this lineage: say so, and show
+    the stamp as it is in the file."""
+    s = _good_state()
+    s["schema_version"] = stamp
+    [msg] = validate_state(s)
+    assert f"unrecognised schema stamp {shown}" in msg
+    assert "newer code" not in msg and "restore" in msg
 
 
 def test_downgrade_of_a_book_holding_only_a_staged_target_is_exact():
