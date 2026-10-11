@@ -23,6 +23,15 @@ DAY_STATE = {
 }
 
 
+MATT_STATE = {
+    **DAY_STATE, "account": "matt", "profile": "balanced", "bar": "1d",
+    "initial_capital": 5_000.0, "equity": 5_100.0, "peak_equity": 5_100.0,
+    "last_bar_date": "2026-10-09",
+    "equity_history": [["2026-09-25", 5_000.0], ["2026-10-01", 5_050.0],
+                       ["2026-10-09", 5_100.0]],
+}
+
+
 @pytest.fixture()
 def books(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
@@ -39,6 +48,7 @@ def books(tmp_path, monkeypatch):
     state["peak_equity_base"] = 103_000.0
     path.write_text(json.dumps(state))
     (tmp_path / "fx_state_daytrader.json").write_text(json.dumps(DAY_STATE))
+    (tmp_path / "fx_state_matt.json").write_text(json.dumps(MATT_STATE))
     return tmp_path
 
 
@@ -55,10 +65,13 @@ def test_group_totals_equal_overview(books):
            [(g["name"], g["aum"]) for g in ov["groups"]]
     # Independent cross-check: the home screen's own period sum ("since you
     # started") must equal what overview reports as worth minus put in.
-    core = next(g for g in out["groups"] if g["name"] == "CORE")
-    ov_core = next(g for g in ov["groups"] if g["name"] == "CORE")
-    assert core["periods"]["ALL"]["change"] == round(ov_core["aum"] - ov_core["initial"], 2)
-    assert core["periods"]["ALL"]["change"] == 2430.0     # 2,500 - 70
+    # FX books report in their own group (measurement truth, commit 6b9e1ff),
+    # so CORE is FULL alone and FX is DAY + MATT.
+    for name, expected in (("CORE", 2500.0), ("FX", 30.0)):   # FX: -70 + 100
+        mine = next(g for g in out["groups"] if g["name"] == name)
+        theirs = next(g for g in ov["groups"] if g["name"] == name)
+        assert mine["periods"]["ALL"]["change"] == round(theirs["aum"] - theirs["initial"], 2)
+        assert mine["periods"]["ALL"]["change"] == expected
 
 
 def test_daily_book_period_changes(books):
@@ -79,11 +92,13 @@ def test_hourly_book_1d_is_its_last_session(books):
 
 
 def test_group_period_counts_only_measured_books(books):
-    core = next(g for g in build(books)["groups"] if g["name"] == "CORE")
-    assert core["periods"]["1D"] == {"measurable": True, "change": 980.0,
-                                     "pct": 0.008793, "measured": 2, "of": 2}
-    one_week = core["periods"]["1W"]
-    assert (one_week["change"], one_week["measured"], one_week["of"]) == (500.0, 1, 2)
+    fx = next(g for g in build(books)["groups"] if g["name"] == "FX")
+    # 1D: DAY -20 (from 9,950) + MATT +50 (from 5,050) = +30 on 15,000
+    assert fx["periods"]["1D"] == {"measurable": True, "change": 30.0,
+                                   "pct": 0.002, "measured": 2, "of": 2}
+    # 1W: DAY's history is too short, so only MATT counts: +50 on 5,050
+    assert fx["periods"]["1W"] == {"measurable": True, "change": 50.0,
+                                   "pct": 0.009901, "measured": 1, "of": 2}
 
 
 def test_books_carry_as_of_and_freshness(books):
