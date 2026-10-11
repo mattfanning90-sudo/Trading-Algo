@@ -332,7 +332,34 @@ def test_downgrade_of_a_book_holding_only_a_staged_target_is_exact():
 
     expected = json.loads(json.dumps(s))
     del expected["sleeves"]["US"]["pending_target"]
+    expected["sleeves"]["US"]["last_rebalance_month"] = None   # no fill to wind back to
     assert migrate_state(down)[0] == expected        # the round trip
+
+
+def test_downgrade_winds_the_month_back_where_it_strips_a_staged_target():
+    """v2 fills at the close it decides on, so in v2 `last_rebalance_month`
+    means "filled this month". v3 stamps it at the DECISION. Keeping a stripped
+    decision's month would tell v2 code the month is done: it would hold until
+    next month and lose the rebalance. The month goes back to that of the last
+    fill (None if there was none). A sleeve with nothing staged is untouched:
+    one gated this month (stamped, nothing staged, last fill last month)
+    means "evaluated this month" in v2 too."""
+    s = _v3_state()
+    us = s["sleeves"]["US"]
+    staged = {"date": "2026-10-01", "weights": {"AAPL": 0.5}, "frozen": []}
+    s["sleeves"] = {
+        "US": {**us, "last_rebalance_month": "2026-10",
+               "last_rebalance_date": "2026-09-16", "pending_target": staged},
+        "ASX": {**us, "currency": "AUD", "last_rebalance_month": "2026-10",
+                "last_rebalance_date": None, "pending_target": staged},
+        "FTSE": {**us, "currency": "GBP", "last_rebalance_month": "2026-10",
+                 "last_rebalance_date": "2026-09-16"},
+    }
+    s["allocations"] = {k: 1 / 3 for k in s["sleeves"]}
+    down = state_schema.downgrade_state(s)
+    assert {k: sl["last_rebalance_month"] for k, sl in down["sleeves"].items()} == {
+        "US": "2026-09", "ASX": None, "FTSE": "2026-10"}
+    assert s["sleeves"]["US"]["last_rebalance_month"] == "2026-10"   # input untouched
 
 
 def test_downgrade_strips_window_markers_and_an_undecided_open():

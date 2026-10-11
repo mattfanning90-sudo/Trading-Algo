@@ -257,11 +257,14 @@ def downgrade_state(state: dict, to: int = 2) -> dict:
         v2's trades and v3 code coming back would credit a window across them;
         stripped, v3 re-arms each window on its first run, as for any v2 book.
       * pending_target, a decision staged and not yet filled: v2 code never
-        reads one. That month's fill is lost: `last_rebalance_month` already
-        records the decision, so v2 code holds the book as it stands until the
-        next month's rebalance (a sleeve never yet filled sits in cash, which
-        v2's verify grades never-traded). A staged breaker exit is not lost:
-        v2 code liquidates a halted book itself, from `risk_halted`.
+        reads one. v2 fills at the close it decides on, so in v2
+        `last_rebalance_month` means "filled this month", while v3 stamps it
+        at the decision. The month therefore goes back with the decision, to
+        that of `last_rebalance_date` (the last fill; None if none), and v2
+        code decides again on its next run and fills at that close: the bar
+        v3 would have filled on, though on that bar's signal. A staged
+        breaker exit is not lost either: v2 code liquidates a halted book
+        itself, from `risk_halted`.
       * opened_on still None (a sleeve that has not decided yet): v2 code may
         make that first decision, so the sleeve must come back as legacy
         (never stamped) rather than stamp a later decision as its first.
@@ -296,8 +299,14 @@ def downgrade_state(state: dict, to: int = 2) -> dict:
             + f"\nRestore its JSON and paper_books.db from the pre-change archive, "
               f"{_ARCHIVE} (its README has the command), with the code it belongs to.")
     for sleeve in (out.get("sleeves") or {}).values():
-        if isinstance(sleeve, dict):
-            for key in _V3_SLEEVE_KEYS:
-                sleeve.pop(key, None)
+        if not isinstance(sleeve, dict):
+            continue
+        if "pending_target" in sleeve:
+            # The decision's month leaves with the decision (see above): kept, it
+            # would tell v2 code this month is filled and skip its rebalance.
+            filled = sleeve.get("last_rebalance_date")
+            sleeve["last_rebalance_month"] = str(filled)[:7] if filled else None
+        for key in _V3_SLEEVE_KEYS:
+            sleeve.pop(key, None)
     out["schema_version"] = 2
     return out
