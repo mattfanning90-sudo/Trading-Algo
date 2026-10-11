@@ -6,11 +6,14 @@ Covers the acceptance criteria:
   AC3 an old-format file migrates (is upgraded, not lost).
 """
 import json
+from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from trading_algo import config as cfg
 from trading_algo import paper_trade, pnl, state_schema
+from trading_algo.regions import get_region
 from trading_algo.state_schema import StateValidationError, migrate_state, validate_state
 
 
@@ -314,13 +317,33 @@ def test_an_unrecognised_stamp_is_named_as_one_not_as_newer_code(stamp, shown):
     assert "newer code" not in msg and "restore" in msg
 
 
-def test_downgrade_of_a_book_holding_only_a_staged_target_is_exact():
-    """A staged target is a decision not yet filled. v2 code never reads one:
-    it is stripped, and v2 code holds the book until the next month's
-    rebalance. Nothing else changes, so the round trip is exact."""
-    s = _v3_state()
-    s["sleeves"]["US"]["pending_target"] = {
-        "date": "2026-10-01", "weights": {"AAPL": 0.5}, "frozen": []}
+# The real `full` book as committed on 2026-09-23 (3c6872a): three sleeves in
+# three currencies, 81 fills. Frozen here because state/ is reset by Task 26.
+REAL_BOOK = Path(__file__).parent / "fixtures" / "full_book_2026-09-23.json"
+
+
+def _one_v3_session(state: dict, today: str) -> None:
+    """What v3 code's first run writes on a legacy book that decides, through
+    its own writers: both cash-event windows armed (a first run pays nothing,
+    so no INT or DIV row), each sleeve's target staged, the decision's month
+    stamped. A legacy sleeve has no `opened_on`, so none is stamped."""
+    for k, sleeve in state["sleeves"].items():
+        region = get_region(k)
+        px = pd.Series({t: 100.0 for t in sleeve["positions"]}, dtype=float)
+        paper_trade._accrue_cash_interest(region, sleeve, px, today, state["trades"])
+        paper_trade._credit_dividends(region, sleeve, today, state["trades"], True)
+        paper_trade._stage_target(sleeve, today, pd.Series({"X": 0.1}))
+        sleeve["last_rebalance_month"] = today[:7]
+
+
+def test_downgrade_round_trip_returns_the_book_less_its_unfilled_decision():
+    """On a real book after one v3 session, migrate(downgrade(s)) is s minus
+    each pending_target, with the month stamp wound back to the last fill and
+    the dividend and interest windows re-armed (None). Nothing else moves: no
+    position, cash, fill, equity row or other key."""
+    s, _ = migrate_state(json.loads(REAL_BOOK.read_text()))
+    _one_v3_session(s, "2026-10-01")
+    assert len(s["trades"]) == 81 and not any(pnl.is_cash_event(t) for t in s["trades"])
     original = json.loads(json.dumps(s))
 
     down = state_schema.downgrade_state(s)
@@ -331,9 +354,12 @@ def test_downgrade_of_a_book_holding_only_a_staged_target_is_exact():
     assert s == original                             # the input is untouched
 
     expected = json.loads(json.dumps(s))
-    del expected["sleeves"]["US"]["pending_target"]
-    expected["sleeves"]["US"]["last_rebalance_month"] = None   # no fill to wind back to
-    assert migrate_state(down)[0] == expected        # the round trip
+    for sleeve in expected["sleeves"].values():
+        del sleeve["pending_target"]
+        filled = sleeve["last_rebalance_date"]
+        sleeve["last_rebalance_month"] = filled[:7] if filled else None
+        sleeve["last_dividend_date"] = sleeve["last_interest_date"] = None
+    assert migrate_state(down)[0] == expected
 
 
 def test_downgrade_winds_the_month_back_where_it_strips_a_staged_target():
