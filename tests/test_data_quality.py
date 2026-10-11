@@ -365,3 +365,142 @@ def test_load_region_reports_the_names_it_dropped(monkeypatch, us, captured_aler
     alerts = [p for p in captured_alerts if p["event"] == "dead_tickers"]
     assert len(alerts) == 1 and alerts[0]["tickers"] == ["DEAD"]
     assert alerts[0]["region"] == "US"
+
+
+# ---------------------------------------------------------------------------
+# A suspected split on a held name. Yahoo back-adjusts the WHOLE history for a
+# split on every download (`auto_adjust=True`), so a split never shows as a jump
+# inside the series — NVDA's 10-for-1 on 2024-06-10 reads 120.54 -> 121.44
+# across it. What changes is the past: the close on the day the book traded no
+# longer matches the price the book recorded. So these tests rewrite history
+# the way Yahoo does and compare it with the book's own fills.
+def _bought(ticker, prices, i=-10, shares=100):
+    """A ledger BUY of `ticker` at the close the book saw on bar `i`."""
+    close = float(prices[ticker].iloc[i])
+    return {"date": str(prices.index[i].date()), "region": "US", "ticker": ticker,
+            "side": "BUY", "shares": shares, "decision": round(close, 4),
+            "fill": round(close * 1.0005, 4), "commission": 1.0,
+            "stamp_duty": 0.0, "currency": "USD"}
+
+
+def test_suspected_split_matches_a_known_factor_on_a_held_name():
+    """A 2-for-1 split halves every close in the history, including the one we
+    bought at. The feed is healthy — only the share count is now wrong."""
+    seen = _clean_frame(cols=("A", "B"))             # what the book traded on
+    fills = [_bought("A", seen), _bought("B", seen)]
+    now = seen.copy()
+    now["A"] = seen["A"] / 2                         # history rewritten under us
+    found = data_quality.suspected_split(now, {"A": 100, "B": 100}, fills)
+    assert set(found) == {"A"}
+    ratio, factor = found["A"]
+    assert ratio == pytest.approx(0.5, abs=0.01)
+    assert factor == pytest.approx(0.5)
+
+
+def test_suspected_split_ignores_a_name_we_do_not_hold():
+    """Detection protects a SHARE COUNT. A name we hold none of has none."""
+    seen = _clean_frame(cols=("A", "B"))
+    fills = [_bought("A", seen), _bought("B", seen)]
+    now = seen.copy()
+    now["A"] = seen["A"] / 2
+    assert data_quality.suspected_split(now, {"B": 100}, fills) == {}
+    assert data_quality.suspected_split(now, {"A": 0, "B": 100}, fills) == {}
+
+
+def test_suspected_split_ignores_an_ordinary_crash():
+    """A held name that halves AFTER we bought it is a market, not a corporate
+    action: the close we traded at is still in the series, untouched. This is
+    the exact shape a close-to-close check cannot tell from a 2-for-1."""
+    seen = _clean_frame(cols=("A",))
+    fills = [_bought("A", seen)]
+    now = seen.copy()
+    now.iloc[-1, 0] = now.iloc[-2, 0] / 2            # -50% today, history intact
+    assert data_quality.suspected_split(now, {"A": 100}, fills) == {}
+
+
+def test_reverse_split_is_detected_too():
+    seen = _clean_frame(cols=("A",))
+    fills = [_bought("A", seen)]
+    now = seen.copy()
+    now["A"] = seen["A"] * 3                         # 1-for-3 consolidation
+    found = data_quality.suspected_split(now, {"A": 100}, fills)
+    assert found and found["A"][1] == pytest.approx(3.0)
+
+
+def test_the_large_splits_in_the_live_universes_are_known_factors():
+    """The splits these universes actually had since 2024: NVDA, AVGO and NFLX
+    10-for-1, NOW 5-for-1, BKNG 25-for-1, AMC.AX 1-for-5."""
+    seen = _clean_frame(cols=("A",))
+    fills = [_bought("A", seen)]
+    for rewrite in (1 / 10, 1 / 5, 1 / 25, 5.0):
+        now = seen.copy()
+        now["A"] = seen["A"] * rewrite
+        found = data_quality.suspected_split(now, {"A": 100}, fills)
+        assert found and found["A"][1] == pytest.approx(rewrite), rewrite
+
+
+def test_dividend_drift_is_not_a_split_but_does_not_hide_one():
+    """`auto_adjust` rewrites history for dividends too, pulling the ratio a
+    little below 1 — measured on the live books, 0.980 to 1.005 over 116
+    fills. That is not a split; but a split on a name that has also paid out
+    since we bought it must still match."""
+    seen = _clean_frame(cols=("A",))
+    fills = [_bought("A", seen)]
+    now = seen.copy()
+    now["A"] = seen["A"] * 0.97
+    assert data_quality.suspected_split(now, {"A": 100}, fills) == {}
+    now["A"] = seen["A"] * 0.97 / 2
+    found = data_quality.suspected_split(now, {"A": 100}, fills)
+    assert found and found["A"][1] == pytest.approx(0.5)
+
+
+def test_suspected_split_reads_the_latest_fill_and_never_a_cash_event():
+    """The anchor is the name's most recent EXECUTION. A dividend row records
+    cash per share in `fill`, not a price: read as one, a 1% dividend would
+    look like a x100 rewrite."""
+    seen = _clean_frame(cols=("A",))
+    div = {"date": str(seen.index[-3].date()), "region": "US", "ticker": "A",
+           "side": "DIV", "shares": 200,
+           "fill": round(float(seen["A"].iloc[-3]) / 100, 4), "commission": 0.0,
+           "stamp_duty": 0.0, "currency": "USD"}
+    fills = [_bought("A", seen, i=-20), _bought("A", seen, i=-10), div]
+    assert data_quality.suspected_split(seen, {"A": 200}, fills) == {}
+
+
+def test_suspected_split_falls_back_to_the_fill_on_older_ledger_rows():
+    """Rows written before the `decision` field (49 of the 120 live fills)
+    carry only the slipped fill. A few bp of slippage is far inside tolerance."""
+    seen = _clean_frame(cols=("A",))
+    old = _bought("A", seen)
+    del old["decision"]
+    now = seen.copy()
+    now["A"] = seen["A"] / 2
+    found = data_quality.suspected_split(now, {"A": 100}, [old])
+    assert found and found["A"][1] == pytest.approx(0.5)
+
+
+def test_a_unit_error_the_book_traded_at_is_not_caught():
+    """The IHG.L /100 defect (Task 15) is NOT caught, and cannot be by this
+    check: the book bought at the same wrong price the series still shows, so
+    record and series agree. Live `full` numbers: BUY 593 IHG.L on 2026-06-11
+    at 1.6328 (no `decision`); today's series reads 1.599281 on that date —
+    a ratio of 0.98, a dividend, not a factor."""
+    now = pd.DataFrame({"IHG.L": 1.599281},
+                       index=pd.bdate_range("2026-06-01", "2026-06-30"))
+    fills = [{"date": "2026-06-11", "region": "FTSE", "ticker": "IHG.L",
+              "side": "BUY", "shares": 593, "fill": 1.6328, "commission": 3.0,
+              "stamp_duty": 4.84, "currency": "GBP"}]
+    assert data_quality.suspected_split(now, {"IHG.L": 593}, fills) == {}
+
+
+def test_a_quote_unit_change_under_a_held_name_is_caught():
+    """What it DOES catch of that class: the scale changing under a position
+    still held. Task 15's quote_overrides moves IHG.L from the region's 0.01 to
+    1.0, which rewrites its whole history x100 under any book holding it."""
+    now = pd.DataFrame({"IHG.L": 159.9281},
+                       index=pd.bdate_range("2026-06-01", "2026-06-30"))
+    fills = [{"date": "2026-06-11", "region": "FTSE", "ticker": "IHG.L",
+              "side": "BUY", "shares": 593, "fill": 1.6328, "commission": 3.0,
+              "stamp_duty": 4.84, "currency": "GBP"}]
+    found = data_quality.suspected_split(now, {"IHG.L": 593}, fills)
+    assert found and found["IHG.L"][1] == pytest.approx(100.0)

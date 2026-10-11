@@ -240,7 +240,7 @@ def test_micro_mode_keeps_three_picks_when_each_can_buy_a_share():
 _KNOWN_STATUSES = {
     "rebalanced", "held", "cash:idle", "cash:halted", "cash:below-min",
     "cash:regime-off", "cash:no-eligible-names", "cash:data-quality",
-    "cash:insufficient-names",
+    "cash:insufficient-names", "split-halt",
 }
 
 
@@ -2015,3 +2015,44 @@ def test_micro_mode_fits_its_picks_with_the_rule_that_executes_them():
                         "2026-10-01", [], max_weight=0.6)
     assert sleeve["positions"] == {"A": 2, "B": 3, "C": 1}
     assert sleeve["cash"] >= 0.0
+
+
+def test_suspected_split_halts_the_sleeve_without_touching_share_counts(
+        account, paper_cycle, monkeypatch):
+    """Detection, not adjustment (spec §10): the sleeve sits the run out and
+    alerts, and the share count is left exactly as it was. A wrong adjustment
+    corrupts the book permanently; a halt is reversible.
+
+    The split arrives the way Yahoo delivers one: the WHOLE history is divided
+    on the next download (`auto_adjust=True`), so the last two closes agree and
+    only the close on the day the book bought no longer matches its own fill."""
+    from trading_algo import notifications
+
+    captured: list = []
+    notifications.register_channel("cap", captured.append)
+    monkeypatch.setattr(cfg, "NOTIFY_CHANNEL", "cap")
+
+    pt.init_account(account, 100_000, synthetic=True, allocations={"US": 1.0})
+    before = paper_cycle(account)                   # decide, then fill
+    held_before = dict(before["sleeves"]["US"]["positions"])
+    assert held_before, "fixture precondition: the cycle must open positions"
+    victim = sorted(t for t, sh in held_before.items() if sh)[0]
+
+    real = pt.latest_region_data
+
+    def split(region, synthetic):
+        prices, index_px = real(region, synthetic)
+        prices = prices.copy()
+        prices[victim] = prices[victim] / 2         # 2-for-1, history rewritten
+        return prices, index_px
+
+    monkeypatch.setattr(pt, "latest_region_data", split)
+    after = paper_cycle(account, sessions=1)
+
+    assert after["sleeves"]["US"]["last_status"]["status"] == "split-halt"
+    assert after["sleeves"]["US"]["positions"] == held_before, \
+        "share counts must NOT be adjusted — detection only"
+    assert after["trades"] == before["trades"], "a halted sleeve books nothing"
+    alerts = [p for p in captured if p["event"] == "suspected_split"]
+    assert len(alerts) == 1 and alerts[0]["level"] == "alert"
+    assert alerts[0]["region"] == "US" and victim in alerts[0]["tickers"]

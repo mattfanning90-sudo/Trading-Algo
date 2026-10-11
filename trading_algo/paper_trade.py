@@ -1127,6 +1127,34 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             # not an outage. Skipping the sleeve on that would freeze it forever,
             # so keep trading — only the valuation is held back.
 
+        # A suspected split is the opposite failure to a bad price: the feed is
+        # healthy and only our SHARE COUNT is wrong, so every other gate waves
+        # it through while the book silently means a fraction of what it says.
+        # Halt the sleeve and alert; do NOT adjust the share count (spec §10) —
+        # a wrong adjustment corrupts the book permanently, a halt is
+        # reversible. No "cash:" prefix: the sleeve is not flat.
+        splits = data_quality.suspected_split(
+            prices, sleeve["positions"],
+            [f for f in state["trades"] if f.get("region") == k])
+        if splits:
+            detail = ", ".join(f"{t} x{ratio:.3f}≈{factor:.3g}"
+                               for t, (ratio, factor) in sorted(splits.items()))
+            print(f"  [{k}] ⛔ suspected split on a held name ({detail}) — "
+                  f"halting this sleeve for the run; share counts NOT adjusted.")
+            notifications.notify(
+                "suspected_split",
+                f"[{account}] {k}: price history no longer matches the book's "
+                f"own fills on held name(s) {detail} (series ÷ recorded close "
+                f"≈ a split factor) as of {today}. The sleeve is halted and "
+                "share counts are NOT adjusted — confirm the corporate action "
+                "and restate the position AND that name's ledger fills by "
+                "hand; the halt holds until they agree with the series.",
+                level="alert", account=account, region=k, last_bar=today,
+                tickers=sorted(splits))
+            _record_sleeve_status(sleeve, today, "split-halt")
+            all_valued = False
+            continue
+
         px_by_region[k] = px_today
         bar_of[k] = today
         report_date = max(report_date, today)

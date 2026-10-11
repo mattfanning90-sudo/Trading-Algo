@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as cfg
+from . import pnl
 
 # Thresholds (module-level so they are documented in one place; the gate on/off
 # switch lives in config as DATA_QUALITY_GATE).
@@ -210,6 +211,67 @@ def missing_names(region, prices: pd.DataFrame, requested: list[str]) -> Quality
             "symbol in universes.py, not a smaller universe",
             level="alert", region=getattr(region, "key", None), tickers=absent)
     return report
+
+
+# Ratios a corporate action leaves between a close the book traded at and that
+# same session's close once the feed has rewritten it: an n-for-1 split
+# rewrites history by 1/n, a 1-for-n consolidation by n. 5, 10 and 25 are not
+# hypothetical — NOW, NVDA/AVGO/NFLX and BKNG split by them since 2024. 100 is
+# a pence/pounds quote change.
+_SPLIT_RATIOS = (1.5, 2, 3, 4, 5, 7, 8, 10, 20, 25, 50, 100)
+SPLIT_FACTORS = tuple(sorted({1.0 / n for n in _SPLIT_RATIOS}
+                             | {float(n) for n in _SPLIT_RATIOS}))
+# Relative match. Dividends rewrite history too, pulling a healthy ratio just
+# below 1 (0.980-1.005 across the 116 comparable live fills), so a split on a
+# name that has also paid out lands a little under its factor. 5% absorbs that
+# and keeps every factor's window disjoint from its neighbours' and from 1.
+SPLIT_TOLERANCE = 0.05
+
+
+def suspected_split(prices: pd.DataFrame, held, fills,
+                    *, tolerance: float = SPLIT_TOLERANCE) -> dict:
+    """Held names whose price history no longer matches the book's own fills.
+
+    Yahoo back-adjusts the WHOLE history for a split on every download
+    (`data.load_prices` asks for `auto_adjust=True`), so a split never shows as
+    a jump inside the series: NVDA's 10-for-1 on 2024-06-10 reads
+    120.54 -> 121.44 across it. What changes is the past. The close on the day
+    the book last traded a name no longer matches the price the book recorded,
+    and the share count is now wrong by exactly that ratio. A market move can
+    never do this: it changes later closes, not that one.
+
+    DETECTION ONLY. Adjusting the share count is deliberately out of scope
+    (spec §10): a wrong adjustment corrupts the book permanently, while halting
+    the sleeve is reversible and visible. Restricted to names actually HELD,
+    because a share count is the only thing at risk.
+
+    `fills` is the sleeve's ledger; cash events (`pnl.is_fill` False) record
+    cash per share, not a price, and are skipped. The recorded close is the
+    row's pre-slippage `decision`, or its `fill` on rows older than that field
+    — slippage is a few bp, far inside `tolerance`.
+
+    Returns {ticker: (observed ratio, matched factor)}; empty when nothing
+    matches, which is the overwhelmingly common case.
+    """
+    last: dict = {}
+    for f in fills or ():
+        if pnl.is_fill(f) and f["date"] >= last.get(f["ticker"], {}).get("date", ""):
+            last[f["ticker"]] = f
+    out: dict[str, tuple[float, float]] = {}
+    for t, shares in dict(held or {}).items():
+        f = last.get(t)
+        day = pd.Timestamp(f["date"]) if f else None
+        if not shares or f is None or t not in prices.columns or day not in prices.index:
+            continue
+        now, then = float(prices.at[day, t]), float(f.get("decision") or f["fill"])
+        if not (now > 0 and then > 0):                 # NaN-safe
+            continue
+        ratio = now / then
+        for factor in SPLIT_FACTORS:
+            if abs(ratio - factor) <= tolerance * factor:
+                out[t] = (ratio, factor)
+                break
+    return out
 
 
 def eligible(prices: pd.DataFrame, region, asof: pd.Timestamp,
