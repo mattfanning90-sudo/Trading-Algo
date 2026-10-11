@@ -71,13 +71,13 @@ class StateValidationError(Exception):
 
 def _unknown_version(state: dict) -> bool:
     """True for a stamp this code did not write and cannot upgrade: newer than
-    STATE_SCHEMA_VERSION, or not a version number. No stamp at all is a
-    pre-schema file, which migrates."""
+    STATE_SCHEMA_VERSION, or not a version number (versions start at 1). No
+    stamp at all is a pre-schema file, which migrates."""
     v = state.get("schema_version")
     if v is None:
         return False
     return not (isinstance(v, int) and not isinstance(v, bool)
-                and v <= STATE_SCHEMA_VERSION)
+                and 1 <= v <= STATE_SCHEMA_VERSION)
 
 
 def _is_number(x) -> bool:

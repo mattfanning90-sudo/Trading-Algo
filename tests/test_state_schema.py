@@ -290,8 +290,10 @@ def test_shadow_mode_still_never_relabels_a_newer_file(monkeypatch, tmp_path):
     assert paper_trade.load_state("newer")["schema_version"] == 4
 
 
-@pytest.mark.parametrize("stamp", ["3", 3.0, True])
+@pytest.mark.parametrize("stamp", ["3", 3.0, True, 0, -1])
 def test_a_stamp_that_is_not_a_version_number_is_refused(stamp):
+    """Versions start at 1; no stamp at all is the pre-schema file. Anything
+    else was not written by this code's lineage and is not its to relabel."""
     s = _good_state()
     s["schema_version"] = stamp
     assert migrate_state(s)[0]["schema_version"] == stamp
