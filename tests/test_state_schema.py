@@ -423,6 +423,26 @@ def test_downgrade_refuses_a_book_holding_a_v3_only_fact(what, monkeypatch):
     assert s == original
 
 
+@pytest.mark.parametrize("history, shown", [([["2026-10-02", 100_000.0]], "2026-10-02"),
+                                             ([], "no history yet")])
+def test_a_refusal_says_what_the_rollback_is_for_a_book_the_archive_never_saw(
+        history, shown):
+    """After the restart nearly every book is refused (opened_on after one run,
+    an INT row after two), and the pre-truth archive holds nothing for a book
+    opened after it. The message gives both ways back, and the book's
+    inception, so the operator can tell which one applies."""
+    s = _v3_state()
+    s["equity_history"] = history
+    s["sleeves"]["US"]["opened_on"] = "2026-10-01"
+    with pytest.raises(StateValidationError) as exc:
+        state_schema.downgrade_state(s)
+    msg = str(exc.value)
+    assert f"inception {shown}" in msg
+    assert ARCHIVE in msg                                   # opened before it
+    assert "--init" in msg and "--force" in msg             # opened after it
+    assert "loses" in msg and "100,000" in msg
+
+
 def test_downgrade_refuses_what_it_does_not_know():
     newer = _v3_state()
     newer["schema_version"] = 4

@@ -26,13 +26,18 @@ Rollback
 Code and data roll back TOGETHER. Code from before v3 has no such guard: handed
 a v3 file it re-stamps it as its own and reads every cash-event row (DIV, INT)
 as a SELL, silently. So before running pre-v3 code, stop the schedulers and
-either downgrade the book (this line writes its DB row and JSON together, and
-``downgrade_state`` refuses, naming why, a book v2 cannot represent)::
+downgrade each book (this line writes its DB row and JSON together)::
 
     python3 -c "from trading_algo import paper_trade as p, state_schema as s; a = 'full'; p.save_state(a, s.downgrade_state(p.load_state(a)))"
 
-or restore its JSON AND ``paper_books.db`` from the pre-change archive,
-``state/archive/2026-09-pre-truth/`` (Task 26; its README has the command).
+``downgrade_state`` refuses a book v2 cannot represent: after the restart,
+nearly every book (``opened_on`` after one run, an INT row after two). Then:
+
+  * opened before the pre-truth archive: restore its JSON AND
+    ``paper_books.db`` from ``state/archive/2026-09-pre-truth/`` (Task 26; its
+    README has the command);
+  * opened after it: there is no v2 form and nothing archived. Re-initialise
+    it under the old code (``paper_trade --init --force``), losing its history.
 """
 from __future__ import annotations
 
@@ -272,8 +277,9 @@ def downgrade_state(state: dict, to: int = 2) -> dict:
     REFUSES, rather than invent a lossy conversion, when any ledger row is a
     cash event (`pnl.is_cash_event`: cash that arrived without a fill, which
     v2 reads as a SELL), when any sleeve has `opened_on` set (stripped, it can
-    never be re-stamped), or when the file is not v2/v3. The way back for such
-    a book is the pre-change archive, restored with the code it belongs to.
+    never be re-stamped), or when the file is not v2/v3. After the restart
+    that is nearly every book (opened_on after one run, an INT row after two);
+    the message gives the way back for each kind (see 'Rollback' above).
     """
     if to != 2:
         raise StateValidationError(
@@ -293,11 +299,22 @@ def downgrade_state(state: dict, to: int = 2) -> dict:
             why.append(f"sleeve '{k}' opened_on={sleeve['opened_on']}, which cannot "
                        "be re-stamped once stripped")
     if why:
+        account = out.get("account")
+        history = out.get("equity_history") or []
+        opened = history[0][0] if history and history[0] else "no history yet"
+        capital = out.get("initial_capital_base")
+        funded = (f"{capital:,.0f} {out.get('base_currency', '')}".strip()
+                  if _is_number(capital) else "its capital")
         raise StateValidationError(
-            f"cannot downgrade '{out.get('account')}' to v2 without losing data:\n  - "
+            f"cannot downgrade '{account}' to v2 without losing data:\n  - "
             + "\n  - ".join(why)
-            + f"\nRestore its JSON and paper_books.db from the pre-change archive, "
-              f"{_ARCHIVE} (its README has the command), with the code it belongs to.")
+            + f"\nThere is no v2 form of this book (inception {opened}). If it was "
+              f"opened before the pre-truth archive was taken, restore its JSON and "
+              f"paper_books.db from {_ARCHIVE} (its README has the command), with the "
+              f"code it belongs to. If it was opened after, the archive holds nothing "
+              f"for it: re-initialise it under the old code (paper_trade --account "
+              f"{account} --init --force, at {funded} and the regions/profile it was "
+              f"opened with), which loses everything it recorded since it opened.")
     for sleeve in (out.get("sleeves") or {}).values():
         if not isinstance(sleeve, dict):
             continue
