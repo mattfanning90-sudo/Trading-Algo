@@ -157,20 +157,34 @@ def _commission_bps(region_key: str | None) -> float | None:
         return None
 
 
-def _window_fills(paper_state: dict, start: pd.Timestamp,
-                  end: pd.Timestamp) -> list[tuple[dict, float | None]]:
-    """Each fill dated inside (start, end], with its base-per-local FX rate.
+def _through(rows: list, end: pd.Timestamp) -> list:
+    """The rows dated on or before `end`: the bridge's ONE window rule, for
+    every dated thing it counts (fills, DIV and INT rows, sleeve values).
 
-    Equity is stamped AFTER a run's trades, so a fill dated `start` is already
-    inside the start equity (on a real book that day is the build-out) and is
-    left out, while a fill dated `end` is inside the end equity and is counted.
+    The window runs from the book's INCEPTION — its initial capital, before
+    any fill on either side — to `end`, so nothing is ever "already inside
+    the start equity". A start DATE could not say that: the engine writes a
+    date's equity row once, on that date's first complete run, and a sleeve
+    still on the previous bar then fills and accrues on a LATER run, dated
+    that same date but outside the row. `end` is inclusive: the run that
+    wrote row `end` made its own events before the row. A sleeve a bar
+    behind on that run makes its `end`-dated ones on a later run, outside
+    the row, and they are counted all the same: the start's problem, left
+    at the window's last date, where no anchor can absorb it.
+    """
+    return [r for r in rows if pd.Timestamp(r["date"]) <= end]
+
+
+def _window_fills(paper_state: dict,
+                  end: pd.Timestamp) -> list[tuple[dict, float | None]]:
+    """Each fill in the window (`_through`), with its base-per-local FX rate.
+
     The rate is the book's CURRENT `fx_snapshot` (see `reconcile`), or None for
     a currency the snapshot has no rate for (`_base_per_local`).
     """
     return [(t, _base_per_local(paper_state, t.get("currency")))
-            for t in paper_state.get("trades") or []
-            if start < pd.Timestamp(t.get("date")) <= end and pnl.is_fill(t)
-            and t.get("shares") and t.get("fill") is not None]
+            for t in _through(paper_state.get("trades") or [], end)
+            if pnl.is_fill(t) and t.get("shares") and t.get("fill") is not None]
 
 
 def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float]:
@@ -214,13 +228,13 @@ def _base_per_local(paper_state: dict, ccy: str | None) -> float | None:
                              paper_state.get("base_currency") or cfg.BASE_CURRENCY)
 
 
-def _window_cash(paper_state: dict, side: str, start: pd.Timestamp,
+def _window_cash(paper_state: dict, side: str,
                  end: pd.Timestamp) -> tuple[float, list[str]]:
     """(base amount, currencies with no rate) of the `side` cash-event rows
-    dated inside (start, end], each at its `_base_per_local` rate."""
+    in the window (`_through`), each at its `_base_per_local` rate."""
     rows = [(t, _base_per_local(paper_state, t.get("currency")))
-            for t in paper_state.get("trades") or []
-            if t.get("side") == side and start < pd.Timestamp(t["date"]) <= end]
+            for t in _through(paper_state.get("trades") or [], end)
+            if t.get("side") == side]
     return (sum(pnl.cash_amount(t) * r for t, r in rows if r),
             sorted({str(t.get("currency")) for t, r in rows if r is None}))
 
@@ -253,12 +267,16 @@ def _sleeve_close(paper_state: dict, key: str,
 
 
 def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
-                  start: pd.Timestamp, end: pd.Timestamp) -> dict:
+                  v0: float, end: pd.Timestamp) -> dict:
     """One sleeve's backtest-minus-paper gap, and the parts the lines name.
 
-    `values` maps each paper date in [start, end] to the sleeve's base value.
-    Every term is a fraction of the sleeve's window-start value. Each backtest
-    day's difference splits, Brinson-style, into
+    The window is the bridge's (`_through`): from inception to `end`. `values`
+    maps each paper date in it to the sleeve's base value, and `v0` is the
+    sleeve's value at inception, its share of the initial capital, all cash.
+    Every term is a fraction of `v0`. The backtest's days start after the bar
+    the sleeve opened on (`open_bar`; all of them when it names none): before
+    it the sleeve did not exist and earned nothing, not even idle interest.
+    Each backtest day's difference splits, Brinson-style, into
 
         (g_bt - g_p) * h   exposure: invested more or less, priced at h
         i                  the backtest's idle-cash credit
@@ -273,7 +291,8 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     compounding cross term behind.
 
     The paper's g is 1 - cash/value at its last close before the day, from
-    `_sleeve_close`, and held there until its next run. Local cash goes into
+    `_sleeve_close`, and held there until its next run; before its first
+    close it is the inception, g = 0 at `v0`. Local cash goes into
     base along the backtest's own FX path, levelled to the sleeve's OWN rate on
     its latest all-cash close in the window (value / cash is exactly that
     day's rate); only a sleeve never flat in the window falls back to the
@@ -285,7 +304,7 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     they cannot be exposure and stay in the remainder.
 
     `interest` is the backtest's credit LESS the paper's: the sleeve's INT
-    rows in (start, end], each put into base as the paper's cash is and
+    rows in the window, each put into base as the paper's cash is and
     linked like a day of the backtest's, from the day it landed, at the
     backtest's growth after it. A credit both engines paid alike nets to
     nothing. `paper_interest` is the paper's part; None when the sleeve has
@@ -295,8 +314,9 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     costs = bt.get("costs")
     costs = costs if costs is not None else pd.Series(dtype=float)
     days = sorted(values)
-    v0 = values[days[0]]
-    idx = rl.index[(rl.index > start) & (rl.index <= end)]
+    idx = rl.index[rl.index <= end]
+    if bt.get("open_bar") is not None:
+        idx = idx[idx > bt["open_bar"]]
     growth = (1 + rb.loc[idx]).cumprod()
     b_end = float(growth.iloc[-1]) if len(idx) else 1.0
     fx_step = (1 + rb) / (1 + rl)                  # the backtest's FX move per day
@@ -338,15 +358,17 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
         i = (fees.idle_cash_credit(float(w.sum()), float(gaps[t]),
                                    cfg.CASH_RATE_ANNUAL) if credit_on else 0.0)
         h = (float(rl[t]) + float(costs.get(t, 0.0)) - i) / g_bt if g_bt > 0 else 0.0
-        d = days[bisect_left(days, t) - 1]         # the paper's last close before t
-        link = float(fx_step[t]) * values[d] / v0 * b_end / float(growth[t])
+        j = bisect_left(days, t) - 1               # the paper's last close before t,
+        d = days[j] if j >= 0 else None            # or None: its inception
+        link = (float(fx_step[t]) * (v0 if d is None else values[d]) / v0
+                * b_end / float(growth[t]))
         interest += i * link
         if why is None:
-            exposure += (g_bt - g_p[d]) * h * link
-            bt_flat += g_bt == 0 and g_p[d] > 1e-6
-    credits = [t for t in paper_state.get("trades") or []
-               if t.get("region") == key and t.get("side") == pnl.INTEREST
-               and start < pd.Timestamp(t["date"]) <= end]
+            g = 0.0 if d is None else g_p[d]
+            exposure += (g_bt - g) * h * link
+            bt_flat += g_bt == 0 and g > 1e-6
+    credits = [t for t in _through(paper_state.get("trades") or [], end)
+               if t.get("region") == key and t.get("side") == pnl.INTEREST]
     paper = None if credits and rate is None else 0.0
     for t in credits if paper is not None else ():
         on = pd.Timestamp(t["date"])
@@ -358,22 +380,25 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
             "exposure": None if why else exposure, "why": why, "bt_flat": bt_flat}
 
 
-def _holdings_terms(paper_state: dict, backtest: dict, start: pd.Timestamp,
+def _holdings_terms(paper_state: dict, backtest: dict,
                     end: pd.Timestamp) -> tuple[dict, str | None]:
     """Every sleeve's `_sleeve_terms`, or ({}, why) when one cannot be had —
-    all or nothing, so no sleeve's gap is half-named while another's is not."""
-    rows = [r for r in paper_state.get("sleeve_history") or []
-            if start <= pd.Timestamp(r["date"]) <= end]
+    all or nothing, so no sleeve's gap is half-named while another's is not.
+    A sleeve starts at its share of the initial capital, as `--init` funds it."""
+    rows = _through(paper_state.get("sleeve_history") or [], end)
     bts = backtest.get("sleeves") or {}
+    alloc = paper_state.get("allocations") or {}
     terms: dict = {}
     for key in paper_state.get("sleeves") or {}:
         values = {pd.Timestamp(r["date"]): float(r[key]) for r in rows
                   if r.get(key) is not None}
+        v0 = float(paper_state["initial_capital_base"]) * float(alloc.get(key) or 0.0)
         if key not in bts:
             return {}, f"the backtest carries no {key} sleeve"
-        if start not in values or end not in values or values[start] <= 0:
-            return {}, f"sleeve_history has no {key} value on {start.date()} and {end.date()}"
-        terms[key] = _sleeve_terms(paper_state, bts[key], key, values, start, end)
+        if end not in values or v0 <= 0:
+            return {}, (f"sleeve_history has no {key} value on {end.date()}"
+                        if end not in values else f"the book records no allocation for {key}")
+        terms[key] = _sleeve_terms(paper_state, bts[key], key, values, v0, end)
     if not terms:
         return {}, "the book records no sleeves"
     return terms, None
@@ -408,8 +433,17 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
               backtest: dict | None = None) -> dict:
     """Walk from the backtest's total return to the paper book's, line by line.
 
-    Every line is a SIGNED return fraction of the book's equity at the window
-    start, positive when the cause put the BACKTEST ahead:
+    ONE window for both sides (`_through`): from the book's INCEPTION, its
+    initial capital before any fill on either side, to the last date both
+    curves have. The paper's return is its last equity row over that capital;
+    the backtest's is `predicted_equity` there over the same capital — the
+    comparison is funded at it and holds it untouched through its first open
+    bar (`paper_trade._predicted_curve`), so its value before any fill is
+    that capital too. Every build-out cost, and every fill, DIV and INT row
+    from inception to `end`, is then inside both returns and the lines.
+
+    Every line is a SIGNED return fraction of that capital, positive when the
+    cause put the BACKTEST ahead:
 
         backtest_return - sum(lines) - paper_return = residual
 
@@ -445,19 +479,19 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
         raise ValueError("bridge needs >= 2 dates common to the book and the backtest")
 
     start, end = common[0], common[-1]
-    paper_return = float(paper.loc[end] / paper.loc[start] - 1.0)
-    backtest_return = float(pred.loc[end] / pred.loc[start] - 1.0)
-    start_equity = float(paper.loc[start])
+    start_equity = float(paper_state["initial_capital_base"])     # inception
+    paper_return = float(paper.loc[end]) / start_equity - 1.0
+    backtest_return = float(pred.loc[end]) / start_equity - 1.0
 
-    fills = _window_fills(paper_state, start, end)
+    fills = _window_fills(paper_state, end)
     unrated = sorted({str(t.get("currency")) for t, rate in fills if rate is None})
     left_out = len(fills)
     fills = [(t, rate) for t, rate in fills if rate is not None]
     left_out -= len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
-    credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, start, end)
-    earned, int_unrated = _window_cash(paper_state, pnl.INTEREST, start, end)
+    credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, end)
+    earned, int_unrated = _window_cash(paper_state, pnl.INTEREST, end)
     lines = {name: 0.0 for name in BRIDGE_LINES}
     lines["fill_convention"] = slip_excess / start_equity
     lines["commission_floor"] = _line_commission_floor(fills) / start_equity
@@ -499,7 +533,7 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
 
     timed = one_sleeve = False          # rebalance_timing measured; one sleeve
     if backtest is not None:
-        terms, why = _holdings_terms(paper_state, backtest, start, end)
+        terms, why = _holdings_terms(paper_state, backtest, end)
         if why:
             for name in ("cash_interest", "exposure_gap", "rebalance_timing"):
                 notes[name] = f"0.0 — not measured: {why}; the gap stays in residual"
@@ -580,9 +614,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
 def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> str:
     """Fixed-width text table: line name, return fraction, bps/yr, base amount.
 
-    `initial` is the book's equity at the WINDOW start in `currency` — the
-    denominator every line is a fraction of (`report["start_equity"]`), so the
-    money column prints the book's actual amounts; pass 0.0 to print the return
+    `initial` is the book's equity at the WINDOW start in `currency` — its
+    initial capital, the denominator every line is a fraction of
+    (`report["start_equity"]`), so the money column prints the book's actual
+    amounts since inception; pass 0.0 to print the return
     and bps columns only. bps/yr divides by `metrics.years_between` (calendar
     time) and does not compound, so it sums down the table like the return
     column. The verdict line states whether the named lines close the identity
@@ -597,7 +632,8 @@ def format_bridge(report: dict, currency: str = "AUD", initial: float = 0.0) -> 
     rows += [("residual", report["residual"]), ("paper return", report["paper_return"])]
 
     width = 22 + 11 + 10 + (14 if initial else 0)
-    out = [f"  window {report['start']} -> {report['end']} ({years:.2f} yr)",
+    out = [f"  window {report['start']} -> {report['end']} ({years:.2f} yr), "
+           "since inception: both sides from the book's initial capital",
            "  backtest return - lines - residual = paper return "
            "(a + line put the backtest ahead)",
            f"{'line':<22}{'return':>11}{'bps/yr':>10}"

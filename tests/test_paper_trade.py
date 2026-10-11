@@ -636,9 +636,11 @@ def test_reconcile_flag_dispatches_to_the_bridge(monkeypatch):
 
 
 def test_reconcile_status_prints_the_books_actual_money(monkeypatch, capsys):
-    """The money column is the book's real base-currency P&L: the paper-return
-    row must read end - start equity (9,000), not the return scaled by
-    initial_capital_base (10,000) — the build-out's costs sit between the two."""
+    """The money column is the book's real base-currency P&L since inception:
+    the bridge measures both sides from the initial capital, so the
+    paper-return row reads end equity less that capital (-1,000) — the
+    build-out's costs (100,000 -> 90,000) are inside the window, not the
+    first row's growth (9,000) measured past them."""
     from trading_algo import portfolio_backtest
 
     state = {"initial_capital_base": 100_000.0, "base_currency": "AUD",
@@ -653,7 +655,7 @@ def test_reconcile_status_prints_the_books_actual_money(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "bridge unavailable" not in out, out
     row = next(ln for ln in out.splitlines() if ln.startswith("paper return"))
-    assert row.split()[-1] == "9,000", row
+    assert row.split()[-1] == "-1,000", row
 
 
 # --- the backtest a book is compared against must be like for like ----------
@@ -1170,6 +1172,103 @@ def test_the_bridge_no_longer_finds_the_comparison_flat_while_the_book_is_invest
     note = rep["notes"]["exposure_gap"]
     assert "not measured" not in note, note
     assert "held nothing" not in note, note
+
+
+def _two_runs_a_day(account, monkeypatch, allocations, days=6):
+    """Run a book as the engine's schedule does, twice per date: run a fires
+    after the ASX close, with every other sleeve still on the PREVIOUS bar;
+    run b fires after the US close, with every sleeve on the date's bar."""
+    real = pt.latest_region_data
+    clock = {"day": 0, "lag": True}
+
+    def serve(region, synthetic):
+        prices, index_px = real(region, synthetic)
+        cut = (len(prices) - 40 + clock["day"]
+               - (clock["lag"] and region.key != "ASX"))
+        return prices.iloc[:cut], index_px.loc[:prices.index[cut - 1]]
+
+    monkeypatch.setattr(pt, "latest_region_data", serve)
+    pt.init_account(account, capital=300_000, synthetic=True, allocations=allocations)
+    rows_after_first_run = None
+    for day in range(1, days + 1):
+        for lag in (True, False):
+            clock.update(day=day, lag=lag)
+            pt.run_daily(account, synthetic=True)
+            if rows_after_first_run is None:
+                rows_after_first_run = pt.load_state(account)
+    return rows_after_first_run, pt.load_state(account)
+
+
+def test_the_bridge_window_opens_before_every_build_out_on_both_sides(
+        account, monkeypatch):
+    """The engine writes a date's equity row ONCE, on its first complete run.
+    On the book's first date that is run a: ASX decides on the date's bar,
+    US and FTSE on the bar before, nothing fills, and the row is the capital
+    untouched. Run b then fills the US and FTSE build-outs, dated that same
+    date, outside the row — and the comparison, which opens each sleeve on
+    the bar it decided on, books its own US and FTSE build-out on that date
+    too. Measured from the first row, the paper's build-out was inside its
+    window and the comparison's was not, while the cost lines dropped the
+    paper's as "already in the start equity": a one-signed bias in the
+    backtest's favour. From inception, every build-out is inside both."""
+    from trading_algo import attribution
+
+    first, state = _two_runs_a_day(
+        account, monkeypatch, {"ASX": 1.0, "US": 1.0, "FTSE": 1.0})
+    capital = state["initial_capital_base"]
+    day0 = state["equity_history"][0][0]
+    # the facts the window has to respect
+    assert first["equity_history"] == [[day0, capital]] and first["trades"] == []
+    assert state["equity_history"][0] == [day0, capital], "row rewritten"
+    built = {t["region"] for t in state["trades"]
+             if t["date"] == day0 and pnl.is_fill(t)}
+    assert built == {"US", "FTSE"}, built
+    res = pt._backtest_for_book(state, synthetic=True)
+    for k in built:
+        assert float(res["sleeves"][k]["costs"].get(pd.Timestamp(day0), 0.0)) > 0, k
+
+    rep = attribution.reconcile(state, pt._predicted_curve(state, res), backtest=res)
+    end = pd.Timestamp(rep["end"])
+    assert rep["start_equity"] == capital
+    assert rep["paper_return"] == pytest.approx(
+        state["equity_history"][-1][1] / capital - 1, abs=1e-15)
+    assert rep["backtest_return"] == pytest.approx(
+        float(res["equity"].loc[end]) / capital - 1, abs=1e-15)
+    # every FTSE fill's stamp duty, the build-out's included, is in the note
+    gbp = state["fx_snapshot"]["GBP"]
+    duty = sum(float(t["stamp_duty"]) * gbp for t in state["trades"]
+               if pnl.is_fill(t) and pd.Timestamp(t["date"]) <= end)
+    assert duty > 0 and f"paid {duty:,.2f} AUD" in rep["notes"]["stamp_duty"]
+    # both engines pay the same idle-cash rule over the same days, the first
+    # one included, so their credits net to under half a basis point; the
+    # comparison's years of warm-up before it opened earn nothing
+    assert abs(rep["lines"]["cash_interest"]) < 0.5e-4, rep["notes"]["cash_interest"]
+    lines = sum(rep["lines"].values())
+    assert rep["residual"] == pytest.approx(
+        rep["backtest_return"] - lines - rep["paper_return"], abs=1e-15)
+    assert rep["identity_ok"] is True, rep["residual"]
+
+
+def test_a_one_sleeve_books_bridge_is_unchanged_from_its_first_row(account, paper_cycle):
+    """A one-sleeve book has no lagging sleeve: its first run decides, nothing
+    fills or accrues, and the first row IS the initial capital, while its
+    comparison is flat at that capital through the same bar. So measuring
+    from inception gives exactly what measuring from the first row gave."""
+    from trading_algo import attribution
+
+    pt.init_account(account, capital=50_000, synthetic=True, allocations={"US": 1.0})
+    state = paper_cycle(account, sessions=6)
+    eh = state["equity_history"]
+    assert eh[0][1] == state["initial_capital_base"]
+    assert all(pd.Timestamp(t["date"]) > pd.Timestamp(eh[0][0])
+               for t in state["trades"])
+    res = pt._backtest_for_book(state, synthetic=True)
+    pred = pt._predicted_curve(state, res)
+    rep = attribution.reconcile(state, pred, backtest=res)
+    assert rep["paper_return"] == pytest.approx(eh[-1][1] / eh[0][1] - 1, abs=1e-15)
+    assert rep["backtest_return"] == pytest.approx(
+        float(pred.iloc[-1] / pred.iloc[0]) - 1, abs=1e-15)
+    assert rep["start_equity"] == eh[0][1]
 
 
 def test_a_book_without_opened_on_is_compared_exactly_as_before():

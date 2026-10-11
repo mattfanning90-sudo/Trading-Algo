@@ -1331,8 +1331,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         book by its open date and charged the floor at that size, and
         `_predicted_curve` could re-level the curve but not undo a cost that
         depends on size. Each sleeve now stands at the book's funded sleeve
-        capital on its open bar; when every sleeve opens on the first equity
-        date, that re-level is a factor of 1.0.
+        capital on its open bar, and the whole comparison at the book's
+        capital before its first open: the bridge's since-inception anchor.
       * PARAMS are the paper path's (`_account_params`): the profile's overrides
         layered on each region's defaults. `run_portfolio_backtest(params=...)`
         replaces EVERY region's params wholesale, so a plain book passes none
@@ -1372,23 +1372,28 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
-    """The backtest's equity over the book's own dates, re-based to the book's
-    starting capital. Fewer than 2 points means there is nothing to compare."""
+    """The backtest's equity over the book's own dates, in the book's money:
+    levelled so the backtest's INCEPTION, its first value (before any sleeve
+    opened), is the book's initial capital — the bridge's anchor on both
+    sides. `_backtest_for_book` funds it at that capital, so the factor is
+    1.0; levelling at the book's first equity date instead would drop the
+    build-out a sleeve that opened a bar earlier paid on that date. Fewer
+    than 2 points means there is nothing to compare."""
     eh = state["equity_history"]
     eq = backtest["equity"]
     window = eq[(eq.index >= pd.Timestamp(eh[0][0]))
                 & (eq.index <= pd.Timestamp(eh[-1][0]))]
     if len(window) < 2:
         return window
-    return window / float(window.iloc[0]) * float(state["initial_capital_base"])
+    return window / float(eq.iloc[0]) * float(state["initial_capital_base"])
 
 
 def attribution_status(account: str, synthetic: bool) -> None:
     """Live-vs-backtest tracking + attribution report for a book (F3).
 
     Builds the backtest-predicted curve over the SAME window the book traded
-    (full history for signal warm-up, then sliced to the book's dates and
-    re-based to its starting equity — no hindsight refetch), compares, and alerts
+    (full history for signal warm-up, then sliced to the book's dates, in the
+    book's money — no hindsight refetch), compares, and alerts
     if tracking error blows the budget.
     """
     state = load_state(account)
@@ -1512,10 +1517,10 @@ def reconcile_status(account: str, synthetic: bool) -> None:
     """Print the backtest -> paper reconciliation bridge (spec §5).
 
     Same predicted curve `--attribution` builds: a backtest over the SAME window
-    the book traded, sliced to the book's dates and re-based to its starting
-    equity — no hindsight refetch (invariant #1). The money column is priced at
-    the bridge's own denominator, the equity at the window start, so it reads
-    the book's actual amounts rather than the return scaled by its capital.
+    the book traded, sliced to the book's dates, in the book's money — no
+    hindsight refetch (invariant #1). The bridge measures both sides since
+    inception, so the money column is priced at its denominator, the book's
+    initial capital, and reads the book's actual amounts since then.
     """
     state = load_state(account)
     eh = state.get("equity_history", [])

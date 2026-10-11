@@ -214,14 +214,17 @@ def test_bridge_nets_the_slippage_both_engines_charge():
     assert rep["lines"]["fill_convention"] == pytest.approx(0.05 / 100_000, abs=1e-12)
 
 
-def test_bridge_leaves_out_trades_already_inside_the_start_equity():
-    """equity_history is stamped AFTER a run's trades, so a trade dated on the
-    window's first day is already inside the start equity. Counting its cost
-    again would double it — and on a real book that day is the build-out."""
+def test_bridge_counts_a_fill_dated_the_first_equity_date():
+    """The window runs from the book's inception, before any fill, so a fill
+    dated the first equity date is inside it whichever run made it. The
+    engine writes a date's row ONCE, on its first complete run: a sleeve
+    still on the previous bar then fills its build-out, dated that same
+    date, on a LATER run, outside the row. Read as "already inside the start
+    equity", that build-out's A$4.92 floor excess fell out of every line."""
     state = _bridge_state(100_995.08)
     state["trades"][0]["date"] = "2026-01-05"
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert rep["lines"]["commission_floor"] == 0.0
+    assert rep["lines"]["commission_floor"] == pytest.approx(4.92e-5, abs=1e-12)
 
 
 def test_bridge_converts_local_costs_at_the_books_fx_snapshot():
@@ -285,14 +288,22 @@ def test_format_bridge_without_a_capital_prints_no_money_column():
     assert _row(text, "backtest return")[-2:] == ["1.0000%", "208"]
 
 
-def test_bridge_reports_the_equity_its_lines_are_fractions_of():
-    """Every line is a fraction of the book's equity at the WINDOW start — after
-    the build-out's costs, so not initial_capital_base. The money column needs
-    that denominator to print the book's actual base-currency amounts."""
+def test_bridge_measures_both_sides_from_the_books_initial_capital():
+    """One window for both sides: from inception, before any fill on either.
+    The paper's first row (99,830.84) is AFTER a build-out it paid, and the
+    backtest paid its own on that same date (100,000 -> 99,900): measured from
+    that date, the paper's build-out fell outside its window and the
+    backtest's did not, or the other way round. Both returns run from the
+    initial capital, which is also every line's denominator and so the money
+    column's."""
     state = _bridge_state(100_995.08)
     state["equity_history"][0][1] = 99_830.84
-    rep = attribution.reconcile(state, _bridge_predicted())
-    assert rep["start_equity"] == 99_830.84
+    predicted = pd.Series([100_000.0, 99_900.0, 101_000.0], index=pd.to_datetime(
+        ["2026-01-02", "2026-01-05", "2026-06-30"]))
+    rep = attribution.reconcile(state, predicted)
+    assert rep["start_equity"] == 100_000.0
+    assert rep["paper_return"] == pytest.approx(0.0099508, abs=1e-12)
+    assert rep["backtest_return"] == pytest.approx(0.01, abs=1e-12)
 
 
 # --- the holdings lines: exposure_gap, cash_interest, rebalance_timing -------
@@ -637,7 +648,7 @@ def test_bridge_counts_a_fill_on_the_windows_last_day():
 # --- a one-sleeve book: the identity cannot fail, so it must not certify ----
 def _one_sleeve(state: dict, bt: dict) -> tuple[dict, dict]:
     """The same book and backtest with the ASX sleeve removed: US only."""
-    state = {**state, "allocations": {"US": 1.0},
+    state = {**state, "allocations": {"US": 1.0}, "initial_capital_base": 50_000.0,
              "sleeves": {"US": state["sleeves"]["US"]},
              "sleeve_history": [{"date": r["date"], "US": r["US"]}
                                 for r in state["sleeve_history"]],
@@ -834,17 +845,11 @@ def test_a_credit_both_engines_pay_alike_nets_to_nothing(monkeypatch):
 
 def test_a_credit_only_the_paper_paid_is_the_papers_gain_on_the_line(monkeypatch):
     """With the backtest's credit off, the paper's INT rows are all the line
-    holds, negative because the paper is ahead: -(5.00 + 5.001) = -10.00 AUD.
-    An INT row dated the window's START is already inside the start equity,
-    as a fill on that day is, so its 999 USD is not counted."""
+    holds, negative because the paper is ahead: -(5.00 + 5.001) = -10.00 AUD."""
     from trading_algo import config as cfg
     monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)
     bt = _backtest((0.0, 0.0), us_weight=0.5)
     state = _with_paper_interest(_paper_book(0.5, (0.0, 0.0)))
-    state["trades"].insert(0, {"date": "2026-03-02", "region": "US", "ticker": "CASH",
-                               "side": "INT", "shares": 1, "fill": 999.0,
-                               "commission": 0.0, "stamp_duty": 0.0,
-                               "currency": "USD"})
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
     assert _aud(rep, "cash_interest") == pytest.approx(
         -(5.0 + 5.001), abs=0.005)
@@ -880,3 +885,73 @@ def test_without_the_backtest_the_note_carries_the_papers_interest():
     assert rep["lines"]["cash_interest"] == 0.0
     assert "credited 2.50 AUD" in rep["notes"]["cash_interest"]
     assert "left out" not in rep["notes"].get("commission_floor", "")
+
+
+# --- one window for both sides: from the book's inception ---------------------
+def test_cash_events_dated_the_first_equity_date_are_inside_the_window():
+    """The window rule is one rule for every dated event the bridge counts.
+    A sleeve still on the previous bar when the first row was written accrues
+    its first interest, dated that row's date, on a later run: inside the
+    paper's return from inception, so inside the window, as a fill is. Here
+    a DIV (10 x A$0.50) and an INT (A$2.50) dated the first equity date."""
+    state = _bridge_state(100_995.08)
+    state["trades"] += [_div("2026-01-05", "ASX", "BHP.AX", 10, 0.5, "AUD"),
+                        {"date": "2026-01-05", "region": "ASX", "ticker": "CASH",
+                         "side": "INT", "shares": 1, "fill": 2.5,
+                         "commission": 0.0, "stamp_duty": 0.0, "currency": "AUD"}]
+    rep = attribution.reconcile(state, _bridge_predicted())
+    assert "credited a net 5.00 AUD" in rep["notes"]["dividends"]
+    assert "credited 2.50 AUD" in rep["notes"]["cash_interest"]
+
+
+def test_a_credit_dated_the_first_equity_date_is_netted_like_any_other(monkeypatch):
+    """The US sleeve's first INT row (100 USD = 150.00 AUD) is dated the first
+    equity date and is inside every row: the sleeve stands at 50,150 from the
+    first row on, against a backtest that pays nothing and holds the same
+    half. Measured from inception (50,000), the whole 150.00 is the paper's
+    interest, so cash_interest is -150.00 and nothing is left for timing.
+    The credit is linked from the day it landed like any other."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", False)
+    bt = _backtest((0.0, 0.0), us_weight=0.5)
+    state = _paper_book(0.5, (0.0, 0.0))
+    state["sleeves"]["US"]["cash"] += 100.0
+    state["trades"].append({"date": "2026-03-02", "region": "US", "ticker": "CASH",
+                            "side": "INT", "shares": 1, "fill": 100.0,
+                            "commission": 0.0, "stamp_duty": 0.0, "currency": "USD"})
+    for row, eq in zip(state["sleeve_history"], state["equity_history"]):
+        row["US"] += 150.0
+        eq[1] += 150.0
+    rep = attribution.reconcile(state, bt["equity"], backtest=bt)
+    assert rep["paper_return"] == pytest.approx(
+        (state["equity_history"][-1][1]) / 100_000.0 - 1, abs=1e-15)
+    assert _aud(rep, "cash_interest") == pytest.approx(-150.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert _aud(rep, "exposure_gap") == pytest.approx(0.0, abs=0.005)
+
+
+def test_a_comparison_sleeve_earns_nothing_before_the_bar_it_opened_on(monkeypatch):
+    """From inception the window can hold days before a comparison sleeve
+    opened (a sleeve whose first decision came a bar after another's). The
+    backtest credits no interest there — the sleeve did not exist — so the
+    bridge must not price one either. Here the US comparison opens on the
+    second session and earns its 2bp of idle credit (7.3% / 365 on all of
+    it) only on the third: 50,000 x 0.0002 = 10.00 AUD, all cash_interest.
+    Priced from the formula on the second session too, the line would read
+    20.00 and push -10.00 into rebalance_timing."""
+    from trading_algo import config as cfg
+    monkeypatch.setattr(cfg, "CREDIT_IDLE_CASH", True)
+    monkeypatch.setattr(cfg, "CASH_RATE_ANNUAL", 0.073)
+    bt = _backtest((0.0, 0.0), us_weight=0.0)
+    us = bt["sleeves"]["US"]
+    us["weights"] = {d: pd.Series(dtype=float) for d in _D}
+    us["returns"] = pd.Series([0.0, 0.0, 0.0002], index=_D)
+    us["base_returns"] = us["returns"].copy()
+    us["open_bar"] = _D[1]
+    bt["equity"] = 50_000.0 * sum((1 + s["returns"]).cumprod()
+                                  for s in bt["sleeves"].values())
+    rep = attribution.reconcile(_paper_book(0.0, (0.0, 0.0)), bt["equity"],
+                                backtest=bt)
+    assert _aud(rep, "cash_interest") == pytest.approx(10.00, abs=0.005)
+    assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=0.005)
+    assert rep["identity_ok"] is True

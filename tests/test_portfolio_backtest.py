@@ -169,3 +169,23 @@ def test_a_mapping_with_no_date_for_a_sleeve_is_refused():
                                end="2020-06-30", allocations={"US": 1, "FTSE": 1},
                                trade_from={"US": pd.Timestamp("2020-03-11"),
                                            "FTSE": None})
+
+
+def test_each_sleeve_names_the_bar_it_opened_on():
+    """The reconciliation bridge measures a comparison sleeve from the bar it
+    opened on: before it the sleeve did not exist, so a day there is no day
+    of idle cash. Each sleeve's result carries that bar (Saturday 2020-03-14
+    opens on Monday the 16th), and a whole-sample run, which opens nowhere,
+    carries None."""
+    from trading_algo.backtest import first_bar_on_or_after
+
+    opened = {"US": pd.Timestamp("2020-03-10"), "FTSE": pd.Timestamp("2020-03-14")}
+    res = run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                                 end="2020-06-30", allocations={"US": 1, "FTSE": 1},
+                                 initial_capital=10_000.0, trade_from=opened)
+    for k, day in opened.items():
+        bars = res["sleeves"][k]["equity"].index
+        assert res["sleeves"][k]["open_bar"] == first_bar_on_or_after(bars, day), k
+    assert res["sleeves"]["FTSE"]["open_bar"] == pd.Timestamp("2020-03-16")
+    whole = run_portfolio_backtest(regions=["US"], synthetic=True, end="2020-06-30")
+    assert whole["sleeves"]["US"]["open_bar"] is None
