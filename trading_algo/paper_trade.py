@@ -579,15 +579,21 @@ def whole_shares(equity: float, weights: pd.Series, px: pd.Series,
     zero (a short one more share short), largest fraction first, ties by
     ticker, so conviction decides who gets the last share. The offer is taken
     only if both hold:
-      * CAP — the position stays within max(max_weight, |w|) of equity:
-        `max_weight` is the BOOK's effective cap (`_account_params`), and a name
-        the strategy already put above it (micro mode) never rounds past its
-        own weight.
+      * CAP — the position stays within max_weight of equity, the BOOK's
+        effective cap (`_account_params`). A round-up always lands above
+        |w| x equity, so a name the strategy put at or above the cap never
+        rounds up — micro mode's 0.97/k picks included (whether they should is
+        a strategy question for Matt).
       * CASH — `cash_after(book)`, the sleeve's cash once the whole book has
         executed, stays at or above the lowest of: zero; the cash the truncated
         book leaves; and equity x (1 - sum(w)), the borrowing a geared book's own
         weights ask for. So rounding never overdraws a sleeve that the
-        truncated book left in credit, and never borrows past the strategy.
+        truncated book left in credit, nor borrows more CASH than the weights
+        do. It bounds cash, not exposure: a short rounds away from zero and its
+        sale credits cash, so a long/short book's gross can end above max_gross
+        (synthetic `experimental`: 2.067 vs 2.0); and a sleeve with sum(w) < 1
+        may spend its vol-target cash buffer on round-ups (up to 6.7pp of
+        equity measured, never past fully invested).
     A refused offer leaves the name truncated; later, smaller offers are still
     tried. `rebalance_sleeve` passes its real fills as `cash_after` (slippage,
     commission, stamp duty, the dust rule, frozen names); without it a share
@@ -611,8 +617,8 @@ def whole_shares(equity: float, weights: pd.Series, px: pd.Series,
         if abs(exact[t] - desired[t]) < 0.5:
             continue                       # nearest IS the truncation
         up = {**desired, t: desired[t] + (1 if exact[t] > 0 else -1)}
-        cap = max(float(max_weight), abs(float(weights[t]))) * float(equity)
-        if abs(up[t]) * float(px[t]) <= cap and cash(up) >= floor:
+        if (abs(up[t]) * float(px[t]) <= float(max_weight) * float(equity)
+                and cash(up) >= floor):
             desired = up
     return desired
 

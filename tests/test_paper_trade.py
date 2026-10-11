@@ -1972,7 +1972,7 @@ def test_a_geared_book_rounds_up_only_into_the_borrowing_it_asked_for():
 def test_the_round_up_guard_is_the_books_own_max_weight():
     """ultra raises max_weight to 0.6. A name at a 50% weight targets 2.5 shares
     of a 2,000 name; 3 shares is 60% — inside ultra's cap, past the region
-    default's 15% (where the guard falls back to the name's own 50%)."""
+    default's 15%."""
     def fill(**kw):
         sleeve = _micro_sleeve(10_000.0)
         pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series({"A": 0.5}),
