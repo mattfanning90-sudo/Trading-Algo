@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Callable
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -546,11 +547,100 @@ def fit_long_short_to_lots(targets, px, equity: float, *, min_value: float,
     return _pd.Series(dtype=float)
 
 
+def _order(region, cur: int, tgt: int, price, dust: float):
+    """The order `rebalance_sleeve` places to move `cur` shares to `tgt`, as
+    (delta, fill, commission, stamp duty) — or None when it places none: no
+    change, no usable price, or a dust adjustment (a full exit always trades).
+    A short sale (delta < 0) CREDITS the book: `delta * fill` carries the sign.
+    """
+    delta = tgt - cur
+    if delta == 0 or not price or price != price:
+        return None
+    fill = price * (1 + np.sign(delta) * region.slippage_bps / 1e4)
+    notional = abs(delta) * fill
+    if notional < dust and tgt != 0:
+        return None
+    duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
+    return delta, fill, fees.commission(region, notional), duty
+
+
+def whole_shares(equity: float, weights: pd.Series, px: pd.Series,
+                 max_weight: float, *,
+                 cash_after: Callable[[dict[str, int]], float] | None = None,
+                 ) -> dict[str, int]:
+    """Target share counts, rounded to NEAREST rather than toward zero.
+
+    `int()` truncation is a systematic short, and only on expensive names: a
+    US$930 name at a 5% weight of a US$10k sleeve targets 0.538 shares and buys
+    none, which removed 16-47% of the US sleeve's target every month.
+
+    The rule. Every name starts at its exact count truncated toward zero. A
+    name at least half a share past that is offered one more share away from
+    zero (a short one more share short), largest fraction first, ties by
+    ticker, so conviction decides who gets the last share. The offer is taken
+    only if both hold:
+      * CAP — the position stays within max(max_weight, |w|) of equity:
+        `max_weight` is the BOOK's effective cap (`_account_params`), and a name
+        the strategy already put above it (micro mode) never rounds past its
+        own weight.
+      * CASH — `cash_after(book)`, the sleeve's cash once the whole book has
+        executed, stays at or above the lowest of: zero; the cash the truncated
+        book leaves; and equity x (1 - sum(w)), the borrowing a geared book's own
+        weights ask for. So rounding never overdraws a sleeve that the
+        truncated book left in credit, and never borrows past the strategy.
+    A refused offer leaves the name truncated; later, smaller offers are still
+    tried. `rebalance_sleeve` passes its real fills as `cash_after` (slippage,
+    commission, stamp duty, the dust rule, frozen names); without it a share
+    costs its price and a short sale credits it.
+
+    Invariant #4 is preserved: every value returned is an int.
+    """
+    exact: dict[str, float] = {}
+    for t, w in weights.items():
+        price = px.get(t)
+        if price and price == price and price > 0:
+            exact[t] = (float(equity) * float(w)) / float(price)
+    desired = {t: int(q) for t, q in exact.items()}          # toward zero
+
+    def at_price(book: dict[str, int]) -> float:
+        return float(equity) - sum(q * float(px[t]) for t, q in book.items())
+
+    cash = cash_after or at_price
+    floor = min(0.0, cash(desired), float(equity) * (1.0 - float(weights.sum())))
+    for t in sorted(exact, key=lambda k: (-abs(exact[k] - desired[k]), k)):
+        if abs(exact[t] - desired[t]) < 0.5:
+            continue                       # nearest IS the truncation
+        up = {**desired, t: desired[t] + (1 if exact[t] > 0 else -1)}
+        cap = max(float(max_weight), abs(float(weights[t]))) * float(equity)
+        if abs(up[t]) * float(px[t]) <= cap and cash(up) >= floor:
+            desired = up
+    return desired
+
+
 def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
                      today: str, trade_log: list,
-                     frozen: set[str] | None = None) -> None:
+                     frozen: set[str] | None = None, *,
+                     max_weight: float | None = None) -> None:
+    # `max_weight` is the book's effective single-name cap; a profiled book's
+    # differs from the region default (ultra's is 0.6), so the live path passes it.
     equity = sleeve_equity_local(sleeve, px)
     frozen = frozen or set()
+    if max_weight is None:
+        max_weight = region.params.max_weight
+    dust = min(200.0, equity * 0.05)
+
+    def cash_after(book: dict[str, int]) -> float:
+        """This sleeve's cash once the loop below has executed `book` — the same
+        orders at the same fills and costs, so rounding pays for what it buys."""
+        cash = float(sleeve["cash"])
+        for t in sorted((set(sleeve["positions"]) | set(book)) - frozen):
+            order = _order(region, sleeve["positions"].get(t, 0), book.get(t, 0),
+                           px.get(t), dust)
+            if order:
+                delta, fill, fee, duty = order
+                cash -= delta * fill + fee + duty
+        return cash
+
     print(f"\n  [{region.key}] rebalancing — equity {equity:,.0f} {region.currency}")
 
     # Micro-account mode: too small to hold the full book in whole shares.
@@ -563,10 +653,13 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
         # One share fitting in the WHOLE sleeve doesn't mean it fits in a pick's
         # share of it: three picks at a third each rounded to 0 shares and the
         # `small` book bought nothing for months. Like `_fit_leg`, shrink the pick
-        # count in rank order — never by price — until every pick buys a share.
+        # count in rank order — never by price — until every pick buys a share,
+        # asking `whole_shares`, the rule that executes it, so the two agree.
         picks = []
         for k in range(min(len(affordable), max(1, min(3, int(equity // 40)))), 0, -1):
-            if all(int((equity * (0.97 / k)) / px[t]) >= 1 for t in affordable[:k]):
+            fit = whole_shares(equity, pd.Series(0.97 / k, index=affordable[:k]),
+                               px, max_weight, cash_after=cash_after)
+            if all(q >= 1 for q in fit.values()):
                 picks = affordable[:k]
                 break
         if picks:
@@ -610,12 +703,7 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
                   "whole shares (highest-conviction names kept, hedge preserved)")
         targets = fitted
 
-    dust = min(200.0, equity * 0.05)
-    desired = {}
-    for t, w in targets.items():
-        price = px.get(t)
-        if price and price == price and price > 0:
-            desired[t] = int((equity * w) / price)
+    desired = whole_shares(equity, targets, px, max_weight, cash_after=cash_after)
 
     # --- post-rounding neutrality gate (long/short books only) --------------
     # `select_long_short` builds both legs to ±1 and stays flat when it can't
@@ -656,20 +744,11 @@ def rebalance_sleeve(region, sleeve: dict, targets: pd.Series, px: pd.Series,
             continue
         cur = sleeve["positions"].get(t, 0)
         tgt = desired.get(t, 0)
-        delta = tgt - cur
-        if delta == 0:
-            continue
         price = px.get(t)
-        if not price or price != price:
+        order = _order(region, cur, tgt, price, dust)
+        if order is None:
             continue
-        fill = price * (1 + np.sign(delta) * region.slippage_bps / 1e4)
-        notional = abs(delta) * fill
-        if notional < dust and tgt != 0:   # skip dust adjustments, allow full exits
-            continue
-        fee = fees.commission(region, notional)
-        duty = fees.stamp_duty(region, notional) if delta > 0 else 0.0
-        # A short sale (delta<0 opening) CREDITS the book with the proceeds; the
-        # sign of `delta * fill` already handles both directions.
+        delta, fill, fee, duty = order
         sleeve["cash"] -= delta * fill + fee + duty
 
         trade = {"date": today, "region": region.key, "ticker": t,
@@ -896,20 +975,21 @@ def _stage_target(sleeve: dict, today: str, targets: pd.Series,
 
 
 def _fill_pending(region, sleeve: dict, px: pd.Series, today: str,
-                  trade_log: list) -> bool:
+                  trade_log: list, max_weight: float | None = None) -> bool:
     """Execute the target staged on an EARLIER bar, at today's close.
 
     Returns True when a fill was attempted. A target staged on today's own bar
     is left alone: that is the whole convention, and the engine runs up to three
     times a day against the same bar. A sleeve with no `pending_target` — every
-    book saved before staging existed — has nothing to fill.
+    book saved before staging existed — has nothing to fill. `max_weight` is the
+    book's effective single-name cap, which whole-share rounding must respect.
     """
     pending = sleeve.get("pending_target")
     if not pending or str(pending.get("date", "")) >= today:
         return False
     targets = pd.Series(pending.get("weights") or {}, dtype=float)
     rebalance_sleeve(region, sleeve, targets, px, today, trade_log,
-                     frozen=set(pending.get("frozen") or ()))
+                     frozen=set(pending.get("frozen") or ()), max_weight=max_weight)
     sleeve["last_rebalance_date"] = today          # the FILL date, not the decision's
     sleeve["last_decision_date"] = str(pending["date"])   # ...kept: the diagnosis asks there
     sleeve.pop("pending_target", None)
@@ -1068,7 +1148,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         # Execute the target staged on an EARLIER bar, at today's close. Every
         # fill in this book therefore lands one session after its decision.
         if rate_ok and _fill_pending(region, sleeve, px_today, today,
-                                     state["trades"]):
+                                     state["trades"], max_weight=params.max_weight):
             rebalanced_this_run = True
 
         if halted:

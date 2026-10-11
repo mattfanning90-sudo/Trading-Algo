@@ -1895,3 +1895,123 @@ def test_the_gap_turns_stuck_and_abandons_only_past_the_limit(monkeypatch):
             assert ("stuck" in message) == (past and priced), (n, priced)
             assert ("abandoned" in message) == (past and not priced), (n, priced)
             assert (sleeve["last_dividend_date"] == today) == (past and not priced)
+
+
+# --- whole shares: round to nearest, not toward zero -------------------------
+def test_whole_shares_round_to_nearest_not_toward_zero():
+    """int() is a systematic short: 0.538 shares of a US$930 name bought none,
+    removing 16-47% of the US sleeve's target every month."""
+    got = pt.whole_shares(10_000.0, pd.Series({"EXP": 0.05}),
+                          pd.Series({"EXP": 930.0}), 0.15)
+    assert got == {"EXP": 1}          # 0.538 shares -> 1, not 0
+
+
+def test_rounding_down_is_still_right_below_the_half():
+    got = pt.whole_shares(10_000.0, pd.Series({"EXP": 0.04}),
+                          pd.Series({"EXP": 930.0}), 0.15)
+    assert got == {"EXP": 0}          # 0.430 shares -> 0
+
+
+def test_round_up_refused_when_it_breaches_the_single_name_cap():
+    """1.5 shares at the 15% cap must not become 2 shares at 20%."""
+    got = pt.whole_shares(10_000.0, pd.Series({"BIG": 0.15}),
+                          pd.Series({"BIG": 1_000.0}), 0.15)
+    assert got == {"BIG": 1}
+
+
+def test_round_up_refused_when_the_cash_is_not_there():
+    """With the cap out of the way, a round-up must still be paid for.
+
+    The truncated book costs 666 of 1,000, so exactly ONE of the two names can
+    round up; the other is refused for want of money, not conviction.
+    """
+    got = pt.whole_shares(1_000.0, pd.Series({"A": 0.5, "B": 0.5}),
+                          pd.Series({"A": 333.0, "B": 333.0}), 1.0)
+    assert sorted(got.values()) == [1, 2]
+
+
+def test_rounding_toward_nearest_applies_to_a_short_leg_too():
+    """A short of -0.6 shares is -1, not 0 — the bias was in `int`, not in sign."""
+    got = pt.whole_shares(10_000.0, pd.Series({"S": -0.06}),
+                          pd.Series({"S": 1_000.0}), 0.15)
+    assert got == {"S": -1}
+
+
+def test_rounding_never_overdraws_a_sleeve_where_every_name_rounds_up():
+    """Eight names each target 4.68 shares, so every one wants to round up.
+
+    The truncated book costs 6,400 of 7,800, which at the bare price leaves
+    exactly seven round-ups (1,400 = 7 x 200) and cash of 0.00. But every fill
+    pays 5bps slippage and the US$1 commission floor, so a seventh round-up
+    would leave the sleeve -11.90 overdrawn. Six are taken, largest fraction
+    first and ties by ticker, and the sleeve ends with cash to spare.
+    """
+    names = list("ABCDEFGH")
+    sleeve = _micro_sleeve(7_800.0)               # above MICRO_THRESHOLD
+    trades: list = []
+    pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(0.12, index=names),
+                        pd.Series(200.0, index=names), "2026-10-01", trades)
+
+    assert sleeve["positions"] == {**{t: 5 for t in "ABCDEF"}, "G": 4, "H": 4}
+    assert all(isinstance(q, int) for q in sleeve["positions"].values())
+    assert sleeve["cash"] >= 0.0
+    assert sleeve["cash"] == pytest.approx(188.2, abs=0.01)
+
+
+def test_a_geared_book_rounds_up_only_into_the_borrowing_it_asked_for():
+    """ultra's weights may sum past 1 — the strategy itself borrows. Rounding
+    may spend what truncation left unspent, down to the cash the exact weights
+    leave (10,000 x (1 - 2.5) = -15,000), never past it: two round-ups at 2,000
+    reach -14,000, a third would be -16,000."""
+    names = list("ABCDE")
+    got = pt.whole_shares(10_000.0, pd.Series(0.5, index=names),
+                          pd.Series(2_000.0, index=names), 0.6)
+    assert got == {"A": 3, "B": 3, "C": 2, "D": 2, "E": 2}
+
+
+def test_the_round_up_guard_is_the_books_own_max_weight():
+    """ultra raises max_weight to 0.6. A name at a 50% weight targets 2.5 shares
+    of a 2,000 name; 3 shares is 60% — inside ultra's cap, past the region
+    default's 15% (where the guard falls back to the name's own 50%)."""
+    def fill(**kw):
+        sleeve = _micro_sleeve(10_000.0)
+        pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series({"A": 0.5}),
+                            pd.Series({"A": 2_000.0}), "2026-10-01", [], **kw)
+        return sleeve["positions"]
+
+    assert fill(max_weight=0.6) == {"A": 3}
+    assert fill() == {"A": 2}
+
+
+def test_a_profiled_book_fills_against_its_own_max_weight(account, paper_cycle,
+                                                          monkeypatch):
+    """The live path must hand the fill the BOOK's effective cap
+    (`_account_params`), not `region.params.max_weight`: a 0.15 guard would
+    silently clip every ultra position the profile sized up to 0.6."""
+    pt.init_account(account, capital=10_000, synthetic=True, profile="ultra")
+    seen: list = []
+    real = pt.rebalance_sleeve
+
+    def spy(*a, **kw):
+        seen.append(kw.get("max_weight"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(pt, "rebalance_sleeve", spy)
+    paper_cycle(account)                                  # decide, then fill
+    assert seen == [0.6]
+
+
+def test_micro_mode_fits_its_picks_with_the_rule_that_executes_them():
+    """The fit check must ask `whole_shares`, not `int()`, or the two disagree.
+
+    A book whose cap is 0.6 (a shrunken ultra) at 3,000: C targets 0.81 shares
+    of a 1,200 name at a third of the sleeve. `int()` called that 0 shares and
+    dropped to two picks, although the executed rule rounds it up to 1 — inside
+    the cap and paid for (cash 95.55 after costs). All three picks are held.
+    """
+    sleeve = _micro_sleeve(3_000.0)
+    pt.rebalance_sleeve(get_region("US"), sleeve, pd.Series(0.1, index=list("ABC")),
+                        pd.Series({"A": 400.0, "B": 300.0, "C": 1_200.0}),
+                        "2026-10-01", [], max_weight=0.6)
+    assert sleeve["positions"] == {"A": 2, "B": 3, "C": 1}
+    assert sleeve["cash"] >= 0.0
