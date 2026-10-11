@@ -193,6 +193,29 @@ Goals and acceptance criteria for a piece of work live in
 - Sandboxes may block outbound internet (Yahoo 403). Use `--synthetic` to
   smoke-test the pipeline offline; real backtests need network on your machine.
 
+## Checking your own work
+Everything here is an evidence claim. Before presenting a finding — in chat, a
+doc, or a spec — it must survive these:
+
+1. **Verify what a subagent reports.** A subagent's report is a claim, not a
+   finding. Open the file or source and confirm it before repeating it. If you
+   can't, label it unverified — never launder it into a fact.
+2. **Read the file, don't grep it.** A grep returning nothing is not evidence of
+   absence, especially for a doc another doc names. Absence is a finding only
+   after you have read the file.
+3. **A gap is not an impossibility.** "No test does X" and "no test could do X"
+   are different claims. Don't upgrade one to the other because it reads better.
+4. **Carry the source's caveat with its number.** If the doc that produced a
+   figure calls it multiple-comparison discounted or not yet actionable, that
+   travels with the figure — into summaries and option text, not just prose.
+5. **Don't manufacture dependencies.** If B doesn't actually require A, say so,
+   even when A-then-B is the tidier story.
+6. **Quote the code you reason about.** A claim about behaviour cites file:line
+   and the line itself. Paraphrase is how divergences get missed.
+
+On substantial work, review it adversarially before presenting it: argue the
+other side, then report what survives and what doesn't.
+
 ## Style
 Python 3.11+, pandas/numpy, type hints, small testable modules, no heavy
 frameworks. Money is always in a known currency — label it.
