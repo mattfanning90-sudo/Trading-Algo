@@ -39,6 +39,7 @@ import pandas as pd
 import pytest
 
 from trading_algo import execution_ibkr as ex
+from trading_algo import paper_trade
 from trading_algo import strategy
 from trading_algo.config import DEFAULT_PARAMS
 from trading_algo.regions import get_region
@@ -245,26 +246,52 @@ def test_fx_live_planner_expresses_the_shared_weights(fx_panel, fx_params):
 
 def test_equity_live_expresses_shared_compute_targets(monkeypatch, asx_region,
                                                       asx_targets):
-    """execution_ibkr does not own a weight formula — it consumes
-    strategy.compute_targets. Given that vector against a flat book it must plan a
-    target value of nav×w per name (within one share / the per-order cap), i.e. it
-    reproduces the paper engine's book rather than re-deriving it."""
+    """execution_ibkr owns neither a weight formula nor a share-count rule. Given
+    strategy.compute_targets' vector against a flat book it orders EXACTLY the
+    shares the paper engine executes at the same NAV and prices — one whole-share
+    rule (`paper_trade.whole_shares`) for every executor.
+
+    At 100 a share, six of these ten names sit at least half a share past a whole
+    count, where truncation and rounding to nearest disagree by one share. The
+    old "within one share" check could not tell the two apart, so a live path
+    still truncating passed while paper rounded."""
     W = asx_targets
     nav, px = 1_000_000.0, 100.0
+    sleeve = {"currency": asx_region.currency, "cash": nav, "positions": {},
+              "cost_basis": {}, "realized_pnl": 0.0}
+    paper_trade.rebalance_sleeve(asx_region, sleeve, W, pd.Series(px, index=W.index),
+                                 "2024-01-02", [])
+    paper = {ex.to_ib_symbol(t, asx_region): q for t, q in sleeve["positions"].items()}
+    truncated = {ex.to_ib_symbol(t, asx_region): int(w * nav / px) for t, w in W.items()}
+    assert sum(paper[s] != truncated[s] for s in paper) == 6, "not a case where rounding bites"
+
     ib = _FakeIB(nav=nav, positions=[],
                  prices={ex.to_ib_symbol(t, asx_region): px for t in W.index})
     _install_fake_ib(monkeypatch, ib)
     orders = ex.rebalance("ASX", W, dry_run=True)
-    by = {o["symbol"]: o for o in orders}
-    for t, w in W.items():
-        want = min(w * nav, ex.MAX_ORDER_NAV_FRACTION * nav)
-        if want < asx_region.min_trade_value:
-            continue
-        sym = ex.to_ib_symbol(t, asx_region)
-        assert by[sym]["action"] == "BUY"
-        # int(want/px)*px == want within one share; the live path expresses exactly
-        # the shared weight, no re-sizing.
-        assert by[sym]["approx_value"] == pytest.approx(want, abs=px)
+    assert all(o["action"] == "BUY" for o in orders)
+    assert {o["symbol"]: o["qty"] for o in orders} == paper
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "KNOWN GAP: the live path reads no cash balance and models no fill costs, so "
+    "its whole_shares cash guard prices a share at its quote; paper's includes "
+    "slippage and the commission floor. Where that guard binds, live takes one "
+    "more round-up than paper (and would overdraw by 11.90 at paper's costs)."))
+def test_equity_live_matches_paper_where_fill_costs_refuse_a_round_up(monkeypatch):
+    """Eight US names at 12% of a 7,800 book, 200 a share: each targets 4.68
+    shares. At the bare price seven round-ups fit exactly; paper's fills pay
+    slippage and the US$1 floor, so it takes six."""
+    names = [f"N{c}" for c in "ABCDEFGH"]
+    W, nav, region = pd.Series(0.12, index=names), 7_800.0, get_region("US")
+    sleeve = {"currency": "USD", "cash": nav, "positions": {}, "cost_basis": {},
+              "realized_pnl": 0.0}
+    paper_trade.rebalance_sleeve(region, sleeve, W, pd.Series(200.0, index=names),
+                                 "2026-10-01", [])
+    ib = _FakeIB(nav=nav, positions=[], prices={n: 200.0 for n in names})
+    _install_fake_ib(monkeypatch, ib)
+    orders = ex.rebalance("US", W, dry_run=True)
+    assert {o["symbol"]: o["qty"] for o in orders} == sleeve["positions"]
 
 
 # ===========================================================================

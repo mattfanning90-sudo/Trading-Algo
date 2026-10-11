@@ -205,3 +205,18 @@ def test_halted_book_flattens_and_opens_nothing(monkeypatch):
     assert actions == {"AAPL": "SELL"}          # flatten AAPL, no MSFT buy
     assert all(o["action"] == "SELL" for o in orders)
     assert not any(a == "BUY" for _, a, _ in ib.placed)
+
+
+def test_live_rounds_whole_shares_against_the_books_own_cap(monkeypatch):
+    """The live path sizes shares with the paper engine's rule, against the
+    BOOK's cap: a 50% weight of a 20,000 name at NAV 100k is 2.5 shares — 3
+    inside ultra's 0.6 cap, 2 under the US default's 0.15."""
+    def qty(**kw):
+        ib = _FakeIB(nav=100_000, positions=[], prices={"AAPL": 20_000.0})
+        _install_fake(monkeypatch, ib)
+        orders = ex.rebalance("US", pd.Series({"AAPL": 0.5}), dry_run=True,
+                              max_order_nav_frac=1.0, **kw)
+        return [o["qty"] for o in orders]
+
+    assert qty(max_weight=0.6) == [3]
+    assert qty() == [2]

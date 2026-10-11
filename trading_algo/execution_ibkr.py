@@ -49,7 +49,8 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
               promotion_evidence: dict | None = None, *,
               account: str | None = None, risk_halted: bool | None = None,
               max_gross: float = MAX_GROSS_WEIGHT,
-              max_order_nav_frac: float = MAX_ORDER_NAV_FRACTION) -> list[dict]:
+              max_order_nav_frac: float = MAX_ORDER_NAV_FRACTION,
+              max_weight: float | None = None) -> list[dict]:
     """Diff target weights vs live IBKR positions for one region and
     (optionally) place orders. Returns the order list (also as a preview).
 
@@ -66,7 +67,12 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
     A persisted drawdown halt (`risk_halted`, or read from the paper book named by
     `account`) forces flatten-only — the halted book may reduce risk but never
     open or rebalance into a risk-on target. Each surviving order is clamped to
-    `max_order_nav_frac` of NAV."""
+    `max_order_nav_frac` of NAV.
+
+    Share counts come from `paper_trade.whole_shares`, the paper engine's rule
+    (nearest whole share, never past `max_weight` — pass the BOOK's effective
+    cap; None means the region default). Its cash guard here prices a share at
+    its quote: this path reads no cash balance and models no fill costs."""
     # Up-front sanity: reject a non-finite / over-leveraged book before we connect
     # or place ANYTHING (never a partial run).
     bad = [str(k) for k, v in target_weights.items() if not math.isfinite(float(v))]
@@ -95,6 +101,8 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
 
     from ib_insync import IB, MarketOrder, Stock
 
+    from .paper_trade import whole_shares
+
     region = get_region(region_key)
     ib = IB()
     ib.connect("127.0.0.1", port, clientId=client_id)
@@ -117,15 +125,25 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
         symbols = {to_ib_symbol(t, region): t for t in target_weights.index}
         orders: list[dict] = []
 
+        # Price the whole book first: the share counts are decided for every
+        # name at once, by the paper engine's own whole-share rule, so live and
+        # paper hold the same shares for the same weights and prices.
+        priced: dict = {}
         for sym in sorted(set(symbols) | set(held_shares)):
             contract = Stock(sym, region.ibkr_exchange, region.currency)
             ib.qualifyContracts(contract)
             ticker = ib.reqMktData(contract, "", False, False)
             ib.sleep(1.5)
             px = ticker.marketPrice()
-            if not px or px != px:  # NaN guard
-                continue
+            if px and px == px:  # NaN guard
+                priced[sym] = (contract, px)
+        want = whole_shares(
+            nav, pd.Series({s: float(target_weights[t]) for s, t in symbols.items()
+                            if s in priced}, dtype=float),
+            pd.Series({s: px for s, (_, px) in priced.items()}, dtype=float),
+            region.params.max_weight if max_weight is None else max_weight)
 
+        for sym, (contract, px) in priced.items():
             shares = held_shares.get(sym, 0.0)
             held_val = shares * px
             target_val = nav * float(target_weights.get(symbols.get(sym, ""), 0.0))
@@ -133,16 +151,16 @@ def rebalance(region_key: str, target_weights: pd.Series, dry_run: bool = True,
             if abs(delta_val) < region.min_trade_value:
                 continue
 
-            if delta_val > 0:
+            delta = want.get(sym, 0) - shares
+            if delta > 0:
                 # Per-order fat-finger cap: never let a single BUY exceed a
                 # fraction of NAV (a bad weight can't deploy the whole book into
                 # one name). Sells only ever *reduce* risk, so they aren't capped.
-                buy_val = min(delta_val, max_order_nav_frac * nav)
-                action, qty = "BUY", int(buy_val / px)
+                action, qty = "BUY", int(min(delta, max_order_nav_frac * nav / px))
             else:
                 # Sell from held shares; never oversell into a short.
                 action = "SELL"
-                qty = min(int(abs(delta_val) / px), int(shares))
+                qty = min(int(-delta), int(shares))
             if qty == 0:
                 continue
 
