@@ -34,6 +34,14 @@ class Region:
     universe: list[str] = field(default_factory=list)
     params: StrategyParams = DEFAULT_PARAMS
     constituents_file: str | None = None   # optional point-in-time membership (CSV/parquet)
+    # Per-TICKER quote scale, overriding `price_scale` for names the feed does
+    # not quote in the region's usual unit. FTSE: Yahoo reports CPG.L and IHG.L
+    # in USD while every other name reports GBp, so a blanket 0.01 divides
+    # dollars by 100. A value of 1.0 means "already in a major unit"; the
+    # CURRENCY mismatch that remains is reported by data_quality, never
+    # silently rescaled — converting USD to GBP needs an FX rate this layer
+    # does not have, and inventing one would break invariant #6.
+    quote_overrides: dict[str, float] = field(default_factory=dict)
     # Rebalance "dust" floor in this region's LOCAL currency: a per-name trade
     # smaller than this is skipped so the commission floor doesn't dominate.
     # Per-region (not a shared constant) so the threshold is comparable in AUD
@@ -109,6 +117,7 @@ REGIONS: dict[str, Region] = {
         slippage_bps=8.0,
         stamp_duty_bps=50.0,           # UK SDRT 0.5% on share PURCHASES
         price_scale=0.01,              # pence (GBX) -> pounds (GBP)
+        quote_overrides={"CPG.L": 1.0, "IHG.L": 1.0},   # Yahoo quotes these in USD
         universe=universes.FTSE,
         min_trade_value=260.0,         # ~A$500 in GBP
         jump_threshold=0.30,           # tighter for GBP names (pence-quoted)
@@ -147,3 +156,8 @@ def get_region(key: str) -> Region:
 
 def all_region_keys() -> list[str]:
     return list(REGIONS)
+
+
+def scale_for(region: Region, ticker: str) -> float:
+    """The quote scale for one ticker: its override, else the region default."""
+    return region.quote_overrides.get(ticker, region.price_scale)

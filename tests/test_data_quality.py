@@ -29,6 +29,38 @@ def ftse():
     return get_region("FTSE")
 
 
+# --- currency mismatch (quote_overrides) -----------------------------------
+def test_currency_mismatch_is_reported_not_silently_rescaled(ftse):
+    """A London name quoted in USD is REJECTED, never divided by 100.
+
+    The name still needs its own price scale so any existing holding marks
+    correctly, but it must not be selected into a GBP sleeve while its quote
+    currency disagrees with the sleeve's (invariant #6).
+    """
+    df = _clean_frame(cols=("CPG.L", "IHG.L", "HSBA.L"))
+    report = data_quality.assess(df, ftse, df.index[-1])
+    assert report.excluded == {"CPG.L", "IHG.L"}
+    assert "currency" in report.reasons["CPG.L"]
+    assert "HSBA.L" not in report.excluded
+
+
+def test_load_region_does_not_divide_a_usd_quoted_name_by_100(monkeypatch, ftse):
+    """The price path applies the per-TICKER scale, not one blanket region scale."""
+    import pandas as pd
+
+    from trading_algo import data
+
+    idx = pd.bdate_range("2026-06-01", periods=5)
+    frame = pd.DataFrame({"CPG.L": 2400.0, "HSBA.L": 900.0, "^FTSE": 8000.0},
+                         index=idx)
+    monkeypatch.setattr(data, "load_prices",
+                        lambda *a, **k: frame.copy())
+    prices, index_px = data.load_region(ftse, "2026-06-01",
+                                        tickers=["CPG.L", "HSBA.L"])
+    assert prices["HSBA.L"].iloc[-1] == 9.0          # 900 GBp -> £9
+    assert prices["CPG.L"].iloc[-1] == 2400.0        # USD, untouched by /100
+
+
 # --- clean data is never flagged -------------------------------------------
 def test_clean_frame_flags_nothing(us):
     df = _clean_frame()

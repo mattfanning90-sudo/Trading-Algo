@@ -118,6 +118,12 @@ def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:
         return report
 
     jump_thr = _jump_threshold(region)
+    # A name the feed quotes in another currency than the sleeve's is not a bad
+    # price — it is the WRONG price for this book. It carries its own scale in
+    # `region.quote_overrides` so any existing holding still marks correctly,
+    # but it must not be selected into the sleeve: converting it would need an
+    # FX rate, and holding it unconverted breaks invariant #6.
+    overrides = dict(getattr(region, "quote_overrides", {}) or {})
     sub = prices.iloc[:loc + 1]
 
     # "Enough history to trade at all" is the only check that spans everything;
@@ -131,6 +137,10 @@ def assess(prices: pd.DataFrame, region, asof: pd.Timestamp) -> QualityReport:
     scan = sub.iloc[-_SCAN_WINDOW:].to_numpy(dtype=float, na_value=np.nan)
 
     for j, t in enumerate(prices.columns):
+        if t in overrides:
+            report.flag(t, f"quote currency mismatch (scale {overrides[t]} vs "
+                           f"region default {region.price_scale})")
+            continue
         if n_valid[j] < 2:
             report.flag(t, "insufficient history")
             continue

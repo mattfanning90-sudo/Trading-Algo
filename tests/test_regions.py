@@ -54,6 +54,22 @@ def test_tsx_scaffold():
     assert all(t.endswith(".TO") for t in tsx.universe)
 
 
+def test_ftse_usd_quoted_names_carry_their_own_scale():
+    """Yahoo reports CPG.L and IHG.L in USD, every other FTSE name in GBp.
+
+    A blanket price_scale of 0.01 divided those two by 100 — which is how the
+    `full` book came to buy 593 IHG.L at "£1.63" against a real price near £120.
+    """
+    from trading_algo.regions import scale_for
+    ftse = get_region("FTSE")
+    assert ftse.price_scale == 0.01                  # the region DEFAULT is pence
+    assert scale_for(ftse, "HSBA.L") == 0.01         # ...and applies to GBp names
+    assert scale_for(ftse, "CPG.L") == 1.0           # already a major unit (USD)
+    assert scale_for(ftse, "IHG.L") == 1.0
+    assert scale_for(get_region("US"), "AAPL") == 1.0
+    assert set(ftse.quote_overrides) == {"CPG.L", "IHG.L"}
+
+
 def test_every_funded_region_is_registered():
     """The funding gate's DURABLE half.
 

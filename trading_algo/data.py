@@ -17,7 +17,7 @@ import pandas as pd
 
 from . import config as cfg
 from . import data_quality
-from .regions import Region
+from .regions import Region, scale_for
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 
@@ -248,8 +248,9 @@ def load_region(region: Region, start: str, end: str | None = None,
                 tickers: list[str] | None = None) -> tuple[pd.DataFrame, pd.Series]:
     """Return (prices, index_prices) for a region in its local currency.
 
-    Universe prices are scaled by `region.price_scale` (pence -> pounds for the
-    LSE). The regime index is left in native points (the regime filter is
+    Universe prices are scaled per ticker by `regions.scale_for` — the region's
+    `price_scale` (pence -> pounds for the LSE) unless the name carries its own
+    override. The regime index is left in native points (the regime filter is
     scale-invariant, so it doesn't need converting).
 
     `tickers` overrides the universe to download — used for point-in-time
@@ -266,7 +267,13 @@ def load_region(region: Region, start: str, end: str | None = None,
                      use_cache=use_cache)
     index_px = df[region.index_ticker]
     prices = df[[c for c in df.columns if c != region.index_ticker]]
-    prices = prices * region.price_scale
+    # Per-TICKER scale. `region.price_scale` is the region's DEFAULT quote unit;
+    # a name the feed quotes in another currency carries its own scale in
+    # `region.quote_overrides`. Dividing dollars by 100 is what put 593 IHG.L
+    # into the `full` book at "£1.63".
+    scale = pd.Series({c: scale_for(region, c) for c in prices.columns},
+                      dtype=float)
+    prices = prices.mul(scale, axis=1)
     # `load_prices` drops all-NaN rows across the COMBINED frame, so a session
     # where only the regime index printed survives here as an all-NaN universe
     # row. Every trailing signal read off it is NaN — realised vol above all —

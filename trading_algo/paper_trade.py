@@ -42,7 +42,7 @@ from . import signals as sig
 from . import (attribution, data, data_quality, fees, fx, metrics,
                notifications, pnl, profiles, promotion, storage, strategy, tca)
 from . import state_schema
-from .regions import REGIONS, get_region
+from .regions import REGIONS, get_region, scale_for
 
 # State location: env override, else the repo's tracked state directory.
 STATE_DIR = os.environ.get("MOMENTUM_STATE_DIR") or os.path.join(
@@ -843,7 +843,7 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
         col = div[t]
         for stamp, raw_dps in col[(col.index > lo) & (col.index <= hi)].items():
             ex = str(pd.Timestamp(stamp).date())
-            dps = round(float(raw_dps) * region.price_scale, 6)
+            dps = round(float(raw_dps) * scale_for(region, t), 6)
             shares = _held_at(sleeve, fills, t, ex)
             if (t, ex) in paid or not dps > 0 or not shares:   # `not >` refuses NaN
                 continue
