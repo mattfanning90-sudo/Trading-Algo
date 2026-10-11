@@ -1,7 +1,9 @@
 # Momentum for Mac — design
 
-**Status:** v2 — revised after a five-reviewer expert review (§10); awaiting Matt's
-review of this written version
+**Status:** v2 — revised after a five-reviewer expert review (§10). Progress
+(2026-10-11): Step 0 done; Step 1 (B1) built 2026-10-10 and awaiting Matt's checks;
+the modern versions of the remaining screens are the next design (Matt,
+2026-10-11).
 **Date:** 2026-10-09 (conversation began 2026-09-24)
 **Owner:** Matt Fanning
 **Branch:** `feat/mac-dashboard`, rebased onto `feat/measurement-truth`
@@ -183,14 +185,14 @@ Measurement truth stays #1 and continues on its own branch. These projects run i
 parallel, read-only, and **nothing here touches trading code until measurement-truth
 Task 10 has landed.**
 
-| Step | Project | Needs |
-|------|---------|-------|
-| 0 | **SMALL micro-mode fix** — own branch from `main`, failing test first | — |
-| 1 | **B1 — home screen on files** (no Postgres, no background agent yet) | measurement-truth Task 22 grouping |
-| 2 | **A — sync agent + Postgres** (local history: first-seen, job runs) | B1 in use |
-| 3 | **D0a — equity decision record (recording)** | measurement-truth Task 10 |
-| 4 | **C — explainers** (currency layer, records, news, AI summary) | A |
-| 5 | **D0b — backfill at historical code**, then **D — bets + learning scaffold** | A, D0a |
+| Step | Project | Needs | Status (2026-10-11) |
+|------|---------|-------|--------|
+| 0 | **SMALL micro-mode fix** — own branch from `main`, failing test first | — | done — PR #100; also on measurement truth as 38f9ff5 |
+| 1 | **B1 — home screen on files** (no Postgres, no background agent yet) | measurement-truth Task 22 grouping | built 2026-10-10 (`docs/specs/home-screen.md`); FX books now report in their own group (6b9e1ff) |
+| 2 | **A — sync agent + Postgres** (local history: first-seen, job runs) | B1 in use | not started |
+| 3 | **D0a — equity decision record (recording)** | measurement-truth Task 10 | unblocked — Task 10 (next-close fills) has landed |
+| 4 | **C — explainers** (currency layer, records, news, AI summary) | A | not started |
+| 5 | **D0b — backfill at historical code**, then **D — bets + learning scaffold** | A, D0a | not started |
 
 Each step ships and is used before the next starts. Specs are written per step.
 

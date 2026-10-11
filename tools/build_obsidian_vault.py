@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Regenerate the in-repo Obsidian vault under ./obsidian.
 
-Most notes are hand-authored prose, but `Reference.md` is generated **from the
-code** (`trading_algo.regions` + `config.StrategyParams`) so the vault can never
-silently drift from the real settings. Re-run after changing regions/params:
+This script holds the text of the core vault notes (README, How It Works, the
+hub note, the first concept notes) and writes them — so edit those notes HERE; a
+hand edit to the generated file is overwritten on the next run. `Reference.md` is
+generated **from the code** (`trading_algo.regions` + `config.StrategyParams`) so
+the vault can never silently drift from the real settings. Re-run after changing
+regions/params or any note text below:
 
     python tools/build_obsidian_vault.py        # or: make obsidian
 
@@ -190,7 +193,7 @@ up: ["[[Multi-Region Momentum]]"]
 > in an uptrend while the index is in an uptrend ([[Regime & Trend Filters]]);
 > else hold cash. Size by inverse vol and scale to a target vol
 > ([[Volatility Targeting]]). Rebalance monthly, [[No-Lookahead|signal at t /
-> trade at t+1]]. Run three sleeves, report in AUD.
+> trade at t+1]]. Run one sleeve per region (ASX, US, FTSE, TSX), report in AUD.
 
 ## 1 · The per-sleeve pipeline
 
@@ -235,10 +238,10 @@ $$\\text{cost} = \\text{turnover}\\cdot\\tfrac{\\text{comm}+\\text{slip}}{10^4} 
 > [!warning] UK stamp duty
 > 0.5% on **FTSE purchases only** — asymmetric, modelled explicitly. See [[Reference]].
 
-## 3 · Three sleeves → one AUD book
+## 3 · Regional sleeves → one AUD book
 $$r_\\text{AUD} = (1 + r_\\text{local})\\cdot\\frac{fx_t}{fx_{t-1}} - 1$$
 Each sleeve trades local; AUD reporting includes the currency move. Capital is
-split ⅓ / ⅓ / ⅓ and trued to target on a cadence.
+split 25% each (ASX, US, FTSE, TSX) by default and trued to target on a cadence.
 
 > [!example] First live run (2026-06-11)
 > 18 trades — 0 ASX (risk-off → cash), 8 US, 10 FTSE — equity A$99,831 after costs.
@@ -594,7 +597,9 @@ system, committed inside the repo so notes are version-controlled with the code.
   repo's `.git` and lets you pull/push from inside Obsidian.
 
 ## Regenerate
-`Reference.md` is generated from `trading_algo/regions.py` and `config.py`:
+`Reference.md` is generated from `trading_algo/regions.py` and `config.py`; this
+README and the core notes are written by the same script — edit the script, not
+the note:
 
 ```bash
 make obsidian        # or: python tools/build_obsidian_vault.py

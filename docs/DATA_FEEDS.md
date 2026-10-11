@@ -211,6 +211,17 @@ again; pass `--source` at run time only to override — note that a run-time
 to switch an existing book. `--close-only-signals` is `--init`-only on purpose: a
 risk policy should not be changeable by a stray flag on one run.
 
+## Known data issues (observed, not yet diagnosed)
+
+- **US prices stopped advancing after 7 Oct 2026** (seen by the Mac home screen
+  on 2026-10-10, from `main` at 150b2c6). The FULL book's US and FTSE sleeves
+  last priced on 2026-10-07 while its ASX sleeve moved the date label on to
+  10-09, so FULL's 8–9 Oct values partly reuse old US/UK prices. The US-only books
+  stalled outright: EXPERIMENTAL's last saved value is 2026-10-06 (its run on
+  10-08 saved none), ULTRA's and SMALL's 2026-10-07. Cause not yet established —
+  candidates include the Yahoo feed lagging and a run firing before New York
+  has closed. Owner: the measurement-truth block.
+
 ## Notes & caveats
 
 * **AUD currency translation is on**: a pair settles in its quote currency (EURUSD
