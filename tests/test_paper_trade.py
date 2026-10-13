@@ -2056,3 +2056,10 @@ def test_suspected_split_halts_the_sleeve_without_touching_share_counts(
     alerts = [p for p in captured if p["event"] == "suspected_split"]
     assert len(alerts) == 1 and alerts[0]["level"] == "alert"
     assert alerts[0]["region"] == "US" and victim in alerts[0]["tickers"]
+    # The halted sleeve is unvalued, so the breaker must not see it. Valued,
+    # a US-only book marks at 0 — an invented -100% that trips the stop and
+    # writes an equity row (the real BKNG replay does exactly that).
+    assert before.get("risk_halted", False) is False, "fixture precondition"
+    assert after["equity_history"] == before["equity_history"]
+    assert after.get("peak_equity_base") == before.get("peak_equity_base")
+    assert after.get("risk_halted", False) is False

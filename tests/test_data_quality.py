@@ -467,6 +467,19 @@ def test_suspected_split_reads_the_latest_fill_and_never_a_cash_event():
     assert data_quality.suspected_split(seen, {"A": 200}, fills) == {}
 
 
+
+def test_suspected_split_anchors_on_the_latest_fill_not_the_first():
+    """A round trip closed BEFORE a split, then re-entered after it: the old
+    fills are in pre-split units, but the shares held now were bought at the
+    post-split price, so the latest fill agrees with the series. Anchoring on
+    the first fill would halt a correct book."""
+    seen = _clean_frame(cols=("A",))                 # pre-split, as traded
+    sell = {**_bought("A", seen, i=-20), "side": "SELL"}
+    now = seen / 2                                   # 2-for-1 at bar -15
+    reentry = _bought("A", now, i=-10, shares=200)   # bought post-split
+    fills = [_bought("A", seen, i=-30), sell, reentry]
+    assert data_quality.suspected_split(now, {"A": 200}, fills) == {}
+
 def test_suspected_split_falls_back_to_the_fill_on_older_ledger_rows():
     """Rows written before the `decision` field (49 of the 120 live fills)
     carry only the slipped fill. A few bp of slippage is far inside tolerance."""
