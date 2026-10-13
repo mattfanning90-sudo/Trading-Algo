@@ -61,10 +61,50 @@ def test_compare_fails_on_a_non_finite_metric(base, cur):
     assert len(drift) == 1 and drift[0].startswith("portfolio.CAGR:"), drift
 
 
+# The resolution each gate metric is reported at: metrics.compute_metrics rounds
+# CAGR, AnnVol and MaxDrawdown to 4 dp and Sharpe to 2 dp.
+_STEP = {"CAGR": 1e-4, "AnnVol": 1e-4, "MaxDrawdown": 1e-4, "Sharpe": 0.01}
+
+
+def _shift(metrics: dict, steps: float) -> dict:
+    """Every portfolio and sleeve return metric moved by `steps` rounding steps."""
+    def move(d):
+        return {k: v + steps * _STEP[k] if k in _STEP else v for k, v in d.items()}
+    return {"portfolio": move(metrics["portfolio"]),
+            "sleeves": {k: move(s) for k, s in metrics["sleeves"].items()}}
+
+
 def test_compare_tolerates_small_noise(current):
-    nudged = {**current, "portfolio": {**current["portfolio"],
-                                       "AnnVol": current["portfolio"]["AnnVol"] + 0.001}}
-    assert ci_regression.compare(current, nudged) == []
+    """The worst float noise can do to a rounded metric is flip its last digit
+    at a rounding boundary (measured raw noise, Task 20: <= 2.7e-15 across
+    arm64/x86_64, Python 3.11-3.14, numpy 2.3-2.5, pandas 3.0.5-3.0.6). One
+    step on every metric at once must pass."""
+    assert ci_regression.compare(current, _shift(current, 1)) == []
+    assert ci_regression.compare(current, _shift(current, -1)) == []
+
+
+@pytest.mark.parametrize("metric", sorted(_STEP))
+def test_compare_flags_two_rounding_steps(current, metric):
+    """Two steps is no longer noise. Task 9's next-close fills moved synthetic
+    portfolio CAGR by 0.0011 and Sharpe by 0.02 — inside the old 0.02 / 0.15."""
+    moved = {**current, "portfolio": {**current["portfolio"],
+                                      metric: current["portfolio"][metric]
+                                      + 2 * _STEP[metric]}}
+    drift = ci_regression.compare(current, moved)
+    assert [d.split(":")[0] for d in drift] == [f"portfolio.{metric}"], drift
+
+
+def test_gate_sees_a_return_convention_change_not_only_its_cost_line(
+        current, monkeypatch):
+    """A 0.4pp/yr change to a convention that is not a cost — idle cash earning
+    0.4pp less — moves every synthetic CAGR by ~0.003. Under the old tolerances
+    the gate flagged only the cost lines (cost is a fraction of a NAV the
+    interest changes), so it could see a dropped cost but not the convention."""
+    from trading_algo import config
+    monkeypatch.setattr(config, "CASH_RATE_ANNUAL", config.CASH_RATE_ANNUAL - 0.004)
+    drift = ci_regression.compare(current, ci_regression.synthetic_metrics())
+    flagged = {d.split(":")[0].split(".")[-1] for d in drift}
+    assert flagged & {"CAGR", "Sharpe", "MaxDrawdown"}, drift
 
 
 def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
@@ -119,7 +159,8 @@ def test_target_first_affects_equity_at_t_plus_one(synth_asx, asx_region):
 
 def test_baseline_records_a_nonzero_cost_per_sleeve():
     """Without a cost line in the baseline, `compare` has nothing to compare:
-    CAGR alone moves less than TOL when every transaction cost is deleted."""
+    CAGR alone moved less than TOL when every transaction cost was deleted
+    (the 0.02 CAGR tolerance before Task 20)."""
     baseline = ci_regression.load_baseline()
     for key, sleeve in baseline["sleeves"].items():
         assert "total_cost_fraction" in sleeve, f"{key} has no cost line"
@@ -128,8 +169,9 @@ def test_baseline_records_a_nonzero_cost_per_sleeve():
 
 def test_gate_fails_when_transaction_costs_are_deleted(monkeypatch):
     """Invariant #2 (costs always on), enforced by the gate rather than by
-    convention. Deleting every transaction cost passes on CAGR/Vol/Sharpe/DD
-    alone — measured: the sleeve CAGRs move 0.0022 to 0.0114 against TOL 0.02."""
+    convention. Deleting every transaction cost passed on CAGR/Vol/Sharpe/DD
+    alone under the tolerances before Task 20 — measured: the sleeve CAGRs moved
+    0.0022 to 0.0114 against TOL 0.02. The cost line must name it either way."""
     from trading_algo import backtest
 
     monkeypatch.setattr(backtest.fees, "turnover_cost", lambda *a, **k: 0.0)

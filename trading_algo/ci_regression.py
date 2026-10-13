@@ -25,18 +25,25 @@ from .portfolio_backtest import run_portfolio_backtest
 
 BASELINE = os.path.join(os.path.dirname(__file__), "_regression_baseline.json")
 
-# Absolute tolerances per metric. Tight enough to catch a real behavioural
-# regression (a lookahead leak moves CAGR/Sharpe well past these); loose enough
-# to absorb cross-version floating-point noise.
+# Absolute tolerances per metric: just above the measured noise. Task 20 ran
+# this backtest on arm64 and x86_64, Python 3.11-3.14, numpy 2.3.5-2.5.4 and
+# pandas 3.0.5-3.0.6: the unrounded metrics were bit-identical on arm64 and
+# within 2.7e-15 on x86_64, and every rounded value was identical. The gate
+# reads them rounded (4 dp, Sharpe 2 dp), so the most that noise can do is
+# flip the last digit at a rounding boundary: 1.5 steps allows one step and
+# refuses two. The old 0.02 / 0.15 could not see a convention change: Task 9's
+# next-close fills moved synthetic portfolio CAGR 0.0011 and Sharpe 0.02, and
+# the gate went red only on a cost line.
 TOL = {
-    "CAGR": 0.02,
-    "AnnVol": 0.02,
-    "MaxDrawdown": 0.02,
-    "Sharpe": 0.15,
+    "CAGR": 1.5e-4,
+    "AnnVol": 1.5e-4,
+    "MaxDrawdown": 1.5e-4,
+    "Sharpe": 0.015,
     # Cumulative cost drag, as a fraction of NAV summed over the run. TIGHT on
-    # purpose: deleting every transaction cost moves the synthetic sleeves' CAGR
-    # by only 0.0022-0.0114, well inside the 0.02 above, so CAGR alone cannot see
-    # a dropped cost. This line is what enforces invariant #2 in CI.
+    # purpose: deleting every transaction cost moved the synthetic sleeves' CAGR
+    # by only 0.0022-0.0114, inside the 0.02 CAGR tolerance before Task 20, so
+    # CAGR alone could not see a dropped cost. This line names the cost
+    # directly, and enforces invariant #2 in CI whatever the return lines do.
     "total_cost_fraction": 1e-4,
 }
 
