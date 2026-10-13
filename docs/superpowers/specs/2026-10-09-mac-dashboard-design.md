@@ -13,22 +13,20 @@ each decision, the expert review and what it changed, and how the work splits in
 projects. Each project gets its own spec in `docs/specs/` and its own plan before
 any code.
 
-## Resume here (updated 2026-10-13, after the mockups)
+## Resume here (updated 2026-10-13)
 - **Where:** worktree `~/Trading-Algo-mac-dashboard`, branch `feat/mac-dashboard`
   (on top of `feat/measurement-truth`; 11 commits behind it on 2026-10-13 —
   rebase before new work). Neither branch is on GitHub.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** merge **PR #100** (SMALL micro-mode fix — open; all 14 CI
-  checks pass and GitHub reports it MERGEABLE/CLEAN on 2026-10-13; must land
-  before the first November rebalance, Mon 2 Nov 21:30 UTC); pick a book-Overview
-  direction from the §11 part 2 mockups (A plain-English / B analyst; Positions
-  proposal to react to — generator: real FULL data, 13 Oct); visual and
-  keyboard checks of the home screen (AC-14/15/16); approval of §11 part 1; open
-  questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
-- **Next:** after Matt's pick — §11 part 3 (testing/rollout), then a spec and plan
-  for phase 1 (book Overview + Positions). D0a (equity decision record) is unblocked whenever Matt wants it.
+- **Waiting on Matt:** react to the book-Overview v2 mockups (§11 part 2);
+  visual and keyboard checks of the home screen (AC-14/15/16); open questions
+  Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
+- **Done 2026-10-13:** PR #100 (SMALL fix) merged into `main` as `cd44ff2`.
+- **Next:** §11 part 3 (testing/rollout), then a spec and plan for phase 1 (book
+  Overview + Positions). D0a (equity decision record) is unblocked — it also feeds
+  the "does the ranking pick winners?" line the Overview needs.
 
 ---
 
@@ -458,5 +456,25 @@ Claude in code or data before inclusion.
 - Constraint: Pages publishes only from `main`, so the phone gets each phase when
   this branch merges (after measurement truth); the Mac app gets it immediately.
 
-**Part 2 (next):** how each screen looks — real-data mockups, starting with a
-book's Overview and Positions. **Part 3:** testing and rollout details.
+**Part 2 — how a book's screens look (Matt, 2026-10-13):**
+- Overview direction **B (numbers first)**, but with **coherent text**: a short
+  plain-English summary on top and a one-line caption under every number.
+- Add an **"Is it working?"** panel: *going right*, *going wrong*, and *is the
+  model any good?* — every figure sourced, small samples and stale results
+  labelled (e.g. the equity backtest saved 19 Sep predates the idle-cash credit).
+  What it can show today: closed-trade win rate and average win/loss, costs vs
+  result, gap to the benchmark, cash share, hold length vs signal horizon (from
+  `verify`), backtest CAGR/Sharpe, the FX permutation test. What it can't yet:
+  whether the equity ranking picks winners (needs D0a) and per-agent accuracy for
+  FX (needs the agent scorecard, project D) — the panel says so rather than
+  guessing.
+- Positions: grouped by region, each saying whether it's investing or waiting in
+  cash and why (no change requested).
+- Mockups (throwaway, real data 13 Oct): `.superpowers/brainstorm/*/content/`
+  `book-screens.html` (A/B + Positions) and `book-overview-v2.html` (B + text +
+  "is it working?" for FULL and FX·Matt).
+- Correction recorded: the first mockup said the strategy "only wanted about 29%
+  invested" — 29% was the *actual* invested share; the US targets were 31–37%
+  gross in Aug–Oct (vol targeting).
+
+**Part 3 (next):** testing and rollout details.
