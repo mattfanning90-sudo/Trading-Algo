@@ -65,6 +65,28 @@ def test_a_genuine_new_drawdown_after_a_resume_still_halts():
     assert halted is True and cooldown == 3
 
 
+def test_a_halt_lasts_exactly_cooldown_len_steps():
+    """Tripped on one step, halted through the next `cooldown_len - 1`, and
+    tradeable on the `cooldown_len`-th: not a step early, not a step late."""
+    peak, halted, cooldown = risk_breaker.breaker_step(
+        equity=70.0, peak=100.0, halted=False, cooldown=0,
+        stop=0.25, cooldown_len=3)
+    seen = []
+    for _ in range(4):
+        peak, halted, cooldown = risk_breaker.breaker_step(
+            equity=70.0, peak=peak, halted=halted, cooldown=cooldown,
+            stop=0.25, cooldown_len=3)
+        seen.append(halted)
+    assert seen == [True, True, False, False]
+
+
+def test_a_fall_of_exactly_the_stop_trips():
+    _, halted, cooldown = risk_breaker.breaker_step(
+        equity=75.0, peak=100.0, halted=False, cooldown=0,
+        stop=0.25, cooldown_len=3)
+    assert halted is True and cooldown == 3
+
+
 def test_a_non_finite_equity_never_becomes_the_mark():
     """Re-basing takes the equity at resume as the new mark. A NaN there would
     compare False against every stop from then on — a breaker disarmed for
@@ -124,6 +146,8 @@ def test_backtest_breaker_does_not_latch_on_a_market_that_never_recovers(asx_reg
     assert res["drawdown_halts"] <= 2, (
         f"{res['drawdown_halts']} halts from one crash — the high-water mark "
         "latched and the book re-trips forever")
+    assert res["drawdown_halt_days"] == 5 * res["drawdown_halts"], (
+        "each halt sits out exactly the 5-day cooldown")
 
 
 # --- the other three engines route through the same definition --------------
@@ -159,6 +183,8 @@ def test_fx_backtest_breaker_does_not_latch_on_a_market_that_never_recovers():
     assert res["drawdown_halts"] <= 2, (
         f"{res['drawdown_halts']} halts from one crash — the FX backtest's "
         "high-water mark latched")
+    assert res["drawdown_halt_days"] == 5 * res["drawdown_halts"], (
+        "each halt sits out exactly the 5-bar cooldown")
 
 
 def test_paper_book_resumes_measured_from_where_it_stands(tmp_path, monkeypatch,
@@ -204,6 +230,25 @@ def test_fx_book_resumes_measured_from_where_it_stands(tmp_path, monkeypatch):
     # A fresh book holds nothing over its first bar, so it marks at capital.
     assert s["peak_equity"] == pytest.approx(capital), (
         "the mark kept the pre-halt level")
+
+
+def test_fx_book_stays_halted_until_the_last_bar_of_its_cooldown(tmp_path,
+                                                                 monkeypatch):
+    """Two bars of cooldown left: one new bar leaves the book halted with one
+    to go (the bar after resumes it — `test_fx_book_resumes_measured_...`)."""
+    from trading_algo.forex import fx_book
+    from trading_algo.forex.agents import AgentPool
+
+    monkeypatch.setattr(fx_book, "STATE_DIR", str(tmp_path))
+    fx_book.init_defaults(synthetic=True)
+    s = fx_book.load_state("matt")
+    s.update(risk_halted=True, halt_cooldown=2)
+    fx_book.save_state("matt", s)
+
+    fx_book.run_once("matt", synthetic=True, pool=AgentPool(max_workers=1))
+    s = fx_book.load_state("matt")
+    assert s["risk_halted"] is True and s["halt_cooldown"] == 1
+    assert s["positions"] == {}
 
 
 # --- one re-entry convention after a resume ----------------------------------
@@ -276,3 +321,9 @@ def test_backtest_re_enters_after_a_resume_on_the_bar_the_paper_book_does(
     assert bt_back == paper_back, (
         f"paper re-entered {paper_back.date()}, the backtest "
         f"{bt_back.date() if bt_back else 'not by ' + str(after_exit[-1].date())}")
+
+    # And on exactly the bars the cooldown says: halted at the close of the
+    # gap and the COOLDOWN - 1 closes after it, resumed at the next, a
+    # decision on the bar after that and its fill one close later.
+    assert [d for d, _, halted in rows if halted] == list(bars[dip:dip + COOLDOWN])
+    assert paper_back == bars[dip + COOLDOWN + 2]
