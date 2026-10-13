@@ -108,6 +108,18 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
     weight_schedule: dict[pd.Timestamp, pd.Series] = {}
     dq_excluded: set[str] = set()
+
+    def decide(asof: pd.Timestamp) -> pd.Series:
+        """The target decided as-of `asof`: on the calendar, or on the first
+        bar after a breaker resume (below)."""
+        base_elig = membership.members_asof(asof) if membership is not None else None
+        eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
+        dq_excluded.update(dq.excluded)
+        capacity = None
+        if ADV_CAP_PCT and advd is not None and asof in advd.index:
+            capacity = (ADV_CAP_PCT * advd.loc[asof] / float(initial_capital)).dropna()
+        return strategy.targets_at(panel, p, asof, eligible=eligible, capacity=capacity)
+
     # A book opened mid-sample decides on its first bar, then on the calendar.
     for d in (rebal_marks if open_bar is None else [open_bar, *rebal_marks]):
         loc_idx = prices.index.searchsorted(d, side="right") - 1
@@ -116,14 +128,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         asof = prices.index[loc_idx]
         if open_bar is not None and asof < open_bar:
             continue                             # warm-up: nothing is decided
-        base_elig = membership.members_asof(asof) if membership is not None else None
-        eligible, dq = data_quality.eligible(prices, region, asof, base_elig)
-        dq_excluded |= dq.excluded
-        capacity = None
-        if ADV_CAP_PCT and advd is not None and asof in advd.index:
-            capacity = (ADV_CAP_PCT * advd.loc[asof] / float(initial_capital)).dropna()
-        weight_schedule[asof] = strategy.targets_at(
-            panel, p, asof, eligible=eligible, capacity=capacity)
+        weight_schedule[asof] = decide(asof)
 
     # ---- daily simulation ------------------------------------------------
     dates = prices.index
@@ -144,6 +149,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     cooldown = 0
     halt_days = 0
     halt_events = 0
+    reenter = False                              # resumed: decide on the next bar
     CASH = pd.Series(dtype=float)
 
     for i in range(1, len(dates)):
@@ -239,10 +245,17 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
 
         if halted:
             pending = CASH                       # liquidate at the NEXT close
-        elif today in weight_schedule:
+        elif was_halted:
+            # Resumed at this close, which was still a halted bar's decision.
+            # The paper book clears its month pins on a resume and decides on
+            # its next bar whatever the calendar says (paper_trade, `transition
+            # == "resume"`); this follows it rather than waiting up to a month.
+            reenter = True
+        elif reenter or today in weight_schedule:
             # A target decided as-of `today` (D_k) is staged now and EXECUTED at
             # the close of D_{k+1}; it first earns a return on D_{k+2}.
-            pending = weight_schedule[today]
+            pending = decide(today) if reenter else weight_schedule[today]
+            reenter = False
 
     ret_series = pd.Series(daily_ret, index=dates[1:])
     eq = pd.Series(equity[1:], index=dates[1:])

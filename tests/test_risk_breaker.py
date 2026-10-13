@@ -204,3 +204,75 @@ def test_fx_book_resumes_measured_from_where_it_stands(tmp_path, monkeypatch):
     # A fresh book holds nothing over its first bar, so it marks at capital.
     assert s["peak_equity"] == pytest.approx(capital), (
         "the mark kept the pre-halt level")
+
+
+# --- one re-entry convention after a resume ----------------------------------
+STOP, COOLDOWN = 0.05, 3
+
+
+def _paper_and_backtest_through_a_resume(tmp_path, monkeypatch, runs_per_bar):
+    """One ASX book, A$300,000, opened 2023-03-01 on synthetic data whose
+    stocks (not the index, so the regime gate stays open) gap down 10% on the
+    fifth bar: the paper book run bar by bar, `runs_per_bar` runs on each, and
+    the backtest opened on the same bar. Returns (bars, dip, paper rows of
+    (bar, holds positions, halted), backtest result)."""
+    from trading_algo import config as cfg
+    from trading_algo import paper_trade as pt
+    from trading_algo.regions import get_region
+
+    region = get_region("ASX")
+    prices, index_px = pt.latest_region_data(region, True)
+    bars = prices.index
+    opened = bars.searchsorted(pd.Timestamp("2023-03-01"))
+    dip = opened + 4
+    prices = prices.copy()
+    prices.iloc[dip:] *= 0.90
+
+    clock = {"cut": opened + 1}
+    monkeypatch.setattr(pt, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "DRAWDOWN_COOLDOWN_DAYS", COOLDOWN)
+    monkeypatch.setattr(pt, "latest_region_data", lambda r, synthetic: (
+        prices.iloc[:clock["cut"]], index_px.iloc[:clock["cut"]]))
+    pt.init_account("t", capital=300_000, synthetic=True, allocations={"ASX": 1.0})
+    state = pt.load_state("t")
+    state["max_drawdown_stop"] = STOP
+    pt.save_state("t", state)
+
+    rows = []
+    for _ in range(4 + COOLDOWN + 5):
+        for _ in range(runs_per_bar):
+            pt.run_daily("t", synthetic=True)
+        state = pt.load_state("t")
+        rows.append((bars[clock["cut"] - 1],
+                     bool(state["sleeves"]["ASX"]["positions"]),
+                     bool(state.get("risk_halted"))))
+        clock["cut"] += 1
+
+    res = run_backtest(prices, index_px, region, initial_capital=300_000.0,
+                       trade_from=bars[opened], max_drawdown_stop=STOP,
+                       cooldown_days=COOLDOWN)
+    return bars, dip, rows, res
+
+
+@pytest.mark.parametrize("runs_per_bar", [1, 3])
+def test_backtest_re_enters_after_a_resume_on_the_bar_the_paper_book_does(
+        tmp_path, monkeypatch, runs_per_bar):
+    """After a resume the paper book clears its month pins and decides on its
+    next run, then fills at the close after (paper_trade, `transition ==
+    "resume"`). The backtest used to wait for the next month-end — up to a
+    month of different books per halt. One convention: the first bar after
+    the resume decides, the next close fills, then the normal calendar."""
+    bars, dip, rows, res = _paper_and_backtest_through_a_resume(
+        tmp_path, monkeypatch, runs_per_bar)
+    held_bt = {d: not res["weights"][d].empty for d in res["weights"]}
+
+    # Both engines trip on the gap and exit at the next close.
+    assert [d for d, _, halted in rows if halted][0] == bars[dip]
+    assert held_bt[bars[dip]] and not held_bt[bars[dip + 1]]
+
+    after_exit = [d for d, _, _ in rows if d > bars[dip + 1]]
+    paper_back = next(d for d, held, _ in rows if d in after_exit and held)
+    bt_back = next((d for d in after_exit if held_bt[d]), None)
+    assert bt_back == paper_back, (
+        f"paper re-entered {paper_back.date()}, the backtest "
+        f"{bt_back.date() if bt_back else 'not by ' + str(after_exit[-1].date())}")

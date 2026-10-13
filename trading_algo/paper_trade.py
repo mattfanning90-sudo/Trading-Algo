@@ -1056,6 +1056,10 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
     # countdown would expire ~3x too fast.
     halted = state.get("risk_halted", False)
     was_halted = halted                       # F12: detect the halt/resume transition
+    # A resume re-enters on the first bar AFTER the day it resumed on, however
+    # many runs land on that day — the cooldown counts market days, not runs,
+    # and so does the re-entry. `backtest.py` re-enters on the same bar.
+    resumed_on = "" if halted else (state.get("halt_last_day") or "")
 
     report_date = ""
     combined = 0.0
@@ -1202,7 +1206,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                 f"— holding cash this run",
                 level="alert", account=account, region=k, currency=region.currency)
             status = "cash:fx-unavailable"
-        elif _should_rebalance(sleeve, today, this_month):
+        elif today > resumed_on and _should_rebalance(sleeve, today, this_month):
             # Reached only when rate_ok is True (the `not rate_ok` branch above
             # was skipped), so `rate` is a positive float, not None.
             assert rate is not None
