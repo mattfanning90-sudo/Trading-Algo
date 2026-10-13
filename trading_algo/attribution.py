@@ -38,7 +38,12 @@ BRIDGE_LINES = ("dividends", "cash_interest", "fill_convention", "commission_flo
 
 
 def equity_returns(equity_history: list) -> pd.Series:
-    """[[date, value], ...] -> period-return Series indexed by date."""
+    """[[date, value], ...] -> period-return Series indexed by date.
+
+    A return SERIES between marks, for vol, Sharpe, drawdown and tracking
+    error: each period runs from one mark to the next, so it starts at the
+    first mark by construction. It is not a total return; that is
+    `total_return`, from inception."""
     if not equity_history:
         return pd.Series(dtype=float)
     idx = pd.to_datetime([d for d, _ in equity_history])
@@ -46,11 +51,22 @@ def equity_returns(equity_history: list) -> pd.Series:
     return vals.pct_change().dropna()
 
 
-def total_return(equity_history: list) -> float:
-    if not equity_history or len(equity_history) < 2:
-        return 0.0
-    first, last = float(equity_history[0][1]), float(equity_history[-1][1])
-    return last / first - 1.0 if first else 0.0
+def since_inception(paper_state: dict, value: float) -> float:
+    """A book's total return at `value` (base currency): since inception, from
+    its initial capital before any fill. The ONE meaning of a book's total
+    return wherever one is printed — the bridge, `--attribution`, the
+    tearsheet, `--status`, `--compare`, a run's own line and the dashboard —
+    so no page measures from its first mark instead and disagrees with the
+    next by the build-out."""
+    return float(value) / float(paper_state["initial_capital_base"]) - 1.0
+
+
+def total_return(paper_state: dict) -> float:
+    """The book's total return at its last persisted row, since inception
+    (`_inception_window`): the paper return the bridge prints for it. 0.0 for
+    a book with no row yet."""
+    window = _inception_window(paper_state)
+    return window["paper_return"] if window["end"] is not None else 0.0
 
 
 def tracking_error(realized_ret: pd.Series, predicted_ret: pd.Series,
@@ -189,9 +205,9 @@ def _inception_window(paper_state: dict,
     capital = float(paper_state["initial_capital_base"])
     end = dates[-1] if len(dates) else None
     return {"dates": dates, "capital": capital, "end": end,
-            "paper_return": None if end is None else float(paper[end]) / capital - 1.0,
+            "paper_return": None if end is None else since_inception(paper_state, paper[end]),
             "backtest_return": (None if end is None or pred is None
-                                else float(pred[end]) / capital - 1.0)}
+                                else since_inception(paper_state, pred[end]))}
 
 
 def _through(rows: list, end: pd.Timestamp) -> list:

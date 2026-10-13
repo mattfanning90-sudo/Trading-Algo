@@ -30,8 +30,31 @@ def test_tearsheet_has_sections_and_disclaimer():
 def test_total_return_reconciles_exactly():
     state = _state()
     md = tearsheet.account_tearsheet(state)
-    exact = attribution.total_return(state["equity_history"])   # +0.51%
+    exact = attribution.total_return(state)                       # +0.51%
     assert f"{exact:+.2%}" in md                       # AC2: 0-tolerance reconciliation
+
+
+def test_the_tearsheets_total_return_is_the_bridges_and_attributions():
+    """The monthly report prints the tearsheet, `--attribution` and
+    `--reconcile` for each book: one total return on all three, since
+    inception. Here the first row (99,830.84) is after the build-out, so
+    measured from it the tearsheet printed +0.68% beside the bridge's
+    +0.51% (100,510 over the 100,000 the book opened with)."""
+    import pytest
+
+    state = _state()
+    state["equity_history"][0][1] = 99_830.84
+    state["fx_snapshot"] = {"AUD": 1.0, "USD": 1.5}
+    state["trades"][0].update(date="2026-06-11", side="BUY", ticker="AAPL")
+    predicted = pd.Series([100_000.0, 100_400.0, 100_300.0], index=pd.to_datetime(
+        [d for d, _ in state["equity_history"]]))
+    bridge = attribution.reconcile(state, predicted)
+    report = attribution.attribution_report(state, predicted)
+    row = next(ln for ln in tearsheet.account_tearsheet(state).splitlines()
+               if ln.startswith("| Total return"))
+    assert bridge["paper_return"] == pytest.approx(100_510 / 100_000 - 1, abs=1e-15)
+    assert row == f"| Total return | {bridge['paper_return']:+.2%} |"
+    assert report["realized_total_return"] == round(bridge["paper_return"], 4)
 
 
 def test_handles_empty_history():

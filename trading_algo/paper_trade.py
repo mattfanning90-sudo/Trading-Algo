@@ -1219,7 +1219,7 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
         state.setdefault("sleeve_history", []).append(sleeve_row)
     save_state(account, state)
 
-    pnl = combined / state["initial_capital_base"] - 1
+    pnl = attribution.since_inception(state, combined)
     print(f"\n{report_date}  combined {combined:,.0f} {cfg.BASE_CURRENCY} "
           f"({pnl:+.2%} since inception)")
     for k, (loc, ccy, base) in breakdown.items():
@@ -1244,7 +1244,7 @@ def status(account: str) -> None:
         print(f"  Inception        {s.index[0].date()}  "
               f"({state['initial_capital_base']:,.0f} {state['base_currency']})")
         print(f"  Current equity   {s.iloc[-1]:,.2f} {state['base_currency']}")
-        print(f"  Total return     {s.iloc[-1] / state['initial_capital_base'] - 1:+.2%}")
+        print(f"  Total return     {attribution.total_return(state):+.2%}")
         if len(rets) > 20:
             ppy = metrics.periods_per_year(s.index)     # daily marks -> 252
             vol = metrics.annualised_vol(rets, periods_per_year=ppy)
@@ -1277,7 +1277,7 @@ def compare(accounts: list[str]) -> None:
         s = load_state(name)
         eq = s["equity_history"][-1][1] if s["equity_history"] else s["initial_capital_base"]
         print(f"{name:<10} {s['initial_capital_base']:>14,.0f} {eq:>14,.2f} "
-              f"{eq / s['initial_capital_base'] - 1:>+8.2%} "
+              f"{attribution.total_return(s):>+8.2%} "
               f"{sum(1 for t in s['trades'] if pnl.is_fill(t)):>7}")
 
 

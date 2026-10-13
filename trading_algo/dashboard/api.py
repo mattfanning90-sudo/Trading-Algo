@@ -435,7 +435,8 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         "kpis": {
             "total_equity": round(total_base, 2),
             "initial_capital": initial,
-            "total_return": round(total_base / initial - 1, 4) if initial else 0.0,
+            "total_return": (round(attribution.since_inception(state, total_base), 4)
+                             if initial else 0.0),
             "day_change": round(total_base / prev_equity - 1, 4) if prev_equity else 0.0,
             "day_change_base": round(total_base - prev_equity, 2),
             "target_vol": params.target_vol,      # this book's, not the global

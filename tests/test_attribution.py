@@ -13,7 +13,13 @@ def _equity_history(vals, start="2026-01-05"):
 
 def test_total_and_period_returns():
     eh = _equity_history([100.0, 101.0, 102.0])
-    assert abs(attribution.total_return(eh) - 0.02) < 1e-9
+    state = {"initial_capital_base": 100.0, "equity_history": eh}
+    assert abs(attribution.total_return(state) - 0.02) < 1e-9
+    # since inception: a first row below the capital is not the start
+    state = {"initial_capital_base": 102.0, "equity_history": eh}
+    assert attribution.total_return(state) == 0.0
+    assert attribution.total_return({"initial_capital_base": 1.0,
+                                     "equity_history": []}) == 0.0
     rets = attribution.equity_returns(eh)
     assert len(rets) == 2 and abs(rets.iloc[0] - 0.01) < 1e-9
 
