@@ -153,13 +153,25 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
 
 def pit_impact(synthetic: bool) -> dict:
     """F1: quantify the survivorship bias — CAGR of the static (current-universe)
-    backtest minus the point-in-time backtest. A positive delta is the inflation
-    the current universe carries. Returns both CAGRs and their difference."""
+    backtest minus the point-in-time backtest, for the portfolio AND for each
+    sleeve. A positive delta is the inflation the current universe carries.
+
+    Per region because spec section 7's off-ramp is per region: a region whose
+    PIT data cannot be sourced publishes a measured BOUND instead, and the two
+    cannot share one number."""
     static = run_portfolio_backtest(synthetic=synthetic, point_in_time=False)
     pit = run_portfolio_backtest(synthetic=synthetic, point_in_time=True)
     s_cagr = float(static["metrics"]["CAGR"])
     p_cagr = float(pit["metrics"]["CAGR"])
-    return {"static_cagr": s_cagr, "pit_cagr": p_cagr, "delta": s_cagr - p_cagr}
+    per_region: dict[str, dict[str, float]] = {}
+    for key, sleeve in static["sleeves"].items():
+        if key not in pit["sleeves"]:
+            continue
+        s = float(sleeve["metrics"]["CAGR"])
+        p = float(pit["sleeves"][key]["metrics"]["CAGR"])
+        per_region[key] = {"static_cagr": s, "pit_cagr": p, "delta": s - p}
+    return {"static_cagr": s_cagr, "pit_cagr": p_cagr, "delta": s_cagr - p_cagr,
+            "per_region": per_region}
 
 
 def run_compare_pit(synthetic: bool) -> None:
@@ -171,6 +183,11 @@ def run_compare_pit(synthetic: bool) -> None:
     print(f"  Point-in-time CAGR               {imp['pit_cagr']:+.2%}")
     print(f"  Survivorship inflation (delta)   {imp['delta']:+.2%}")
     print("  (positive delta = the current universe flatters returns)")
+    if imp["per_region"]:
+        print("\n  Per sleeve (standalone, local currency):")
+        for key, row in imp["per_region"].items():
+            print(f"    {key:<5} static {row['static_cagr']:>+7.2%}  "
+                  f"PIT {row['pit_cagr']:>+7.2%}  bias {row['delta']:>+7.2%}")
 
 
 def main(argv: list[str] | None = None) -> None:
