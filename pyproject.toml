@@ -45,10 +45,18 @@ target-version = "py311"
 # B (flake8-bugbear) adds likely-bug patterns: a zip() that silently drops the
 # tail of a longer sequence (B905 — so every zip states strict=), a loop
 # variable left unused, an `assert False` that `python -O` deletes.
-select = ["E", "F", "W", "B"]
+# DTZ flags timezone-naive datetimes. Bar stamps are naive UTC by convention
+# (forex/sessions.parse_bar), so the few deliberate naive sites carry a noqa.
+select = ["E", "F", "W", "B", "DTZ"]
 # E501 (line length) is not gated — it is the highest-churn / lowest-value rule
 # and the codebase's dense-but-readable lines are a deliberate choice.
 ignore = ["E731", "E741", "E702", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures that build naive bar stamps, matching the naive-UTC convention of the
+# code under test (sessions.parse_bar, verify's `today`); aware ones would raise.
+"tests/test_sessions.py" = ["DTZ001"]
+"tests/test_verify.py" = ["DTZ001"]
 
 [tool.mypy]
 # Gold-standard type gate. Scoped to the MONEY-PATH modules first ("start

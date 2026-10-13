@@ -165,7 +165,7 @@ def _next_rebalance(as_of: str, last_rebalance_months: list[str | None]) -> str:
     try:
         d = date.fromisoformat(as_of)
     except ValueError:
-        d = date.today()
+        d = date.today()  # noqa: DTZ011 - display-only fallback for a bad as_of
     if any(m is not None and m < as_of[:7] for m in last_rebalance_months):
         nxt = d + timedelta(days=1)
     else:
