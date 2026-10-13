@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from . import data_quality, fees
+from . import data_quality, fees, risk_breaker
 from . import strategy
 from .config import DRAWDOWN_COOLDOWN_DAYS, INITIAL_CAPITAL, MAX_DRAWDOWN_STOP
 from .metrics import compute_metrics
@@ -225,15 +225,16 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         weights_hist[today] = current_w
 
         # --- drawdown circuit breaker (decision at close, execute t+1) ---
-        peak = max(peak, equity[-1])
+        # One definition, shared with paper_trade and both FX engines. The peak
+        # does not rise while halted and is re-based on resume — see
+        # risk_breaker for why a latched mark is a permanent off-switch.
         if halted:
             halt_days += 1
-            cooldown -= 1
-            if cooldown <= 0:
-                halted = False
-        elif max_drawdown_stop is not None and equity[-1] / peak - 1 <= -max_drawdown_stop:
-            halted = True
-            cooldown = cooldown_days
+        was_halted = halted
+        peak, halted, cooldown = risk_breaker.breaker_step(
+            equity=equity[-1], peak=peak, halted=halted, cooldown=cooldown,
+            stop=max_drawdown_stop, cooldown_len=cooldown_days)
+        if halted and not was_halted:
             halt_events += 1
 
         if halted:

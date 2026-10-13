@@ -27,6 +27,7 @@ from .fx_config import (ACCOUNT_CURRENCY, FX_RISK_FREE, MARGIN_RATE_ANNUAL,
                         SHORT_BORROW_ANNUAL, FXParams)
 from .fx_data import closes
 from .pairs import get_pair
+from .. import risk_breaker
 from ..metrics import compute_metrics
 
 
@@ -173,15 +174,15 @@ def run_backtest(panel: dict[str, pd.DataFrame], p: FXParams,
         total_swap += swap
 
         # Drawdown circuit breaker (decision at close, flat from next bar).
-        peak = max(peak, equity[-1])
+        # Shared definition — the peak does not rise while halted and is
+        # re-based on resume (risk_breaker).
         if halted:
             halt_days += 1
-            cooldown -= 1
-            if cooldown <= 0:
-                halted = False
-        elif p.max_drawdown_stop is not None and equity[-1] / peak - 1 <= -p.max_drawdown_stop:
-            halted = True
-            cooldown = p.drawdown_cooldown_days
+        was_halted = halted
+        peak, halted, cooldown = risk_breaker.breaker_step(
+            equity=equity[-1], peak=peak, halted=halted, cooldown=cooldown,
+            stop=p.max_drawdown_stop, cooldown_len=p.drawdown_cooldown_days)
+        if halted and not was_halted:
             halt_events += 1
 
     idx = dates[1:]

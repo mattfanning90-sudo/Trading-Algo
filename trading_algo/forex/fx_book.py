@@ -33,6 +33,7 @@ import pandas as pd
 
 from .. import metrics
 from .. import notifications
+from .. import risk_breaker
 from .. import storage
 from . import bar_quality
 from . import explain
@@ -577,17 +578,22 @@ def _run_once_locked(account: str, synthetic: bool = False,
     marked = equity              # equity after the mark, BEFORE today's spread
 
     # --- drawdown breaker --------------------------------------------------
-    peak = max(state.get("peak_equity", equity), equity)
-    halted = state.get("risk_halted", False)
-    if halted:
-        state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
-        if state["halt_cooldown"] <= 0:
-            halted = False
-    elif p.max_drawdown_stop is not None and equity / peak - 1 <= -p.max_drawdown_stop:
-        halted = True
-        state["halt_cooldown"] = p.drawdown_cooldown_days
+    # Shared definition (trading_algo/risk_breaker): the peak does not rise
+    # while halted and is re-based at resume, so a book still under its old
+    # high after the cooldown is not instantly re-halted forever.
+    was_halted = bool(state.get("risk_halted", False))
+    peak, halted, cooldown = risk_breaker.breaker_step(
+        equity=equity,
+        peak=float(state.get("peak_equity", equity)),
+        halted=was_halted,
+        cooldown=int(state.get("halt_cooldown", 0) or 0),
+        stop=p.max_drawdown_stop,
+        cooldown_len=p.drawdown_cooldown_days)
+    state["halt_cooldown"] = cooldown
+    if halted and not was_halted:
         print(f"  [{account}] ⛔ drawdown {equity / peak - 1:.1%} breached "
-              f"{p.max_drawdown_stop:.0%} — flattening for {p.drawdown_cooldown_days} bars.")
+              f"{p.max_drawdown_stop:.0%} — flattening for "
+              f"{p.drawdown_cooldown_days} bars.")
 
     # --- target weights ----------------------------------------------------
     rationale: dict[str, dict] = {}

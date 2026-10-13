@@ -41,7 +41,8 @@ import pandas as pd
 from . import config as cfg
 from . import signals as sig
 from . import (attribution, data, data_quality, fees, fx, metrics,
-               notifications, pnl, profiles, promotion, storage, strategy, tca)
+               notifications, pnl, profiles, promotion, risk_breaker, storage,
+               strategy, tca)
 from . import state_schema
 from .regions import REGIONS, get_region, scale_for
 
@@ -1266,22 +1267,29 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
     # breaker (nor move the peak) off a partial book (a stale bar / failed pair).
     stop = _account_drawdown_stop(state)
     peak = float(state.get("peak_equity_base") or state["initial_capital_base"])
+    mark = peak                  # what this run is measured against (the alert's)
     if not all_valued:
         print("  ⚠ incomplete valuation this run — breaker & history untouched.")
+    elif halted and state.get("halt_last_day") == report_date:
+        # The engine fires up to 3x a day. Multiple runs on ONE market day count
+        # once, so leave the countdown — and the mark — as the first run left
+        # them.
+        state["peak_equity_base"] = risk_breaker.update_peak(
+            peak, combined, halted=True)
     else:
-        peak = max(peak, combined)
+        # Shared definition (risk_breaker): the peak does not rise while halted
+        # and is re-based to this equity on resume, so a book still under its
+        # pre-halt high is not re-tripped by it on the next run.
+        peak, now_halted, cooldown = risk_breaker.breaker_step(
+            equity=combined, peak=peak, halted=halted,
+            cooldown=int(state.get("halt_cooldown", 0) or 0),
+            stop=stop, cooldown_len=cfg.DRAWDOWN_COOLDOWN_DAYS)
         state["peak_equity_base"] = peak
-        if halted:
-            # Cool down one distinct market day at a time (multiple runs on the
-            # same report_date count once), then re-arm trading on the next run.
-            if state.get("halt_last_day") != report_date:
-                state["halt_cooldown"] = state.get("halt_cooldown", 0) - 1
-                state["halt_last_day"] = report_date
-            state["risk_halted"] = state["halt_cooldown"] > 0
-        elif stop is not None and combined / peak - 1 <= -stop:
-            state["risk_halted"] = True
-            state["halt_cooldown"] = cfg.DRAWDOWN_COOLDOWN_DAYS
+        state["risk_halted"] = now_halted
+        if halted or now_halted:
+            state["halt_cooldown"] = cooldown
             state["halt_last_day"] = report_date
+        if now_halted and not halted:
             print(f"  ⛔ drawdown {combined / peak - 1:.1%} breached "
                   f"{stop:.0%} stop — halting for "
                   f"{cfg.DRAWDOWN_COOLDOWN_DAYS} market days.")
@@ -1294,8 +1302,6 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
                 sl = state["sleeves"][k]
                 if sl["positions"] or sl.get("pending_target"):
                     _stage_target(sl, bar, pd.Series(dtype=float))
-        else:
-            state["risk_halted"] = False
 
     # F12: alert exactly once on a halt/resume transition (not every halted day).
     transition = notifications.breaker_transition(
@@ -1308,7 +1314,9 @@ def _run_daily_locked(account: str, synthetic: bool) -> None:
             sl["last_rebalance_month"] = None
             sl["last_rebalance_date"] = None
     if transition:
-        dd = combined / peak - 1 if peak else 0.0
+        # Against the mark this run was measured from: a resume re-bases the
+        # peak to `combined`, and "+0.0% vs peak" would hide how deep it is.
+        dd = combined / mark - 1 if mark else 0.0
         notifications.notify(
             f"breaker_{transition}",
             f"[{account}] drawdown breaker {transition.upper()} on {report_date} — "
