@@ -74,13 +74,20 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     open bar, so until then the sleeve is pinned at `initial_capital *
     alloc[k]` in the BASE currency — its cash carries no currency move. The
     paper book's cash is held in LOCAL currency from `--init`, so it does
-    carry that move. The bridge measures both from inception, so the two
-    differ over the time between `--init` and the sleeve's own open bar: the
-    paper's FX move on that cash is not in the comparison and lands in the
-    bridge's remainder. The scheduled workflow runs a new book's first pass
-    straight after `--init`, so that is normally hours, not days — longer
-    only when the min-viable-size gate held a sleeve in cash past its first
-    run, or a book was initialised by hand well before its first run."""
+    carry that move. So the comparison's cash carries FX from its open bar's
+    close, and the paper's from `--init`. The bridge measures both from
+    inception, and the two differ over the time between those moments, in
+    either direction:
+      * `--init` first (the min-viable-size gate held a sleeve in cash past
+        its first run, or a book was initialised by hand before its first
+        run): the paper carries FX the comparison does not;
+      * the open bar's close first (a sleeve still on the previous session
+        when the book's first run decided, as on a staggered first day): the
+        comparison carries FX, from that close to `--init`, that the paper
+        never held.
+    Either way it lands in the bridge's remainder. The scheduled workflow
+    runs a new book's first pass straight after `--init`, so the gap is
+    normally hours, not days."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     undated = ([k for k in regions if trade_from.get(k) is None]
                if isinstance(trade_from, Mapping) else [])
