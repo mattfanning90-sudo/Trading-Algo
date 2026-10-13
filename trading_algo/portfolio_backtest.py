@@ -93,9 +93,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
 
     # Normalise BEFORE the sleeve loop: each sleeve needs its OWN share of
     # `initial_capital` to fund its own run_backtest call below.
-    alloc = {k: (allocations or cfg.ALLOCATIONS)[k] for k in regions}
-    tot_alloc = sum(alloc.values())
-    alloc = {k: v / tot_alloc for k, v in alloc.items()}  # normalise to 1.0
+    alloc = cfg.allocation_shares(allocations, regions)      # normalise to 1.0
 
     sleeves: dict[str, dict] = {}
     index_by_region: dict[str, tuple] = {}

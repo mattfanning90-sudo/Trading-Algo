@@ -398,8 +398,7 @@ def init_account(account: str, capital: float, synthetic: bool,
         raise SystemExit(f"Unknown region(s) {unknown}. Known: {list(REGIONS)}")
 
     snap = fx_snapshot(synthetic, regions=regions)
-    total = sum(alloc_src[k] for k in regions)
-    norm = {k: alloc_src[k] / total for k in regions}
+    norm = cfg.allocation_shares(alloc_src, regions)
     sleeves = {}
     for k in regions:
         region = get_region(k)

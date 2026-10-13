@@ -421,15 +421,17 @@ def _holdings_terms(paper_state: dict, backtest: dict,
                     end: pd.Timestamp) -> tuple[dict, str | None]:
     """Every sleeve's `_sleeve_terms`, or ({}, why) when one cannot be had —
     all or nothing, so no sleeve's gap is half-named while another's is not.
-    A sleeve starts at its share of the initial capital, as `--init` funds it."""
+    A sleeve starts at its share of the initial capital by the one rule
+    `--init` and the comparison fund it by (`config.allocation_shares`)."""
     rows = _through(paper_state.get("sleeve_history") or [], end)
     bts = backtest.get("sleeves") or {}
-    alloc = paper_state.get("allocations") or {}
+    sleeves = list(paper_state.get("sleeves") or {})
+    shares = cfg.allocation_shares(paper_state.get("allocations"), sleeves)
     terms: dict = {}
-    for key in paper_state.get("sleeves") or {}:
+    for key in sleeves:
         values = {pd.Timestamp(r["date"]): float(r[key]) for r in rows
                   if r.get(key) is not None}
-        v0 = float(paper_state["initial_capital_base"]) * float(alloc.get(key) or 0.0)
+        v0 = float(paper_state["initial_capital_base"]) * shares[key]
         if key not in bts:
             return {}, f"the backtest carries no {key} sleeve"
         if end not in values or v0 <= 0:

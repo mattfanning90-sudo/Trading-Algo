@@ -204,6 +204,19 @@ ALLOCATIONS: dict[str, float] = {
     "TSX": 0.25,
 }
 
+
+def allocation_shares(allocations: dict[str, float] | None,
+                      keys: list[str] | None = None) -> dict[str, float]:
+    """Each sleeve's share of a book's capital: its allocation over the sum of
+    the allocations of the sleeves the book holds (`keys`, default every one),
+    so the shares sum to 1; no allocations means `ALLOCATIONS`. The ONE rule
+    `--init` funds a book's sleeves by, `run_portfolio_backtest` funds the
+    comparison's by, and the reconciliation bridge starts each sleeve at."""
+    src = allocations or ALLOCATIONS
+    keys = list(src) if keys is None else list(keys)
+    total = sum(src[k] for k in keys)
+    return {k: src[k] / total for k in keys}
+
 # How often to true sleeve capital back to ALLOCATIONS (pandas offset alias).
 # "ME" = every month-end rebalance; "YE" = annually; None = never (let them drift).
 ALLOCATION_REBALANCE = "ME"

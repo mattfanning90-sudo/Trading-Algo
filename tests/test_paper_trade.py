@@ -1352,6 +1352,33 @@ def test_the_monthly_reports_attribution_and_bridge_agree(account, monkeypatch, 
     assert a["divergence"] == round(b["paper_return"] - b["backtest_return"], 4)
 
 
+def test_the_bridge_starts_each_sleeve_at_its_share_of_the_capital(
+        account, monkeypatch, paper_cycle):
+    """An uneven book, ASX 0.5 / US 0.3 / FTSE 0.2. `--init` funds each sleeve
+    with its share of the capital, the comparison funds its sleeve the same
+    way, and the bridge starts each sleeve there: one rule. With the
+    comparison's monthly true-up off, both sides then compound the same
+    shares of the same capital, so the residual (the portfolio layer) is
+    zero; starting every sleeve at an equal third leaves the sleeves'
+    different returns in it. Allocations stored as 5 / 3 / 2 are the same
+    shares by that rule, so they give the same bridge to the bit."""
+    from trading_algo import attribution
+
+    monkeypatch.setattr(cfg, "ALLOCATION_REBALANCE", None)
+    pt.init_account(account, capital=300_000, synthetic=True,
+                    allocations={"ASX": 5.0, "US": 3.0, "FTSE": 2.0})
+    state = paper_cycle(account, sessions=6)
+    assert state["allocations"] == {"ASX": 0.5, "US": 0.3, "FTSE": 0.2}
+    res = pt._backtest_for_book(state, synthetic=True)
+    rep = attribution.reconcile(state, pt._predicted_curve(state, res), backtest=res)
+    assert "not measured" not in rep["notes"]["rebalance_timing"]
+    assert abs(rep["residual"]) < 1e-6, rep["residual"]
+
+    stored = {**state, "allocations": {"ASX": 5.0, "US": 3.0, "FTSE": 2.0}}
+    again = attribution.reconcile(stored, pt._predicted_curve(stored, res), backtest=res)
+    assert again["lines"] == rep["lines"] and again["residual"] == rep["residual"]
+
+
 def test_a_book_without_opened_on_is_compared_exactly_as_before():
     """Every legacy book has no `opened_on`: each of its sleeves opens on the
     book's first equity date, exactly Task 13c's comparison, array for array.
