@@ -42,7 +42,7 @@ import json
 import os
 import statistics
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import config as cfg
 from . import fx, notifications, pnl
@@ -625,7 +625,9 @@ def check_turnover(account: str, state: dict) -> list[Finding]:
 # ---------------------------------------------------------------------------
 def verify_book(kind: str, account: str, state: dict,
                 today: datetime | None = None) -> list[Finding]:
-    today = today or datetime.utcnow()
+    # Naive UTC on purpose: bar stamps parse naive (`sessions.parse_bar`) and
+    # are subtracted from this. utcnow() gave the same value but is deprecated.
+    today = today or datetime.now(timezone.utc).replace(tzinfo=None)
     if state.get("_unreadable"):
         return [Finding(ERROR, account, "unreadable-state",
                         f"state file could not be parsed: {state['_unreadable']}")]
