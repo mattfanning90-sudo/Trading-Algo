@@ -2275,12 +2275,12 @@
       "epic": "statistical-validity",
       "status": "proposed",
       "owner_role": "product_owner",
-      "problem": "The four FX books have no demonstrated edge, yet they trade every day with no rule for when they would stop or what would justify continuing. daytrader in particular pays costs about equal to its whole loss and is not even run on its designed schedule. The money is paper, so the cost is a track record that cannot teach anything and numbers that are easy to misread.",
+      "problem": "The four FX books have no demonstrated edge (their agents' cost-corrected backtest Sharpe is near zero, and the search for better settings finds nothing beyond luck), yet they trade every day with no rule for when they would stop or what would justify continuing. daytrader in particular pays costs about equal to its whole loss and is not even run on its designed schedule. The money is paper, so the cost is a track record that cannot teach anything and numbers that are easy to misread.",
       "hypothesis": "If each FX book gets an explicit keep/pause rule with a pre-registered re-entry test (corrected costs, hold-out net Sharpe > 0, DSR at the true trial count), books with no edge stop accruing paper losses while the learning goal continues on recorded decisions. The rule is falsified if a paused book's shadow decisions would have earned a positive net return over the pause.",
       "evidence": [
         {
-          "claim": "Permutation test on matt (200 shuffles, 2026-09-19): p = 0.47. A strategy with no edge scores this well about half the time.",
-          "source": "state/permtest_matt.json; docs/PERMUTATION_TESTING.md",
+          "claim": "Permutation test of the swarm's SEARCH on matt (200 bar shuffles, data 2020-04-10 to 2026-09-19, run 2026-09-19): p = 0.47, so the search finds settings this good on patternless shuffled data about half the time and its best finds look like luck. It tests the search, not the live book: champions_matt.json has an empty roster, so matt trades none of the searched genomes.",
+          "source": "state/permtest_matt.json (statistic best_holdout_sharpe); state/champions_matt.json; trading_algo/forex/permtest.py docstring; docs/PERMUTATION_TESTING.md",
           "confidence": "high"
         },
         {
