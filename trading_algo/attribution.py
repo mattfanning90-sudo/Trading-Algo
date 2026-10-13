@@ -160,6 +160,8 @@ def _blended_cost_fraction(cost_by_region: dict) -> float:
 
 def _commission_bps(region_key: str | None) -> float | None:
     """The bps rate the BACKTEST charges for this region, or None if unknown."""
+    if region_key is None:
+        return None
     try:
         return float(get_region(region_key).commission_bps)
     except Exception:
@@ -232,7 +234,8 @@ def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float
     modelled is not credited and stays in the residual."""
     excess = paid_total = 0.0
     for t, rate in fills:
-        bps = tca._modelled_bps(t.get("region"))
+        region = t.get("region")
+        bps = None if region is None else tca._modelled_bps(region)
         if not t.get("decision") or bps is None:
             continue
         shares, decision = float(t["shares"]), float(t["decision"])
@@ -407,11 +410,12 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     credits = [t for t in _through(paper_state.get("trades") or [], end)
                if t.get("region") == key and t.get("side") == pnl.INTEREST]
     paper = None if credits and rate is None else 0.0
-    for t in credits if paper is not None else ():
-        on = pd.Timestamp(t["date"])
-        before = growth.loc[:on]
-        paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
-                  / (float(before.iloc[-1]) if len(before) else 1.0))
+    if paper is not None:
+        for t in credits:
+            on = pd.Timestamp(t["date"])
+            before = growth.loc[:on]
+            paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
+                      / (float(before.iloc[-1]) if len(before) else 1.0))
     return {"v0": v0, "gap": b_end - values[days[-1]] / v0,
             "interest": interest - (paper or 0.0), "paper_interest": paper,
             "exposure": None if why else exposure, "why": why, "bt_flat": bt_flat}
@@ -519,11 +523,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     start_equity = window["capital"]
     paper_return, backtest_return = window["paper_return"], window["backtest_return"]
 
-    fills = _window_fills(paper_state, end)
-    unrated = sorted({str(t.get("currency")) for t, rate in fills if rate is None})
-    left_out = len(fills)
-    fills = [(t, rate) for t, rate in fills if rate is not None]
-    left_out -= len(fills)
+    all_fills = _window_fills(paper_state, end)
+    unrated = sorted({str(t.get("currency")) for t, rate in all_fills if rate is None})
+    fills = [(t, rate) for t, rate in all_fills if rate is not None]
+    left_out = len(all_fills) - len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
     credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, end)
