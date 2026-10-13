@@ -87,6 +87,23 @@ def test_a_fall_of_exactly_the_stop_trips():
     assert halted is True and cooldown == 3
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_equity_never_raises_the_peak(bad):
+    """On a bar the book is trading, a non-finite equity is not a mark it
+    stood at. A NaN peak compares False against every stop (disarmed for
+    good) and an infinite one makes every later bar a 100% drawdown (latched
+    for good). `max(peak, nan)` kept the peak only by argument order."""
+    assert risk_breaker.update_peak(100.0, bad, halted=False) == 100.0
+    peak, halted, cooldown = risk_breaker.breaker_step(
+        equity=bad, peak=100.0, halted=False, cooldown=0,
+        stop=0.25, cooldown_len=3)
+    assert peak == 100.0 and halted is False
+    _, halted, _ = risk_breaker.breaker_step(
+        equity=70.0, peak=peak, halted=halted, cooldown=cooldown,
+        stop=0.25, cooldown_len=3)
+    assert halted is True, "still armed against the real mark"
+
+
 def test_a_non_finite_equity_never_becomes_the_mark():
     """Re-basing takes the equity at resume as the new mark. A NaN there would
     compare False against every stop from then on — a breaker disarmed for

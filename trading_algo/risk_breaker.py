@@ -32,8 +32,12 @@ def update_peak(peak: float, equity: float, *, halted: bool) -> float:
     While HALTED the peak does not rise: the book is in cash and has not earned
     a new high. The RESUME re-base lives in `breaker_step`, which is the only
     place that can see the halt end.
+
+    Nor does a non-finite equity ever raise it: a NaN peak compares False
+    against every stop (the breaker disarmed for good), an infinite one makes
+    every later bar a 100% drawdown (latched for good).
     """
-    if halted:
+    if halted or not math.isfinite(equity):
         return float(peak)
     return max(float(peak), float(equity))
 
