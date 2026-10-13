@@ -35,10 +35,10 @@ A compacted session reads this first to find where execution stopped.
 | 0 — deploy what already exists | merge branch → `main` | ✅ **done** 2026-09-24 (`06464ca`) |
 | 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
 | 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
-| 3 — conventions | 9-13 (+13b, 12b) | 🟡 **in progress** — 9, 10, 13b done; 13 in its fix round; 11 in flight; 12, 12b queued |
-| 4 — mechanism | 14-20 (17 superseded) | ⬜ not started |
-| 5 — regeneration, deploy, restart | 21-26 (+4d) | 🟡 22, 23 (and the inserted 4d) **done early**; 21, 24 wait for Phase 4; **25, 26 need Matt's go** |
-| W2 — survivorship (needs data) | 27 | ⬜ blocked on membership data |
+| 3 — conventions | 9-13 (+12b, 13b-13e) | ✅ **done** 2026-10-13 (`6a904cd`) |
+| 4 — mechanism | 14-20 (17 superseded) | 🟡 15, 16, 18, 19 **done**; 14 in review; 20 (re-baseline) last |
+| 5 — regeneration, deploy, restart | 21-26 (+4d) | 🟡 22, 23, 4d **done**; 21, 24 wait for 14/20; **25, 26 need Matt's go** |
+| W2 — survivorship (needs data) | 27 | 🟡 steps 1-4 in flight; 5-6 blocked on membership data |
 
 **Execution log** — one line per task, appended as it completes:
 
@@ -126,6 +126,27 @@ A compacted session reads this first to find where execution stopped.
   schema bump, and old code would silently relabel a newer file. 12b bumps the version (upgrade
   step), refuses a newer-than-code file, adds a downgrade step, and Task 26 must RUN the restore
   against the pre-merge code before reopening any book.
+- **2026-10-13 — Phase 3 complete.** Every engine now measures the same things the same way:
+  - **Dividends and interest (11, 12):** the paper books receive dividends and idle-cash interest
+    as dated cash records, through the backtest's own interest rule.
+  - **Commission (13):** the backtest charges the per-order minimum commission on every real order,
+    at each region's REAL funded size — ASX alone was understated ~1.1pp/yr; the AUD portfolio's
+    CAGR moved 8.41% -> 7.98% on real data (survivorship-biased).
+  - **CAGR (13b):** counts intervals.
+  - **The comparison window (13c-13e):** the backtest-vs-paper comparison starts on each book's
+    (and each region's) own first day, at its own size, and measures both sides since the opening
+    capital. With the monthly region true-up off, the unexplained residual is now exactly zero.
+  - **Saved books (12b):** the saved-book format is versioned (v3) with an upgrade step, a guard
+    that refuses a newer file, and a downgrade step whose rollback was tested against the
+    pre-change code.
+- **2026-10-13 — Phase 4 so far.**
+  - **15:** two FTSE names quoted in US dollars are no longer divided by 100.
+  - **16:** whole shares round to nearest, in paper AND the live broker path.
+  - **18:** a ticker that fails to load is reported.
+  - **19:** a stock split is detected against the book's own fills, because Yahoo rewrites price
+    history and a split never shows as a jump.
+  - **14 (in review):** the drawdown breaker resets its high-water mark on resume (real `matt` FX:
+    488 halts -> 7).
 
 ---
 
