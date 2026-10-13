@@ -20,12 +20,13 @@ any code.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** react to the book-Overview v2 mockups (§11 part 2);
-  visual and keyboard checks of the home screen (AC-14/15/16); open questions
-  Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
+- **Waiting on Matt:** approve §11 part 1 (with its 2026-10-13 addition) and
+  part 3, so the phase-1 spec can be written; visual and keyboard checks of the
+  home screen (AC-14/15/16); open questions Q-1, Q-3, Q-4 in
+  `docs/specs/home-screen.md`.
 - **Done 2026-10-13:** PR #100 (SMALL fix) merged into `main` as `cd44ff2`.
-- **Next:** §11 part 3 (testing/rollout), then a spec and plan for phase 1 (book
-  Overview + Positions). D0a (equity decision record) is unblocked — it also feeds
+- **Next:** once parts 1 and 3 are approved, a spec (`docs/specs/book-screens.md`)
+  and plan for phase 1 (book Overview + Positions). D0a (equity decision record) is unblocked — it also feeds
   the "does the ranking pick winners?" line the Overview needs.
 
 ---
@@ -455,8 +456,20 @@ Claude in code or data before inclusion.
   screen is replaced; each phase publishes as it lands.
 - Constraint: Pages publishes only from `main`, so the phone gets each phase when
   this branch merges (after measurement truth); the Mac app gets it immediately.
+- **Addition (2026-10-13), found while grounding part 3:** the summary text and the
+  "Is it working?" panel cannot come from the existing answers alone. Several of
+  their inputs are served by no screen today: the FX permutation result
+  (`state/permtest_matt.json`, read only by `forex/champions.py`), average win and
+  loss, hold length against the signal horizon (`verify.check_horizon`), and how
+  old each backtest is. Working them out in the page would break "screens never do
+  money maths". So there is **one new server builder,
+  `dashboard/book_verdict.py`, served at `/api/verdict/<book>`** and baked into the
+  Pages export like the others. It writes sentences from fixed rules over numbers
+  (no Claude call; Claude explainers are project C), and every item carries its
+  source and date. An input that is missing gives "not measured yet", never a
+  guess.
 
-**Part 2 — how a book's screens look (Matt, 2026-10-13):**
+**Part 2 — how a book's screens look (Matt, 2026-10-13; v2 mockup approved — "i like it"):**
 - Overview direction **B (numbers first)**, but with **coherent text**: a short
   plain-English summary on top and a one-line caption under every number.
 - Add an **"Is it working?"** panel: *going right*, *going wrong*, and *is the
@@ -477,4 +490,35 @@ Claude in code or data before inclusion.
   invested" — 29% was the *actual* invested share; the US targets were 31–37%
   gross in Aug–Oct (vol targeting).
 
-**Part 3 (next):** testing and rollout details.
+**Part 3 — testing and rollout (presented 2026-10-13, awaiting approval):**
+- *Server answers (CI):* `book_verdict` is tested on copies of real state files,
+  like `test_home_api.py`. There is one test per sentence rule, showing it appears
+  only when its condition holds: for example "costs are bigger than the gain" needs
+  fees > net result. A missing input reads "not measured yet". A small sample is
+  labelled (under 30 closed trades). A backtest always shows its saved date, and
+  one older than 14 days adds "may not reflect recent changes". Hold length is
+  said in days only for daily-bar books, otherwise in bars.
+- *Screen files (CI):* every new screen file must parse (`node --check`, as now
+  for `home.js`). The existing "no money maths in the page" check is widened from
+  `home.js` to every screen file and the shared building blocks.
+- *Real browser (local, skipped where unavailable):* each screen is opened in a
+  headless browser — one that runs without a window — against fixture data, at Mac
+  width and phone width (390 px). It must load with no script errors, show its key
+  text and need no sideways scroll. The exported Pages file is opened the same way
+  and must make no network requests. This uses Playwright, which is installed on
+  Matt's Mac but not in CI, so CI skips these tests the way it skips the `node`
+  check when `node` is missing.
+- *Nothing old breaks:* the existing dashboard and export tests stay green, and the
+  old terminal stays reachable through "Classic view" on every new screen.
+- *Matt's checks per phase:* a 5-second test on FULL and FX·Matt ("what's the one
+  thing this screen tells you?"), a keyboard pass, and a look on the phone once
+  Pages has it.
+- *Rollout:* the Mac app switches the moment a phase is committed; the home
+  sidebar opens the new book screens. Pages gets each phase when the branch merges
+  to `main`. There the new screens publish *alongside* the current page, linked from
+  it, and become the front page only after Matt has used them for a week.
+- *Rollback:* phase 1 only reads. It adds no stored file and changes no stored
+  format, so no migration is needed and the rollback is reverting the commit (or
+  clicking "Classic view"). The migration-and-backup rule applies again the moment
+  a phase stores anything.
+- *Before any code:* rebase this branch onto `feat/measurement-truth`.
