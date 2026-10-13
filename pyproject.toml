@@ -53,9 +53,12 @@ ignore = ["E731", "E741", "E702", "E501"]
 # explicitly, and this `files` list keeps a bare `mypy` invocation in sync.
 # Third-party libs without stubs (pandas/numpy/yfinance/ib_insync/ccxt/...) are
 # not our correctness surface, so missing imports are ignored globally.
+# Installed packages that SHIP their own types are still read: numpy does, so a
+# numpy value is checked rather than silently `Any` (`no_site_packages = true`
+# used to hide them — a probe `bad: str = np.zeros(3)` passed the gate). pandas
+# ships none and stays `Any` until stubs are a deliberate choice.
 python_version = "3.11"
 ignore_missing_imports = true
-no_site_packages = true
 files = [
     "trading_algo/strategy.py",
     "trading_algo/signals.py",
