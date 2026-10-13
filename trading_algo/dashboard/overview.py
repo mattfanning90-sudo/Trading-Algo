@@ -10,7 +10,7 @@ import math
 from datetime import datetime, timezone
 
 from .. import config as cfg
-from .. import paper_trade, pnl
+from .. import metrics, paper_trade, pnl
 from .. import profiles
 from ..forex import fx_book
 from . import registry
@@ -45,7 +45,8 @@ def _card(entry: dict, state: dict) -> dict | None:
     if kind == "equity":
         initial = float(state.get("initial_capital_base") or 0.0)
         equity = float(hist[-1][1]) if hist else initial
-        peak = float(state.get("peak_equity_base") or equity or 1.0)
+        peak = metrics.all_time_peak(
+            hist, initial, state.get("peak_equity_base"), equity) or 1.0
         n_positions = sum(len(s.get("positions") or {})
                           for s in (state.get("sleeves") or {}).values())
         fills = sum(1 for t in state.get("trades") or [] if pnl.is_fill(t))
@@ -53,7 +54,8 @@ def _card(entry: dict, state: dict) -> dict | None:
     else:
         initial = float(state.get("initial_capital") or 0.0)
         equity = _num(state.get("equity")) or (hist[-1][1] if hist else initial)
-        peak = _num(state.get("peak_equity")) or equity or 1.0
+        peak = metrics.all_time_peak(
+            hist, initial, state.get("peak_equity"), equity) or 1.0
         positions = state.get("positions") or {}
         gross = sum(abs(w) for w in positions.values())
         unit = ("SYMBOLS" if any(not registry._is_pairlike(s) for s in positions)

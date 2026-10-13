@@ -24,6 +24,7 @@ import math
 import os
 from datetime import date, datetime, timedelta, timezone
 
+from .. import metrics
 from ..forex import fx_book
 from ..forex import fx_config as fxcfg
 from ..forex import fx_pnl
@@ -305,10 +306,11 @@ def build_fx_snapshot(account: str) -> dict:
 
     equity = _f(state.get("equity"))
     initial = _f(state.get("initial_capital"))
-    # A running peak includes the current mark, so off_peak can never be
-    # positive — the same guard the equity snapshot carries.
-    peak = max(_f(state.get("peak_equity"), equity) or equity, equity)
     hist = state.get("equity_history") or []
+    # A running peak includes the current mark, so off_peak can never be
+    # positive — the same guard the equity snapshot carries — and it is the
+    # ALL-TIME high, not the breaker's mark (re-based on a resume).
+    peak = metrics.all_time_peak(hist, initial, state.get("peak_equity"), equity)
     daily = state.get("daily") or {}
 
     day_pct = daily.get("net_pct")

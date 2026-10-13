@@ -14,8 +14,8 @@ from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 
 from .. import config as cfg
-from .. import (attribution, crowding, fx, paper_trade, pnl, promotion,
-                signals, tca)
+from .. import (attribution, crowding, fx, metrics, paper_trade, pnl,
+                promotion, signals, tca)
 from ..regions import get_region
 from . import meta
 
@@ -387,8 +387,11 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
     # A running peak INCLUDES the current mark. paper_trade only updates it on a
     # scheduled run, while this endpoint re-marks live, so today's equity could
     # sit above the persisted high-water mark — and off_peak then came out
-    # POSITIVE ("OFF-PEAK +89.96%"), which cannot happen to a real book.
-    peak = max(float(state.get("peak_equity_base") or 0.0), total_base, 1e-9)
+    # POSITIVE ("OFF-PEAK +89.96%"), which cannot happen to a real book. And it
+    # is the ALL-TIME high: the breaker's stored mark re-bases on a resume.
+    peak = max(metrics.all_time_peak(eq_hist, initial,
+                                     state.get("peak_equity_base"), total_base),
+               1e-9)
 
     # The knobs THIS book actually runs: its profile's param_overrides layered on
     # the shared defaults through the SAME StrategyParams path paper_trade sizes

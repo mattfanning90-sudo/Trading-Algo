@@ -153,6 +153,26 @@ def drawdown(equity: pd.Series) -> pd.Series:
     return equity / equity.cummax() - 1.0
 
 
+def all_time_peak(history, *marks) -> float:
+    """The best a book has ever been marked at: the highest finite value in
+    its `equity_history` rows ([date, value]) and in `marks` (its initial
+    capital, the breaker's stored mark, a live re-mark). 0.0 if none.
+
+    The running peak `drawdown` divides by, taken at its end over every mark
+    the book is known to have stood at — not the drawdown BREAKER's mark,
+    which re-bases when a halt ends (risk_breaker), so a screen labelled PEAK
+    must not read that field alone."""
+    best = 0.0
+    for v in [row[1] for row in history or ()] + list(marks):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(v):
+            best = max(best, v)
+    return best
+
+
 def max_drawdown(equity: pd.Series) -> Measure:
     """Deepest peak-to-trough fall of an equity curve, as a negative fraction.
 
