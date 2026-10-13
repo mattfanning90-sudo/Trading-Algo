@@ -213,6 +213,11 @@ risk policy should not be changeable by a stray flag on one run.
 
 ## Known data issues (observed, not yet diagnosed)
 
+- **Four universe symbols return no data** (Yahoo, 2026-10-13): `MMC` (US) and
+  `BDEV.L`, `PHNX.L`, `AHT.L` (FTSE) — "possibly delisted; no timezone found".
+  `data.load_region` drops them and raises the `dead_tickers` alert; the fix is
+  to update `trading_algo/universes.py` (renamed or delisted names), not to
+  accept a smaller universe.
 - **US prices stopped advancing after 7 Oct 2026** (seen by the Mac home screen
   on 2026-10-10, from `main` at 150b2c6). The FULL book's US and FTSE sleeves
   last priced on 2026-10-07 while its ASX sleeve moved the date label on to

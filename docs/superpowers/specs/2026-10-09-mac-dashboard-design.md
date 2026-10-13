@@ -13,20 +13,22 @@ each decision, the expert review and what it changed, and how the work splits in
 projects. Each project gets its own spec in `docs/specs/` and its own plan before
 any code.
 
-## Resume here (updated 2026-10-13)
+## Resume here (updated 2026-10-13, after the mockups)
 - **Where:** worktree `~/Trading-Algo-mac-dashboard`, branch `feat/mac-dashboard`
   (on top of `feat/measurement-truth`; 11 commits behind it on 2026-10-13 —
   rebase before new work). Neither branch is on GitHub.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** merge **PR #100** (SMALL micro-mode fix — still open; must
-  land before the first November rebalance, Mon 2 Nov 21:30 UTC); visual and
+- **Waiting on Matt:** merge **PR #100** (SMALL micro-mode fix — open; all 14 CI
+  checks pass and GitHub reports it MERGEABLE/CLEAN on 2026-10-13; must land
+  before the first November rebalance, Mon 2 Nov 21:30 UTC); pick a book-Overview
+  direction from the §11 part 2 mockups (A plain-English / B analyst; Positions
+  proposal to react to — generator: real FULL data, 13 Oct); visual and
   keyboard checks of the home screen (AC-14/15/16); approval of §11 part 1; open
   questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
-- **Next:** §11 part 2 — real-data mockups of a book's Overview and Positions
-  (visual companion), then part 3 (testing/rollout), then a spec and plan for
-  phase 1. D0a (equity decision record) is unblocked whenever Matt wants it.
+- **Next:** after Matt's pick — §11 part 3 (testing/rollout), then a spec and plan
+  for phase 1 (book Overview + Positions). D0a (equity decision record) is unblocked whenever Matt wants it.
 
 ---
 
