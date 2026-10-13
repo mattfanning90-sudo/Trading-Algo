@@ -15,18 +15,18 @@ any code.
 
 ## Resume here (updated 2026-10-13)
 - **Where:** worktree `~/Trading-Algo-mac-dashboard`, branch `feat/mac-dashboard`
-  (on top of `feat/measurement-truth`; 11 commits behind it on 2026-10-13 —
-  rebase before new work). Neither branch is on GitHub.
+  (on top of `feat/measurement-truth`, rebased 2026-10-13). Neither branch is on GitHub.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** approve §11 part 1 (with its 2026-10-13 addition) and
-  part 3, so the phase-1 spec can be written; visual and keyboard checks of the
-  home screen (AC-14/15/16); open questions Q-1, Q-3, Q-4 in
-  `docs/specs/home-screen.md`.
+- **Waiting on Matt:** review the phase-1 spec `docs/specs/book-screens.md`
+  (draft; its Q-1–Q-3); push/PR for the fix backlog (branch `docs/fix-backlog`,
+  `6796786`, items F20–F26); visual and keyboard checks of the home screen
+  (AC-14/15/16); open questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
 - **Done 2026-10-13:** PR #100 (SMALL fix) merged into `main` as `cd44ff2`.
-- **Next:** once parts 1 and 3 are approved, a spec (`docs/specs/book-screens.md`)
-  and plan for phase 1 (book Overview + Positions). D0a (equity decision record) is unblocked — it also feeds
+- **Next:** once the phase-1 spec is approved, its implementation plan
+  (writing-plans), then build. Rebased onto `feat/measurement-truth` 2026-10-13
+  (suite 1500 passed). D0a (equity decision record) is unblocked — it also feeds
   the "does the ranking pick winners?" line the Overview needs.
 
 ---
@@ -439,7 +439,7 @@ Claude in code or data before inclusion.
 - Built as **one small file per screen** sharing Midnight building blocks — not a
   restyle of the 3,816-line `static/app.js`, and no web framework.
 
-**Part 1 — how they're built and fed (presented 2026-10-11, awaiting approval):**
+**Part 1 — how they're built and fed (approved by Matt 2026-10-13):**
 - Files: one per screen (book Overview, Positions, Backtest, Method, Swarm, All
   accounts, plus the existing home screen), sharing building blocks (cards, period
   chips, charts, tables, status pill, money formatting) extracted from `home.js`.
@@ -463,7 +463,9 @@ Claude in code or data before inclusion.
   loss, hold length against the signal horizon (`verify.check_horizon`), and how
   old each backtest is. Working them out in the page would break "screens never do
   money maths". So there is **one new server builder,
-  `dashboard/book_verdict.py`, served at `/api/verdict/<book>`** and baked into the
+  `dashboard/book_summary.py`, served at `/api/summary/<book>`** (named
+  `book_verdict` until the spec, which widened it to the tiles and Positions
+  "why" lines too) and baked into the
   Pages export like the others. It writes sentences from fixed rules over numbers
   (no Claude call; Claude explainers are project C), and every item carries its
   source and date. An input that is missing gives "not measured yet", never a
@@ -490,7 +492,7 @@ Claude in code or data before inclusion.
   invested" — 29% was the *actual* invested share; the US targets were 31–37%
   gross in Aug–Oct (vol targeting).
 
-**Part 3 — testing and rollout (presented 2026-10-13, awaiting approval):**
+**Part 3 — testing and rollout (approved by Matt 2026-10-13):**
 - *Server answers (CI):* `book_verdict` is tested on copies of real state files,
   like `test_home_api.py`. There is one test per sentence rule, showing it appears
   only when its condition holds: for example "costs are bigger than the gain" needs
@@ -522,3 +524,14 @@ Claude in code or data before inclusion.
   clicking "Classic view"). The migration-and-backup rule applies again the moment
   a phase stores anything.
 - *Before any code:* rebase this branch onto `feat/measurement-truth`.
+
+**Findings → fix backlog (Matt, 2026-10-13):** "log the findings and put them into a
+fix backlog". Measured on the live books and filed as F20–F26 in
+`product/backlog/backlog.json` (branch `docs/fix-backlog`, commit `6796786`, not yet
+pushed). The book screens' "going wrong" lines name the item that tracks each. One
+result cuts against the obvious fix: on matt, partner and multiasset the positions
+held longer did *not* earn more, and a September sweep of the existing min-hold and
+hysteresis knobs found nothing out of sample. So F20 is a re-test after the FX
+cost-model artefacts are fixed, not a switch to flip.
+
+**Phase 1 spec:** `docs/specs/book-screens.md` (draft, 2026-10-13).
