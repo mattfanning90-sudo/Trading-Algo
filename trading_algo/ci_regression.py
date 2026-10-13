@@ -28,7 +28,8 @@ BASELINE = os.path.join(os.path.dirname(__file__), "_regression_baseline.json")
 # Absolute tolerances per metric: just above the measured noise. Task 20 ran
 # this backtest on arm64 and x86_64, Python 3.11-3.14, numpy 2.3.5-2.5.4 and
 # pandas 3.0.5-3.0.6: the unrounded metrics were bit-identical on arm64 and
-# within 2.7e-15 on x86_64, and every rounded value was identical. The gate
+# within 2.7e-15 on x86_64, and every rounded value was identical. (x86_64 ran
+# under Rosetta at SSE-level SIMD, not CI's Linux AVX kernels.) The gate
 # reads them rounded (4 dp, Sharpe 2 dp), so the most that noise can do is
 # flip the last digit at a rounding boundary: 1.5 steps allows one step and
 # refuses two. The old 0.02 / 0.15 could not see a convention change: Task 9's
