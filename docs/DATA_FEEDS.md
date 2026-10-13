@@ -226,6 +226,12 @@ risk policy should not be changeable by a stray flag on one run.
   10-08 saved none), ULTRA's and SMALL's 2026-10-07. Cause not yet established —
   candidates include the Yahoo feed lagging and a run firing before New York
   has closed. Owner: the measurement-truth block.
+  *Update 2026-10-13 (EXPERIMENTAL's file on `main`):* the runs committed at 01:13
+  on 8 Oct and 01:22 on 9 Oct UTC saved no new value (latest still 10-06); the run
+  committed 01:10 on 10 Oct, after New York's 9 Oct close, saved one dated **10-08**,
+  a day behind; the run committed 02:42 on 13 Oct saved **10-12**, on time. So the
+  values caught up, with no value dated 7 or 9 Oct. That fits a feed running one to
+  two days behind rather than a broken run, but the cause is still not established.
 
 ## Notes & caveats
 
