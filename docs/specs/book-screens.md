@@ -125,7 +125,8 @@ items F20–F26 (PR #102), and the panel names the item that tracks each problem
    3. the strongest "going right" line, if any;
    4. the model line.
 
-   Each sentence carries its caveat in short form. **The summary never has more
+   Each sentence carries its caveat in short form: the first sentence of the
+   item's caveat (the full caveat is on the panel). **The summary never has more
    "going right" sentences than problems.**
 5. **Six tiles** with captions.
 6. **The "Is it working?" panel**: Going right · Holding it back · Is the model any
@@ -194,7 +195,7 @@ If nothing qualifies: "Nothing clearly going right yet."
 **Is the model any good?**
 | Rule | Says | Caveats |
 |---|---|---|
-| backtest | "Backtest (start–end): x% a year, Sharpe s (risk-free rate stated)" (equity: vs the benchmark's) | Always shows the saved date; over 14 days old, "may not reflect changes since". Equity: "survivorship-biased, so an upper bound; no sleeve passes a standalone Deflated-Sharpe test"; "the benchmark here leaves out dividends, which flatters the strategy". If the book's allocations, profile settings or micro mode differ from the backtest's: "this is the standard strategy, not this book's settings". FX: the review notice's artefact sentence only (not its hard-coded Sharpes). A synthetic backtest is never shown as performance. |
+| backtest | "Backtest (start–end): x% a year, Sharpe s" (equity: vs the benchmark's). The saved backtests don't record which cash rate their Sharpe assumes, so the line doesn't state one rather than guess. | Always shows the saved date; over 14 days old, "may not reflect changes since". Equity: "survivorship-biased, so an upper bound; no sleeve passes a standalone Deflated-Sharpe test"; "the benchmark here leaves out dividends, which flatters the strategy". If the book's allocations, profile settings or micro mode differ from the backtest's: "this is the standard strategy, not this book's settings". FX: the review notice's artefact sentence only (not its hard-coded Sharpes). A synthetic backtest is never shown as performance. |
 | luck-test | FX books with a permutation report (read through `permtest.load_report`): "We tested whether the search for better agent settings finds anything real. On shuffled, patternless data it finds results this good about 1 in 2 times (p = 0.47), so its best finds look like luck." | "This tests the settings search, not this book's trades: the book currently uses none of the search's finds." States the null (bar shuffles, n, data window) and the date; over 30 days old, says so. p under 0.1 reads "rarely (p = x)", never "0 in 10". Tracked as fix F22. |
 
 **Counting words:** "closed trades" are the parts of positions that the ledger
@@ -208,7 +209,8 @@ on a screen. The terms are: Sharpe, drawdown/below its best, breaker, volatility
 target, regime/below trend, stamp duty, spread, swap/financing, signal horizon,
 backtest, survivorship bias, Deflated Sharpe, permutation test, p-value,
 benchmark, tracking error, profit factor and bps. Plain words come first and the
-term second, e.g. "UK trades cost 0.46% of the money traded (46 basis points)".
+term second, e.g. "UK trades cost 0.46% of the money traded (46 basis points)". The status pill is a
+label, not a sentence, so it isn't glossed; the first sentence that uses a term is.
 
 **Tiles:**
 - **Equity:** Worth · Since start · vs the market · Below its best · Costs so far
@@ -220,19 +222,25 @@ include "as of <date>" where it matters, the breaker level, and what "costs"
 includes. A book with no closed positions shows "No closed positions yet" instead
 of a win rate.
 
-**Positions "why" lines**, one per region, chosen in this order:
+**Positions "why" lines**, one per region, chosen in this order (specific reasons
+before the generic "waiting until next month", or they would never show):
 1. paused by the breaker (days left);
 2. price data failed checks (`data-quality` / `cash:stale-data`);
 3. exchange rate unavailable (`cash:fx-unavailable`);
 4. too small to trade (`cash:below-min`, SMALL's gate);
-5. waiting below trend (`regime-off`): "in cash since the book began; at the last
-   decision (6 Oct) the index was below its long-term trend", with the review's
-   caveat that this costs some growth but limits the worst falls;
-6. waiting until next month's rebalance;
-7. nothing passed the momentum and trend tests (`no-eligible-names`);
-8. a long/short book couldn't form both sides (`insufficient-names`);
+5. waiting below trend (`regime-off`): "in cash since the book began" (or since
+   its last sale, read from the trade record), "at the last decision (6 Oct) the
+   index was below its long-term trend", with the review's caveat that this costs
+   some growth but limits the worst falls;
+6. nothing passed the momentum and trend tests (`no-eligible-names`);
+7. a long/short book couldn't form both sides (`insufficient-names`);
+8. holding nothing until next month's rebalance (flat, already rebalanced this
+   month, no recorded reason);
 9. invested, with the share held in cash and why ("sized to a volatility target;
    whole shares round down").
+
+A flat region with a reason also says "next decision: the start of next month"
+when it has already been decided this month.
 
 Regions needing attention come first. Shorts read "sold at → now" and their gain
 has the right sign. Cash above 100% on a long/short book is explained ("cash
@@ -258,7 +266,7 @@ shares.
 | AC-10 | Every glossary term used in a screen's text carries its plain gloss on first use. | `tests/test_book_summary_rules.py` | ☐ |
 | AC-11 | Month returns come from `metrics.monthly_returns` and the chart's fall-from-best from `metrics.drawdown`, proven by a spy test; the tile's fall-from-best equals the overview card's; the single-source guard stays green. | `tests/test_metrics.py`, `tests/test_book_summary.py`, `tests/test_metrics_single_source.py` | ☐ |
 | AC-12 | Positions why-lines: each reason in the list, the precedence order, shorts, cash > 100%, an unpriced holding, and the FX "market shut" line, each from a fixture. | `tests/test_book_positions.py` | ☐ |
-| AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic book (banner; no performance claims). | `tests/test_book_summary_rules.py` | ☐ |
+| AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic backtest (never shown as performance; the saved books themselves carry no synthetic marker). | `tests/test_book_summary_rules.py` | ☐ |
 
 **1b: the Mac screens**
 | ID    | Criterion (observable behaviour) | Verified by | Status |
