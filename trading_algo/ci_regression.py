@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -85,7 +86,12 @@ def compare(baseline: dict, current: dict) -> list[str]:
         else:
             metric = path.rstrip(".").split(".")[-1]
             tol = _tol_for(metric)
-            if abs(float(base) - float(cur)) > tol:
+            # `abs(b - c) > tol` is False when either side is NaN, so a metric
+            # that turns into NaN would pass silently. No metric here is
+            # legitimately NaN or infinite, so either side non-finite is drift.
+            if not (math.isfinite(float(base)) and math.isfinite(float(cur))):
+                drift.append(f"{path.rstrip('.')}: {base} -> {cur} (non-finite)")
+            elif abs(float(base) - float(cur)) > tol:
                 drift.append(f"{path.rstrip('.')}: {base} -> {cur} "
                              f"(|Δ| > tol {tol})")
 

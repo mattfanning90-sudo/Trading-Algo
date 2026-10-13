@@ -46,6 +46,21 @@ def test_compare_detects_injected_drift(current):
     assert any("CAGR" in d for d in drift), "a large CAGR move must be flagged"
 
 
+@pytest.mark.parametrize("base, cur", [
+    (0.0863, float("nan")),               # a metric that turned into NaN
+    (float("nan"), 0.0863),               # a NaN baseline compares to nothing
+    (float("nan"), float("nan")),         # no gate metric is legitimately NaN
+    (float("inf"), float("inf")),         # inf - inf is NaN too
+])
+def test_compare_fails_on_a_non_finite_metric(base, cur):
+    """`abs(base - cur) > tol` is False whenever either side is NaN, so a metric
+    that turned into NaN (Task 13b made a CAGR of fewer than 2 marks NaN) used
+    to pass the gate silently."""
+    drift = ci_regression.compare({"portfolio": {"CAGR": base}},
+                                  {"portfolio": {"CAGR": cur}})
+    assert len(drift) == 1 and drift[0].startswith("portfolio.CAGR:"), drift
+
+
 def test_compare_tolerates_small_noise(current):
     nudged = {**current, "portfolio": {**current["portfolio"],
                                        "AnnVol": current["portfolio"]["AnnVol"] + 0.001}}
