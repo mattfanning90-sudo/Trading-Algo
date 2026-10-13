@@ -3,7 +3,7 @@ title: Modern book screens, phase 1 (Overview + Positions)
 slug: book-screens
 status: draft            # draft → agreed → in-progress → done (or dropped)
 created: 2026-10-13
-last-updated: 2026-10-13
+last-updated: 2026-10-14
 owner: Matt Fanning
 ---
 
@@ -11,215 +11,401 @@ owner: Matt Fanning
 
 Phase 1 of §11 of `docs/superpowers/specs/2026-10-09-mac-dashboard-design.md`
 (parts 1–3 approved by Matt on 2026-10-13). The approved look is the v2 mockup
-(`.superpowers/brainstorm/*/content/book-overview-v2.html`, throwaway).
+(`.superpowers/brainstorm/*/content/book-overview-v2.html`, throwaway), as amended
+by the adversarial review recorded at the end of this spec (2026-10-14).
+
+**Phase 1 ships in three steps:**
+- **1a**: the server answers and their rules. Pure code, all tested in CI.
+- **1b**: the Mac screens.
+- **1c**: the phone (Pages).
+
+The first implementation plan covers 1a and 1b. 1c gets its own plan after 1b,
+because:
+- it changes the robots' publishing step, which needs its own care;
+- the phone cannot get anything until this branch reaches `main` anyway.
 
 ## Context
 The home screen (B1, `docs/specs/home-screen.md`) answers "am I up, and is anything
 wrong?" for all books at once. Going deeper into one book still means the old
-terminal (`static/app.js`, 3,823 lines), which shows numbers without saying what
-they mean. Matt asked for modern versions of every screen, most-used first. He
-chose direction B for a book's Overview: numbers first, with **coherent text** (a
-short plain-English summary, a caption under every number) and an **"Is it
-working?"** panel (what's going right, what's going wrong, is the model any good).
+terminal (`static/app.js`), which shows numbers without saying what they mean. Matt
+asked for modern versions of every screen, most-used first. He chose direction B for
+a book's Overview: numbers first, with **coherent text** and an **"Is it working?"**
+panel. He also asked that what the panel finds be logged as fixes. They are backlog
+items F20–F26 (PR #102), and the panel names the item that tracks each problem.
 
-Grounding on 2026-10-13 found that the summary and the panel need inputs no screen
-serves today:
-- the FX permutation result (`state/permtest_matt.json`, read only by
-  `forex/champions.py`);
-- average win and loss;
-- hold length against the signal horizon (`verify.check_horizon`);
-- each backtest's age;
-- the reason a sleeve is in cash (`last_flat_reason` and `last_status` are in the
-  saved books, but not in `/api/account`).
+**Measured 2026-10-14, which shapes everything below:**
+- Building FULL's existing screen answer (`api.build_snapshot`) takes **about 50
+  seconds** every time, because it downloads prices back to 2012 with no cache
+  (`paper_trade.py:169,193`, `use_cache=False`).
+- Building from the books' saved values (`overview.build_overview`) takes **under
+  0.1 s for all eight books**.
+- Live and saved values disagree on screen. FULL is +0.19% on live prices and −0.05%
+  on its last saved value. So **the Overview uses saved values only**, the same ones
+  the home screen uses, and says which date they are from.
 
-The page must not work these out itself, so there is one new server builder.
+**Approach:**
+- **`dashboard/book_summary.py`**: a pure function (no file, network or clock
+  reads) that turns one book's saved state, overview card, audit findings, saved
+  backtest and permutation report into the Overview's answer. A thin loader beside
+  it gathers those inputs. Served at **`/api/summary/<KEY>`**; it needs no network.
+- **Positions** comes from **`/api/positions/<KEY>`**, in two parts:
+  - holdings, cost and the "why" lines come from saved state at once;
+  - today's prices are fetched separately, only for the names held, and their time
+    is shown.
 
-What the panel says "going wrong" is now also logged as fixes in the product
-backlog, items F20–F26 (branch `docs/fix-backlog`, commit `6796786`). The panel
-names the item that tracks each problem, so the screen and the backlog stay
-connected.
-
-**Approach (draft — confirm):**
-- **`dashboard/book_summary.py`**, served at **`/api/summary/<KEY>`**. This renames
-  the design's `book_verdict`, because it also builds the tiles and the "why" lines.
-  For one book it returns:
-  - the six KPI tiles (label, value, one-line caption);
-  - the summary paragraph;
-  - the "Is it working?" items (column, text, source, date, caveat, backlog id);
-  - per-region (equity) or per-asset-group (FX) "why" lines for Positions;
-  - month-by-month returns.
-
-  It reads the existing payloads (`api.build_snapshot`, `fx_api.build_fx_snapshot`),
-  `verify`, `backtest_store`, `state/permtest_<account>.json` and `metrics`. It
-  calls no Claude and no network beyond what those already do.
-- **`metrics.monthly_returns`**: one new function, so the month grid comes from the
-  measurement single source. "Below its best" uses the existing `metrics.drawdown`.
+  Offline, Positions says the holdings are valued at cost. It never waits on the
+  network before showing anything.
+- **`metrics`** gains `monthly_returns`. The chart's "below its best" uses
+  `metrics.drawdown`. The **tile** uses the safety breaker's own figure from the
+  overview card, the same figure the home screen shows.
 - **Screen files**:
-  - `static/blocks.js`: shared building blocks, extracted from `home.js` (escaping,
-    money and percent formatting, period chips, line chart, tiles, tables, status
-    pill).
+  - `static/blocks.js`: shared building blocks and the formatting rules, on one
+    namespace object, moved out of `home.js`;
   - `static/screens/book_overview.js` and `static/screens/book_positions.js`.
 
-  They are plain scripts on one shared namespace, not ES modules, so the Pages
-  export can inline them into one file. No framework.
-- **Navigation:** picking a book in the home sidebar opens its tabs in place:
-  - **Overview** and **Positions** are new.
-  - **Backtest**, **Method** and, on FX books, **Swarm** open the old terminal on
-    that book until phases 2–3 replace them.
-  - Every book screen has a "Classic view" link.
-  - The new Overview replaces B1's single-book view. It keeps that view's
-    freshness line ("last update …") and its period chips (1D/1W/1M/ALL), which
-    set the chart's window.
-- **Phone:** `dashboard/export.py` gains an `--app` mode that writes one
-  self-contained `public/app.html`. It holds the home screen plus both book screens,
-  with every payload baked in behind the existing `fetch()` stand-in.
-  `scripts/build_site.sh` publishes it, and the current front page gets a link to it.
+  They are plain scripts with no top-level names that could collide. No framework.
+- **Navigation:** picking a book in the home sidebar opens its view in place.
+  - **Overview** and **Positions** are tabs.
+  - **Backtest**, **Method** and **Swarm** (FX books only) are links marked ↗ that
+    open the old terminal on that book and that tab, until phases 2–3 replace them.
+  - A "Classic view ↗" link opens the old terminal on the same book. This needs a
+    small change to the old terminal's `boot()`: `?account=` and `?tab=`.
 
 ## Goals
-- **G-1**: On any book, within five seconds, Matt can say whether it is up or down
-  since it started, how that compares, and the main thing going wrong.
-- **G-2**: Every sentence and number on these screens is backed by a named source
-  and date. Anything that cannot be measured yet says "not measured yet". Nothing is
-  guessed.
-- **G-3**: On Positions, for each region (equity) or asset group (FX), Matt can see
-  whether it is investing or waiting, and why. He can also see what each holding
-  cost, what it's worth in A$, and its gain or loss.
-- **G-4**: The same screens work on the Mac and on the phone (Pages), from the same
-  answers.
-- **G-5**: Nothing old breaks. The classic terminal stays one click away, and no
-  trading code or stored data changes.
+- **G-1**: On any book, within five seconds, Matt can say:
+  - whether it is up or down since it started, and as of when;
+  - whether that is out of the ordinary against its market;
+  - the **main problem**, which is a single defined item on screen.
+- **G-2**: Every sentence and number is backed by a named source and date, with its
+  caveat, everywhere it appears: summary, tiles and panel. Anything that cannot be
+  measured says "not measured yet" or "couldn't measure". Nothing is guessed, and
+  every term is explained in plain words.
+- **G-3**: Nothing that needs Matt is hidden. A halted book, a book near its
+  breaker, stale data or an audit problem is at the top, before anything else.
+- **G-4**: On Positions, for each region (equity) or asset group (FX), Matt can see:
+  - whether it is investing or waiting, and why;
+  - what each holding cost, what it's worth and its gain or loss;
+  - how old the prices are.
+- **G-5**: Nothing old breaks, and the new screens are fast and work offline.
+  - The classic terminal stays one click away.
+  - No trading code or stored data changes.
+  - Every Mac screen shows within 2 seconds from saved values.
 
 ## Non-goals
-- **NG-1**: The Backtest, Method, Swarm and All-accounts screens (phases 2–3), and
+- **NG-1**: Backtest, Method, Swarm and All-accounts screens (phases 2–3);
   retiring the old terminal.
-- **NG-2**: The "By region / By pair" chart view shown in the mockup's chips (phase
-  2). Phase 1 has **Value** and **Below its best**.
-- **NG-3**: Claude-written explanations or news (project C). The summary is built
-  from fixed rules.
+- **NG-2**: The "By region / By pair" chart view (phase 2). Phase 1 has **Value**
+  and **Below its best**.
+- **NG-3**: Claude-written explanations or news (project C). Every sentence comes
+  from a fixed rule.
 - **NG-4**: Measuring whether the equity ranking picks winners (needs D0a) or which
   FX agents are right (needs the agent scorecard, project D). The panel says these
   are not measured yet.
-- **NG-5**: Fixing anything the panel finds. That is backlog items F20–F26, each
-  with its own decision.
-- **NG-6**: Making the new screens the Pages front page. They sit alongside it until
-  Matt has used them for a week and decides.
+- **NG-5**: Fixing what the panel finds. That is backlog items F20–F26.
+- **NG-6**: Splitting each holding's gain into the price move and the currency
+  move (phase 2). Phase 1 labels the figure honestly instead.
 - **NG-7**: Any change to trading code, `verify.py` behaviour or stored data.
-  `metrics.py` gains one read-only function.
+  `metrics.py` gains one read-only function, and `app.js` gains the two link
+  parameters.
 
-## The "Is it working?" rules (thresholds agreed 2026-10-13, Q-2)
-The panel and the summary are built only from these rules. A rule shows a line only
-when its condition holds. Each line carries its source and date, and its caveat
-where the source has one. The **summary paragraph is 2–4 sentences drawn only from
-lines that are on the panel**, so the summary never claims something the panel does
-not back.
+## How a book's Overview reads, top to bottom
+1. **Status pill** (shape + word, kept from B1): ■ Halted · ▲ Near its safety
+   breaker · ▲ Data stale · ● Running normally. Then the book's urgent and warning
+   audit items, if any (B1's "Problems in this book").
+2. **Result line**, always present. It is built from the last saved value and gives
+   that value's date. Example: "▲ Up A$X since 11 Jun 2026 · as of 13 Oct · about
+   n points behind the market (within its normal ups and downs)". Long/short books
+   are not compared with a market; they say "aims to make money whichever way the
+   market moves".
+3. **Main problem**, one line: the top-ranked item from "Holding it back" (ranking
+   below), or "No standout problem".
+4. **Summary**, 2–4 sentences, built in a fixed order:
+   1. the result line in words;
+   2. the main problem;
+   3. the strongest "going right" line, if any;
+   4. the model line.
 
-| Rule | Books | Column | Shows when | Says (shape) | Caveat carried | Backlog |
-|---|---|---|---|---|---|---|
-| winners-bigger | equity, FX | right | ≥ 5 closed trades and average win ≥ 1.5 × average loss | "Only W of N closed trades made money, but the average win (+A$a) is about k× the average loss (−A$b)" | "small sample" when N < 30 | — |
-| filter-working | equity | right | a sleeve is flat with `last_flat_reason` = `regime-off` | "Australia has stayed in cash since 24 Jul while its market is below its long-term trend: the safety filter doing its job" | — | — |
-| inside-breaker | equity, FX | right | the book has a breaker and its fall from peak is under half of it | "x% below its best, well inside the −y% breaker" | — | — |
-| open-ahead | FX | right | open positions are in profit | "Open positions are A$x ahead" | — | — |
-| ahead-of-market | equity | right | return since start is above the benchmark's over the same dates | "n points ahead of the market since …" | "the benchmark is price-only; dividends not counted" | — |
-| costs-vs-result | equity, FX | wrong | costs > net gain, or the book is down and costs > 0 | "Costs (A$x) are bigger than the gain (A$y)" / "Costs (A$x) are about k% of the loss" | — | — |
-| uk-costs | equity | wrong | FTSE cost per value traded ≥ 2 × the US figure | "UK trading has cost x bps of the amount traded (0.5% stamp duty on buys) vs y bps in the US" | — | F25 |
-| behind-market | equity | wrong | return since start is more than 1 point below the benchmark's | "About n points behind the market since …" | price-only benchmark, as above | — |
-| mostly-idle | equity | wrong | cash ≥ 50% of the book | "x% of the book is in cash, so even a right call moves the total little" | — | F23 |
-| holds-too-short | FX | wrong | `verify` raises `hold-shorter-than-signal` | "Sells early: median hold n days vs an m-day signal; c of r positions closed before their signal could resolve" | "holding longer has not been shown to earn more (F20)" | F20 |
-| frozen-prices | FX | wrong | `verify` raises `dead-price-turnover` | "n position changes since start at a frozen price, paying spread for nothing" | — | F21 |
-| loses-more-often | FX | wrong | win rate < 50% and realised result < 0 | "x% of closed trades made money; realised trades are −A$y in total" | "small sample" when N < 30 | — |
-| backtest | equity, FX | model | a saved backtest exists | "Backtest (start–end): x% a year, Sharpe s" (equity: vs the benchmark's) | the saved date always. Over 14 days old: "may not reflect recent changes". Equity: "survivorship-biased, so an upper bound; no sleeve passes a standalone Deflated-Sharpe test". Equity book with its own profile: "this is the standard strategy, not this book's settings". FX: the review notice's artefact caveat (`fx_config.REVIEW_NOTICE`) | — |
-| luck-test | FX | model | `state/permtest_<account>.json` exists | "Permutation test (date, n shuffles): p = x, so a strategy with no edge would score this well about k in 10 times" | "no evidence of skill yet" when p ≥ 0.05 | F22 |
-| not-measured | equity, FX | model | always | equity: "Does the ranking pick winners? Not measured yet: needs the decision record (D0a)". FX: "Which agents are right? Not measured yet: needs the agent scorecard (project D)" | — | — |
+   Each sentence carries its caveat in short form. **The summary never has more
+   "going right" sentences than problems.**
+5. **Six tiles** with captions.
+6. **The "Is it working?" panel**: Going right · Holding it back · Is the model any
+   good?
+7. The **chart** (Value / Below its best, period chips 1D–ALL from B1), the
+   **month-by-month grid**, and the **last closed trades**.
 
-**Counting words (decided in drafting — confirm):** `fx_api` counts *closed trades*
-(FIFO lots: 197 on matt today). `verify` counts *positions opened and closed* (77).
-These are different things, so the screen never calls both "round trips". Win rate
-uses closed trades. The hold-length line uses "positions". Hold length is said in
-days only for daily-bar books, otherwise in bars.
+The panel heading is **"Holding it back"**, not "Going wrong", and it is not red. As
+on the home screen, red is kept for things that need action: halted, audit errors,
+failed jobs.
+
+**Ranking of the main problem** (first match wins):
+1. halted;
+2. an audit ERROR for this book;
+3. near the breaker (the home screen's `NEAR_BREAKER`, one constant for both);
+4. stale data;
+5. costs flipped the result or ate more than half of it (costs-flip);
+6. no safety breaker on a leveraged book;
+7. sells long before its signal resolves;
+8. loses more often than it wins;
+9. behind the market by more than its normal ups and downs;
+10. mostly idle;
+11. any other audit WARN;
+12. trades at frozen prices.
+
+## The rules (agreed thresholds where measured; reviewed 2026-10-14)
+A rule shows a line only when its condition holds. Every line carries its **source,
+date and caveat**, and a backlog id where one tracks it ("tracked as fix F20"). A
+rule whose input is missing gives "not measured yet". A rule whose input fails to
+load gives "couldn't measure <thing>", and the rest of the screen still shows.
+
+**Always on**
+| Rule | Says | Notes |
+|---|---|---|
+| result | up/down A$ and % since start, as of the last saved date; vs the market | Book and benchmark are both measured to the same last saved date. "Ahead" or "behind" only when the gap is more than 2 × the book's normal spread (tracking error from `metrics.benchmark_stats` × √years); otherwise "within its normal ups and downs". The benchmark is price-only, so the line says "the market figure leaves out dividends, which flatters this book". Long/short books: no market comparison. |
+| not-measured | equity: "Does the ranking pick winners? Not measured yet (needs the decision record)"; FX: "Which agents are right? Not measured yet (needs the agent scorecard)" | — |
+
+**Needs attention** (top of screen, and first in "Holding it back")
+| Rule | Shows when | Backlog |
+|---|---|---|
+| halted | the book's breaker has paused it (days left shown) | — |
+| audit-error | any audit ERROR for this book (its own text, plain-worded) | — |
+| near-breaker | fall from peak ≥ `NEAR_BREAKER` × breaker (same constant as the home screen) | — |
+| stale | the home screen's freshness rule says late or stale | — |
+| no-breaker | the book has no breaker and is leveraged (ULTRA) | — |
+| audit-warn | **every** audit WARN for this book not already covered by a rule below, shown in plain words (nothing hidden) | mapped where an item exists |
+
+**Going right** (results only; how the machinery works goes on Positions, not here)
+| Rule | Shows when | Caveat |
+|---|---|---|
+| winners-pay | profit factor (total won ÷ total lost on closed positions, after costs) > 1 **and** closed result > 0, **excluding closes forced by a recorded bug** (the state's `corrections` block, e.g. FULL's 27 Aug liquidation, which says how many were left out) | sample size counted in positions and decision dates; "small sample" under 30 positions or under 6 decision dates |
+| ahead-of-market | the result rule finds the book ahead by more than its normal spread | price-only benchmark |
+
+If nothing qualifies: "Nothing clearly going right yet."
+
+**Holding it back**
+| Rule | Shows when | Caveat | Backlog |
+|---|---|---|---|
+| costs-flip | costs turned a gain into a loss, or costs are more than half the result before costs | Names what "costs" includes: equity = commission + stamp duty, with slippage inside the fill prices; FX = the spread and financing `fx_pnl` charges. Names the biggest contributor, e.g. "mostly UK stamp duty: A$292.51 of A$449.17". FX adds a note when `fx_pnl`'s unexplained residual is over 10% of the result. | F25 when the FTSE share of costs > 50% |
+| holds-too-short | the audit raises `hold-shorter-than-signal` | "Holding longer has not been shown to earn more"; units stated exactly ("5 days against a signal of 57 trading days, about 11 weeks") | F20 |
+| loses-more-often | the 95% interval for the share of winning positions (after costs) is entirely below 50% | the interval is shown | — |
+| behind-market | the result rule finds the book behind by more than its normal spread | price-only benchmark, as above | — |
+| mostly-idle | long-only book with gross exposure < 50% | Split by cause: waiting below trend (by design), pinned until next month, micro mode, or sized down (volatility target / whole-share rounding) | F23 / F24 for the sized-down part only |
+| frozen-prices | ≥ 10 position changes at a frozen price in the last 30 days | — | F21 |
+
+**Is the model any good?**
+| Rule | Says | Caveats |
+|---|---|---|
+| backtest | "Backtest (start–end): x% a year, Sharpe s (risk-free rate stated)" (equity: vs the benchmark's) | Always shows the saved date; over 14 days old, "may not reflect changes since". Equity: "survivorship-biased, so an upper bound; no sleeve passes a standalone Deflated-Sharpe test"; "the benchmark here leaves out dividends, which flatters the strategy". If the book's allocations, profile settings or micro mode differ from the backtest's: "this is the standard strategy, not this book's settings". FX: the review notice's artefact sentence only (not its hard-coded Sharpes). A synthetic backtest is never shown as performance. |
+| luck-test | FX books with a permutation report (read through `permtest.load_report`): "We tested whether the search for better agent settings finds anything real. On shuffled, patternless data it finds results this good about 1 in 2 times (p = 0.47), so its best finds look like luck." | "This tests the settings search, not this book's trades: the book currently uses none of the search's finds." States the null (bar shuffles, n, data window) and the date; over 30 days old, says so. p under 0.1 reads "rarely (p = x)", never "0 in 10". Tracked as fix F22. |
+
+**Counting words:** "closed trades" are the parts of positions that the ledger
+closes (FIFO lots). "Positions" are opened and then fully closed. Win rates and
+sample sizes use **positions, after costs**. If a figure has to use closed trades,
+it says "closed parts of positions". FX averages use the full trade history, not
+the payload's last 400 rows.
+
+**Plain words:** a server-side glossary gives each term a plain gloss on first use
+on a screen. The terms are: Sharpe, drawdown/below its best, breaker, volatility
+target, regime/below trend, stamp duty, spread, swap/financing, signal horizon,
+backtest, survivorship bias, Deflated Sharpe, permutation test, p-value,
+benchmark, tracking error, profit factor and bps. Plain words come first and the
+term second, e.g. "UK trades cost 0.46% of the money traded (46 basis points)".
 
 **Tiles:**
-- **Equity:** Worth · Since start · vs the market · Below its best · Costs so far ·
-  In cash.
+- **Equity:** Worth · Since start · vs the market · Below its best · Costs so far
+  · Invested.
 - **FX:** Worth · Since start · Below its best · Win rate · Costs so far · Turnover.
 
-Each tile has a one-line caption (for example "of A$100,000 put in, at today's
-prices"; "safety breaker trips at −25%"; "ASX all cash; US 72%, UK 40%").
+All tiles use the same saved value. Every caption is server-written; captions
+include "as of <date>" where it matters, the breaker level, and what "costs"
+includes. A book with no closed positions shows "No closed positions yet" instead
+of a win rate.
 
-**Positions "why" lines:**
-- **Equity, per region,** from the saved sleeve and the engine's own fields:
-  - waiting because the market is below trend (`regime-off`, with the date it began);
-  - waiting until next month's rebalance (holds nothing and already rebalanced this
-    month);
-  - investing part of its money because positions are sized to a volatility target;
-  - paused by the safety breaker (with the days left);
-  - in cash because its price data failed checks (`data-quality`).
-- **FX, per asset group** (`pairs.Pair.asset_class`: currencies, crypto, shares,
-  bonds): a line when that market is shut right now ("frozen until it reopens", from
-  `forex/sessions.py`).
+**Positions "why" lines**, one per region, chosen in this order:
+1. paused by the breaker (days left);
+2. price data failed checks (`data-quality` / `cash:stale-data`);
+3. exchange rate unavailable (`cash:fx-unavailable`);
+4. too small to trade (`cash:below-min`, SMALL's gate);
+5. waiting below trend (`regime-off`): "in cash since the book began; at the last
+   decision (6 Oct) the index was below its long-term trend", with the review's
+   caveat that this costs some growth but limits the worst falls;
+6. waiting until next month's rebalance;
+7. nothing passed the momentum and trend tests (`no-eligible-names`);
+8. a long/short book couldn't form both sides (`insufficient-names`);
+9. invested, with the share held in cash and why ("sized to a volatility target;
+   whole shares round down").
+
+Regions needing attention come first. Shorts read "sold at → now" and their gain
+has the right sign. Cash above 100% on a long/short book is explained ("cash
+includes the proceeds of short sales"). A holding with no price today reads "no
+price today, held at cost". Each holding's A$ gain is labelled "price move, at
+today's exchange rate". FX positions are grouped by asset class, and a group whose
+market is shut says "frozen until it reopens". The header counts holdings, not
+shares.
 
 ## Acceptance criteria
+**1a: server answers (all in CI)**
 | ID    | Criterion (observable behaviour) | Verified by | Status |
 |-------|----------------------------------|-------------|--------|
-| AC-1  | `/api/summary/<KEY>` returns tiles, summary, panel items, why-lines and month returns for every discovered book; an unknown key gives 404; a builder error gives a generic 500 that leaks no file path. | `tests/test_book_summary_server.py` | ☐ |
-| AC-2  | Every money figure in the summary equals the existing payload's figure for the same snapshot, to the cent (worth, since start, costs, closed-trade net, open P&L). | `tests/test_book_summary.py` on copies of real state files | ☐ |
-| AC-3  | Each rule in the table shows its line when its condition holds and not otherwise. There is one test per rule, with a fixture on each side of its threshold. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-4  | Every panel item carries a source and a date; a rule whose input is missing yields "not measured yet" (or no line) and never an invented number. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-5  | Caveats travel: "small sample" under 30 closed trades; every backtest line shows its saved date and, past 14 days, "may not reflect recent changes"; profiled equity books say the backtest is the standard strategy; FX backtest lines carry the review notice's artefact caveat; behind/ahead-of-market lines say the benchmark is price-only. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-6  | Every sentence in the summary paragraph comes from a line shown on the panel (test: each summary clause maps to a panel item id). | `tests/test_book_summary_rules.py` | ☐ |
-| AC-7  | Lines with a backlog id name it, and every id the builder can emit exists in `product/backlog/backlog.json`. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-8  | Win rate is labelled "closed trades" and the hold line "positions"; hold length is in days only for daily-bar books. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-9  | Month-by-month returns and "below its best" come from `metrics` (`monthly_returns`, `drawdown`); the single-source guard stays green. | `tests/test_metrics.py`, `tests/test_metrics_single_source.py` | ☐ |
-| AC-10 | Positions why-lines: each equity reason in the list above and the FX "market shut" line render from fixtures, and a sleeve with no recorded reason says what it holds without inventing a reason. | `tests/test_book_summary_rules.py` | ☐ |
-| AC-11 | Every new screen file and `blocks.js` parses, and none of them totals or divides money: the existing guard test is widened from `home.js` to all of them. | `tests/test_home_ui.py` | ☐ |
-| AC-12 | In a real headless browser against fixture data, the Overview and Positions of FULL and FX·Matt load with no script errors, show their key text (the summary, the six tiles, the three panel columns, each region's why-line), and do not scroll sideways at 1280 px or 390 px. Runs where Playwright is installed; skipped otherwise, like the `node` check. | `tests/test_book_screens_browser.py` | ☐ |
-| AC-13 | `export --app` writes one `app.html` that, opened from disk in the headless browser, shows the same screens and makes **no network request**. | `tests/test_export_app.py` (+ browser check) | ☐ |
-| AC-14 | The home sidebar opens a book's Overview and Positions in place. Backtest, Method and Swarm open the old terminal on that book. Every book screen has a working "Classic view" link (Mac: the terminal on the same book; Pages: that book's existing terminal page). | `tests/test_book_screens_browser.py` + manual | ☐ |
-| AC-15 | The existing terminal, export and home tests all stay green, and `export --site` output is unchanged apart from the added link to `app.html`. | `pytest` | ☐ |
-| AC-16 | Keyboard: the tab bar follows the standard tab pattern (←/→ move between tabs when it has focus), B1's shortcuts still work (⌘0–9, ⌘R, Esc, ↑/↓ in the sidebar), visible focus ring, status shown as shape + word. | Manual checklist | ☐ |
-| AC-17 | 5-second test: on FULL and FX·Matt, Matt says "up or down since start", "against what", and "the main thing going wrong", correctly, within 5 seconds each. | Manual (Matt) | ☐ Matt |
-| AC-18 | Phone check: after the branch reaches `main`, `app.html` on the Pages site reads correctly on Matt's phone. | Manual (Matt) | ☐ Matt |
-| AC-19 | Full suite green. | `pytest` | ☐ |
+| AC-1  | `/api/summary/<KEY>` and `/api/positions/<KEY>` (holdings part) answer for every discovered book in < 2 s with the network stubbed off; unknown key → 404; builder error → generic 500 with no file path, logged. | `tests/test_book_summary_server.py` | ☐ |
+| AC-2  | `book_summary.summarise(...)` is pure: same inputs → same output, and it does no file, network or clock reads (enforced by test). | `tests/test_book_summary.py` | ☐ |
+| AC-3  | One valuation point: the result line, tiles, ALL chip, summary and market gap all use the book's last saved value and the same date; worth and since-start equal the overview card to the cent. | `tests/test_book_summary.py` (copies of the current synced snapshot) | ☐ |
+| AC-4  | Each rule fires when its condition holds and not otherwise: one fixture each side of every threshold, including the two-sided market rule, the profit-factor rule with and without a corrections block, the 95% interval rule, and mostly-idle on a long/short book (must not fire). | `tests/test_book_summary_rules.py` | ☐ |
+| AC-5  | Caveats travel: every line, tile caption and summary sentence that uses a number carries that number's caveat (price-only benchmark, sample size, backtest date and staleness, settings mismatch, forced closes excluded, luck-test scope and null, costs definition, F20's counter-evidence). | `tests/test_book_summary_rules.py` | ☐ |
+| AC-6  | The summary is a list of `{text, item_id}`; every sentence maps to a shown item; the fixed order holds; never more "right" sentences than problems; and **the expected summaries for all eight books on the current snapshot are pinned** in a test. | `tests/test_book_summary_rules.py` | ☐ |
+| AC-7  | Every audit WARN or ERROR for a book appears on its Overview, either through a rule or in plain words; none is dropped. | `tests/test_book_summary_rules.py` | ☐ |
+| AC-8  | The main problem follows the ranking; a halted, ERROR, near-breaker or stale book always leads with it. | `tests/test_book_summary_rules.py` | ☐ |
+| AC-9  | Backlog ids named by the builder all exist in `product/backlog/backlog.json` and are not `done` or `rejected`. Until PR #102 is in this branch's base, this test is `xfail(strict=True)`, never skipped. | `tests/test_book_summary_rules.py` | ☐ |
+| AC-10 | Every glossary term used in a screen's text carries its plain gloss on first use. | `tests/test_book_summary_rules.py` | ☐ |
+| AC-11 | Month returns come from `metrics.monthly_returns` and the chart's fall-from-best from `metrics.drawdown`, proven by a spy test; the tile's fall-from-best equals the overview card's; the single-source guard stays green. | `tests/test_metrics.py`, `tests/test_book_summary.py`, `tests/test_metrics_single_source.py` | ☐ |
+| AC-12 | Positions why-lines: each reason in the list, the precedence order, shorts, cash > 100%, an unpriced holding, and the FX "market shut" line, each from a fixture. | `tests/test_book_positions.py` | ☐ |
+| AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic book (banner; no performance claims). | `tests/test_book_summary_rules.py` | ☐ |
+
+**1b: the Mac screens**
+| ID    | Criterion (observable behaviour) | Verified by | Status |
+|-------|----------------------------------|-------------|--------|
+| AC-14 | Every screen file and `blocks.js` parses; no two scripts declare the same top-level name; the page receives money as server-formatted display text and computes nothing from money (guard widened to every screen file). | `tests/test_home_ui.py` | ☐ |
+| AC-15 | In a real headless browser, against fixtures: the Overview and Positions of FULL, FX·Matt, EXPERIMENTAL and SMALL load with no script errors. The status pill, result line, main problem, six tiles and three panel columns are present, and so is each region's why-line. Positions shows holdings with the network off. Runs in a CI `ui` job that installs Playwright and Chromium; locally, `REQUIRE_BROWSER=1` turns a skip into a failure. | `tests/test_book_screens_browser.py` + `.github/workflows/ci.yml` | ☐ |
+| AC-16 | Navigation: the sidebar opens a book's Overview; Overview and Positions are tabs (←/→ when the tab bar has focus); Backtest, Method, Swarm and Classic view are ↗ links that open the old terminal on that book and tab (relative links, never `/`); B1's shortcuts still work (⌘0–9, ⌘R, Esc, ↑/↓). | `tests/test_book_screens_browser.py` + manual | ☐ |
+| AC-17 | Accessibility and formats:<br>• ▲/▼ on every money figure, and one minus sign (−);<br>• one date format ("13 Oct 2026");<br>• text contrast ≥ 4.5:1 in the month grid and tiles (colour is never the only signal);<br>• the chart's benchmark line differs by pattern as well as colour, and has a text alternative;<br>• keyboard focus survives a refresh;<br>• only the status region is a live region. | Browser test (contrast, focus) + manual checklist | ☐ |
+| AC-18 | The old terminal, export and home tests all stay green, and the B1 home screen tests still pass with the new book view. | `pytest` | ☐ |
+| AC-19 | 5-second test, on fixtures Matt hasn't seen (a quiet day and a red day): he names "up or down, as of when", "against what" and the main problem, matching the screen's defined main problem, within 5 seconds each. | Manual (Matt) | ☐ Matt |
+| AC-20 | Full suite green. | `pytest` | ☐ |
+
+**1c: the phone (its own plan, after 1b).** These requirements come from the
+review, so they are fixed now:
+- **The robots' runs must never break.** `export --app` runs as
+  `… || { warning; write a "build failed at <time>" stub }`. The front page links
+  to `app.html` only if it exists. All three Pages publishers are covered
+  (`day-paper.yml`, `fx-paper.yml`, `fx-swarm.yml`). A CI test forces a failure and
+  checks that the script exits 0 with every other page present. A CI test also runs
+  `build_site.sh` with `SYNTH=--synthetic` on temporary copies of state.
+- **Built like `--site`.** `app.html` is built by the same process and payload map
+  as `--site`. Export walks every script tag in order (`blocks.js`, the screens,
+  then `home.js`). A book that fails becomes a visible error stub plus a
+  `::warning::`, never a silent drop. The page has a size budget, measured against
+  today's 1.74 MB `index.html`.
+- **The phone home answer is pure.** It is built with no seen-file and no App
+  Support paths, so nothing is written but the output file (test with HOME and
+  `MOMENTUM_HOME_DIR` pointed at a temp folder, and `state/` checksums unchanged).
+  The snapshot comes from `GITHUB_SHA` only.
+- **Honest about age.**
+  - `published_at` is baked in, and the page works out its age when opened.
+  - After 26 hours, any baked "fresh" or "All clear" becomes "may be out of date".
+  - Time-sensitive lines say "at publish time".
+  - Keyboard hints are hidden on touch screens.
+- **Q-1 made honest.** While audit warnings exist, the phone shows "No action ·
+  n warnings (this page can't tell new from old)", never "All clear". Near-breaker
+  and stale stay amber.
+- **Job health.** The publishing run is left out (`GITHUB_RUN_ID`), and each job is
+  judged on its last completed run. The panel is labelled "as of publish". Calls use
+  `GITHUB_TOKEN` with `actions: read`.
+- **Kill switch.** A repo variable read by `build_site.sh`, plus a publish-only
+  `workflow_dispatch`. With the switch off, `public/` matches the file list before
+  phase 1c.
+- **Public page hygiene.** No `/Users/` text, no root-relative links, no raw sync
+  errors.
+- **Phone layout.**
+  - The sidebar becomes a book list with a "‹ All books" back bar.
+  - Tabs scroll sideways.
+  - Tiles go 2 across.
+  - The panel stacks, with "Holding it back" first.
+  - Positions rows become cards.
+  - Text is at least 12 px.
+  - The status, result line and main problem fit on the first screen at 390 px.
+- **Done.** Matt checks it on his phone after the branch reaches `main`.
 
 ## Constraints & invariants
-- **#1–#4** (no lookahead, costs always on, one weight function, whole shares):
-  not touched. Phase 1 only reads saved state.
-- **#5 Synthetic is test-only:** fixtures are copies of real state files. A synthetic
-  book keeps its SYNTHETIC banner, and no synthetic number appears as performance.
-- **#6 Local currency:** every money figure is labelled. Book totals are A$ as the
-  existing payloads report them. Positions show local price and A$ value side by
-  side.
-- **Measurement single source:** no drawdown, Sharpe, annualisation or monthly
-  return outside `metrics.py`; the guard test stays green.
-- **No money maths in the page:** the page formats and slices; the server computes.
-- **Carry the source's caveat with its number** (CLAUDE.md "Checking your own
-  work" #4) is a tested rule here (AC-5), not a style hope.
-- **Dependencies:** none new to run the app or CI. Playwright is used only by the
-  local browser tests and is skipped where absent.
-- **Public data:** Pages already publishes every book's figures; `app.html` adds
-  the panel's sentences and backlog ids, which are already public in the repo.
-  Nothing private is added.
+- **#1–#4:** not touched; phase 1 only reads saved state.
+- **#5:** fixtures are copies of the current synced snapshot. A synthetic book or
+  backtest keeps its banner and is never described as performance.
+- **#6:** every money figure is labelled. Positions shows local price and A$ value
+  side by side, and the A$ gain says it is at today's exchange rate.
+- **Measurement single source:** no drawdown, Sharpe, annualisation, tracking
+  error or monthly return outside `metrics.py`, proven by spy tests, not only the
+  pattern guard.
+- **One figure per idea across screens:** fall from best and near-breaker use the
+  home screen's figures and its `NEAR_BREAKER` constant.
+- **Carry the caveat with the number** (CLAUDE.md, "Checking your own work" #4):
+  tested (AC-5), including in the summary and the tiles.
+- **Dependencies:** none new to run the app. CI adds Playwright and Chromium in
+  its own `ui` job.
 
 ## Migration & rollback
-- Nothing stored changes: there are no new state files, no format changes and no
-  App Support files beyond B1's. So no migration is needed.
-- Rollback: revert the commits, or use "Classic view". On Pages, stop publishing
-  `app.html` and remove the link (one line each in `build_site.sh` and `export.py`).
-- The migration-and-backup rule applies again the moment a later phase stores
-  anything (for example, if the phone later gets a stored first-seen record — Q-1 option (a)).
+- 1a and 1b store nothing new: no state files, no format changes, no App Support
+  files beyond B1's. No migration is needed. Rollback is to revert the commits, or
+  use Classic view.
+- 1c changes the robots' publishing step. Its rollback is the kill switch above,
+  tested by the file-list check; "rollback complete" means `public/` matches the
+  list from before phase 1c.
+- If any later step stores something (e.g. a first-seen record for the phone), the
+  migration-and-backup rule applies.
 
 ## Verification plan
 ```bash
 pytest tests/test_book_summary.py tests/test_book_summary_rules.py \
-       tests/test_book_summary_server.py tests/test_metrics.py \
-       tests/test_metrics_single_source.py tests/test_home_ui.py \
-       tests/test_export_app.py tests/test_book_screens_browser.py
+       tests/test_book_summary_server.py tests/test_book_positions.py \
+       tests/test_metrics.py tests/test_metrics_single_source.py tests/test_home_ui.py
+REQUIRE_BROWSER=1 pytest tests/test_book_screens_browser.py
 pytest                                              # full suite
-python -m trading_algo.home                         # Mac: sync, open home → a book
-python -m trading_algo.dashboard.export --app -o /tmp/app.html   # phone build, open from disk
+python -m trading_algo.home                         # Mac: open home → a book → its tabs
 ```
 
 ## Open questions
-None open. Q-1–Q-3 were settled on 2026-10-13 (see the Decision log).
+None open. Q-1–Q-3 were settled on 2026-10-13, and the review's changes are below.
+
+## Adversarial review (2026-10-14)
+Four independent reviewers attacked the 2026-10-13 draft: quant validity on the
+real books, engineering, product design, and operations. Claude checked each claim
+in code or data before adopting it.
+
+**Changed the spec:**
+- The Overview was going to be built on a live price download of about 50 s with
+  no cache, and broke offline. It now uses saved values only, with one valuation
+  point per screen (FULL showed +0.19% live and −0.05% saved).
+- The draft dropped B1's status pill and problem list. Halted, ERROR, near-breaker
+  and stale books could have read as fine. Now: a "Needs attention" block, every
+  audit WARN/ERROR shown, and a ranked **main problem**.
+- G-1's "main thing going wrong" was never defined, and the summary could
+  cherry-pick. Now: a fixed ranking, a fixed summary order, and pinned summaries for
+  all eight books.
+- **FULL's "winners are bigger than losers" rested on a bug.** 16 of its 37 closed
+  trades, including the biggest win, were the 27 Aug forced liquidation. Without
+  them, closed trades net +A$4.50, not +A$387.65. Forced closes are now left out
+  and the screen says so.
+- **The luck test was described wrongly.** It tests the swarm's search for
+  settings, not matt's trades (matt uses none of its finds; `champions_matt.json`
+  roster is empty). The wording is corrected, and backlog F22 was corrected in PR
+  #102.
+- **Thresholds that sat inside the noise.**
+  - The ±1-point market rule is now two-sided and based on each book's normal
+    spread.
+  - "Small sample < 30" is replaced by an interval. matt's win rate is 44%
+    [37%, 51%]; by position it is 38%.
+  - "Mostly idle" now uses gross exposure, skips long/short books (EXPERIMENTAL
+    read "110% in cash") and splits cash by cause.
+  - Costs fire only when they matter, and say what they include. Daytrader's
+    "costs" range from 63% to 99.5% of its loss depending on the source.
+- The "safety filter doing its job" line had the wrong date. Its "since 24 Jul" is
+  when that field was added; ASX has never traded. It is also a mechanism, not a
+  result, so it moved to Positions with the review's caveat.
+- Missing: ULTRA's lack of a breaker; the engine's other cash reasons; shorts;
+  cash over 100%; unpriced holdings; the per-holding A$ gain ignoring currency
+  moves (now labelled).
+- Plain words: a glossary, plain words first, a neutral "Holding it back" heading,
+  and red kept for action.
+- Tests: CI now runs the browser tests, a skip can't hide locally, spy tests prove
+  the single source, and the summary has a testable shape.
+- Phone: split out as 1c, with the operations reviewer's requirements fixed above.
+  An unguarded export failure would have skipped the robots' state commit.
+
+**Checked and not adopted:**
+- "FULL's backtest is a different portfolio": not so. The saved backtest's
+  allocations are ASX/US/FTSE in thirds, the same as FULL. The general
+  settings-mismatch caveat is kept.
+- "Show a 'known restatement' figure on the backtest line": not adopted. The
+  measurement-truth block regenerates the backtest. Until then the line shows its
+  date and "may not reflect changes since", rather than a hand-entered figure that
+  would itself go stale.
 
 ## Decision log
 | Date | Decision | Who |
@@ -227,8 +413,8 @@ None open. Q-1–Q-3 were settled on 2026-10-13 (see the Decision log).
 | 2026-10-11 | All screens, in phases, most-used first; Mac and Pages; one small file per screen | Matt |
 | 2026-10-13 | Overview = direction B + coherent text + "Is it working?" panel; v2 mockup approved ("i like it") | Matt |
 | 2026-10-13 | §11 parts 1 and 3 approved, including the new server builder | Matt |
-| 2026-10-13 | Findings go into a fix backlog (F20–F26); the panel names the item that tracks each | Matt |
-| 2026-10-13 | Q-1: on the phone, problems show red when serious and are listed as known otherwise; no amber "new" (no stored first-seen record in phase 1) | Matt (recommended) |
-| 2026-10-13 | Q-2: the draft thresholds stand — win ≥ 1.5× loss, behind = > 1 point, idle = ≥ 50% cash, inside breaker = < half used, UK costs ≥ 2× US | Matt (recommended) |
-| 2026-10-13 | Q-3: Classic view opens the old terminal on the same book, via a small change to `static/app.js` | Matt (recommended) |
-| 2026-10-13 | Spec to be reviewed adversarially before the plan | Matt |
+| 2026-10-13 | Findings go into a fix backlog (F20–F26, PR #102); the panel names the item that tracks each | Matt |
+| 2026-10-13 | Q-1: on the phone, no amber "new" (no stored first-seen record in phase 1); made honest in 1c ("can't tell new from old", never "All clear" while warnings exist) | Matt (recommended); wording from review |
+| 2026-10-13 | Q-2: draft thresholds accepted; the review then replaced the market, sample, idle and costs thresholds with measured or interval-based rules | Matt (recommended); review 2026-10-14 |
+| 2026-10-13 | Q-3: Classic view opens the old terminal on the same book via `?account=`/`?tab=` in `app.js` `boot()` | Matt (recommended) |
+| 2026-10-14 | Adversarial review adopted as above; phase 1 split into 1a/1b (first plan) and 1c (phone, own plan) | Claude, under Matt's "continue with recommended but adverse review" |

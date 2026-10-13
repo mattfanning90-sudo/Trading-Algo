@@ -19,13 +19,13 @@ any code.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** review the phase-1 spec `docs/specs/book-screens.md`
-  (draft; its Q-1–Q-3); push/PR for the fix backlog (branch `docs/fix-backlog`,
-  `6796786`, items F20–F26); visual and keyboard checks of the home screen
+- **Waiting on Matt:** review the phase-1 plan (1a + 1b) once written; merge of PR
+  #102 (fix backlog F20–F26); visual and keyboard checks of the home screen
   (AC-14/15/16); open questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
 - **Done 2026-10-13:** PR #100 (SMALL fix) merged into `main` as `cd44ff2`.
-- **Next:** once the phase-1 spec is approved, its implementation plan
-  (writing-plans), then build. Rebased onto `feat/measurement-truth` 2026-10-13
+- **Next:** the phase-1 spec (`docs/specs/book-screens.md`) was adversarially
+  reviewed 2026-10-14 and revised (saved values only, ranked main problem, phone
+  split out as 1c). Next is its implementation plan for 1a + 1b, then build. Rebased onto `feat/measurement-truth` 2026-10-13
   (suite 1500 passed). D0a (equity decision record) is unblocked — it also feeds
   the "does the ranking pick winners?" line the Overview needs.
 
@@ -450,8 +450,10 @@ Claude in code or data before inclusion.
   `/api/overview`, `/api/meta`) plus `/api/home`. Screens never do money maths.
 - Phone: `dashboard/export.py --site` already bakes those answers into the page
   behind a small `fetch()` stand-in; the new screens use the same mechanism.
-  Differences on the phone: job status is judged at publish time, and "new" means
-  "appeared in the last 24 hours" (a public page can't know what you've seen).
+  Differences on the phone: job status is judged at publish time, and the phone
+  cannot tell new problems from old ones (Q-1 in `docs/specs/book-screens.md`,
+  2026-10-13: no stored first-seen record, so it says so and never shows "All
+  clear" while warnings exist — this replaces the earlier "new = last 24 hours").
 - Rollout: a "Classic view" link keeps the old terminal one click away until each
   screen is replaced; each phase publishes as it lands.
 - Constraint: Pages publishes only from `main`, so the phone gets each phase when
@@ -535,3 +537,7 @@ hysteresis knobs found nothing out of sample. So F20 is a re-test after the FX
 cost-model artefacts are fixed, not a switch to flip.
 
 **Phase 1 spec:** `docs/specs/book-screens.md` (draft, 2026-10-13).
+Adversarially reviewed and revised 2026-10-14 (four reviewers; see the spec's
+"Adversarial review" section). Phase 1 now ships as 1a (server answers), 1b (Mac
+screens) and 1c (phone, own plan). The Overview uses saved values only: the live
+re-mark took about 50 s per book and disagreed with the home screen.
