@@ -42,7 +42,9 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            allocations: dict[str, float] | None = None,
                            initial_capital: float = cfg.INITIAL_CAPITAL,
                            trade_from: pd.Timestamp | Mapping[str, pd.Timestamp]
-                           | None = None) -> dict:
+                           | None = None,
+                           max_drawdown_stop: float | None = cfg.MAX_DRAWDOWN_STOP
+                           ) -> dict:
     """`params` overrides the strategy knobs for every sleeve; `allocations`
     overrides the capital split (both used by the tuner). `initial_capital` is
     in the BASE currency (AUD) — the portfolio's total starting capital, split
@@ -87,7 +89,12 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         never held.
     Either way it lands in the bridge's remainder. The scheduled workflow
     runs a new book's first pass straight after `--init`, so the gap is
-    normally hours, not days."""
+    normally hours, not days.
+
+    `max_drawdown_stop` is each sleeve's breaker threshold (None disables it,
+    as in `run_backtest`), so a book whose profile loosens or disables its
+    breaker is compared against the stop it actually runs. The paper book's
+    breaker watches the COMBINED book; this one watches each sleeve."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     undated = ([k for k in regions if trade_from.get(k) is None]
                if isinstance(trade_from, Mapping) else [])
@@ -141,7 +148,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                           initial_capital=sleeve_capital_local,
                           membership=membership,
                           apply_delisting=apply_delisting, volume=volume,
-                          trade_from=opens)
+                          trade_from=opens, max_drawdown_stop=max_drawdown_stop)
         m = fx.align_fx(fx_tbl, bt["returns"].index, region.currency)
         bt["base_returns"] = _sleeve_base_returns(bt["returns"], m)
         if open_bar is not None:

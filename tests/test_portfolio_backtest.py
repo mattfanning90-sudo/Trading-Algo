@@ -47,6 +47,30 @@ def test_each_sleeve_has_base_returns():
         assert not s["base_returns"].isna().any()
 
 
+@pytest.mark.parametrize("kwargs, expected", [
+    ({}, cfg.MAX_DRAWDOWN_STOP),              # a plain book: the global stop
+    ({"max_drawdown_stop": None}, None),      # ultra: the breaker is OFF
+    ({"max_drawdown_stop": 0.4}, 0.4)])       # a loosened stop
+def test_the_drawdown_stop_reaches_every_sleeve(monkeypatch, kwargs, expected):
+    """A book's own breaker threshold must reach each sleeve's run_backtest.
+    Without the seam every comparison ran the global 25% stop: `ultra`'s
+    profile turns the breaker OFF, yet its comparison sat almost entirely in
+    cash behind a stop the paper book never had."""
+    import trading_algo.portfolio_backtest as pb
+
+    seen: dict = {}
+    real_run_backtest = pb.run_backtest
+
+    def spy(prices, index_px, region, **kw):
+        seen[region.key] = kw.get("max_drawdown_stop", cfg.MAX_DRAWDOWN_STOP)
+        return real_run_backtest(prices, index_px, region, **kw)
+
+    monkeypatch.setattr(pb, "run_backtest", spy)
+    pb.run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                              start="2018-01-01", end="2020-01-01", **kwargs)
+    assert seen == {"US": expected, "FTSE": expected}
+
+
 def test_each_sleeve_funded_at_allocation_in_local_currency(monkeypatch):
     """I-1 (fix round 1): each sleeve's run_backtest must be funded at
     initial_capital * alloc[k], converted to the sleeve's own LOCAL currency

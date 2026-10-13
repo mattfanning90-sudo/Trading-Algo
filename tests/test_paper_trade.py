@@ -785,6 +785,21 @@ def test_the_backtest_runs_the_books_own_regions_and_allocations(monkeypatch):
     assert list(seen["allocations"]) != list(cfg.ALLOCATIONS)
 
 
+@pytest.mark.parametrize("stored, expected", [
+    ({}, cfg.MAX_DRAWDOWN_STOP),              # a plain book: the global stop
+    ({"max_drawdown_stop": None}, None),      # ultra: the breaker is OFF
+    ({"max_drawdown_stop": 0.4}, 0.4)])
+def test_the_comparison_runs_the_books_own_drawdown_stop(monkeypatch, stored,
+                                                         expected):
+    """`ultra`'s profile disables the breaker, but its comparison applied the
+    default 25% stop and sat almost entirely in cash. The backtest must run
+    the stop the paper book runs (`_account_drawdown_stop`)."""
+    state = {**_profiled_book(), **stored}
+    seen = _capture_backtest(monkeypatch)
+    pt._backtest_for_book(state, synthetic=True)
+    assert seen.get("max_drawdown_stop", cfg.MAX_DRAWDOWN_STOP) == expected
+
+
 def test_the_predicted_curve_reaches_the_books_last_equity_date(monkeypatch, capsys):
     """`end` reaches yfinance, whose `end` is EXCLUSIVE: asking for the book's
     last date returns bars up to the day before, so the bridge window stopped

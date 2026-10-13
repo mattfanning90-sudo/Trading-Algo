@@ -1433,7 +1433,7 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
 
     The one place `--attribution` and `--reconcile` build their comparison, so
     the two cannot drift apart. Returns `run_portfolio_backtest`'s full result.
-    Four things make it the book's own strategy:
+    Five things make it the book's own strategy:
 
       * REGIONS AND ALLOCATIONS are the book's (`state["allocations"]`), not
         `config.ALLOCATIONS`, which funds a sleeve `full` does not hold.
@@ -1464,9 +1464,12 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         goes to yfinance, whose `end` is exclusive, so the request runs one
         day past it; `_predicted_curve` trims anything beyond.
 
-    The profile's drawdown-breaker override is NOT reproduced: the backtest
-    applies `cfg.MAX_DRAWDOWN_STOP`, and `run_portfolio_backtest` has no seam
-    for a per-book threshold.
+      * The drawdown STOP is the book's own (`_account_drawdown_stop`): a
+        profile may loosen it or disable it (None), and `ultra`, which turns
+        it off, was compared against a default 25% stop that held its
+        comparison in cash. The backtest's breaker watches each sleeve, the
+        paper book's the combined book, so on a multi-sleeve book with a stop
+        set they can still trip on different bars.
     """
     from .portfolio_backtest import run_portfolio_backtest
 
@@ -1489,7 +1492,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         allocations=state.get("allocations"),
         initial_capital=state["initial_capital_base"],
         trade_from={k: pd.Timestamp((sleeves.get(k) or {}).get("opened_on") or first)
-                    for k in regions})
+                    for k in regions},
+        max_drawdown_stop=_account_drawdown_stop(state))
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
