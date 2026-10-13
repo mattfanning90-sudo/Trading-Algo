@@ -20,12 +20,6 @@ def test_baseline_exists():
         "no committed baseline — run `python -m trading_algo.ci_regression --update`")
 
 
-@pytest.mark.xfail(
-    reason="re-baselined in Task 20: baseline predates the next-day-close fill "
-           "convention (Task 9) and the per-order commission floor (Task 13). "
-           "Re-cut once, with the bridge report attached — spec §6. Remove this "
-           "marker there.",
-    strict=False)
 def test_synthetic_backtest_matches_baseline(current):
     baseline = ci_regression.load_baseline()
     drift = ci_regression.compare(baseline, current)
