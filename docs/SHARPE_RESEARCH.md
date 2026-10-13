@@ -385,6 +385,20 @@ than the ASX slot does.
 efficiency metric. It is currently 0.204 and 0.041 of that is the FX bug in §5 —
 fix that first, then re-measure before attributing the rest to rebalancing.
 
+**Correction (2026-10-13): the daily matrix above understates correlation.** The
+ASX closes before the US opens, so a US shock reaches Australian prices the next
+calendar day and a same-day daily correlation misses it. Measured on the same
+sleeve returns (2013-05 → 2026-09, local currency), US–ASX is 0.06 daily but
+0.42 with a lead-lag (Dimson) correction, 0.38 weekly and 0.38 monthly; ASX is
+about 0.4 correlated with every sleeve. Mean pairwise ρ ≈ **0.41**, not 0.260.
+So the portfolio does not diversify "because ASX–US correlation is 0.058"; the
+frictionless benchmark is ≈ 0.674 × √(4/(1+3×0.41)) ≈ **0.90**, and the
+portfolio-layer leak is ≈ **0.10**, not 0.204 — about half of it was the
+correlation estimate. US–TSX ≈ 0.50 holds on three of four estimators. Track the
+efficiency metric above on weekly or Dimson-corrected correlations. Evidence and
+script: `docs/MEDALLION_CITADEL_RESEARCH.md` ("Four regional sleeves behave like
+fewer than two").
+
 ## 7. Leverage: Sharpe is invariant, wealth is not
 
 **Finding.** In frictionless theory leverage cancels out of the Sharpe ratio.
