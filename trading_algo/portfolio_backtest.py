@@ -33,6 +33,65 @@ def _sleeve_base_returns(local_rets: pd.Series, fx_mult: pd.Series) -> pd.Series
     return (1 + local_rets) * (1 + fx_ret) - 1.0
 
 
+# What the benchmark actually is, in words, so no consumer can print a number
+# without printing what it was measured against. The ETF basis promises the
+# strategy's OWN dividend treatment, not more: both come from the same
+# auto_adjust=True feed, so whatever that feed reinvests, both reinvest.
+BENCHMARK_LABELS = {
+    "total-return": "equal-weight index ETFs, dividends reinvested as in the "
+                    "strategy's own prices, AUD",
+    "price-index": "equal-weight price indices only — NO dividends, AUD",
+    "mixed": "equal-weight index ETFs where available, price index elsewhere "
+             "— mixed basis, AUD",
+}
+
+
+def _blend(index_by_region: dict, union: pd.DatetimeIndex,
+           fx_tbl: pd.DataFrame, proxies: dict[str, pd.Series],
+           open_bars: Mapping[str, pd.Timestamp | None] | None = None) -> pd.Series:
+    """Equal-weight AUD return of one series per region. A region present in
+    `proxies` uses its total-return proxy; the rest fall back to the price
+    index. Scale-free — this takes a pct_change, so a pence-quoted proxy needs
+    no price_scale.
+
+    `open_bars` holds each region's leg flat through that sleeve's open bar,
+    exactly as the sleeve's own base returns are zeroed there: the yardstick
+    is not credited with days the strategy held no position."""
+    parts = []
+    for key, (idx, ccy) in index_by_region.items():
+        px = proxies.get(key, idx)
+        mult = fx.align_fx(fx_tbl, px.index, ccy)
+        part = (px * mult).pct_change(fill_method=None).reindex(union).fillna(0.0)
+        opened = (open_bars or {}).get(key)
+        if opened is not None:
+            part.loc[:opened] = 0.0
+        parts.append(part)
+    return sum(parts) / len(parts)
+
+
+def _total_return_proxies(regions: list[str], start: str, end: str | None,
+                          synthetic: bool) -> dict[str, pd.Series]:
+    """Closes of each region's dividend-reinvesting ETF proxy, from the same
+    auto_adjust=True feed as the strategy's prices. Empty offline or synthetic
+    — the caller then falls back to the price index and SAYS SO."""
+    if synthetic:
+        return {}
+    want = {k: get_region(k).benchmark_ticker for k in regions
+            if get_region(k).benchmark_ticker}
+    if not want:
+        return {}
+    tickers = sorted(set(want.values()))
+    try:
+        # Keyed on the ticker SET as well as the window, like load_region:
+        # a run over fewer regions must not leave a cache a fuller run reads.
+        df = data.load_prices(tickers, start, end,
+                              cache_key=f"benchmark:{start}:{end}:{','.join(tickers)}")
+    except Exception:
+        return {}
+    return {k: df[t].dropna() for k, t in want.items()
+            if t in df.columns and df[t].notna().any()}
+
+
 def run_portfolio_backtest(regions: list[str] | None = None,
                            synthetic: bool = False,
                            start: str = cfg.START,
@@ -190,14 +249,26 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     returns = equity.pct_change(fill_method=None).fillna(0.0)
     sleeve_equity = pd.DataFrame({dt: row for dt, row in sleeve_rows}).T
 
-    # Benchmark: equal-weight buy-and-hold of the regional indices, in AUD.
-    parts = []
-    for idx, ccy in index_by_region.values():
-        mult = fx.align_fx(fx_tbl, idx.index, ccy)
-        idx_aud_ret = (idx * mult).pct_change(fill_method=None)
-        parts.append(idx_aud_ret.reindex(union).fillna(0.0))
-    bench_ret = sum(parts) / len(parts)
+    # Benchmark: the strategy's prices are dividend-adjusted, so the benchmark
+    # must be too. PRIMARY = equal-weight dividend-reinvesting ETF proxies in
+    # AUD. The price-only index blend is kept as a clearly-labelled SECONDARY,
+    # so both are reported and neither can be read as the other. Both are
+    # measured like the strategy: on `initial_capital`, in AUD, and flat
+    # through each sleeve's open bar.
+    proxies = _total_return_proxies(regions, start, end, synthetic)
+    # An ETF with no price on its region's first index bar would sit in cash
+    # until it lists. Never splice: that region keeps its price index, and
+    # the kind below says the basis is mixed.
+    proxies = {k: p for k, p in proxies.items()
+               if p.index[0] <= index_by_region[k][0].first_valid_index()}
+    open_bars = {k: s["open_bar"] for k, s in sleeves.items()}
+    bench_ret = _blend(index_by_region, union, fx_tbl, proxies, open_bars)
+    price_ret = _blend(index_by_region, union, fx_tbl, {}, open_bars)
+    covered = [k for k in regions if k in proxies]
+    bench_kind = ("total-return" if len(covered) == len(regions)
+                  else "price-index" if not covered else "mixed")
     bench_equity = initial_capital * (1 + bench_ret).cumprod()
+    price_equity = initial_capital * (1 + price_ret).cumprod()
 
     return {
         "equity": equity,
@@ -210,5 +281,11 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         "benchmark": bench_equity,
         "benchmark_metrics": compute_metrics(bench_ret, bench_equity, currency=cfg.BASE_CURRENCY),
         "benchmark_stats": benchmark_stats(returns, bench_ret),
+        "benchmark_kind": bench_kind,
+        "benchmark_label": BENCHMARK_LABELS[bench_kind],
+        "benchmark_proxies": {k: get_region(k).benchmark_ticker for k in covered},
+        "benchmark_price_index": price_equity,
+        "benchmark_price_index_metrics": compute_metrics(
+            price_ret, price_equity, currency=cfg.BASE_CURRENCY),
         "metrics": compute_metrics(returns, equity, currency=cfg.BASE_CURRENCY),
     }

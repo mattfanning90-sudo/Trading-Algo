@@ -37,7 +37,7 @@ def portfolio_markdown(result: dict, synthetic: bool, point_in_time: bool) -> st
     out.append("")
 
     if bs:
-        out += ["## vs Benchmark (equal-weight indices, AUD buy & hold)", "",
+        out += [f"## vs Benchmark ({result.get('benchmark_label', 'unlabelled')})", "",
                 "| Metric | Value |", "|---|---|",
                 f"| Benchmark CAGR | {bm.get('CAGR')} |",
                 f"| Benchmark MaxDrawdown | {bm.get('MaxDrawdown')} |"]

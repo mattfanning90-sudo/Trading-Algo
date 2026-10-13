@@ -42,6 +42,12 @@ class Region:
     # silently rescaled — converting USD to GBP needs an FX rate this layer
     # does not have, and inventing one would break invariant #6.
     quote_overrides: dict[str, float] = field(default_factory=dict)
+    # Dividend-REINVESTING total-return proxy for this market, used only by the
+    # portfolio benchmark. The strategy's own prices are auto_adjust=True, so a
+    # price index (`index_ticker`) is not its opponent — it is the same market
+    # with the dividends removed. Deliberately NOT in `all_tickers`: this is a
+    # yardstick, never a tradable name.
+    benchmark_ticker: str | None = None
     # Rebalance "dust" floor in this region's LOCAL currency: a per-name trade
     # smaller than this is skipped so the commission floor doesn't dominate.
     # Per-region (not a shared constant) so the threshold is comparable in AUD
@@ -69,6 +75,7 @@ REGIONS: dict[str, Region] = {
         name="Australia (ASX)",
         currency="AUD",
         index_ticker="^AXJO",          # S&P/ASX 200
+        benchmark_ticker="STW.AX",     # SPDR S&P/ASX 200 ETF (distributions reinvested)
         yahoo_suffix=".AX",
         ibkr_exchange="ASX",
         timezone="Australia/Sydney",
@@ -88,6 +95,7 @@ REGIONS: dict[str, Region] = {
         name="United States",
         currency="USD",
         index_ticker="^GSPC",          # S&P 500
+        benchmark_ticker="SPY",        # SPDR S&P 500 ETF
         yahoo_suffix="",
         ibkr_exchange="SMART",
         timezone="America/New_York",
@@ -107,6 +115,10 @@ REGIONS: dict[str, Region] = {
         name="United Kingdom (LSE)",
         currency="GBP",
         index_ticker="^FTSE",          # FTSE 100
+        benchmark_ticker="ISF.L",      # iShares Core FTSE 100 UCITS ETF
+        # Measured 2026-10-14: Yahoo's adjusted close for .L quotes carries
+        # ~1% of their dividends (ISF.L 5.73% vs ^FTSE 5.74% CAGR in AUD), and
+        # the FTSE sleeve's own names share it — like for like, price-only.
         yahoo_suffix=".L",
         ibkr_exchange="LSE",
         timezone="Europe/London",
@@ -131,6 +143,7 @@ REGIONS: dict[str, Region] = {
         name="Canada (TSX)",
         currency="CAD",
         index_ticker="^GSPTSE",        # S&P/TSX Composite
+        benchmark_ticker="XIU.TO",     # iShares S&P/TSX 60 Index ETF
         yahoo_suffix=".TO",
         ibkr_exchange="TSE",           # IBKR Toronto Stock Exchange
         timezone="America/Toronto",

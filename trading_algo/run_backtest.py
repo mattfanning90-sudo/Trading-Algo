@@ -133,7 +133,7 @@ def run_portfolio(synthetic: bool, point_in_time: bool) -> None:
     bs = result.get("benchmark_stats") or {}
     if bs:
         bm = result["benchmark_metrics"]
-        print("\n  vs Benchmark (equal-weight indices, AUD buy & hold):")
+        print(f"\n  vs Benchmark ({result.get('benchmark_label', 'unlabelled')}):")
         print(f"    Benchmark CAGR {bm['CAGR']:>7.1%}  Vol {bm['AnnVol']:>6.1%}  "
               f"MaxDD {bm['MaxDrawdown']:>7.1%}")
         print(f"    Active {bs['ActiveReturn']:>+7.1%}  Alpha {bs['Alpha']:>+7.1%}  "

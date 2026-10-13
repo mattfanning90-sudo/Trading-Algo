@@ -213,3 +213,102 @@ def test_each_sleeve_names_the_bar_it_opened_on():
     assert res["sleeves"]["FTSE"]["open_bar"] == pd.Timestamp("2020-03-16")
     whole = run_portfolio_backtest(regions=["US"], synthetic=True, end="2020-06-30")
     assert whole["sleeves"]["US"]["open_bar"] is None
+
+
+# --- total-return benchmark (the strategy's own prices are auto_adjust=True) --
+def test_every_region_declares_a_total_return_proxy():
+    """A price index is not the strategy's opponent: the strategy compounds
+    dividends (data.py downloads with auto_adjust=True) and the index does not.
+    Each region names a dividend-reinvesting ETF that tracks the same market."""
+    from trading_algo.regions import REGIONS
+    assert {k: r.benchmark_ticker for k, r in REGIONS.items()} == {
+        "ASX": "STW.AX", "US": "SPY", "FTSE": "ISF.L", "TSX": "XIU.TO"}
+
+
+def test_blend_prefers_the_total_return_proxy_where_one_exists():
+    """`_blend` is scale-free (it takes a pct_change), so a pence-quoted proxy
+    needs no price_scale. A reinvesting proxy compounds ABOVE the price index of
+    the same market; the blend has to show that."""
+    from trading_algo import portfolio_backtest as pb
+
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    price = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
+    total = pd.Series([100.0, 102.0, 104.0, 106.0, 108.0], index=idx)
+    fx_tbl = pd.DataFrame({"AUD": [1.0] * 5}, index=idx)
+    by_region = {"ASX": (price, "AUD")}
+
+    price_ret = pb._blend(by_region, idx, fx_tbl, {})
+    tr_ret = pb._blend(by_region, idx, fx_tbl, {"ASX": total})
+    assert abs(float((1 + price_ret).prod()) - 1.04) < 1e-9
+    assert float((1 + tr_ret).prod()) > float((1 + price_ret).prod())
+
+
+def test_offline_benchmark_falls_back_to_the_price_index_and_says_so():
+    """Synthetic has no ETF history. Falling back is fine; falling back
+    silently is not — the label has to carry the word the reader needs."""
+    result = run_portfolio_backtest(synthetic=True, start="2018-01-01",
+                                    end="2021-01-01")
+    assert result["benchmark_kind"] == "price-index"
+    assert "NO dividends" in result["benchmark_label"]
+    assert result["benchmark_proxies"] == {}
+    assert result["benchmark"].equals(result["benchmark_price_index"])
+    assert "CAGR" in result["benchmark_price_index_metrics"]
+
+
+def test_blend_holds_each_region_flat_through_its_own_open_bar():
+    """A sleeve opened on a later bar earns nothing before it (its base
+    returns are zeroed through its open bar). The benchmark's leg for that
+    region must do the same, or the yardstick is credited with days the
+    strategy was never invested."""
+    from trading_algo import portfolio_backtest as pb
+
+    idx = pd.date_range("2020-01-01", periods=6, freq="D")
+    up = pd.Series([100.0, 110.0, 121.0, 133.1, 146.41, 161.051], index=idx)
+    fx_tbl = pd.DataFrame({"AUD": [1.0] * 6}, index=idx)
+    by_region = {"ASX": (up, "AUD"), "US": (up, "AUD")}
+    opens = {"ASX": idx[1], "US": idx[3]}
+
+    r = pb._blend(by_region, idx, fx_tbl, {}, open_bars=opens)
+    # each leg is +10% a day; half the book per leg
+    assert list(r.round(12)) == [0.0, 0.0, 0.05, 0.05, 0.10, 0.10]
+    # no open bars: the whole sample, unchanged
+    assert list(pb._blend(by_region, idx, fx_tbl, {}).round(12)) == [
+        0.0, 0.1, 0.1, 0.1, 0.1, 0.1]
+
+
+def test_the_benchmark_is_measured_on_the_strategys_capital_and_window():
+    """Same capital, same AUD conversion, same window: a book opened at
+    `trade_from` is flat at `initial_capital` through its earliest open bar,
+    so the benchmark (both of them) must be too — and on the same dates."""
+    opened = {"US": pd.Timestamp("2020-03-10"), "FTSE": pd.Timestamp("2020-03-12")}
+    res = run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                                 end="2020-06-30", allocations={"US": 1, "FTSE": 1},
+                                 initial_capital=10_000.0, trade_from=opened)
+    first_open = min(s["open_bar"] for s in res["sleeves"].values())
+    for key in ("benchmark", "benchmark_price_index"):
+        bench = res[key]
+        assert bench.index.equals(res["equity"].index), key
+        assert (bench.loc[:first_open] == 10_000.0).all(), key
+        assert (res["equity"].loc[:first_open] == 10_000.0).all()
+        assert bench.loc[first_open:].iloc[1:].ne(10_000.0).any(), key
+
+
+def test_a_proxy_that_lists_after_the_window_opens_is_not_spliced(monkeypatch):
+    """An ETF with no price at the start of the window would sit in cash (a
+    zero return) until it lists. That region falls back to its price index,
+    and the kind/label say the basis is mixed — never a silent splice."""
+    import trading_algo.portfolio_backtest as pb
+    from trading_algo import data
+
+    _, us_idx = data.synthetic_region(pb.get_region("US"), start="2018-01-01",
+                                      end="2020-01-01")
+    _, ft_idx = data.synthetic_region(pb.get_region("FTSE"), start="2018-01-01",
+                                      end="2020-01-01")
+    late = ft_idx.loc["2019-01-01":] * 1.5             # lists a year in
+    monkeypatch.setattr(pb, "_total_return_proxies",
+                        lambda *a, **k: {"US": us_idx * 2.0, "FTSE": late})
+    res = pb.run_portfolio_backtest(regions=["US", "FTSE"], synthetic=True,
+                                    start="2018-01-01", end="2020-01-01")
+    assert res["benchmark_kind"] == "mixed"
+    assert res["benchmark_proxies"] == {"US": "SPY"}
+    assert "mixed" in res["benchmark_label"]
