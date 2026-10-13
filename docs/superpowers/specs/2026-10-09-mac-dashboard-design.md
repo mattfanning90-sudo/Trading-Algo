@@ -19,8 +19,9 @@ any code.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
   `docs/specs/home-screen.md`); knowledge reorganised in three layers
   (`docs/README.md`).
-- **Waiting on Matt:** review the phase-1 plan (1a + 1b) once written; merge of PR
-  #102 (fix backlog F20–F26); visual and keyboard checks of the home screen
+- **Waiting on Matt:** review the phase-1 plan
+  `docs/superpowers/plans/2026-10-14-book-screens-phase1.md` (15 tasks, 1a + 1b)
+  and choose how it's executed; merge of PR #102 (fix backlog F20–F26); visual and keyboard checks of the home screen
   (AC-14/15/16); open questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
 - **Done 2026-10-13:** PR #100 (SMALL fix) merged into `main` as `cd44ff2`.
 - **Next:** the phase-1 spec (`docs/specs/book-screens.md`) was adversarially
