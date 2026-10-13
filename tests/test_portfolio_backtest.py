@@ -293,6 +293,34 @@ def test_the_benchmark_is_measured_on_the_strategys_capital_and_window():
         assert bench.loc[first_open:].iloc[1:].ne(10_000.0).any(), key
 
 
+def test_a_later_sleeves_benchmark_leg_waits_for_its_own_open(monkeypatch):
+    """Per-sleeve opens reach the benchmark region by region: between the US
+    open and the later FTSE open, the two-sleeve benchmark moves by exactly
+    half the US-only benchmark (the FTSE half is still flat), and from the
+    FTSE open on it does not. Opening every leg at the EARLIEST open would
+    credit the FTSE leg with days its sleeve held nothing."""
+    from trading_algo import fx
+
+    monkeypatch.setattr(fx, "synthetic_fx", _drifting_fx)   # same rates per currency
+    us_open, ft_open = pd.Timestamp("2020-03-10"), pd.Timestamp("2020-03-17")
+    kw = dict(synthetic=True, end="2020-06-30", initial_capital=10_000.0)
+    both = run_portfolio_backtest(regions=["US", "FTSE"],
+                                  allocations={"US": 1, "FTSE": 1},
+                                  trade_from={"US": us_open, "FTSE": ft_open}, **kw)
+    us_only = run_portfolio_backtest(regions=["US"], trade_from={"US": us_open}, **kw)
+    assert both["sleeves"]["US"]["open_bar"] < both["sleeves"]["FTSE"]["open_bar"]
+    for key in ("benchmark", "benchmark_price_index"):
+        two = both[key].pct_change(fill_method=None)
+        half_us = us_only[key].pct_change(fill_method=None) / 2.0
+        between = two.loc[us_open:ft_open].index[1:]          # after US open, through FTSE's
+        assert len(between) >= 4, key
+        assert np.allclose(two.loc[between], half_us.loc[between],
+                           rtol=0.0, atol=1e-12), key
+        after = two.loc[ft_open:].index[1:]
+        assert not np.allclose(two.loc[after], half_us.loc[after],
+                               rtol=0.0, atol=1e-12), key
+
+
 def test_a_proxy_that_lists_after_the_window_opens_is_not_spliced(monkeypatch):
     """An ETF with no price at the start of the window would sit in cash (a
     zero return) until it lists. That region falls back to its price index,
