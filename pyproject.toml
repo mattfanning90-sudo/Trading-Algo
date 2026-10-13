@@ -42,7 +42,10 @@ target-version = "py311"
 # core pycodestyle E/W. The purely stylistic rules the codebase uses deliberately
 # are ignored rather than churned: E731 (factory lambdas), E741 (short math
 # names like `l`), E702 (compact one-liners in tests/helpers).
-select = ["E", "F", "W"]
+# B (flake8-bugbear) adds likely-bug patterns: a zip() that silently drops the
+# tail of a longer sequence (B905 — so every zip states strict=), a loop
+# variable left unused, an `assert False` that `python -O` deletes.
+select = ["E", "F", "W", "B"]
 # E501 (line length) is not gated — it is the highest-churn / lowest-value rule
 # and the codebase's dense-but-readable lines are a deliberate choice.
 ignore = ["E731", "E741", "E702", "E501"]

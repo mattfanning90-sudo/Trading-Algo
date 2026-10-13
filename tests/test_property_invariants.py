@@ -66,7 +66,7 @@ TEST_REGION = dataclasses.replace(
 # Synthetic-input strategies
 # ---------------------------------------------------------------------------
 @st.composite
-def _price_panel(draw, min_days=130, max_days=190, n_assets=len(_TEST_TICKERS)):
+def _price_panel(draw, min_days=130, max_days=190, n_assets=len(_TEST_TICKERS)):  # noqa: B008 - module constant, read once on purpose
     """Generate (prices DataFrame, index Series) from a drawn returns matrix.
 
     Prices are a strictly-positive GBM path (base*exp(cumsum(r))) with bounded

@@ -38,7 +38,7 @@ def test_split_refuses_a_too_short_history():
 def _hist(rows):
     """rows: list of dicts {symbol: weight} -> weights_hist keyed by date."""
     idx = pd.date_range("2024-01-01", periods=len(rows), freq="D")
-    return {t: pd.Series(r, dtype=float) for t, r in zip(idx, rows)}
+    return {t: pd.Series(r, dtype=float) for t, r in zip(idx, rows, strict=True)}
 
 
 def test_median_hold_counts_a_simple_round_trip():

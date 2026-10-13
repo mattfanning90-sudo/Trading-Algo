@@ -8,7 +8,7 @@ from trading_algo import attribution, metrics
 
 def _equity_history(vals, start="2026-01-05"):
     idx = pd.bdate_range(start, periods=len(vals))
-    return [[d.strftime("%Y-%m-%d"), float(v)] for d, v in zip(idx, vals)]
+    return [[d.strftime("%Y-%m-%d"), float(v)] for d, v in zip(idx, vals, strict=True)]
 
 
 def test_total_and_period_returns():
@@ -367,9 +367,9 @@ def _paper_book(us_invested, us_rets, *, buy_on_d1=0.0, positions=None):
                     "US": {"currency": "USD", "cash": cash / _FX,
                            "positions": positions or {
                                "AAA": 10 * bool(us_invested) + 10 * bool(buy_on_d1)}}},
-        "equity_history": [[d, a + u] for d, a, u in zip(days, asx, us)],
+        "equity_history": [[d, a + u] for d, a, u in zip(days, asx, us, strict=True)],
         "sleeve_history": [{"date": d, "ASX": a, "US": u}
-                           for d, a, u in zip(days, asx, us)],
+                           for d, a, u in zip(days, asx, us, strict=True)],
         "trades": trades,
     }
 
@@ -565,7 +565,7 @@ def test_a_flat_close_is_uninvested_whatever_the_rate():
     bt = _backtest((0.10, -0.05))
     state = _paper_book(0.0, (0.0, 0.0))
     us = 50_000.0 / _FX * 1.6
-    for row, eq in zip(state["sleeve_history"][1:], state["equity_history"][1:]):
+    for row, eq in zip(state["sleeve_history"][1:], state["equity_history"][1:], strict=True):
         row["US"] = us
         eq[1] = row["ASX"] + us
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
@@ -937,7 +937,7 @@ def test_a_credit_dated_the_first_equity_date_is_netted_like_any_other(monkeypat
     state["trades"].append({"date": "2026-03-02", "region": "US", "ticker": "CASH",
                             "side": "INT", "shares": 1, "fill": 100.0,
                             "commission": 0.0, "stamp_duty": 0.0, "currency": "USD"})
-    for row, eq in zip(state["sleeve_history"], state["equity_history"]):
+    for row, eq in zip(state["sleeve_history"], state["equity_history"], strict=True):
         row["US"] += 150.0
         eq[1] += 150.0
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)

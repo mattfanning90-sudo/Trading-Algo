@@ -19,7 +19,7 @@ def synth_us():
 def test_fold_edges_are_contiguous_and_cover_all():
     edges = walkforward.fold_edges(100, 6)
     assert edges[0][0] == 0 and edges[-1][1] == 100
-    for (a, b), (c, d) in zip(edges, edges[1:]):
+    for (_a, b), (c, _d) in zip(edges, edges[1:], strict=False):
         assert b == c, "folds must be contiguous with no gap/overlap"
 
 

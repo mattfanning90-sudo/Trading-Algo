@@ -175,7 +175,7 @@ def test_run_ml_backtest_rule_based(panel, params):
     res = ml_backtest.run_ml_backtest(panel, params, include_ml=False, n_folds=4)
     assert 0.0 <= res["pbo"] <= 1.0
     assert res["n_trials"] >= 7              # 5 agents + 2 ensembles
-    for name, m in res["metrics"].items():
+    for _name, m in res["metrics"].items():
         assert {"Sharpe", "PSR", "DSR"} <= set(m)
         assert 0.0 <= m["PSR"] <= 1.0
     assert "Probability of Backtest Overfitting" in ml_backtest.format_report(res)
@@ -758,9 +758,9 @@ def test_the_deployed_artefact_is_refit_on_the_most_recent_rows(short_panel, par
     # 2. The weights on disk are the REFIT ones, not the held-out probe's.
     bundle = ModelBundle.load(out["neural"])
     shipped, final_m, probe_m = bundle.models[0], finals[-1]["model"], probes[-1]["model"]
-    assert all(np.allclose(a, b) for a, b in zip(shipped.W, final_m.W)), \
+    assert all(np.allclose(a, b) for a, b in zip(shipped.W, final_m.W, strict=True)), \
         "the shipped weights are not the ones fit on all rows"
-    assert not all(np.allclose(a, b) for a, b in zip(shipped.W, probe_m.W)), \
+    assert not all(np.allclose(a, b) for a, b in zip(shipped.W, probe_m.W, strict=True)), \
         "the shipped weights are the probe's — the refit changed nothing"
 
     # 3. ...for the epoch count early stopping actually chose, not the cap.

@@ -86,7 +86,7 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
             parts.append(idx_aud / idx_aud.iloc[0])
         norm = sum(parts) / len(parts)
         return [{"date": d.strftime("%Y-%m-%d"), "value": round(float(initial * v), 2)}
-                for d, v in zip(dates, norm)]
+                for d, v in zip(dates, norm, strict=True)]
     except Exception:
         return []
 
