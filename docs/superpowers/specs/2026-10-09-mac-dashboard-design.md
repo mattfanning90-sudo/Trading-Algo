@@ -13,6 +13,21 @@ each decision, the expert review and what it changed, and how the work splits in
 projects. Each project gets its own spec in `docs/specs/` and its own plan before
 any code.
 
+## Resume here (updated 2026-10-13)
+- **Where:** worktree `~/Trading-Algo-mac-dashboard`, branch `feat/mac-dashboard`
+  (on top of `feat/measurement-truth`; 11 commits behind it on 2026-10-13 —
+  rebase before new work). Neither branch is on GitHub.
+- **Done:** B1 home screen (`python -m trading_algo.home`; spec
+  `docs/specs/home-screen.md`); knowledge reorganised in three layers
+  (`docs/README.md`).
+- **Waiting on Matt:** merge **PR #100** (SMALL micro-mode fix — still open; must
+  land before the first November rebalance, Mon 2 Nov 21:30 UTC); visual and
+  keyboard checks of the home screen (AC-14/15/16); approval of §11 part 1; open
+  questions Q-1, Q-3, Q-4 in `docs/specs/home-screen.md`.
+- **Next:** §11 part 2 — real-data mockups of a book's Overview and Positions
+  (visual companion), then part 3 (testing/rollout), then a spec and plan for
+  phase 1. D0a (equity decision record) is unblocked whenever Matt wants it.
+
 ---
 
 ## 1. Intent
@@ -412,3 +427,34 @@ Claude in code or data before inclusion.
 - "Cut explainers, news and Claude entirely" (strategy reviewer): not adopted —
   learning is an explicit goal — but the thin-first order and behavioural success
   measures were adopted.
+
+## 11. Modern screens — the next phase (in design)
+
+**Decided by Matt (2026-10-11):**
+- Every old terminal screen gets a modern Midnight version, **in phases, most-used
+  first**: (1) a book's Overview + Positions, (2) Backtest + Method, (3) Swarm +
+  All accounts — then the old terminal retires.
+- The same screens serve **both** the Mac app and the GitHub Pages site (phone).
+- Built as **one small file per screen** sharing Midnight building blocks — not a
+  restyle of the 3,816-line `static/app.js`, and no web framework.
+
+**Part 1 — how they're built and fed (presented 2026-10-11, awaiting approval):**
+- Files: one per screen (book Overview, Positions, Backtest, Method, Swarm, All
+  accounts, plus the existing home screen), sharing building blocks (cards, period
+  chips, charts, tables, status pill, money formatting) extracted from `home.js`.
+- Navigation stays in the app: the home sidebar opens a book's tabs in place
+  (Overview · Positions · Backtest · Method, + Swarm for FX books).
+- Data: each screen requests the same JSON the terminal already uses
+  (`/api/account/<book>`, `/api/backtest/<book>`, `/api/swarm/<book>`,
+  `/api/overview`, `/api/meta`) plus `/api/home`. Screens never do money maths.
+- Phone: `dashboard/export.py --site` already bakes those answers into the page
+  behind a small `fetch()` stand-in; the new screens use the same mechanism.
+  Differences on the phone: job status is judged at publish time, and "new" means
+  "appeared in the last 24 hours" (a public page can't know what you've seen).
+- Rollout: a "Classic view" link keeps the old terminal one click away until each
+  screen is replaced; each phase publishes as it lands.
+- Constraint: Pages publishes only from `main`, so the phone gets each phase when
+  this branch merges (after measurement truth); the Mac app gets it immediately.
+
+**Part 2 (next):** how each screen looks — real-data mockups, starting with a
+book's Overview and Positions. **Part 3:** testing and rollout details.

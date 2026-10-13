@@ -2,7 +2,7 @@
 
 Every knowledge document in the repo, what it's for, and whether to trust it as
 current. **Check here before reading a long doc** — several are dated records.
-Updated 2026-10-11.
+Updated 2026-10-13.
 
 **How knowledge is organised (three layers):**
 1. **Always read** — the root `CLAUDE.md` (kept under 150 lines).
@@ -43,7 +43,7 @@ owned by that piece of work · *record* = a finished plan/spec, true when writte
 | `HANDOFF_2026-09-24.md` | active | Resume point for the measurement-truth block |
 | `superpowers/specs/2026-09-24-measurement-truth-design.md` | active (header says "pending implementation plan"; the plan below is executing) | Measurement-truth design |
 | `superpowers/plans/2026-09-24-measurement-truth.md` | active — owned by that block | 27-task plan; its **Progress** section near the top is the part to read |
-| `superpowers/specs/2026-10-09-mac-dashboard-design.md` | active | Mac app umbrella design (projects D0, A, B, C, D) |
+| `superpowers/specs/2026-10-09-mac-dashboard-design.md` | active — **start at its "Resume here" block** | Mac app umbrella design (D0, A, B, C, D) and §11 the modern screens |
 | `specs/home-screen.md` | draft — built 2026-10-10, awaiting Matt's checks | B1 home screen spec + acceptance results |
 | `specs/equity-decision-record.md` | draft | D0 spec — its blocker (measurement-truth Task 10, next-close fills) has landed |
 
