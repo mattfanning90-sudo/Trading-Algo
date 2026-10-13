@@ -193,6 +193,47 @@ def test_micro_account_does_not_crash(account):
     assert state["equity_history"][-1][1] >= 0
 
 
+def _micro_sleeve(cash):
+    return {"currency": "USD", "cash": float(cash), "positions": {},
+            "cost_basis": {}, "realized_pnl": 0.0,
+            "last_rebalance_month": None, "last_rebalance_date": None}
+
+
+def test_micro_mode_concentrates_until_every_pick_buys_a_share():
+    """The live `small` book's 2026-10-01 rebalance, on its real targets and
+    closes. Micro mode used to call a name affordable if ONE share fit in the
+    whole sleeve (<= 647.21) but then gave each of three picks a third of it
+    (219.74), so AMD/AMAT/SOXX all rounded to 0 shares and the book bought
+    nothing three months running. Like `_fit_leg`, it must shrink the pick count
+    in rank order — never choosing by price — until every pick buys a share:
+    3 picks -> AMD gets 0, 2 picks -> 0, 1 pick at 659.18 -> 1 share of AMD."""
+    ranked = ["MU", "AMD", "AMAT", "SOXX", "MRK", "SMH", "CAT", "XBI", "CSCO", "AMGN"]
+    closes = [1097.39, 615.73, 529.30, 576.33, 143.81, 617.81, 826.35, 154.51,
+              108.34, 407.27]
+    targets = pd.Series(0.037, index=ranked)
+    px = pd.Series(closes, index=ranked)
+    sleeve = _micro_sleeve(679.57)
+    trades: list = []
+
+    pt.rebalance_sleeve(get_region("US"), sleeve, targets, px, "2026-10-01", trades)
+
+    assert sleeve["positions"] == {"AMD": 1}
+    assert [(t["side"], t["ticker"], t["shares"]) for t in trades] == [("BUY", "AMD", 1)]
+
+
+def test_micro_mode_keeps_three_picks_when_each_can_buy_a_share():
+    """Guard: when the top three affordable names each get >= 1 share at a third
+    of the sleeve, micro mode still spreads across three (970.00 each here)."""
+    targets = pd.Series(0.1, index=["A", "B", "C", "D"])
+    px = pd.Series([400.0, 300.0, 200.0, 50.0], index=["A", "B", "C", "D"])
+    sleeve = _micro_sleeve(3000.0)
+    trades: list = []
+
+    pt.rebalance_sleeve(get_region("US"), sleeve, targets, px, "2026-10-01", trades)
+
+    assert sleeve["positions"] == {"A": 2, "B": 3, "C": 4}
+
+
 _KNOWN_STATUSES = {
     "rebalanced", "held", "cash:idle", "cash:halted", "cash:below-min",
     "cash:regime-off", "cash:no-eligible-names", "cash:data-quality",
