@@ -106,7 +106,7 @@ connected.
 - **NG-7**: Any change to trading code, `verify.py` behaviour or stored data.
   `metrics.py` gains one read-only function.
 
-## The "Is it working?" rules (draft — confirm the thresholds)
+## The "Is it working?" rules (thresholds agreed 2026-10-13, Q-2)
 The panel and the summary are built only from these rules. A rule shows a line only
 when its condition holds. Each line carries its source and date, and its caveat
 where the source has one. The **summary paragraph is 2–4 sentences drawn only from
@@ -173,7 +173,7 @@ prices"; "safety breaker trips at −25%"; "ASX all cash; US 72%, UK 40%").
 | AC-11 | Every new screen file and `blocks.js` parses, and none of them totals or divides money: the existing guard test is widened from `home.js` to all of them. | `tests/test_home_ui.py` | ☐ |
 | AC-12 | In a real headless browser against fixture data, the Overview and Positions of FULL and FX·Matt load with no script errors, show their key text (the summary, the six tiles, the three panel columns, each region's why-line), and do not scroll sideways at 1280 px or 390 px. Runs where Playwright is installed; skipped otherwise, like the `node` check. | `tests/test_book_screens_browser.py` | ☐ |
 | AC-13 | `export --app` writes one `app.html` that, opened from disk in the headless browser, shows the same screens and makes **no network request**. | `tests/test_export_app.py` (+ browser check) | ☐ |
-| AC-14 | The home sidebar opens a book's Overview and Positions in place. Backtest, Method and Swarm open the old terminal on that book. Every book screen has a working "Classic view" link (Mac: the terminal on the same book, per Q-3; Pages: that book's existing terminal page). | `tests/test_book_screens_browser.py` + manual | ☐ |
+| AC-14 | The home sidebar opens a book's Overview and Positions in place. Backtest, Method and Swarm open the old terminal on that book. Every book screen has a working "Classic view" link (Mac: the terminal on the same book; Pages: that book's existing terminal page). | `tests/test_book_screens_browser.py` + manual | ☐ |
 | AC-15 | The existing terminal, export and home tests all stay green, and `export --site` output is unchanged apart from the added link to `app.html`. | `pytest` | ☐ |
 | AC-16 | Keyboard: the tab bar follows the standard tab pattern (←/→ move between tabs when it has focus), B1's shortcuts still work (⌘0–9, ⌘R, Esc, ↑/↓ in the sidebar), visible focus ring, status shown as shape + word. | Manual checklist | ☐ |
 | AC-17 | 5-second test: on FULL and FX·Matt, Matt says "up or down since start", "against what", and "the main thing going wrong", correctly, within 5 seconds each. | Manual (Matt) | ☐ Matt |
@@ -205,7 +205,7 @@ prices"; "safety breaker trips at −25%"; "ASX all cash; US 72%, UK 40%").
 - Rollback: revert the commits, or use "Classic view". On Pages, stop publishing
   `app.html` and remove the link (one line each in `build_site.sh` and `export.py`).
 - The migration-and-backup rule applies again the moment a later phase stores
-  anything (for example, if Q-1 picks option (a)).
+  anything (for example, if the phone later gets a stored first-seen record — Q-1 option (a)).
 
 ## Verification plan
 ```bash
@@ -219,24 +219,7 @@ python -m trading_algo.dashboard.export --app -o /tmp/app.html   # phone build, 
 ```
 
 ## Open questions
-- **Q-1**: What does "new" mean on the phone? The approved design says "appeared in
-  the last 24 hours", but a public page has no record of when a problem first
-  appeared unless the robots store one.
-  - (a) Store a small first-seen file in the repo, written by the publishing job.
-    This is a stored-data change, so it needs a migration and a backup.
-  - (b) **Recommended for phase 1:** on the phone, problems show red when serious
-    and are listed as known otherwise, with no amber "new". The Mac keeps its
-    seen-file.
-- **Q-2**: The draft thresholds in the rules table:
-  - average win ≥ 1.5× average loss;
-  - "behind" means more than 1 point behind the market;
-  - "mostly idle" means at least 50% cash;
-  - "inside the breaker" means less than half of it used;
-  - "uk-costs" means UK costs at least 2× the US.
-- **Q-3**: "Classic view" on the Mac must open the old terminal *on the same book*.
-  Today the terminal always opens on its default book, so this needs a small change
-  to `static/app.js` (choose the book from the link). The alternative is to open it
-  on its default book and let Matt switch. Recommended: the small change.
+None open. Q-1–Q-3 were settled on 2026-10-13 (see the Decision log).
 
 ## Decision log
 | Date | Decision | Who |
@@ -245,3 +228,7 @@ python -m trading_algo.dashboard.export --app -o /tmp/app.html   # phone build, 
 | 2026-10-13 | Overview = direction B + coherent text + "Is it working?" panel; v2 mockup approved ("i like it") | Matt |
 | 2026-10-13 | §11 parts 1 and 3 approved, including the new server builder | Matt |
 | 2026-10-13 | Findings go into a fix backlog (F20–F26); the panel names the item that tracks each | Matt |
+| 2026-10-13 | Q-1: on the phone, problems show red when serious and are listed as known otherwise; no amber "new" (no stored first-seen record in phase 1) | Matt (recommended) |
+| 2026-10-13 | Q-2: the draft thresholds stand — win ≥ 1.5× loss, behind = > 1 point, idle = ≥ 50% cash, inside breaker = < half used, UK costs ≥ 2× US | Matt (recommended) |
+| 2026-10-13 | Q-3: Classic view opens the old terminal on the same book, via a small change to `static/app.js` | Matt (recommended) |
+| 2026-10-13 | Spec to be reviewed adversarially before the plan | Matt |
