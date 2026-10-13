@@ -357,7 +357,7 @@ def _pair_payload(sym, bars_df, trades, decision, p, bars, intraday=False):
                 "open": round(float(o), 6), "high": round(float(h), 6),
                 "low": round(float(l), 6), "close": round(float(c), 6)}
                for d, o, h, l, c in zip(df.index, df["open"], df["high"],
-                                        df["low"], df["close"])]
+                                        df["low"], df["close"], strict=True)]
     line = lambda s: [{"time": d.strftime(tfmt), "value": round(float(v), 6)}
                       for d, v in s.items() if v == v]
 
@@ -603,7 +603,7 @@ def _risk_costs(state, p, txn) -> dict:
 
     base = float(s.iloc[0]) or float(state["initial_capital"])
     cum, curve = 0.0, []
-    for d, e in zip(s.index, s.values):
+    for d, e in zip(s.index, s.values, strict=True):
         cum += cost_on_date.get(d, 0.0)
         curve.append({"time": d, "net": round(100.0 * e / base, 4),
                       "gross": round(100.0 * (e + cum) / base, 4),

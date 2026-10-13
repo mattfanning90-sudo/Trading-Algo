@@ -33,7 +33,7 @@ def test_run_research_scores_and_pbo(panel):
     res = research.run_research(panel, profile("balanced"), n_bars=500)
     assert res["n_trials"] >= 10
     assert 0.0 <= res["pbo"] <= 1.0
-    for name, m in res["metrics"].items():
+    for _name, m in res["metrics"].items():
         assert {"sharpe", "psr", "dsr", "total"} <= set(m)
         assert 0.0 <= m["dsr"] <= 1.0
     report = research.format_report(res)

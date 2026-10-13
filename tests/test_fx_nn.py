@@ -79,7 +79,7 @@ def test_gradient_check(task):
     out, cache = m._forward(X, train=False)
     gW, _ = m._backward(out, m._prep_y(y), cache)
     gW_num = _numeric_grad(m, X, m._prep_y(y))
-    for a, b in zip(gW, gW_num):
+    for a, b in zip(gW, gW_num, strict=True):
         np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-6)
 
 
@@ -321,7 +321,7 @@ def test_sharpe_net_fit_refuses_without_a_panel_index():
     before = [w.copy() for w in m.W]
     with pytest.raises(ValueError, match="panel_index"):
         m.fit(X, y, epochs=1, batch_size=16)
-    for w0, w1 in zip(before, m.W):          # refused, not partially trained
+    for w0, w1 in zip(before, m.W, strict=True):          # refused, not partially trained
         assert np.array_equal(w0, w1)
 
 
@@ -369,7 +369,7 @@ def test_sharpe_net_panel_index_must_describe_the_training_rows():
     before = [w.copy() for w in m.W]
     with pytest.raises(ValueError, match="describes 40 rows"):
         m.fit(X, y, epochs=1, batch_size=16)
-    for w0, w1 in zip(before, m.W):               # refused, not partially trained
+    for w0, w1 in zip(before, m.W, strict=True):               # refused, not partially trained
         assert np.array_equal(w0, w1)
 
 

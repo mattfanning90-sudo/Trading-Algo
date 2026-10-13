@@ -115,7 +115,7 @@ def test_server_404_for_missing_account(tmp_path, monkeypatch):
     try:
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=10)
-            assert False, "expected HTTP 404"
+            pytest.fail("expected HTTP 404")
         except urllib.error.HTTPError as e:
             assert e.code == 404
     finally:

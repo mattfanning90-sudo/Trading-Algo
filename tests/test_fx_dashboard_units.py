@@ -31,7 +31,7 @@ def _hourly_state(n=120, sigma=0.001, bar="60m", start="2026-06-01"):
     vals = [10_000.0]
     for i in range(n - 1):
         vals.append(vals[-1] * (1 + (sigma if i % 2 else -sigma)))
-    eqh = [[d.strftime("%Y-%m-%d %H:%M"), v] for d, v in zip(keys, vals)]
+    eqh = [[d.strftime("%Y-%m-%d %H:%M"), v] for d, v in zip(keys, vals, strict=True)]
     st = {"equity_history": eqh, "equity": vals[-1], "initial_capital": 10_000.0,
           "trades": [], "positions": {}}
     if bar is not None:
@@ -67,7 +67,7 @@ def test_risk_costs_curve_and_vol_are_the_layers():
     # a random walk that sets new highs, so the running peak actually moves
     rets = np.random.default_rng(3).normal(0.0005, 0.002, len(st["equity_history"]))
     st["equity_history"] = [[d, round(10_000.0 * float(g), 2)] for (d, _), g in
-                            zip(st["equity_history"], np.cumprod(1 + rets))]
+                            zip(st["equity_history"], np.cumprod(1 + rets), strict=True)]
     rk = dashboard._risk_costs(st, profile("intraday"), {"rows": []})
     keys = [d for d, _ in st["equity_history"]]
     s = pd.Series([v for _, v in st["equity_history"]], index=keys, dtype=float)
@@ -314,7 +314,7 @@ def test_period_metrics_come_from_python(isolated):
     vals = 5_000 * np.cumprod(1 + np.random.default_rng(7).normal(0.0002, 0.006, 130))
     st = fx_book.load_state("matt")
     st["equity_history"] = [[d.strftime("%Y-%m-%d"), round(float(v), 2)]
-                            for d, v in zip(dates, vals)]
+                            for d, v in zip(dates, vals, strict=True)]
     fx_book.save_state("matt", st)
     p = dashboard.build_payload("matt", synthetic=True)
     bm = p["book_period_metrics"]
@@ -347,7 +347,7 @@ def test_period_metrics_slice_each_window():
     idx = pd.date_range("2026-01-01", periods=120, freq="D")
     vals = 100 * np.cumprod(1 + np.random.default_rng(3).normal(0.0, 0.01, 120))
     curve = [{"time": d.strftime("%Y-%m-%d"), "value": float(v)}
-             for d, v in zip(idx, vals)]
+             for d, v in zip(idx, vals, strict=True)]
     pm = dashboard._period_metrics(curve, 252)
     # a `days` window on a daily curve holds days+1 marks: return is from the
     # mark `days` back to the last one
@@ -384,7 +384,7 @@ def test_book_all_row_equals_header_tile_despite_rounding(isolated):
     vals = _task4d_curve(base=100.0)   # base is eqh[0][1] -> curve rebases to itself
     dates = pd.date_range("2026-01-01", periods=len(vals), freq="D")
     st = fx_book.load_state("matt")
-    st["equity_history"] = [[d.strftime("%Y-%m-%d"), v] for d, v in zip(dates, vals)]
+    st["equity_history"] = [[d.strftime("%Y-%m-%d"), v] for d, v in zip(dates, vals, strict=True)]
     st["equity"] = vals[-1]
     fx_book.save_state("matt", st)
     p = dashboard.build_payload("matt", synthetic=True)

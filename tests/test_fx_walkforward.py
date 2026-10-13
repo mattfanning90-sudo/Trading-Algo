@@ -146,7 +146,7 @@ def test_panel_index_is_addressed_to_the_folds_own_rows():
                          index_factory=_real_index_factory(times, pairs, calls))
 
     assert log and len(calls) == len(log)
-    for rows, rec in zip(calls, log):
+    for rows, rec in zip(calls, log, strict=True):
         idx = rec["panel_index"]
         n = len(rec["X"])
         assert len(rows) < len(X), "a fold never trains on the whole panel"

@@ -137,7 +137,9 @@ def parse_bar(stamp: str) -> datetime:
     """
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
-            return datetime.strptime(stamp, fmt)
+            # Naive on purpose: stamps are UTC by convention and callers compare
+            # them with naive datetimes; an aware result would raise TypeError.
+            return datetime.strptime(stamp, fmt)  # noqa: DTZ007
         except ValueError:
             pass
     raise ValueError(f"unparseable timestamp {stamp!r}")

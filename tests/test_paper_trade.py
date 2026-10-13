@@ -76,7 +76,7 @@ def test_init_splits_into_sleeves(account):
     assert set(state["sleeves"]) == set(cfg.ALLOCATIONS)
     assert state["initial_capital_base"] == 100_000
     # each sleeve funded with positive local cash
-    for k, s in state["sleeves"].items():
+    for _k, s in state["sleeves"].items():
         assert s["cash"] > 0
         assert s["positions"] == {}
 
@@ -525,7 +525,7 @@ def _seed_equity(account, n=22, sigma=0.01, seed=5) -> pd.Series:
     idx = pd.bdate_range("2026-01-02", periods=n)
     eq = 100_000 * np.cumprod(1 + np.random.default_rng(seed).normal(0, sigma, n))
     st["equity_history"] = [[d.strftime("%Y-%m-%d"), round(float(v), 2)]
-                            for d, v in zip(idx, eq)]
+                            for d, v in zip(idx, eq, strict=True)]
     pt.save_state(account, st)
     return pd.Series([v for _, v in st["equity_history"]], index=idx)
 

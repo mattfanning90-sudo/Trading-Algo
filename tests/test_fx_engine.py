@@ -81,7 +81,7 @@ def test_ml_gate_pins_ml_pool_to_daily_default_books(isolated_state, monkeypatch
     assert len(ml_calls) == 1                       # memoized: loaded once
     # The FX-trained pool was never asked to score anything outside the
     # default FX+crypto universe it was trained on (issue 40's assertion).
-    for acct, (pool, syms) in used.items():
+    for _acct, (pool, syms) in used.items():
         if pool is ml_sentinel:
             assert syms <= set(pairs.DEFAULT_UNIVERSE)
 

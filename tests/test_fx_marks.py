@@ -185,7 +185,7 @@ def test_status_annualises_at_book_bar(isolated_state, capsys):
     rng = np.random.default_rng(7)
     eq = 10_000.0 * np.cumprod(1.0 + rng.normal(0.0, 0.002, size=len(idx)))
     st["equity_history"] = [[t.strftime("%Y-%m-%d %H:%M"), round(float(v), 2)]
-                            for t, v in zip(idx, eq)]
+                            for t, v in zip(idx, eq, strict=True)]
     st["equity"] = round(float(eq[-1]), 2)
     fx_book.save_state("daytrader", st)
 
@@ -212,7 +212,7 @@ def test_status_daily_book_unchanged_at_252(isolated_state, capsys):
     rng = np.random.default_rng(11)
     eq = 5_000.0 * np.cumprod(1.0 + rng.normal(0.0, 0.002, size=len(idx)))
     st["equity_history"] = [[t.strftime("%Y-%m-%d"), round(float(v), 2)]
-                            for t, v in zip(idx, eq)]
+                            for t, v in zip(idx, eq, strict=True)]
     st["equity"] = round(float(eq[-1]), 2)
     fx_book.save_state("matt", st)
 
@@ -232,7 +232,7 @@ def _seed_hourly_book(n=30, sigma=0.002, seed=7) -> pd.Series:
     idx = pd.date_range("2025-01-02 00:00", periods=n, freq="h")
     eq = 10_000.0 * np.cumprod(1.0 + np.random.default_rng(seed).normal(0.0, sigma, n))
     st["equity_history"] = [[t.strftime("%Y-%m-%d %H:%M"), round(float(v), 2)]
-                            for t, v in zip(idx, eq)]
+                            for t, v in zip(idx, eq, strict=True)]
     st["equity"] = st["equity_history"][-1][1]
     fx_book.save_state("daytrader", st)
     return pd.Series([v for _, v in st["equity_history"]], index=idx)

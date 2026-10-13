@@ -76,7 +76,7 @@ def test_tearsheet_annualises_an_hourly_history_at_its_own_spacing():
     """A book marked hourly must not be annualised as if its marks were days."""
     idx = pd.date_range("2026-06-01", periods=60, freq="h")
     vals = [10_000.0 * (1.0 + 0.0004 * ((i % 7) - 3)) ** i for i in range(60)]
-    eh = [[d.strftime("%Y-%m-%d %H:%M"), v] for d, v in zip(idx, vals)]
+    eh = [[d.strftime("%Y-%m-%d %H:%M"), v] for d, v in zip(idx, vals, strict=True)]
     stats = tearsheet._annualised(eh)
     ppy = stats["periods_per_year"]
     assert ppy > 2000                             # hourly ppy ~ 8766, not 252

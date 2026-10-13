@@ -86,7 +86,7 @@ def _benchmark_curve(index_by_region: dict, eq_hist: list, initial: float,
             parts.append(idx_aud / idx_aud.iloc[0])
         norm = sum(parts) / len(parts)
         return [{"date": d.strftime("%Y-%m-%d"), "value": round(float(initial * v), 2)}
-                for d, v in zip(dates, norm)]
+                for d, v in zip(dates, norm, strict=True)]
     except Exception:
         return []
 
@@ -165,7 +165,7 @@ def _next_rebalance(as_of: str, last_rebalance_months: list[str | None]) -> str:
     try:
         d = date.fromisoformat(as_of)
     except ValueError:
-        d = date.today()
+        d = date.today()  # noqa: DTZ011 - display-only fallback for a bad as_of
     if any(m is not None and m < as_of[:7] for m in last_rebalance_months):
         nxt = d + timedelta(days=1)
     else:

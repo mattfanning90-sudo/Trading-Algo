@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> None:
     keys = list(_GRID)
     rows = []
     for combo in itertools.product(*_GRID.values()):
-        kw = dict(zip(keys, combo))
+        kw = dict(zip(keys, combo, strict=True))
         params = DEFAULT_PARAMS.with_overrides(**kw)
         for alloc_name, alloc in _ALLOCS.items():
             try:

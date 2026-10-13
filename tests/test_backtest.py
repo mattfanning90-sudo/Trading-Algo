@@ -94,7 +94,7 @@ def test_return_is_earned_by_the_previous_bars_book(synth_asx, asx_region):
 
     dates = list(res["returns"].index)
     checked = 0
-    for prev, today in zip(dates, dates[1:]):
+    for prev, today in zip(dates, dates[1:], strict=False):
         book = weights_hist.get(prev)
         if book is None or book.empty:
             continue

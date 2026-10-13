@@ -112,7 +112,7 @@ def synthetic_fx(currencies: list[str], start: str = "2012-01-01",
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range(start, end)
     out = pd.DataFrame(index=dates)
-    for i, c in enumerate(currencies):
+    for c in currencies:
         if c == base:
             out[c] = 1.0
             continue

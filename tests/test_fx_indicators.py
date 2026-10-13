@@ -64,5 +64,5 @@ def test_streaming_atr_matches_vectorized(ohlc):
     vec = ind.atr(ohlc["high"], ohlc["low"], ohlc["close"], win)
     s = ind.StreamingATR(win)
     stream = [s.update(h, l, c) for h, l, c in
-              zip(ohlc["high"], ohlc["low"], ohlc["close"])]
+              zip(ohlc["high"], ohlc["low"], ohlc["close"], strict=True)]
     np.testing.assert_allclose(stream, vec.values, rtol=1e-9)
