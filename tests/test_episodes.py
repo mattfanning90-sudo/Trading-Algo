@@ -42,6 +42,11 @@ def test_a_lot_with_no_known_result_makes_the_position_unmeasured():
     assert out[0]["net"] is None
 
 
+def test_a_closed_position_with_no_matching_lot_is_unmeasured():
+    out, _ = E.closed_positions([("2026-07-01", "EURUSD", 0.2), ("2026-07-10", "EURUSD", 0.0)], [], **NET)
+    assert out[0]["net"] is None and out[0]["lots"] == 0
+
+
 def test_equity_events_follow_buys_and_sells_and_skip_cash_rows():
     trades = [{"date": "2026-07-01", "region": "US", "ticker": "AAPL", "side": "BUY", "shares": 10},
               {"date": "2026-07-02", "region": "US", "ticker": "AAPL", "side": "DIV", "amount": 1.0},

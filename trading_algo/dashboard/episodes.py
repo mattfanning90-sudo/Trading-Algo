@@ -54,6 +54,10 @@ def episodes(events) -> list[dict]:
 
 def closed_positions(events, lots, *, symbol_of: Callable, net_of: Callable,
                      exclude_dates=frozenset()) -> tuple[list[dict], int]:
+    """Match closed episodes to FIFO lots and compute net P&L.
+
+    A closed position no lot matched has net None (unmeasured), never 0.
+    """
     closed = [e for e in episodes(events) if e["closed"] is not None]
     by_sym: dict = defaultdict(list)
     for e in closed:
@@ -69,7 +73,9 @@ def closed_positions(events, lots, *, symbol_of: Callable, net_of: Callable,
                 break
     kept = [e for e in closed if e["closed"][:10] not in exclude_dates]
     for e in kept:
-        if e["net"] is not None:
+        if e["lots"] == 0:
+            e["net"] = None
+        elif e["net"] is not None:
             e["net"] = round(e["net"], 2)
     return kept, len(closed) - len(kept)
 
