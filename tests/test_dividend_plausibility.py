@@ -284,3 +284,22 @@ def test_an_undecided_value_is_never_cached(monkeypatch, tmp_path):
     second = data.dividends(["AAA"], START, END)
     assert not second.isna().any().any(), "the cached undecided value was served"
     assert second.empty or (second == 0).all().all(), "the typo must come back rejected"
+
+
+def test_the_reach_back_never_pays_a_dividend_from_before_the_window(monkeypatch, tmp_path):
+    """The download reaches DIVIDEND_REACH_BACK_DAYS before the window so a
+    first-day dividend can be judged against the close before it — which means
+    it also returns dividends the book was ALREADY paid on an earlier run. Only
+    those in (last_dividend_date, today] may be credited: BBB's 03-04 dividend,
+    paid on the 03-04 run, is back in the 03-06 run's download and must not be
+    paid a second time (the `paid` guard only covers rows dated after `last`)."""
+    _sent(monkeypatch)
+    sleeve = {"currency": "USD", "cash": 0.0, "positions": {"AAA": 100, "BBB": 50},
+              "last_dividend_date": "2026-03-03"}
+    log = []
+    _feed(monkeypatch, tmp_path, [100.0] * 5, aaa_div=(0.0,) * 5)
+    assert _run(sleeve, log, "2026-03-04") == pytest.approx(50.0)
+    assert sleeve["last_dividend_date"] == "2026-03-04"
+    assert _run(sleeve, log, "2026-03-06") == 0.0
+    assert [r["ticker"] for r in log] == ["BBB"], "a reached-back dividend was paid twice"
+    assert sleeve["cash"] == pytest.approx(50.0)
