@@ -340,3 +340,65 @@ def test_a_proxy_that_lists_after_the_window_opens_is_not_spliced(monkeypatch):
     assert res["benchmark_kind"] == "mixed"
     assert res["benchmark_proxies"] == {"US": "SPY"}
     assert "mixed" in res["benchmark_label"]
+
+
+# --- the benchmark is opt-out for callers that never read it (the bridge) ----
+_BENCHMARK_KEYS = {"benchmark", "benchmark_metrics", "benchmark_stats",
+                   "benchmark_kind", "benchmark_label", "benchmark_proxies",
+                   "benchmark_price_index", "benchmark_price_index_metrics"}
+_CORE_KEYS = {"equity", "returns", "sleeve_equity", "sleeves", "allocations",
+              "fx_rebalance_cost", "point_in_time", "metrics"}
+
+
+def _real_path_offline(monkeypatch) -> list[list[str]]:
+    """Drive the NON-synthetic path with no network. Regions and FX come from
+    the synthetic generators; the one `data.load_prices` call left is the
+    benchmark's ETF download, which is recorded and answered with each
+    region's synthetic index (so every proxy covers its window)."""
+    from trading_algo import data, fx
+    from trading_algo.regions import REGIONS
+
+    calls: list[list[str]] = []
+    syn_end = lambda end: end or "2026-01-01"                  # noqa: E731
+    monkeypatch.setattr(data, "load_region", lambda region, start, end=None, **k:
+                        data.synthetic_region(region, start=start, end=syn_end(end)))
+    monkeypatch.setattr(fx, "load_fx", lambda cur, start, end=None, base="AUD", **k:
+                        fx.synthetic_fx(cur, start=start, end=syn_end(end), base=base))
+    by_etf = {r.benchmark_ticker: r for r in REGIONS.values()}
+
+    def fake_load_prices(tickers, start, end=None, **k):
+        calls.append(list(tickers))
+        return pd.DataFrame({t: data.synthetic_region(by_etf[t], start=start,
+                                                      end=syn_end(end))[1]
+                             for t in tickers})
+
+    monkeypatch.setattr(data, "load_prices", fake_load_prices)
+    return calls
+
+
+def test_the_default_path_downloads_the_etfs_and_builds_the_benchmark(monkeypatch):
+    """Real data, default call: one ETF download for the regions run, a
+    total-return benchmark, and exactly the result keys callers rely on."""
+    calls = _real_path_offline(monkeypatch)
+    res = run_portfolio_backtest(regions=["US", "FTSE"], start="2018-01-01",
+                                 end="2020-01-01")
+    assert calls == [["ISF.L", "SPY"]]
+    assert res["benchmark_kind"] == "total-return"
+    assert res["benchmark_proxies"] == {"US": "SPY", "FTSE": "ISF.L"}
+    assert set(res) == _CORE_KEYS | _BENCHMARK_KEYS
+
+
+def test_the_bridge_downloads_no_benchmark(monkeypatch):
+    """`--attribution` / `--reconcile` read no benchmark key, so the bridge's
+    backtest must not pay for the ETF download (nor Yahoo's ~110s of retries
+    when it is down). It gets the core result and nothing it would ignore."""
+    from trading_algo import paper_trade as pt
+
+    calls = _real_path_offline(monkeypatch)
+    state = {"initial_capital_base": 10_000.0, "base_currency": "AUD",
+             "fx_snapshot": {"AUD": 1.0}, "trades": [],
+             "allocations": {"US": 0.5, "FTSE": 0.5}, "param_overrides": {},
+             "equity_history": [["2020-03-11", 10_000.0], ["2020-06-30", 10_100.0]]}
+    res = pt._backtest_for_book(state, synthetic=False)
+    assert calls == []
+    assert set(res) == _CORE_KEYS

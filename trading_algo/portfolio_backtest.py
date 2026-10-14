@@ -102,7 +102,8 @@ def run_portfolio_backtest(regions: list[str] | None = None,
                            initial_capital: float = cfg.INITIAL_CAPITAL,
                            trade_from: pd.Timestamp | Mapping[str, pd.Timestamp]
                            | None = None,
-                           max_drawdown_stop: float | None = cfg.MAX_DRAWDOWN_STOP
+                           max_drawdown_stop: float | None = cfg.MAX_DRAWDOWN_STOP,
+                           benchmark: bool = True
                            ) -> dict:
     """`params` overrides the strategy knobs for every sleeve; `allocations`
     overrides the capital split (both used by the tuner). `initial_capital` is
@@ -153,7 +154,11 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     `max_drawdown_stop` is each sleeve's breaker threshold (None disables it,
     as in `run_backtest`), so a book whose profile loosens or disables its
     breaker is compared against the stop it actually runs. The paper book's
-    breaker watches the COMBINED book; this one watches each sleeve."""
+    breaker watches the COMBINED book; this one watches each sleeve.
+
+    `benchmark=False` builds no benchmark and downloads no ETF: the result
+    carries none of the `benchmark*` keys. For a caller that never reads them
+    (the paper book's bridge), so it does not pay for a download it ignores."""
     regions = regions or list(allocations or cfg.ALLOCATIONS)
     undated = ([k for k in regions if trade_from.get(k) is None]
                if isinstance(trade_from, Mapping) else [])
@@ -248,6 +253,18 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     equity = pd.Series(dict(equity_rows))
     returns = equity.pct_change(fill_method=None).fillna(0.0)
     sleeve_equity = pd.DataFrame({dt: row for dt, row in sleeve_rows}).T
+    result = {
+        "equity": equity,
+        "returns": returns,
+        "sleeve_equity": sleeve_equity,
+        "sleeves": sleeves,
+        "allocations": alloc,
+        "fx_rebalance_cost": fx_cost_total,
+        "point_in_time": point_in_time,
+        "metrics": compute_metrics(returns, equity, currency=cfg.BASE_CURRENCY),
+    }
+    if not benchmark:
+        return result
 
     # Benchmark: the strategy's prices are dividend-adjusted, so the benchmark
     # must be too. PRIMARY = equal-weight dividend-reinvesting ETF proxies in
@@ -270,14 +287,7 @@ def run_portfolio_backtest(regions: list[str] | None = None,
     bench_equity = initial_capital * (1 + bench_ret).cumprod()
     price_equity = initial_capital * (1 + price_ret).cumprod()
 
-    return {
-        "equity": equity,
-        "returns": returns,
-        "sleeve_equity": sleeve_equity,
-        "sleeves": sleeves,
-        "allocations": alloc,
-        "fx_rebalance_cost": fx_cost_total,
-        "point_in_time": point_in_time,
+    result.update({
         "benchmark": bench_equity,
         "benchmark_metrics": compute_metrics(bench_ret, bench_equity, currency=cfg.BASE_CURRENCY),
         "benchmark_stats": benchmark_stats(returns, bench_ret),
@@ -287,5 +297,5 @@ def run_portfolio_backtest(regions: list[str] | None = None,
         "benchmark_price_index": price_equity,
         "benchmark_price_index_metrics": compute_metrics(
             price_ret, price_equity, currency=cfg.BASE_CURRENCY),
-        "metrics": compute_metrics(returns, equity, currency=cfg.BASE_CURRENCY),
-    }
+    })
+    return result

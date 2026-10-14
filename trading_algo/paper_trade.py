@@ -1497,7 +1497,8 @@ def _backtest_for_book(state: dict, synthetic: bool) -> dict:
         initial_capital=state["initial_capital_base"],
         trade_from={k: pd.Timestamp((sleeves.get(k) or {}).get("opened_on") or first)
                     for k in regions},
-        max_drawdown_stop=_account_drawdown_stop(state))
+        max_drawdown_stop=_account_drawdown_stop(state),
+        benchmark=False)          # the bridge reads no benchmark: skip its download
 
 
 def _predicted_curve(state: dict, backtest: dict) -> pd.Series:
