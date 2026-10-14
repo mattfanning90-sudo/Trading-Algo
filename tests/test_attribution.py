@@ -163,7 +163,7 @@ def test_bridge_identity_is_backtest_less_lines_less_paper():
     A$4.92 the paper paid above the backtest's 8c stays in the residual —
     inside tolerance here, so the identity still holds."""
     rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
-    assert rep["lines"]["commission_floor"] == 0.0
+    assert rep["lines"]["commission"] == 0.0
     assert rep["residual"] == pytest.approx(4.92e-5, abs=1e-12)
     identity = (rep["backtest_return"] - sum(rep["lines"].values())
                 - rep["paper_return"])
@@ -218,7 +218,7 @@ def test_bridge_counts_a_fill_dated_the_first_equity_date():
     state = _bridge_state(100_995.08)
     state["trades"][0]["date"] = "2026-01-05"
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert "paid 5.00 AUD" in rep["notes"]["commission_floor"]
+    assert "paid 5.00 AUD" in rep["notes"]["commission"]
 
 
 def test_bridge_converts_local_costs_at_the_books_fx_snapshot():
@@ -233,7 +233,7 @@ def test_bridge_converts_local_costs_at_the_books_fx_snapshot():
                                "currency": "GBP"})
     rep = attribution.reconcile(state, _bridge_predicted())
     # FTSE: the £1 floor = A$2.00.
-    assert "paid 2.00 AUD" in rep["notes"]["commission_floor"]
+    assert "paid 2.00 AUD" in rep["notes"]["commission"]
     assert rep["lines"]["stamp_duty"] == 0.0
     assert "1.00 AUD" in rep["notes"]["stamp_duty"]
 
@@ -532,7 +532,7 @@ def test_the_backtests_trading_cost_is_not_exposure():
     assert rep["identity_ok"] is True
 
 
-# --- commission_floor: the paper's commission less the backtest's ------------
+# --- commission: the paper's commission less the backtest's ------------
 def _bt_pays(bt, day, amount, key="ASX", fx=1.0):
     """The backtest's `key` sleeve pays `amount` of LOCAL commission at `day`'s
     close, recorded as backtest.py records it: a fraction of the sleeve's NAV
@@ -579,7 +579,7 @@ def test_both_engines_paying_the_floor_on_the_same_build_out_nets_to_nothing():
     _paper_pays(state, _D[0], "BHP.AX", "BUY", 10, 5.0)
     _paper_pays(state, _D[0], "CBA.AX", "BUY", 4_990, 39.92)
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
-    assert _aud(rep, "commission_floor") == pytest.approx(0.0, abs=1e-9)
+    assert _aud(rep, "commission") == pytest.approx(0.0, abs=1e-9)
     assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=1e-6)
     assert rep["identity_ok"] is True
 
@@ -597,9 +597,9 @@ def test_a_floor_both_engines_paid_on_the_same_small_order_is_no_difference():
     state["equity_history"][2][1] -= 5.0
     _paper_pays(state, _D[2], "BHP.AX", "SELL", 10, 5.0)
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
-    assert _aud(rep, "commission_floor") == pytest.approx(0.0, abs=1e-9)
+    assert _aud(rep, "commission") == pytest.approx(0.0, abs=1e-9)
     assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=1e-6)
-    assert "5.00 less 5.00 AUD" in rep["notes"]["commission_floor"]
+    assert "5.00 less 5.00 AUD" in rep["notes"]["commission"]
 
 
 def test_a_dust_order_only_the_backtest_placed_is_its_commission_on_the_line():
@@ -611,7 +611,7 @@ def test_a_dust_order_only_the_backtest_placed_is_its_commission_on_the_line():
     bt = _bt_pays(_backtest((0.10, -0.05)), _D[2], 5.0)
     rep = attribution.reconcile(_paper_book(1.0, (0.10, -0.05)), bt["equity"],
                                 backtest=bt)
-    assert _aud(rep, "commission_floor") == pytest.approx(-5.00, abs=1e-9)
+    assert _aud(rep, "commission") == pytest.approx(-5.00, abs=1e-9)
     assert _aud(rep, "rebalance_timing") == pytest.approx(0.0, abs=1e-6)
     assert rep["identity_ok"] is True
 
@@ -629,7 +629,7 @@ def test_a_backtest_fill_after_the_windows_last_date_is_not_counted():
     rep = attribution.reconcile(_paper_book(1.0, (0.10, -0.05)), bt["equity"],
                                 backtest=bt)
     assert rep["end"] == "2026-03-04"
-    assert _aud(rep, "commission_floor") == pytest.approx(0.0, abs=1e-9)
+    assert _aud(rep, "commission") == pytest.approx(0.0, abs=1e-9)
 
 
 def test_the_backtests_commission_is_put_in_base_at_its_own_rate_on_the_bar():
@@ -644,16 +644,16 @@ def test_the_backtests_commission_is_put_in_base_at_its_own_rate_on_the_bar():
     _bt_pays(bt, _D[2], 1.0, key="US", fx=_FX)
     rep = attribution.reconcile(_paper_book(1.0, (0.10, -0.05)), bt["equity"],
                                 backtest=bt)
-    assert _aud(rep, "commission_floor") == pytest.approx(-1.815, abs=1e-9)
+    assert _aud(rep, "commission") == pytest.approx(-1.815, abs=1e-9)
 
 
 def test_an_unmeasured_commission_line_says_what_the_paper_paid():
     """Without the backtest there is no backtest commission to net against, so
     the line reads 0.0, says why, and names the paper's own: A$5.00."""
     rep = attribution.reconcile(_bridge_state(100_995.08), _bridge_predicted())
-    assert rep["lines"]["commission_floor"] == 0.0
-    assert "backtest=" in rep["notes"]["commission_floor"]
-    assert "paid 5.00 AUD" in rep["notes"]["commission_floor"]
+    assert rep["lines"]["commission"] == 0.0
+    assert "backtest=" in rep["notes"]["commission"]
+    assert "paid 5.00 AUD" in rep["notes"]["commission"]
 
 
 def test_an_all_cash_close_gives_the_sleeve_its_own_exact_rate():
@@ -761,13 +761,13 @@ def test_a_fill_in_a_currency_with_no_rate_is_not_converted_at_parity():
     state["trades"][0].update({"region": "US", "ticker": "AAPL",
                                "commission": 1.0, "currency": "USD"})
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert rep["lines"]["commission_floor"] == 0.0
-    assert "USD" in rep["notes"]["commission_floor"]
+    assert rep["lines"]["commission"] == 0.0
+    assert "USD" in rep["notes"]["commission"]
     assert "USD" in rep["notes"]["fill_convention"]
     # ...and the base currency itself still converts at exactly 1.0
     state["trades"][0]["currency"] = "AUD"
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert "paid 1.00 AUD" in rep["notes"]["commission_floor"]
+    assert "paid 1.00 AUD" in rep["notes"]["commission"]
 
 
 def test_bridge_counts_a_fill_on_the_windows_last_day():
@@ -778,7 +778,7 @@ def test_bridge_counts_a_fill_on_the_windows_last_day():
     state = _bridge_state(100_995.08)
     state["trades"][0]["date"] = "2026-06-30"
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert "paid 5.00 AUD" in rep["notes"]["commission_floor"]
+    assert "paid 5.00 AUD" in rep["notes"]["commission"]
 
 
 # --- a one-sleeve book: the identity cannot fail, so it must not certify ----
@@ -841,11 +841,11 @@ def test_an_unrated_fill_note_says_where_its_cost_went():
     del state["fx_snapshot"]["USD"]
     rep = attribution.reconcile(state, bt["equity"], backtest=bt)
     assert rep["notes"]["exposure_gap"].startswith("a different invested")
-    assert "USD" in rep["notes"]["commission_floor"]
-    assert "rebalance_timing" in rep["notes"]["commission_floor"]
+    assert "USD" in rep["notes"]["commission"]
+    assert "rebalance_timing" in rep["notes"]["commission"]
     rep = attribution.reconcile(state, bt["equity"])
-    assert "residual" in rep["notes"]["commission_floor"]
-    assert "rebalance_timing" not in rep["notes"]["commission_floor"]
+    assert "residual" in rep["notes"]["commission"]
+    assert "rebalance_timing" not in rep["notes"]["commission"]
 
 
 @pytest.mark.parametrize("bad", [float("nan"), 0.0, -1.5])
@@ -858,8 +858,8 @@ def test_a_nan_or_non_positive_rate_is_no_rate(bad):
     state["trades"][0].update({"region": "US", "ticker": "AAPL",
                                "commission": 1.0, "currency": "USD"})
     rep = attribution.reconcile(state, _bridge_predicted())
-    assert rep["lines"]["commission_floor"] == 0.0
-    assert "USD" in rep["notes"]["commission_floor"]
+    assert rep["lines"]["commission"] == 0.0
+    assert "USD" in rep["notes"]["commission"]
 
 
 # --- dividends: DIV ledger rows move cash and are not fills -----------------
@@ -907,8 +907,8 @@ def test_the_bridge_names_the_dividends_the_paper_credited():
     assert rep["lines"]["dividends"] == 0.0
     assert "5.00 AUD" in rep["notes"]["dividends"]
     assert "USD" in rep["notes"]["dividends"]
-    assert "left out" not in rep["notes"].get("commission_floor", "")
-    assert "paid 5.00 AUD" in rep["notes"]["commission_floor"]
+    assert "left out" not in rep["notes"].get("commission", "")
+    assert "paid 5.00 AUD" in rep["notes"]["commission"]
 
 def test_the_cash_path_undoes_any_cash_event_without_a_reader_edit(monkeypatch):
     """Cash events are defined once (`pnl.CASH_EVENTS`); Task 12's interest
@@ -1020,7 +1020,7 @@ def test_without_the_backtest_the_note_carries_the_papers_interest():
     rep = attribution.reconcile(state, _bridge_predicted())
     assert rep["lines"]["cash_interest"] == 0.0
     assert "credited 2.50 AUD" in rep["notes"]["cash_interest"]
-    assert "left out" not in rep["notes"].get("commission_floor", "")
+    assert "left out" not in rep["notes"].get("commission", "")
 
 
 # --- one window for both sides: from the book's inception ---------------------

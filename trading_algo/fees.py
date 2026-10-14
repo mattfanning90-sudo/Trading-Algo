@@ -74,7 +74,7 @@ def turnover_cost(region: Region, turnover: float, buy_turnover: float,
     sold), already accounted for by the reconciliation bridge's holdings lines.
     It is not a cost to imitate here: every entry in `orders` is a trade the
     backtest itself actually placed (the commission it pays on one the paper
-    skipped is the bridge's commission_floor line).
+    skipped is the bridge's commission line).
     """
     duty = buy_turnover * region.stamp_duty_bps / 1e4
     if _sized(nav, orders):

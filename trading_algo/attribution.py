@@ -32,7 +32,7 @@ TRACKING_ERROR_ALERT_BPS = 200.0
 # The reconciliation bridge (spec §5). 1 basis point on total return.
 BRIDGE_TOLERANCE = 1e-4
 
-BRIDGE_LINES = ("dividends", "cash_interest", "fill_convention", "commission_floor",
+BRIDGE_LINES = ("dividends", "cash_interest", "fill_convention", "commission",
                 "stamp_duty", "exposure_gap", "rebalance_timing", "fx_translation")
 
 
@@ -250,7 +250,7 @@ def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float
     return excess, paid_total
 
 
-def _line_commission_floor(paid: float, terms: dict, equity: float) -> float:
+def _line_commission(paid: float, terms: dict, equity: float) -> float:
     """The paper's commission less the backtest's, as a fraction of `equity`.
 
     `paid` is the paper's fills' commission in the window, base currency; the
@@ -520,7 +520,7 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     from — the SAME regions, allocations, params and window as the book. With
     it, the holdings lines are measured from its per-sleeve weights, returns
     and recorded commission (see `_sleeve_terms`): `cash_interest`,
-    `commission_floor`, `exposure_gap`, and `rebalance_timing`. The last is
+    `commission`, `exposure_gap`, and `rebalance_timing`. The last is
     each sleeve's gap less every other line, so it is the one place an
     unnamed SLEEVE-level cause can hide, and its note lists what it
     carries; the residual is then the portfolio layer
@@ -577,10 +577,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                            f"which both engines charge; the paper book paid "
                            f"{slip_paid:,.2f} {ccy} of slippage over this window "
                            f"(fills that record a decision price)",
-        "commission_floor": (f"0.0 — needs the backtest's commission "
-                             f"(backtest=); the paper book paid {commissions:,.2f} "
-                             f"{ccy} of commission over this window, and the "
-                             f"difference stays in residual"),
+        "commission": (f"0.0 — needs the backtest's commission (backtest=); "
+                       f"the paper book paid {commissions:,.2f} {ccy} of "
+                       f"commission over this window, and the difference "
+                       f"stays in residual"),
         "stamp_duty": f"0.0 — both engines charge it; the paper book paid "
                       f"{duty:,.2f} {ccy} over this window",
         "exposure_gap": "0.0 — needs the backtest's per-sleeve holdings "
@@ -599,7 +599,7 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     if backtest is not None:
         terms, why = _holdings_terms(paper_state, backtest, end)
         if why:
-            for name in ("cash_interest", "commission_floor", "exposure_gap",
+            for name in ("cash_interest", "commission", "exposure_gap",
                          "rebalance_timing"):
                 notes[name] = f"0.0 — not measured: {why}; the gap stays in residual"
         else:
@@ -618,10 +618,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                 + (f"; {', '.join(lost)} INT rows left out — no rate for the "
                    "sleeve's cash, and parity would be a guess; they stay in "
                    "residual" if lost else ""))
-            lines["commission_floor"] = _line_commission_floor(
+            lines["commission"] = _line_commission(
                 commissions, terms, start_equity)
-            charged = commissions - lines["commission_floor"] * start_equity
-            notes["commission_floor"] = (
+            charged = commissions - lines["commission"] * start_equity
+            notes["commission"] = (
                 f"the paper book's commission less the backtest's, both one "
                 f"fees.commission per order, floor included: "
                 f"{commissions:,.2f} less {charged:,.2f} {ccy} over this "
@@ -676,7 +676,7 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
         why = (f"{left_out} fill(s) in {', '.join(unrated)} left out — no rate "
                f"in fx_snapshot, and parity would be a guess; their cost "
                f"stays in {where}")
-        for name in ("fill_convention", "commission_floor", "stamp_duty"):
+        for name in ("fill_convention", "commission", "stamp_duty"):
             notes[name] = "; ".join(filter(None, (notes.get(name), why)))
 
     residual = backtest_return - sum(lines.values()) - paper_return
