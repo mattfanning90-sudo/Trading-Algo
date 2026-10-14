@@ -899,6 +899,12 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
     window's names — so it is abandoned, named in the alert, and the window
     moves on rather than waiting for good.
 
+    Every value has passed `data_quality.implausible_dividends` (inside
+    `data.dividends`), the rule the backtest's prices go through. One it
+    cannot judge YET (NaN: a large dividend whose ex-date close is not in) is
+    deferred the same way — not paid, the window held — and given up on,
+    unpaid and alerted, past the same DIVIDEND_GAP_SESSIONS.
+
     Synthetic data has no dividend feed, and invariant #5 says synthetic results
     are plumbing only — so it returns zero offline rather than inventing one.
     """
@@ -923,11 +929,14 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
             if r.get("region") == region.key and r.get("side") == pnl.DIVIDEND
             and r["date"] > last}
     lo, hi = pd.Timestamp(last), pd.Timestamp(today)
-    total = 0.0
+    total, undecided = 0.0, []
     for t in [n for n in names if n in div.columns]:
         col = div[t]
         for stamp, raw_dps in col[(col.index > lo) & (col.index <= hi)].items():
             ex = str(pd.Timestamp(stamp).date())
+            if pd.isna(raw_dps):        # the plausibility rule cannot judge it yet
+                undecided.append(f"{t} ex {ex}")
+                continue
             dps = round(float(raw_dps) * scale_for(region, t), 6)
             shares = _held_at(sleeve, fills, t, ex)
             if (t, ex) in paid or not dps > 0 or not shares:   # `not >` refuses NaN
@@ -942,13 +951,28 @@ def _credit_dividends(region, sleeve: dict, today: str, trade_log: list,
             print(f"    DIV  {shares:>7} {t:<10} @ {dps:.4f} "
                   f"= {amount:>10,.2f} {region.currency}")
     missing = [n for n in names if n not in div.columns]
-    sessions = int(np.busday_count(last, today)) if missing else 0
+    sessions = int(np.busday_count(last, today)) if missing or undecided else 0
     abandoned = ([n for n in missing if not px.get(n, 0) > 0]   # NaN: no close
                  if px is not None and sessions > DIVIDEND_GAP_SESSIONS else [])
     if missing:
         _dividend_gap_alert(region, account, last, today, missing, abandoned,
                             sessions)
-    if len(abandoned) == len(missing):
+    # An undecided value is DEFERRED like a name the feed omitted: never paid
+    # unjudged (a DIV row could not be reversed), the window held open for the
+    # next run to judge it, and given up on — unpaid — past the same bound.
+    given_up = bool(undecided) and sessions > DIVIDEND_GAP_SESSIONS
+    if undecided:
+        msg = (f"{region.key}: dividend(s) not yet judgeable (no close on or "
+               f"after the ex-date, or none before it): {', '.join(undecided)}")
+        if given_up:
+            who = f"[{account}] " if account else ""
+            notifications.notify(
+                "dividend_undecided", f"{who}{msg} — still undecided after "
+                f"{sessions} sessions, so NOT credited",
+                level="alert", account=account, region=region.key, events=undecided)
+        else:
+            print(f"    DIV  deferred — {msg}")
+    if len(abandoned) == len(missing) and (not undecided or given_up):
         sleeve["last_dividend_date"] = today
     return total
 

@@ -235,6 +235,12 @@ def _download_dividends(tickers: list[str], start: str, end: str | None):
     return raw
 
 
+# How far `dividends` downloads before `start`, so a dividend going ex on the
+# window's first session is judged against the close before it (Christmas and
+# Easter close the LSE and ASX for up to four days in a row).
+DIVIDEND_REACH_BACK_DAYS = 14
+
+
 def dividends(tickers: list[str], start: str, end: str | None = None,
               use_cache: bool = True) -> pd.DataFrame:
     """Cash dividends per share (index=ex-date, cols=tickers). Raw Yahoo units.
@@ -254,6 +260,12 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     answer missing any requested name, which a retry would otherwise get back.
     A window wholly in the past is immutable history; an open-ended one keeps
     CACHE_TTL_HOURS.
+
+    Every value goes through `data_quality.implausible_dividends`, judged
+    against the close of the same download (which reaches back
+    DIVIDEND_REACH_BACK_DAYS for the close before the first ex-date): a value
+    the price contradicts comes back 0, one it cannot judge yet comes back NaN
+    and is never cached.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = _cache_path(f"div:v2:{start}:{end}:" + ",".join(sorted(tickers)))
@@ -265,7 +277,8 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
         if have:
             return df.loc[start:end, have]
 
-    raw = _download_dividends(list(tickers), start, end)
+    reach = (pd.Timestamp(start) - pd.Timedelta(days=DIVIDEND_REACH_BACK_DAYS))
+    raw = _download_dividends(list(tickers), reach.strftime("%Y-%m-%d"), end)
     if raw is None or not len(raw):
         return pd.DataFrame()
     cols = raw.columns
@@ -282,11 +295,13 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     if isinstance(div, pd.Series):
         div = div.to_frame(tickers[0])
     div = div.reindex(columns=[t for t in tickers if t in div.columns]).fillna(0.0)
+    div = div.loc[pd.Timestamp(start):]           # the reach-back is for closes only
     if close is not None:          # the same rule the backtest's prices go through
         div, _ = data_quality.implausible_dividends(close, div, source="dividends")
     div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
     try:
-        if use_cache and len(div.columns) == len(tickers):   # never a partial answer
+        if (use_cache and len(div.columns) == len(tickers)   # never a partial answer
+                and not div.isna().any().any()):            # nor an undecided one
             div.to_parquet(cache_file)
     except Exception:
         pass  # parquet engine optional; caching is a nicety, not a requirement

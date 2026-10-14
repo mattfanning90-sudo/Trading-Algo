@@ -292,8 +292,8 @@ DIVIDEND_ALERT_DAYS = 30
 
 def implausible_dividends(close: pd.DataFrame, dividends: pd.DataFrame,
                           *, source: str = "prices") -> tuple[pd.DataFrame, QualityReport]:
-    """`dividends` with every value its own price contradicts set to 0, and a
-    report naming each one.
+    """`dividends` with every value its own price contradicts set to 0, every
+    value it cannot judge YET set to NaN, and a report naming each rejection.
 
     The ONE rule for a dividend value, on both paths a dividend enters a book:
     the backtest's prices (`data._download_primary`, before
@@ -301,13 +301,19 @@ def implausible_dividends(close: pd.DataFrame, dividends: pd.DataFrame,
     A dividend D of at least DIVIDEND_CHECK_SIZE of the ticker's last close
     before its ex-date must be matched by a fall to its first close on or
     after it of at least DIVIDEND_MIN_FALL x D. `close` is the raw
-    (split-adjusted) close the dividends belong to, on the same index; a
-    dividend with no close on one side cannot be judged and is kept.
+    (split-adjusted) close the dividends belong to, on the same index.
+
+    UNDECIDED (NaN): no close before it (its size is unknown), or a large one
+    with no close on or after its ex-date yet. Neither applied nor rejected,
+    and not reported: the caller judges it again once the close is in. The
+    backtest does so for free (it re-reads full history every run, and an
+    undecided value adjusts no close either way); the paper defers it.
     """
     prior = close.ffill().shift(1).reindex(index=dividends.index, columns=dividends.columns)
     after = close.bfill().reindex(index=dividends.index, columns=dividends.columns)
-    bad = ((dividends >= DIVIDEND_CHECK_SIZE * prior)
-           & (prior - after < DIVIDEND_MIN_FALL * dividends))
+    large = dividends >= DIVIDEND_CHECK_SIZE * prior
+    bad = large & (prior - after < DIVIDEND_MIN_FALL * dividends)
+    undecided = (dividends > 0) & (prior.isna() | (large & after.isna()))
     report, events = QualityReport(), []
     for i, j in zip(*np.nonzero(bad.to_numpy())):
         day, t = bad.index[i], bad.columns[j]
@@ -328,7 +334,7 @@ def implausible_dividends(close: pd.DataFrame, dividends: pd.DataFrame,
             "were NOT applied — " + " | ".join(f"{t}: {r}" for t, r in report.reasons.items()),
             level="alert" if recent else "info", channel=None if recent else "log",
             source=source, events=events)
-    return dividends.mask(bad, 0.0), report
+    return dividends.mask(bad, 0.0).mask(undecided, np.nan), report
 
 
 def eligible(prices: pd.DataFrame, region, asof: pd.Timestamp,
