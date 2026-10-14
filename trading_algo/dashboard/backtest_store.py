@@ -22,7 +22,7 @@ import os
 from datetime import datetime, timezone
 
 from .. import config as cfg
-from .. import paper_trade
+from .. import manifest, paper_trade
 from ..metrics import metric as _metric
 
 EQUITY_CACHE = "backtest_equity.json"
@@ -118,6 +118,9 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
     out = {
         "kind": "equity",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # The commit that computed these numbers, so a cache older than its
+        # code can be read off the file rather than inferred from its date.
+        "git_commit": manifest._git_commit(),
         "synthetic": synthetic,
         "point_in_time": point_in_time,
         "start": cfg.START,

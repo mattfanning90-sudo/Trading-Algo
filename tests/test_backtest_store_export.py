@@ -119,3 +119,16 @@ def test_overfitting_gate_shape_is_stable_when_it_fails(monkeypatch):
         assert gate["dsr"] is None and gate["pbo"] is None
         assert gate["passed"] is None
         assert gate["verdict"].startswith("error:")
+
+
+def test_the_cache_records_the_code_it_was_generated_by(exported):
+    """P5's gate is 'no published number older than its code', and the cache
+    had no way to say. The cache in `state/` was written 2026-09-19 (commit
+    8477005's scheduled export), before every measurement-truth change, and
+    nothing on it said which code computed it. A commit stamp makes that
+    readable rather than inferable."""
+    from trading_algo import manifest
+
+    assert exported["git_commit"] == manifest._git_commit()
+    assert exported["git_commit"] != "unknown"
+    assert len(exported["git_commit"]) == 40
