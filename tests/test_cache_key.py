@@ -100,7 +100,7 @@ def test_open_ended_cache_expires_and_refetches(tmp_path, monkeypatch):
     monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(data, "_download_primary", _fake_downloader(calls))
     data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
-    _age_file(data._cache_path("k"), data.CACHE_TTL_HOURS + 1)
+    _age_file(data._cache_path(f"{data.PRICE_CACHE_VERSION}:k"), data.CACHE_TTL_HOURS + 1)
     data.load_prices(["AAA"], "2026-01-01", None, cache_key="k")
     assert len(calls) == 2
 
@@ -112,7 +112,7 @@ def test_closed_window_cache_never_expires(tmp_path, monkeypatch):
     monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(data, "_download_primary", _fake_downloader(calls))
     data.load_prices(["AAA"], "2026-01-01", "2026-01-08", cache_key="k2")
-    _age_file(data._cache_path("k2"), 10_000)
+    _age_file(data._cache_path(f"{data.PRICE_CACHE_VERSION}:k2"), 10_000)
     data.load_prices(["AAA"], "2026-01-01", "2026-01-08", cache_key="k2")
     assert len(calls) == 1
 

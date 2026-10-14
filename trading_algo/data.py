@@ -95,6 +95,40 @@ def _cache_path(cache_key: str) -> str:
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
 
 
+# Prefix of every price cache key, versioned by what the file holds. v2 =
+# `dividend_adjusted` (ours). An unversioned key holds Yahoo's own adjustment,
+# and a closed window's file never expires, so without the bump a pre-change
+# file would be served forever.
+PRICE_CACHE_VERSION = "adj:v2"
+
+
+def dividend_adjusted(close: pd.DataFrame, dividends: pd.DataFrame) -> pd.DataFrame:
+    """THE dividend-adjusted (total-return) close, for every ticker.
+
+    For each ex-date d paying D, every close strictly before d is multiplied by
+    (1 - D / C), C being that ticker's own last close before d; the newest
+    close stays the raw close. This is Yahoo's convention: on its US names it
+    reproduces Yahoo's adjusted close to 0.01bp of total growth (2012-2026),
+    so it changes nothing where Yahoo is right. It exists because Yahoo's
+    adjustment applies London (.L) dividends at 1/100: HSBA.L's adjusted close
+    carried 0.16% over 2023-2024 against 16.5% of dividends paid.
+
+    `close` must be split-adjusted already, as Yahoo's `auto_adjust=False`
+    Close is (NVDA reads 120.888 the session before its 10-for-1), with
+    `dividends` in the same units (NVDA's pre-split $0.04 reads 0.004), so no
+    split is applied here. A name with no dividend column is left unchanged; a
+    dividend dated after a name's newest close adjusts nothing (no close in
+    the series has gone ex), so the newest close is always the raw close.
+    """
+    close = close.astype(float)
+    div = dividends.reindex(index=close.index, columns=close.columns).fillna(0.0)
+    gone_ex = close.bfill().notna()                 # some close on or after it
+    factor = (1.0 - div / close.ffill().shift(1)).where((div != 0) & gone_ex, 1.0)
+    factor = factor.fillna(1.0)                     # no close before it: nothing to adjust
+    later = factor.iloc[::-1].cumprod().iloc[::-1].shift(-1, fill_value=1.0)
+    return close * later
+
+
 def _cache_is_fresh(cache_file: str, end: str | None) -> bool:
     """Is this cache file still usable?
 
@@ -109,16 +143,23 @@ def _cache_is_fresh(cache_file: str, end: str | None) -> bool:
 
 
 def _download_primary(tickers: list[str], start: str, end: str | None):
-    """Primary price source (Yahoo via yfinance). Raises on repeated failure."""
+    """Primary price source (Yahoo via yfinance): `dividend_adjusted` built from
+    Yahoo's raw Close and Dividends, never Yahoo's own adjustment (see there).
+    Raises on repeated failure."""
     import yfinance as yf  # imported lazily so the package works offline
 
     backoffs = [5, 15, 30, 60]                      # Yahoo rate-limits; back off hard
     for attempt, wait in enumerate(backoffs):
         try:
-            raw = yf.download(tickers, start=start, end=end, auto_adjust=True,
-                              progress=False)["Close"]
+            raw = yf.download(tickers, start=start, end=end, auto_adjust=False,
+                              actions=True, progress=False)
             if raw is not None and len(raw):
-                return raw
+                close, div = raw["Close"], raw.get("Dividends")
+                if isinstance(close, pd.Series):    # single-level columns: one name
+                    close = close.to_frame(tickers[0])
+                    div = None if div is None else div.to_frame(tickers[0])
+                return dividend_adjusted(
+                    close, pd.DataFrame(index=close.index) if div is None else div)
         except Exception:
             if attempt == len(backoffs) - 1:
                 raise
@@ -128,9 +169,11 @@ def _download_primary(tickers: list[str], start: str, end: str | None):
 
 def load_prices(tickers: list[str], start: str, end: str | None = None,
                 cache_key: str | None = None, use_cache: bool = True) -> pd.DataFrame:
-    """Adjusted-close prices (index=date, cols=tickers). Raw Yahoo units."""
+    """Dividend-adjusted closes (index=date, cols=tickers), as `dividend_adjusted`
+    defines them. Raw Yahoo units."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_file = _cache_path(cache_key or ",".join(sorted(tickers)))
+    cache_file = _cache_path(
+        f"{PRICE_CACHE_VERSION}:{cache_key or ','.join(sorted(tickers))}")
 
     if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
         # Reuse the cache for this key even if a few tickers persistently fail to
