@@ -95,11 +95,12 @@ def _cache_path(cache_key: str) -> str:
     return os.path.join(CACHE_DIR, f"prices_{safe}.parquet")
 
 
-# Prefix of every price cache key, versioned by what the file holds. v2 =
-# `dividend_adjusted` (ours). An unversioned key holds Yahoo's own adjustment,
+# Prefix of every price cache key, versioned by what the file holds. v3 =
+# `dividend_adjusted` over the dividends `data_quality.implausible_dividends`
+# keeps; v2 applied every value. An unversioned key holds Yahoo's adjustment,
 # and a closed window's file never expires, so without the bump a pre-change
 # file would be served forever.
-PRICE_CACHE_VERSION = "adj:v2"
+PRICE_CACHE_VERSION = "adj:v3"
 
 
 def dividend_adjusted(close: pd.DataFrame, dividends: pd.DataFrame) -> pd.DataFrame:
@@ -144,7 +145,8 @@ def _cache_is_fresh(cache_file: str, end: str | None) -> bool:
 
 def _download_primary(tickers: list[str], start: str, end: str | None):
     """Primary price source (Yahoo via yfinance): `dividend_adjusted` built from
-    Yahoo's raw Close and Dividends, never Yahoo's own adjustment (see there).
+    Yahoo's raw Close and the Dividends its prices do not contradict
+    (`data_quality.implausible_dividends`), never Yahoo's own adjustment.
     Raises on repeated failure."""
     import yfinance as yf  # imported lazily so the package works offline
 
@@ -158,8 +160,9 @@ def _download_primary(tickers: list[str], start: str, end: str | None):
                 if isinstance(close, pd.Series):    # single-level columns: one name
                     close = close.to_frame(tickers[0])
                     div = None if div is None else div.to_frame(tickers[0])
-                return dividend_adjusted(
+                div, _ = data_quality.implausible_dividends(
                     close, pd.DataFrame(index=close.index) if div is None else div)
+                return dividend_adjusted(close, div)
         except Exception:
             if attempt == len(backoffs) - 1:
                 raise
@@ -253,7 +256,7 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
     CACHE_TTL_HOURS.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_file = _cache_path(f"div:v1:{start}:{end}:" + ",".join(sorted(tickers)))
+    cache_file = _cache_path(f"div:v2:{start}:{end}:" + ",".join(sorted(tickers)))
     use_cache = use_cache and (
         end is None or pd.Timestamp(end) < pd.Timestamp.now().normalize())
     if use_cache and os.path.exists(cache_file) and _cache_is_fresh(cache_file, end):
@@ -270,13 +273,17 @@ def dividends(tickers: list[str], start: str, end: str | None = None,
         if "Dividends" not in cols.get_level_values(0):
             return pd.DataFrame()
         div = raw["Dividends"]
+        close = raw["Close"] if "Close" in cols.get_level_values(0) else None
     elif "Dividends" in cols:
         div = raw[["Dividends"]].rename(columns={"Dividends": tickers[0]})
+        close = raw[["Close"]].rename(columns={"Close": tickers[0]}) if "Close" in cols else None
     else:
         return pd.DataFrame()
     if isinstance(div, pd.Series):
         div = div.to_frame(tickers[0])
     div = div.reindex(columns=[t for t in tickers if t in div.columns]).fillna(0.0)
+    if close is not None:          # the same rule the backtest's prices go through
+        div, _ = data_quality.implausible_dividends(close, div, source="dividends")
     div = div.loc[(div != 0).any(axis=1)]          # keep only actual ex-dates
     try:
         if use_cache and len(div.columns) == len(tickers):   # never a partial answer

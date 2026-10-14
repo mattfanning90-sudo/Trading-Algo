@@ -274,6 +274,63 @@ def suspected_split(prices: pd.DataFrame, held, fills,
     return out
 
 
+# A dividend VALUE the price contradicts. A real dividend takes about itself off
+# the close on its ex-date (the ex-date return regresses on -D/C with slope
+# 0.73-1.02 across the four markets, 2012-2026); a typo, a double count or a
+# value never rescaled for a later consolidation does not. Only a LARGE one can
+# be judged: a normal day moves 1-2.5%, which swamps half of a small dividend.
+# Over all 13,143 dividends in the four universes 2012-2026 this rejects 11
+# (MRO.L's eight 2012-15 values, AV.L 2022-05-16, IHG.L 2016-05-05, DHR
+# 2016-07-05) and keeps every large real one (TSCO.L 2021 21%, MDLZ 2012 33%).
+DIVIDEND_CHECK_SIZE = 0.08      # D at least this share of the prior close...
+DIVIDEND_MIN_FALL = 0.5         # ...must take at least this share of D off it
+# An older rejection is history, not news: the full panel is re-read on every
+# run, so it is printed and never posted (verify.HISTORICAL_CUTOFF_DAYS ages
+# its findings for the same reason).
+DIVIDEND_ALERT_DAYS = 30
+
+
+def implausible_dividends(close: pd.DataFrame, dividends: pd.DataFrame,
+                          *, source: str = "prices") -> tuple[pd.DataFrame, QualityReport]:
+    """`dividends` with every value its own price contradicts set to 0, and a
+    report naming each one.
+
+    The ONE rule for a dividend value, on both paths a dividend enters a book:
+    the backtest's prices (`data._download_primary`, before
+    `data.dividend_adjusted`) and the paper book's cash (`data.dividends`).
+    A dividend D of at least DIVIDEND_CHECK_SIZE of the ticker's last close
+    before its ex-date must be matched by a fall to its first close on or
+    after it of at least DIVIDEND_MIN_FALL x D. `close` is the raw
+    (split-adjusted) close the dividends belong to, on the same index; a
+    dividend with no close on one side cannot be judged and is kept.
+    """
+    prior = close.ffill().shift(1).reindex(index=dividends.index, columns=dividends.columns)
+    after = close.bfill().reindex(index=dividends.index, columns=dividends.columns)
+    bad = ((dividends >= DIVIDEND_CHECK_SIZE * prior)
+           & (prior - after < DIVIDEND_MIN_FALL * dividends))
+    report, events = QualityReport(), []
+    for i, j in zip(*np.nonzero(bad.to_numpy())):
+        day, t = bad.index[i], bad.columns[j]
+        d, p, a = (float(f.iat[i, j]) for f in (dividends, prior, after))
+        events.append({"ticker": t, "date": str(day.date()), "dividend": d,
+                       "prior_close": p, "ex_close": a})
+        note = f"{day.date()} {d:g} = {d / p:.1%} of {p:g}, close moved {a / p - 1:+.1%}"
+        report.reasons[t] = (report.reasons[t] + "; " + note if t in report.excluded
+                             else f"implausible dividend: {note}")
+        report.excluded.add(t)
+    if events:
+        from . import notifications
+        recent = (pd.Timestamp(max(e["date"] for e in events))
+                  >= pd.Timestamp.now().normalize() - pd.Timedelta(days=DIVIDEND_ALERT_DAYS))
+        notifications.notify(
+            "implausible_dividend",
+            f"{source}: {len(events)} dividend value(s) the price contradicts "
+            "were NOT applied — " + " | ".join(f"{t}: {r}" for t, r in report.reasons.items()),
+            level="alert" if recent else "info", channel=None if recent else "log",
+            source=source, events=events)
+    return dividends.mask(bad, 0.0), report
+
+
 def eligible(prices: pd.DataFrame, region, asof: pd.Timestamp,
              base: set | None = None) -> tuple[set | None, QualityReport]:
     """The eligible candidate set after the quality gate, and the report.
