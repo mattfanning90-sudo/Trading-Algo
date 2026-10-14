@@ -43,3 +43,8 @@ def test_a_term_inside_a_gloss_is_never_glossed():
 def test_every_term_has_a_plain_gloss():
     for term, pattern, g in glossary.TERMS:
         assert g and g[0].islower() and not g.endswith("."), term
+
+
+def test_plural_forms_are_glossed_too():
+    out = glossary.gloss(["two backtests and normal spreads"])
+    assert out[0].count("(") == 2

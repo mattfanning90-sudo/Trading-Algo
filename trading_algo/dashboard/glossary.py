@@ -1,7 +1,7 @@
-"""Plain words for the terms the book screens can't avoid (Matt's standing
-rule: plain English first, the term second). Each term is explained the first
-time it appears on a screen. Matching runs on the original text only, so a
-gloss is never itself glossed."""
+"""Plain words for the terms the book screens can't avoid. The rule texts are
+written plain-words-first (Matt's standing rule); any term they still need is
+explained here, in brackets, the first time it appears on a screen.
+Matching runs on the original text only, so a gloss is never itself glossed."""
 from __future__ import annotations
 
 import re
@@ -14,7 +14,7 @@ TERMS: list[tuple[str, str, str]] = [
      "return per unit of ups and downs after the return on cash; above 1 is strong, below 0 did worse than cash"),
     ("permutation test", r"\bpermutation test\b",
      "re-running the search on shuffled, patternless prices to see how often luck alone does as well"),
-    ("p-value", r"\bp-value\b", "the share of shuffled runs that did at least as well"),
+    ("p-value", r"\bp-values?\b", "the share of shuffled runs that did at least as well"),
     ("profit factor", r"\bprofit factor\b",
      "money won on winning positions divided by money lost on losing ones; above 1 means winners paid for losers"),
     ("survivorship-biased", r"\bsurvivorship-biased\b",
@@ -27,10 +27,10 @@ TERMS: list[tuple[str, str, str]] = [
     ("safety breaker", r"\bsafety breaker\b", "a rule that pauses trading if the book falls too far from its peak"),
     ("below its best", r"\bbelow its best\b", "how far the book has fallen from its highest value"),
     ("stamp duty", r"\bstamp duty\b", "a 0.5% UK tax on buying shares"),
-    ("spread", r"\bspread\b", "the gap between the buying and selling price, paid on every trade"),
+    ("spread", r"\bspreads?\b", "the gap between the buying and selling price, paid on every trade"),
     ("financing", r"\bfinancing\b", "the overnight interest paid or earned on currency positions"),
-    ("backtest", r"\bbacktest\b", "a replay of the strategy on past prices, costs included"),
-    ("benchmark", r"\bbenchmark\b", "what simply holding the market's index funds would have done"),
+    ("backtest", r"\bbacktests?\b", "a replay of the strategy on past prices, costs included"),
+    ("benchmark", r"\bbenchmarks?\b", "what simply holding the market's index funds would have done"),
     ("tracking error", r"\btracking error\b", "how much the book's return normally wanders from the market's"),
     ("basis points", r"\bbasis points\b", "hundredths of a percent; 46 basis points is 0.46%"),
 ]
