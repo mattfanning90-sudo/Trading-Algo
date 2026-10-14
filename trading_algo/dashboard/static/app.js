@@ -1378,7 +1378,7 @@ function backtestHTML(page) {
       <div style="display:flex;gap:18px;font-size:9px;letter-spacing:.12em;margin-bottom:10px">
         <span style="color:#eaffec">■ GROWTH OF A$${num((real && bt.initial_capital) || 100000, 0)} · AUD, NET OF COSTS${real ? '' : ' · ILLUSTRATIVE'}</span>
         <span style="color:${dirColor(curves.dir, DIM)}">— MOMENTUM/3R</span>
-        <span style="color:#61805f">— EQUAL-WEIGHT INDEX BENCHMARK</span>
+        <span style="color:#61805f">— ${esc(String((real && bt.benchmark_label) || 'equal-weight index benchmark').toUpperCase())}</span>
       </div>
       <svg viewBox="0 0 1200 240" preserveAspectRatio="none" style="width:100%;height:250px;display:block">
         <line x1="0" y1="60" x2="1200" y2="60" stroke="#1a1a1a" stroke-width="1"></line>

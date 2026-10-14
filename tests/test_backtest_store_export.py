@@ -132,3 +132,20 @@ def test_the_cache_records_the_code_it_was_generated_by(exported):
     assert exported["git_commit"] == manifest._git_commit()
     assert exported["git_commit"] != "unknown"
     assert len(exported["git_commit"]) == 40
+
+
+def test_the_cache_names_the_benchmark_it_measured_against(exported):
+    """Task 21 made the benchmark a dividend-reinvesting ETF blend, with the
+    price-index blend kept as a labelled fallback; the page still printed a
+    fixed "EQUAL-WEIGHT INDEX BENCHMARK" whichever was used. The cache carries
+    the run's own label, and the page shows it."""
+    import pathlib
+
+    from trading_algo import portfolio_backtest as pb
+
+    assert exported["benchmark_kind"] in pb.BENCHMARK_LABELS
+    assert exported["benchmark_label"] == pb.BENCHMARK_LABELS[exported["benchmark_kind"]]
+    app = (pathlib.Path(__file__).parents[1] / "trading_algo" / "dashboard" / "static"
+           / "app.js").read_text()
+    assert "bt.benchmark_label" in app
+    assert "— EQUAL-WEIGHT INDEX BENCHMARK</span>" not in app

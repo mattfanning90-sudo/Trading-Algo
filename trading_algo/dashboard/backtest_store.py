@@ -128,6 +128,11 @@ def export_equity(synthetic: bool = False, point_in_time: bool = False,
         "initial_capital": cfg.INITIAL_CAPITAL,
         "curve": _downsample(result["equity"]),
         "benchmark": _downsample(result["benchmark"]),
+        # Which benchmark this run measured against (Task 21): the ETF blend,
+        # or the price-index fallback, which carries no dividends. The page
+        # prints the label rather than a fixed name.
+        "benchmark_kind": result.get("benchmark_kind"),
+        "benchmark_label": result.get("benchmark_label"),
         "metrics": _metrics_out(result["metrics"]),
         "benchmark_metrics": _metrics_out(result["benchmark_metrics"]),
         # "is the strategy adding anything over owning the index?" — portfolio
