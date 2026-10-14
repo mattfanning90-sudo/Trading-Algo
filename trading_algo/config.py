@@ -328,8 +328,8 @@ MIN_REBALANCE_GAP_DAYS = 20
 # combined, which makes HOLDING PERIOD a strategy parameter rather than a cost.
 MARGINAL_TAX_RATE = 0.47        # top AU marginal incl. Medicare levy; set yours
 
-# Dividend withholding by sleeve. The price series is auto_adjust=True (TOTAL
-# RETURN), so the backtest already credited you 100% of every dividend — this is
+# Dividend withholding by sleeve. The price series is dividend-adjusted (TOTAL
+# RETURN, data.dividend_adjusted), so the backtest already credited you 100% of every dividend — this is
 # the slice that never arrives. US: 15% under the AU/US treaty WITH a W-8BEN on
 # file (30% without). UK: nil on most dividends for non-residents. ASX: nil
 # withholding for a resident (franking credits are a separate, unmodelled

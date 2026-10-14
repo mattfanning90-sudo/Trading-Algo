@@ -15,8 +15,10 @@ HONEST LIMITS — read before relying on this:
     `.L` suffixed tickers the ASX and FTSE sleeves trade, so this is redundancy
     for the US sleeve and nothing else. It returns None for a ticker it cannot
     serve rather than inventing a column.
-  * Prices are `adjClose` (split- and dividend-adjusted), matching the
-    `auto_adjust=True` Yahoo primary.
+  * Prices are Tiingo's `adjClose` (split- and dividend-adjusted, by Tiingo),
+    not `data.dividend_adjusted` over Tiingo's own close and dividends — the
+    same quantity only if Tiingo adjusts as Yahoo does for US names, which
+    has not been measured (no token).
   * Fallback data still flows through the F7 data-quality gate downstream, so a
     poor secondary cannot slip bad prints into a rebalance.
   * No token in the environment = a silent no-op, never an error: a laptop with

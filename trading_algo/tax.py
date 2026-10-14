@@ -18,7 +18,7 @@ Two things are modelled:
 * **CGT** on the FIFO round-trips `pnl.build_lots` already produces. Losses are
   applied against NON-discounted gains first (the ATO lets you choose the order;
   that choice is strictly better for the taxpayer).
-* **Dividend withholding.** The price series is `auto_adjust=True`, i.e. TOTAL
+* **Dividend withholding.** The price series is dividend-adjusted, i.e. TOTAL
   RETURN — the backtest silently credits you 100% of every dividend. An
   Australian resident holding US equities loses 15% to US withholding under the
   treaty (with a W-8BEN; 30% without). This measures that drag from the actual
@@ -147,7 +147,7 @@ def withholding_drag(round_trips: list[dict], *, dividends, rates: dict,
     sold between two ex-dates correctly earns nothing.
 
     This is an ESTIMATE of a drag the price series hides: with
-    `auto_adjust=True` the backtest already credited you the full dividend.
+    dividend-adjusted prices the backtest already credited you the full dividend.
     """
     gross = withheld = 0.0
     by_region: dict[str, float] = {}
@@ -250,7 +250,7 @@ def tax_report(state: dict, *, marginal_rate: float, rates: dict,
         "",
         "## Dividend withholding",
         "",
-        "The price series is `auto_adjust=True` — total return — so the book "
+        "The price series is dividend-adjusted — total return — so the book "
         "already credited itself 100% of these dividends.",
         "",
         "| | |", "|---|---|",

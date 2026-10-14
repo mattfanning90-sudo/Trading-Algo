@@ -36,7 +36,7 @@ def _sleeve_base_returns(local_rets: pd.Series, fx_mult: pd.Series) -> pd.Series
 # What the benchmark actually is, in words, so no consumer can print a number
 # without printing what it was measured against. The ETF basis promises the
 # strategy's OWN dividend treatment, not more: both come from the same
-# auto_adjust=True feed, so whatever that feed reinvests, both reinvest.
+# loader (data.dividend_adjusted), so whatever it reinvests, both reinvest.
 BENCHMARK_LABELS = {
     "total-return": "equal-weight index ETFs, dividends reinvested as in the "
                     "strategy's own prices, AUD",
@@ -72,7 +72,7 @@ def _blend(index_by_region: dict, union: pd.DatetimeIndex,
 def _total_return_proxies(regions: list[str], start: str, end: str | None,
                           synthetic: bool) -> dict[str, pd.Series]:
     """Closes of each region's dividend-reinvesting ETF proxy, from the same
-    auto_adjust=True feed as the strategy's prices. Empty offline or synthetic
+    dividend-adjusted loader as the strategy's prices. Empty offline or synthetic
     — the caller then falls back to the price index and SAYS SO."""
     if synthetic:
         return {}

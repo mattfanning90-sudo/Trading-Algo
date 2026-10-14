@@ -232,9 +232,9 @@ def suspected_split(prices: pd.DataFrame, held, fills,
                     *, tolerance: float = SPLIT_TOLERANCE) -> dict:
     """Held names whose price history no longer matches the book's own fills.
 
-    Yahoo back-adjusts the WHOLE history for a split on every download
-    (`data.load_prices` asks for `auto_adjust=True`), so a split never shows as
-    a jump inside the series: NVDA's 10-for-1 on 2024-06-10 reads
+    Yahoo back-adjusts the WHOLE history for a split on every download (its
+    raw Close, which `data.load_prices` builds on, is split-adjusted), so a
+    split never shows as a jump inside the series: NVDA's 10-for-1 on 2024-06-10 reads
     120.54 -> 121.44 across it. What changes is the past. The close on the day
     the book last traded a name no longer matches the price the book recorded,
     and the share count is now wrong by exactly that ratio. A market move can

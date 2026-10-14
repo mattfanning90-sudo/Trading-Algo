@@ -43,7 +43,7 @@ class Region:
     # does not have, and inventing one would break invariant #6.
     quote_overrides: dict[str, float] = field(default_factory=dict)
     # Dividend-REINVESTING total-return proxy for this market, used only by the
-    # portfolio benchmark. The strategy's own prices are auto_adjust=True, so a
+    # portfolio benchmark. The strategy's own prices are dividend-adjusted, so a
     # price index (`index_ticker`) is not its opponent — it is the same market
     # with the dividends removed. Deliberately NOT in `all_tickers`: this is a
     # yardstick, never a tradable name.
@@ -116,9 +116,9 @@ REGIONS: dict[str, Region] = {
         currency="GBP",
         index_ticker="^FTSE",          # FTSE 100
         benchmark_ticker="ISF.L",      # iShares Core FTSE 100 UCITS ETF
-        # Measured 2026-10-14: Yahoo's adjusted close for .L quotes carries
-        # ~1% of their dividends (ISF.L 5.73% vs ^FTSE 5.74% CAGR in AUD), and
-        # the FTSE sleeve's own names share it — like for like, price-only.
+        # Yahoo's own adjusted close for .L quotes carries ~1% of their
+        # dividends, so this leg (and the sleeve's names) were price-only
+        # until data.dividend_adjusted built the adjustment for every ticker.
         yahoo_suffix=".L",
         ibkr_exchange="LSE",
         timezone="Europe/London",
