@@ -101,6 +101,24 @@ def test_turnover_cost_exact_per_order_not_averaged():
     assert exact > turnover * asx.slippage_bps / 1e4 + averaged_commission
 
 
+def test_turnover_commission_is_the_commission_part_of_turnover_cost():
+    """The commission `turnover_cost` charges, on its own, so the backtest can
+    record what it paid: one fees.commission per sized order (floor
+    included) over nav, or the bps rate on turnover when the orders cannot
+    be sized."""
+    asx = get_region("ASX")
+    nav = 10_000.0
+    orders = pd.Series({"tiny": 0.01, "large": 2.0})
+    turnover = float(orders.sum())
+    got = fees.turnover_commission(asx, turnover, nav=nav, orders=orders)
+    assert got == (5.0 + 2.0 * nav * asx.commission_bps / 1e4) / nav
+    assert fees.turnover_cost(asx, turnover, 0.0, nav=nav, orders=orders) == (
+        turnover * asx.slippage_bps / 1e4 + got)
+    for unsized in ({}, {"nav": 0.0, "orders": orders}, {"nav": nav}):
+        assert fees.turnover_commission(asx, 0.4, **unsized) == pytest.approx(
+            0.4 * asx.commission_bps / 1e4)
+
+
 def test_turnover_cost_guards_on_nonpositive_nav():
     """M-3: the per-order branch must require nav > 0, not just truthy — a
     `nav` of 0 (or, in principle, negative) must fall back to the bps model

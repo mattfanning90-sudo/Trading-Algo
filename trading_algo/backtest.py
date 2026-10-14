@@ -138,6 +138,7 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
     daily_ret: list[float] = []
     turnover_log: list[tuple] = []
     cost_log: list[tuple] = []
+    commission_log: list[tuple] = []
     weights_hist: dict[pd.Timestamp, pd.Series] = {}
     total_cost = 0.0
     total_cash_interest = 0.0
@@ -214,11 +215,15 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
             # (today's own close isn't appended yet); under Task 9's
             # next-close-fill convention the strictly correct NAV is one bar's
             # return later, which is second order and accepted here.
+            orders = delta[delta.abs() > 0]
             cost = fees.turnover_cost(
                 region, turnover, buy_turnover, impact=impact,
-                nav=equity[-1], orders=delta[delta.abs() > 0])
+                nav=equity[-1], orders=orders)
             turnover_log.append((today, turnover))
             cost_log.append((today, cost))
+            # The commission inside `cost`, recorded for the bridge.
+            commission_log.append((today, fees.turnover_commission(
+                region, turnover, nav=equity[-1], orders=orders)))
             total_cost += cost
             r -= cost
             current_w = pending
@@ -265,6 +270,8 @@ def run_backtest(prices: pd.DataFrame, index_prices: pd.Series, region: Region,
         "equity": eq,
         "turnover": pd.Series(dict(turnover_log)),
         "costs": pd.Series(dict(cost_log)),
+        # Fraction of NAV like `costs`: the commission part of each bar's cost.
+        "commission": pd.Series(dict(commission_log)),
         "total_cost_fraction": total_cost,
         "cash_interest_fraction": total_cash_interest,
         "weights": weights_hist,

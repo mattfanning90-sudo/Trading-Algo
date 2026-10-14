@@ -25,7 +25,6 @@ import pandas as pd
 
 from . import config as cfg
 from . import fees, fx, metrics, pnl, tca
-from .regions import get_region
 
 # AC4: alert when annualised tracking error exceeds this budget.
 TRACKING_ERROR_ALERT_BPS = 200.0
@@ -174,14 +173,6 @@ def _blended_cost_fraction(cost_by_region: dict) -> float:
     return (tot_cost / tot_notional) if tot_notional else 0.0
 
 
-def _commission_bps(region_key: str | None) -> float | None:
-    """The bps rate the BACKTEST charges for this region, or None if unknown."""
-    try:
-        return float(get_region(region_key).commission_bps)
-    except Exception:
-        return None
-
-
 def _inception_window(paper_state: dict,
                       predicted: pd.Series | None = None) -> dict:
     """THE window every live-vs-backtest return here is measured over, so
@@ -244,8 +235,8 @@ def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float
     """(shortfall BEYOND the modelled slippage, slippage paid), base currency.
 
     Both engines charge `region.slippage_bps`, so only the excess diverges.
-    Floored at zero per fill, as `_line_commission_floor` is: a fill better than
-    modelled is not credited and stays in the residual."""
+    Floored at zero per fill: a fill better than modelled is not credited and
+    stays in the residual."""
     excess = paid_total = 0.0
     for t, rate in fills:
         bps = tca._modelled_bps(t.get("region"))
@@ -259,15 +250,16 @@ def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float
     return excess, paid_total
 
 
-def _line_commission_floor(fills: list[tuple[dict, float]]) -> float:
-    """Commission paid ABOVE the backtest's bps model, base currency."""
-    excess = 0.0
-    for t, rate in fills:
-        bps = _commission_bps(t.get("region"))
-        if bps is not None:
-            modelled = float(t["shares"]) * float(t["fill"]) * bps / 1e4
-            excess += max(0.0, float(t.get("commission") or 0.0) - modelled) * rate
-    return excess
+def _line_commission_floor(paid: float, terms: dict, equity: float) -> float:
+    """The paper's commission less the backtest's, as a fraction of `equity`.
+
+    `paid` is the paper's fills' commission in the window, base currency; the
+    backtest's is each sleeve's `_sleeve_terms` "commission". Both engines
+    charge one `fees.commission` per order, the region's floor included, so an
+    order both placed at the same size nets to nothing; what is left is an
+    order only one placed (the paper skips dust the backtest trades) or a
+    size that pays the floor in one engine and bps in the other."""
+    return (paid - sum(t["v0"] * t["commission"] for t in terms.values())) / equity
 
 
 def _base_per_local(paper_state: dict, ccy: str | None) -> float | None:
@@ -362,6 +354,14 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
     backtest's growth after it. A credit both engines paid alike nets to
     nothing. `paper_interest` is the paper's part; None when the sleeve has
     no rate to convert it at, and then it is left out, never taken at parity.
+
+    `commission` is what the backtest charged in the window, as a fraction
+    of v0, raw (not linked), the way the paper's fills are counted. Each fill
+    bar's record c is a fraction of its NAV at the previous close
+    (`fees.turnover_commission`); like its returns it goes into base through
+    the bar's FX move: c x v0 x growth / (1 + local return) is c of its base
+    value at the previous close times fx_step, its local commission at its
+    own rate on that bar.
     """
     rl, rb = bt["returns"], bt["base_returns"]
     costs = bt.get("costs")
@@ -372,6 +372,10 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
         idx = idx[idx > bt["open_bar"]]
     growth = (1 + rb.loc[idx]).cumprod()
     b_end = float(growth.iloc[-1]) if len(idx) else 1.0
+    charged = bt.get("commission")
+    charged = (charged if charged is not None
+               else pd.Series(dtype=float)).reindex(idx, fill_value=0.0)
+    commission = float((charged * growth / (1 + rl.loc[idx])).sum())
     fx_step = (1 + rb) / (1 + rl)                  # the backtest's FX move per day
     gaps = rl.index.to_series().diff().dt.days.fillna(0)
     # backtest.py records weights[D] at D's CLOSE, after any fill on D, so day
@@ -429,6 +433,7 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
         paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
                   / (float(before.iloc[-1]) if len(before) else 1.0))
     return {"v0": v0, "gap": b_end - values[days[-1]] / v0,
+            "commission": commission,
             "interest": interest - (paper or 0.0), "paper_interest": paper,
             "exposure": None if why else exposure, "why": why, "bt_flat": bt_flat}
 
@@ -513,11 +518,12 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
 
     `backtest` is the `run_portfolio_backtest` result `predicted_equity` came
     from — the SAME regions, allocations, params and window as the book. With
-    it, the holdings lines are measured from its per-sleeve weights and
-    returns (see `_sleeve_terms`): `cash_interest`, `exposure_gap`, and
-    `rebalance_timing`. The last is each sleeve's gap less every other line,
-    so it is the one place an unnamed SLEEVE-level cause can hide, and its
-    note lists what it carries; the residual is then the portfolio layer
+    it, the holdings lines are measured from its per-sleeve weights, returns
+    and recorded commission (see `_sleeve_terms`): `cash_interest`,
+    `commission_floor`, `exposure_gap`, and `rebalance_timing`. The last is
+    each sleeve's gap less every other line, so it is the one place an
+    unnamed SLEEVE-level cause can hide, and its note lists what it
+    carries; the residual is then the portfolio layer
     alone (the backtest trues sleeves to target monthly while the paper funds
     once and drifts). Without `backtest`, or when a sleeve's holdings cannot
     be had, those lines stay 0.0, say why, and leave the gap in residual.
@@ -542,11 +548,11 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     left_out -= len(fills)
     slip_excess, slip_paid = _line_fill_convention(fills)
     duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
+    commissions = sum(float(t.get("commission") or 0.0) * rate for t, rate in fills)
     credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, end)
     earned, int_unrated = _window_cash(paper_state, pnl.INTEREST, end)
     lines = {name: 0.0 for name in BRIDGE_LINES}
     lines["fill_convention"] = slip_excess / start_equity
-    lines["commission_floor"] = _line_commission_floor(fills) / start_equity
 
     ccy = paper_state.get("base_currency") or "base"
     notes = {
@@ -571,6 +577,10 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                            f"which both engines charge; the paper book paid "
                            f"{slip_paid:,.2f} {ccy} of slippage over this window "
                            f"(fills that record a decision price)",
+        "commission_floor": (f"0.0 — needs the backtest's commission "
+                             f"(backtest=); the paper book paid {commissions:,.2f} "
+                             f"{ccy} of commission over this window, and the "
+                             f"difference stays in residual"),
         "stamp_duty": f"0.0 — both engines charge it; the paper book paid "
                       f"{duty:,.2f} {ccy} over this window",
         "exposure_gap": "0.0 — needs the backtest's per-sleeve holdings "
@@ -589,7 +599,8 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
     if backtest is not None:
         terms, why = _holdings_terms(paper_state, backtest, end)
         if why:
-            for name in ("cash_interest", "exposure_gap", "rebalance_timing"):
+            for name in ("cash_interest", "commission_floor", "exposure_gap",
+                         "rebalance_timing"):
                 notes[name] = f"0.0 — not measured: {why}; the gap stays in residual"
         else:
             lines["cash_interest"] = _line_cash_interest(terms, start_equity)
@@ -607,6 +618,18 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                 + (f"; {', '.join(lost)} INT rows left out — no rate for the "
                    "sleeve's cash, and parity would be a guess; they stay in "
                    "residual" if lost else ""))
+            lines["commission_floor"] = _line_commission_floor(
+                commissions, terms, start_equity)
+            charged = commissions - lines["commission_floor"] * start_equity
+            notes["commission_floor"] = (
+                f"the paper book's commission less the backtest's, both one "
+                f"fees.commission per order, floor included: "
+                f"{commissions:,.2f} less {charged:,.2f} {ccy} over this "
+                f"window, raw sums — the paper's fills at the current "
+                f"fx_snapshot, the backtest's at its own rate on each fill "
+                f"bar. Every commission difference, not only the floor's: an "
+                f"order only one engine placed (the paper skips dust) counts "
+                f"on its side alone")
             missing = [t["why"] for t in terms.values() if t["why"]]
             if missing:
                 for name in ("exposure_gap", "rebalance_timing"):
@@ -633,9 +656,9 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
                     "(data-quality exclusions, whole-share rounding of the name "
                     "mix), which cannot be separated without per-name "
                     "counterfactual books — plus every sleeve-level cause no "
-                    "line names yet: turnover-cost differences, dividends the "
-                    "ledger does not hold, FX translation timing, bars stamped "
-                    "a day apart")
+                    "line names yet: slippage and stamp duty on different "
+                    "turnover, dividends the ledger does not hold, FX "
+                    "translation timing, bars stamped a day apart")
                 notes["residual"] = (
                     "the portfolio layer: the backtest trues its sleeves back to "
                     "target each month and pays the FX spread; the paper book "

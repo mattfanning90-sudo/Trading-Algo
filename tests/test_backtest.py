@@ -122,6 +122,31 @@ def test_small_book_pays_more_than_bps_because_of_the_floor(synth_asx, asx_regio
     assert small["total_cost_fraction"] > big["total_cost_fraction"] * 1.2
 
 
+def test_the_backtest_records_the_commission_its_cost_charged(
+        synth_asx, asx_region, monkeypatch):
+    """The reconciliation bridge nets the paper's commission against the
+    backtest's, so the backtest must say what it charged: per fill bar, a
+    fraction of NAV like `costs`. ASX pays no stamp duty and no impact is set,
+    so each bar's cost is slippage on its turnover plus exactly that
+    commission, the A$5 floor included on a small book."""
+    prices, index_px = synth_asx
+    res = run_backtest(prices, index_px, asx_region, initial_capital=20_000)
+    comm, turnover = res["commission"], res["turnover"]
+    slip = turnover * asx_region.slippage_bps / 1e4
+    assert comm.index.equals(res["costs"].index) and len(comm) > 10
+    assert ((comm - (res["costs"] - slip)).abs() < 1e-15).all()
+    assert (comm > turnover * asx_region.commission_bps / 1e4 * 1.01).any(), \
+        "the floor never bound, so this cannot tell the floor from bps"
+    # One definition: what is recorded and what is charged come from the same
+    # fees function, so changing it changes both.
+    real = fees.turnover_commission
+    monkeypatch.setattr(fees, "turnover_commission", lambda *a, **k: 2 * real(*a, **k))
+    twice = run_backtest(prices, index_px, asx_region, initial_capital=20_000)
+    assert twice["commission"].sum() > 1.5 * comm.sum()
+    assert ((twice["commission"] - (twice["costs"] - twice["turnover"]
+             * asx_region.slippage_bps / 1e4)).abs() < 1e-15).all()
+
+
 # --- a book opened mid-sample (Task 13c) ------------------------------------
 # The comparison a paper book is bridged against is "this strategy, run by this
 # book, from the day it opened". History before that is WARM-UP: the signals

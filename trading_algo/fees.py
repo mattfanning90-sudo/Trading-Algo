@@ -73,16 +73,35 @@ def turnover_cost(region: Region, turnover: float, buy_turnover: float,
     (the paper book is left still holding a sliver the backtest would have
     sold), already accounted for by the reconciliation bridge's holdings lines.
     It is not a cost to imitate here: every entry in `orders` is a trade the
-    backtest itself actually placed.
+    backtest itself actually placed (the commission it pays on one the paper
+    skipped is the bridge's commission_floor line).
     """
     duty = buy_turnover * region.stamp_duty_bps / 1e4
-    if nav is not None and nav > 0 and orders is not None and len(orders) > 0:
-        commission_frac = sum(
-            commission(region, abs(float(dw)) * float(nav)) for dw in orders
-        ) / float(nav)
+    if _sized(nav, orders):
         return (turnover * region.slippage_bps / 1e4
-                + commission_frac + duty + impact)
+                + turnover_commission(region, turnover, nav=nav, orders=orders)
+                + duty + impact)
     return turnover * round_trip_cost_rate(region) + duty + impact
+
+
+def _sized(nav: float | None, orders: pd.Series | None) -> bool:
+    """Can a rebalance's orders be charged one by one: a positive `nav` and
+    at least one order."""
+    return nav is not None and nav > 0 and orders is not None and len(orders) > 0
+
+
+def turnover_commission(region: Region, turnover: float, *,
+                        nav: float | None = None,
+                        orders: pd.Series | None = None) -> float:
+    """The commission inside `turnover_cost`, as a fraction of `nav`: one
+    `commission()` per order of |Δw_i| · nav, floor included, over nav — or,
+    when the orders cannot be sized, commission_bps on turnover (the
+    commission inside `round_trip_cost_rate`). The backtest records it per
+    fill bar, so what it says it paid is what it charged."""
+    if _sized(nav, orders):
+        return sum(commission(region, abs(float(dw)) * float(nav))
+                   for dw in orders) / float(nav)
+    return turnover * region.commission_bps / 1e4
 
 
 def square_root_impact(order_notional: float, adv_dollar: float, vol: float,
