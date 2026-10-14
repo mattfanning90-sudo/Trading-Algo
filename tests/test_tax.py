@@ -133,3 +133,31 @@ def test_us_dividends_are_not_scaled():
         dividends=lambda t: divs.get(t, pd.Series(dtype=float)),
         rates={"US": 0.15}, price_scale=lambda r: 1.0)
     assert w["gross_dividends"] == pytest.approx(85.0)
+
+
+def test_the_report_s_dividends_go_through_the_plausibility_rule(monkeypatch, tmp_path):
+    """The after-tax report's default dividend source is the same
+    `data.dividends` the paper book credits from, so a value the price
+    contradicts (here 20% of the price on a day it did not move) is no more
+    'received' in the tax report than it is in the book. Yahoo's raw
+    `Ticker.dividends` carries it."""
+    import pandas as pd
+    import yfinance
+
+    from trading_algo import data, notifications, tax
+
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(data, "CACHE_DIR", str(tmp_path))
+    idx = pd.bdate_range("2026-03-02", periods=5)
+    raw = pd.DataFrame({("Close", "AAA"): [100.0] * 5,
+                        ("Dividends", "AAA"): [0.0, 0.0, 20.0, 0.0, 1.0]}, index=idx)
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+    monkeypatch.setattr(data, "_download_dividends", lambda t, s, e: raw)
+
+    class _Ticker:                     # what Yahoo's own dividend list says
+        def __init__(self, t):
+            self.dividends = raw[("Dividends", "AAA")].loc[lambda s: s != 0]
+    monkeypatch.setattr(yfinance, "Ticker", _Ticker)
+
+    got = tax.yahoo_dividends("AAA")
+    assert got.loc[lambda s: s != 0].to_dict() == {idx[4]: 1.0}

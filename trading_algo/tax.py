@@ -182,14 +182,19 @@ def withholding_drag(round_trips: list[dict], *, dividends, rates: dict,
 def yahoo_dividends(ticker: str):
     """Per-share dividend history from Yahoo. The default `dividends` source.
 
-    Network-bound and therefore never used by a test — `withholding_drag` takes
-    the callable so the maths can be pinned offline.
+    Read through `data.dividends`, the source the paper book credits from, so
+    a value its own price contradicts (`data_quality.implausible_dividends`)
+    is not counted as received here either. Network-bound: tests replace
+    `data._download_dividends`, and `withholding_drag` takes the callable so
+    the maths can be pinned offline.
     """
-    import yfinance as yf
+    from . import config as cfg
+    from . import data
     try:
-        return yf.Ticker(ticker).dividends
+        df = data.dividends([ticker], cfg.START)
     except Exception:
         return pd.Series(dtype=float)
+    return df[ticker] if ticker in df.columns else pd.Series(dtype=float)
 
 
 def open_lots_as_holdings(open_lots: dict, as_of: str | None = None) -> list[dict]:
