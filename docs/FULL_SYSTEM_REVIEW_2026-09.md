@@ -866,3 +866,48 @@ training rows, and because that one list also decides what the books trade,
 arithmetic combination of two majors, so this is not new diversification, it is
 undisclosed concentration on exposures the books already held. The fix, commit
 `f15a118`, splits the training list from the traded list and is merged nowhere.
+
+## 16. Re-measured after the measurement-truth block (2026-10-15)
+
+The block that followed this review set out to make every reported number mean what it says
+(plan: `docs/superpowers/plans/2026-09-24-measurement-truth.md`). Re-measured on the finished code,
+real data 2012-01-04 → 2026-10-15, in Australian dollars, costs on. **CAGR** is the yearly growth
+rate; **Sharpe** is return per unit of bumpiness, measured above a 3.5% cash rate; **worst drawdown**
+is the deepest fall from a previous high. Every strategy figure is still a **survivorship-biased upper
+bound** — the backtest picks only from companies that exist today — while the benchmarks are index
+funds and indices, which carry no such bias.
+
+| | CAGR | Sharpe | Worst drawdown |
+|---|---|---|---|
+| Strategy portfolio (four sleeves) | 8.35% | 0.59 | −10.0% |
+| — ASX / US / FTSE / TSX sleeves | 5.17% / 8.97% / 5.33% / 8.95% | 0.26 / 0.57 / 0.25 / 0.71 | −12.1% / −13.3% / −16.3% / −15.5% |
+| Index-fund blend, dividends reinvested (STW, SPY, ISF, XIU) | 12.50% | 0.72 | −29.3% |
+| Price-index blend, no dividends (the old benchmark) | 9.29% | 0.49 | −30.6% |
+
+In plain words: the strategy trails a simple index-fund blend by about 4 points a year and does not
+beat it on smoothness either; what it offers is a worst fall about a third as deep, because it holds
+roughly 40% of the market's exposure (beta 0.41). This is the conclusion §1 reached, now on numbers
+the code computes correctly.
+
+**What moved the headline since §1's "8.6% / 0.62 at HEAD"**, each measured by the task that made it:
+trades now fill at the next day's close in both engines, not at the close they were decided on
+(Task 9, about −0.4 points a year on US and ASX); the per-order minimum commission is charged at each
+sleeve's real A$25,000 size (Task 13, ASX −1.1 points a year); Yahoo applied London dividends at
+1/100, now fixed by building the dividend-adjusted price in the repo (Task 21b, FTSE 4.06% → 5.44%);
+eleven dividend values the price contradicts are now rejected (Task 21c, FTSE 5.44% → 5.29%); the
+benchmark is now dividend-reinvesting index funds (Task 21), not price indices.
+
+**The FX books, re-measured after the drawdown breaker was fixed** (Task 14; the breaker no longer
+latches off for good after one fall — F10). Daily books' data to 2026-09-24, daytrader's hourly data to
+2026-10-15:
+
+| book | Sharpe (F18 → now) | CAGR | Worst drawdown |
+|---|---|---|---|
+| matt | −2.06 → −0.80 | −2.8% | −68.8% |
+| partner | −2.14 → −0.91 | −0.8% | −42.1% |
+| multiasset | −5.56 → −2.91 | −24.1% | −99.9% |
+| daytrader | −6.25 → −8.08 | −38.6% | −60.7% |
+
+All four still lose money. The fix roughly halves the daily books' losses; daytrader is worse, because
+the latched breaker had kept it in cash most of the time, and it turns its whole book over about 1,280
+times a year. The fixed-dollar crypto spread (F11) is still unfixed — it is the next block's.
