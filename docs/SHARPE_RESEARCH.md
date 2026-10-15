@@ -31,6 +31,27 @@ from the literature as if it were our result.
 
 ---
 
+> **Read this first — re-measured 2026-10-15, after the measurement-truth block.** The sleeve
+> figures in the tables below (§1, §1b, §3, §8, §9b) were measured before the block and are
+> superseded. On the finished code (real data 2012-01-04 → 2026-10-15, costs on, idle cash credited,
+> Sharpe measured above a 3.5% cash rate; survivorship-biased upper bounds):
+>
+> | sleeve | Sharpe | CAGR | worst drawdown | cumulative cost drag |
+> |---|---|---|---|---|
+> | ASX | 0.26 | 5.17% | −12.1% | 24.4% |
+> | US | 0.57 | 8.97% | −13.3% | 6.6% |
+> | FTSE | 0.25 | 5.33% | −16.3% | 27.6% |
+> | TSX | 0.71 | 8.95% | −15.5% | 8.8% |
+> | portfolio | 0.59 | 8.35% | −10.0% | — |
+>
+> What moved them: trades fill at the next day's close, not the close they were decided on (Task 9);
+> the per-order minimum commission is charged at each sleeve's real A$25,000 size — this is most of
+> ASX's fall and of its cost drag (Task 13); Yahoo applied London dividends at 1/100, so FTSE was
+> missing its dividends until the repo built the adjusted price itself (Task 21b, FTSE rises); eleven
+> dividend values the price contradicts are rejected (Task 21c). The *methods* in this document (which
+> Sharpe, annualisation, precision, multiple testing) are unchanged and still apply; only the numbers
+> moved. Full record: `docs/FULL_SYSTEM_REVIEW_2026-09.md` §16.
+
 ## 1. Which Sharpe? This repo computes four, and they disagree by 0.45
 
 **Finding.** "The Sharpe ratio" is not one definition. Sharpe's own 1994
