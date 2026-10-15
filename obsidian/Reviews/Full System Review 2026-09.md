@@ -114,6 +114,27 @@ from every decision and nothing reported that either.
 > is a hidden doubling-down. The fix already exists in the repo, on a branch that
 > was never merged.
 
+## Update — after the measurement-truth block (October 2026)
+
+The work that followed this review set out to make every number the system reports mean what it
+says, before trying to improve any of them. Measured again on the finished code:
+
+- **The strategy** grows about **8.4% a year** with a worst fall of **10%**. That is still an upper
+  bound, because the backtest only picks from companies that survive to today
+  ([[Survivorship Bias]]).
+- **Simply owning index funds** with dividends reinvested grew about **12.5% a year**, with a worst
+  fall of about **29%** ([[Total Return vs Price Index]]).
+- So the conclusion above stands, now on trustworthy numbers: the strategy trades growth for a much
+  calmer ride, because it keeps only about 40% of its money in the market
+  ([[Cash Drag and Exposure]]).
+
+The biggest surprise was in the data, not the code: Yahoo's dividend-adjusted prices counted London
+dividends at a hundredth of their real size, so the UK part of the strategy had been missing almost
+all its dividends. Fixed, it grows about 1.3 points a year faster than previously reported.
+
+**The currency and crypto books still lose money** after the [[Drawdown Breaker]] was fixed so it no
+longer switches itself off for good: Sharpe −0.8 to −8.1 across the four. They stay under review.
+
 ## Related
 - [[How It Works]] · [[12-1 Momentum]] · [[Regime & Trend Filters]] · [[Volatility Targeting]] · [[Sharpe Ratio]] · [[Permutation Testing]]
 - [[Total Return vs Price Index]] · [[Cash Drag and Exposure]] · [[Drawdown Breaker]] · [[Survivorship Bias]]
