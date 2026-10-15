@@ -16,5 +16,9 @@ def test_the_fx_snapshot_states_the_books_are_under_review(tmp_path, monkeypatch
     snap = fx_api.build_fx_snapshot("matt")
     assert snap["review_notice"] == fxcfg.REVIEW_NOTICE
     assert "UNDER REVIEW" in fxcfg.REVIEW_NOTICE.upper()
-    for sharpe in ("−2.06", "−2.14", "−5.56", "−6.25"):
+    # Re-measured on real data after the breaker fix (Task 14, Task 24):
+    # matt -0.80, partner -0.91, multiasset -2.91, daytrader -8.08.
+    for sharpe in ("−0.80", "−0.91", "−2.91", "−8.08"):
         assert sharpe in fxcfg.REVIEW_NOTICE
+    # The breaker latch is fixed; the notice must not still blame it.
+    assert "never resets" not in fxcfg.REVIEW_NOTICE

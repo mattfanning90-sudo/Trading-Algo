@@ -316,15 +316,16 @@ ACCOUNTS: dict[str, dict] = {
 
 # What every FX surface has to say about these books, in ONE place so the
 # terminal SPA and the published static page cannot state different things.
-# Figures: docs/FULL_SYSTEM_REVIEW_2026-09.md F18, real data, HEAD code,
-# isolated state. Two known artefacts inflate them (the fixed-dollar crypto
-# spread and the breaker latch) and both are named in the text rather than
+# Figures: re-measured on real data after the breaker fix (Task 14), recorded
+# in docs/FULL_SYSTEM_REVIEW_2026-09.md §16 (daily books' data to 2026-09-24,
+# daytrader's hourly data to 2026-10-15). The one known artefact still in
+# them, the fixed-dollar crypto spread, is named in the text rather than
 # quietly discounted from it.
 REVIEW_NOTICE = (
     "UNDER REVIEW — these books back-test NEGATIVE and are excluded from the "
-    "headline AUM. Backtest Sharpe: matt −2.06, partner −2.14, multiasset "
-    "−5.56, daytrader −6.25. Two known cost/risk artefacts inflate those "
-    "losses (a fixed-dollar crypto spread and a drawdown breaker that never "
-    "resets its high-water mark); with both corrected the agents' gross Sharpe "
-    "is near zero. No edge has been demonstrated. Paper money only."
+    "headline AUM. Backtest Sharpe: matt −0.80, partner −0.91, multiasset "
+    "−2.91, daytrader −8.08 (daytrader turns its whole book over about 1,280 "
+    "times a year, and the costs swamp it). One known cost artefact still "
+    "inflates the losses — crypto's spread is modelled as a fixed dollar "
+    "amount — but no edge has been demonstrated. Paper money only."
 )
