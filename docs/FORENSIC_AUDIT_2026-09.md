@@ -361,6 +361,82 @@ refuse to write over a state file whose book was opened non-synthetically.
 
 ---
 
+## The 2026-08-27 phantom liquidation (recorded here late)
+
+The whole `full` book was liquidated on a drawdown that never happened, and
+neither this document nor `LIVE_BOOK_AUDIT.md` recorded it until now. From
+`state/paper_state_full.json`, block `corrections`:
+
+| date | equity as booked | equity on real closes | FTSE sleeve as booked | FTSE sleeve corrected |
+|---|---|---|---|---|
+| 2026-08-27 | A$74,552.44 | A$99,086.23 | A$7,910.89 | A$32,444.69 |
+| 2026-08-28 | A$74,325.61 | A$98,819.82 | A$7,891.45 | A$32,385.67 |
+
+**Cause.** The FTSE sleeve was marked at cash only, on an all-NaN price row.
+Equity read A$74,552 against a true A$99,086, the 25% drawdown breaker read a
+−26.2% drawdown against a true **−2.24%**, tripped, and sixteen names were sold.
+The book sat in cash until 16 September; re-entry cost £46 of UK stamp duty.
+
+**Fix.** PR #93 — valuation now refuses an unpriced book (`paper_trade.py`
+unpriced-holdings guard). State was corrected on 2026-09-15T21:15:33Z by
+replaying holdings from the trade ledger and marking them at the real closes,
+with `risk_halted` cleared and the correction recorded in the state file.
+
+**Why it is written here.** The fix is good; the silence was not. An audit that
+does not carry its own incidents is not an audit.
+
+## The swarm permutation result: p = 0.4726
+
+From `state/permtest_matt.json`, run 2026-09-19T21:26:21 on the `matt` book,
+real data:
+
+| field | value |
+|---|---|
+| statistic | `best_holdout_sharpe` |
+| real result | **0.0599** |
+| permutations | 200 |
+| **p-value** | **0.4726** |
+| seed | 0 (held fixed across the real run and every permutation) |
+| window | 2020-04-10 → 2026-09-19, 2,354 bars |
+| window limited by | `SOLUSD` (4,840 bars dropped to get one shared timeline) |
+| search | 12 generations, population 40, 25% holdout |
+
+**What it means in plain words.** The genetic swarm's search over the `matt`
+book is indistinguishable from the same search run on shuffled data: roughly
+half of 200 fake markets produced a best genome at least as good as the real
+one. This is a statement about the *search*, not a refutation of every possible
+FX edge — and its scope is the trimmed 2020–2026 window above, not the full
+history. Method and its caveats: `docs/specs/swarm-insample-permutation.md`.
+
+## Yahoo's London dividends, and the plausibility rule (recorded 2026-10-14)
+
+**What was wrong.** The backtest builds a "dividend-adjusted" price: past prices are scaled down
+for every dividend paid since, so the price series grows exactly as an investor's money would with
+dividends reinvested. It took that series straight from Yahoo. For London-listed (`.L`) shares,
+Yahoo applied each dividend at 1/100 of its real size — a pence-versus-pounds slip inside Yahoo's
+own adjustment (the dividend amounts it reports are correct). Checked by hand over 2023–2025: HSBC's
+adjusted price gained 0.16% from dividends against 16.9% actually paid; Unilever 0.07% against 7.4%;
+Commonwealth Bank and JPMorgan matched. So the UK sleeve's backtest missed almost all of its
+dividends, about 4% a year.
+
+**The fix.** The repo now builds the adjusted price itself, from Yahoo's raw closes and dividends,
+with one rule for every share (`data.dividend_adjusted`). It matches Yahoo to within 0.01 basis
+points for US, Australian and Canadian shares, and puts the London dividends back: the UK sleeve's
+growth rate rose from 4.06% to 5.44% a year, the whole portfolio's from 8.03% to 8.38%.
+
+**A second check that the fix exposed.** With the 1/100 slip gone, about a dozen dividend amounts in
+Yahoo's data that the share price itself contradicts became visible — a "dividend" of a quarter of
+the share price on a day the price barely moved cannot be real. One rule now rejects a dividend of
+8% or more of the price when the price fell by less than half of it, in BOTH the backtest and the
+paper book's cash credit (`data_quality.implausible_dividends`). Of 13,143 dividends since 2012 it
+rejected 11 (Aviva 2022, IHG 2016, eight Melrose dividends 2012–2015, Danaher 2016) and kept every
+genuine large special dividend (Tesco 2021, among others). UK sleeve 5.44% → 5.29%, portfolio
+8.38% → 8.35%. A dividend the rule cannot judge yet (its ex-date close is not published) is held back
+by the paper book, never paid unchecked.
+
+**Why it is written here.** It is the largest single measurement error the block found, and it sat
+in a data feed the repo trusted rather than in the repo's own code.
+
 ## A trap worth recording
 
 Three tests failed locally and passed in CI. Cause: local `pandas` was **3.0.2**
