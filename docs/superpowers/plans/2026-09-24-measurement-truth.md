@@ -36,9 +36,9 @@ A compacted session reads this first to find where execution stopped.
 | 1 — measurement semantic layer | 1-4 (+3b, 4b, 4c) | ✅ **done** 2026-09-24 (`fe616e8`) |
 | 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
 | 3 — conventions | 9-13 (+12b, 13b-13e) | ✅ **done** 2026-10-13 (`6a904cd`) |
-| 4 — mechanism | 14-20 (17 superseded) | 🟡 15, 16, 18, 19 **done**; 14 in review; 20 (re-baseline) last |
-| 5 — regeneration, deploy, restart | 21-26 (+4d) | 🟡 22, 23, 4d **done**; 21, 24 wait for 14/20; **25, 26 need Matt's go** |
-| W2 — survivorship (needs data) | 27 | 🟡 steps 1-4 in flight; 5-6 blocked on membership data |
+| 4 — mechanism | 14-20 (17 superseded) | ✅ **done** 2026-10-14 — regression gate re-baselined once (Task 20) |
+| 5 — regeneration, deploy, restart | 21-26 (+4d, 21b, 21c) | 🟡 21-24 **done** (numbers regenerated 2026-10-15); **25 (merge) and 26 (restart) wait for Matt's go** |
+| W2 — survivorship (needs data) | 27 | 🟡 steps 1-4 **done**; 5-6 blocked on point-in-time membership data |
 
 **Execution log** — one line per task, appended as it completes:
 
@@ -147,6 +147,16 @@ A compacted session reads this first to find where execution stopped.
     history and a split never shows as a jump.
   - **14 (in review):** the drawdown breaker resets its high-water mark on resume (real `matt` FX:
     488 halts -> 7).
+- **2026-10-14 — Phase 4 complete.** Breaker re-base (14), FTSE per-ticker scale (15), whole shares
+  to nearest in paper AND the live broker path (16), dropped tickers reported (18), splits detected
+  against the book's own fills (19), and the ONE re-baseline of the regression gate (20) — every moved
+  number traced to the commit that moved it across 76 commits; tolerances ~130x tighter.
+- **2026-10-15 — Phase 5 regeneration.** A dividend-reinvesting ETF benchmark (21). Yahoo applied
+  London dividends at 1/100 — the repo now builds the dividend-adjusted price itself (21b) and rejects
+  dividend values the price contradicts in both engines (21c). Every headline re-measured on the final
+  code (24): strategy 8.35% / Sharpe 0.59 / worst fall −10.0% (survivorship-biased upper bound) against
+  an index-fund blend 12.50% / 0.72 / −29.3%. Final whole-branch review clean (72-case lookahead probe,
+  0 failures). **Next: Matt's go on Task 25 (merge) and Task 26 (restart).**
 
 ---
 
@@ -171,7 +181,7 @@ Each phase changes the input to the next. Doing regeneration before conventions 
 | 1 — semantic layer | 1-4 | No independent metric implementation outside `metrics.py`; suite green |
 | 2 — bridge | 5-8 | Bridge sums exactly (residual is the remainder); every line computable from the book's own state is computed; the residual is **reported, not gated** (spec §5 sets no target for it) |
 | 3 — conventions | 9-13 | Bridge shows the dividend and cash-interest lines at zero |
-| 4 — mechanism | 14-20 | A test per defect; the regression gate re-baselined **once**, here, with the bridge as evidence |
+| 4 — mechanism | 14-20 (17 superseded) | ✅ **done** 2026-10-14 — regression gate re-baselined once (Task 20) |
 | 5 — deploy | 21-27 | Schedulers on new code; books reopened clean; PIT delta published per region |
 
 **Task 23 (the training/traded universe split) must land before Task 26 (the restart)** or the reopened FX books come back up on 16 symbols, re-creating the defect the restart exists to clear.
