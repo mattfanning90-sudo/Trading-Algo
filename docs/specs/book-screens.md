@@ -161,7 +161,7 @@ load gives "couldn't measure <thing>", and the rest of the screen still shows.
 **Always on**
 | Rule | Says | Notes |
 |---|---|---|
-| result | up/down A$ and % since start, as of the last saved date; vs the market | Book and benchmark are both measured to the same last saved date. "Ahead" or "behind" only when the gap is more than 2 × the book's normal spread (tracking error from `metrics.benchmark_stats` × √years); otherwise "within its normal ups and downs". The benchmark is price-only, so the line says "the market figure leaves out dividends, which flatters this book". Long/short books: no market comparison. |
+| result | up/down A$ and % since start, as of the last saved date; vs the market | Book and benchmark are both measured to the same last saved date. "Ahead" or "behind" only when the gap is more than 2 × the book's normal spread (tracking error from `metrics.benchmark_stats` × √years); otherwise "within its normal ups and downs". The benchmark is price-only, so the line says "the market figure leaves out dividends, which flatters this book". Long/short books: no market comparison. Needs at least 20 aligned trading days (about a month); before that the line says it's too early to compare with the market. |
 | not-measured | equity: "Does the ranking pick winners? Not measured yet (needs the decision record)"; FX: "Which agents are right? Not measured yet (needs the agent scorecard)" | — |
 
 **Needs attention** (top of screen, and first in "Holding it back")
