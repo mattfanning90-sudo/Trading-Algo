@@ -3,6 +3,8 @@ BookInputs and returns items; nothing here reads a file, the network or the
 clock. Thresholds are the spec's, named once here."""
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from .. import metrics
@@ -18,6 +20,7 @@ FROZEN_RECENT = 10
 GAP_SPREADS = 2.0
 BACKTEST_STALE_DAYS = 14
 LUCK_STALE_DAYS = 30
+MIN_MARKET_DAYS = 20          # about a month of trading days before any market verdict
 
 RANK = {"halted": 1, "audit-error": 2, "near-breaker": 3, "stale": 4,
         "costs-flip": 5, "no-breaker": 6, "holds-too-short": 7,
@@ -81,6 +84,11 @@ def daily_values(inp) -> pd.Series:
     return pd.Series([daily[k] for k in keys], index=pd.to_datetime(keys), dtype=float)
 
 
+def _on(stamp) -> str:
+    """A saved date as display text, or 'an unknown date' — never a crash."""
+    return day(stamp) if stamp else "an unknown date"
+
+
 def _src_saved(inp) -> str:
     d = as_of(inp)
     return f"saved book, {day(d)}" if d else "saved book"
@@ -98,7 +106,9 @@ def plain_finding(f) -> str:
 
 def market(inp) -> dict | None:
     """The book against its benchmark to the last SAVED date, and how far the
-    two normally stray. None when there's nothing fair to compare."""
+    two normally stray. None when there's nothing fair to compare; with fewer
+    than MIN_MARKET_DAYS aligned days it returns {"too_short": True, ...} and
+    no verdict."""
     if inp.kind != "equity" or long_short(inp) or inp.market != "ready" or not inp.live:
         return None
     bench = {r["date"]: float(r["value"]) for r in inp.live.get("benchmark_curve") or []
@@ -107,31 +117,36 @@ def market(inp) -> dict | None:
     days = [d for d in vals.index if d.strftime("%Y-%m-%d") in bench]
     if len(days) < 3:
         return None
+    if len(days) < MIN_MARKET_DAYS:
+        return {"too_short": True, "days": len(days)}
     s = vals.loc[days]
     b = pd.Series([bench[d.strftime("%Y-%m-%d")] for d in days], index=days, dtype=float)
     initial = float(inp.card["initial"])
     gap = (s.iloc[-1] / initial - 1.0) - (b.iloc[-1] / initial - 1.0)
     stats = metrics.benchmark_stats(s.pct_change().dropna(), b.pct_change().dropna())
-    spread = metrics.expected_gap(stats.get("TrackingError") or 0.0,
+    te = stats.get("TrackingError") or 0.0
+    spread = metrics.expected_gap(te if math.isfinite(te) else 0.0,
                                   metrics.years_between(days[0], days[-1]))
     return {"gap": float(gap), "spread": spread, "bench_ret": float(b.iloc[-1] / initial - 1.0),
-            "beyond": abs(gap) > GAP_SPREADS * spread, "last": days[-1].strftime("%Y-%m-%d")}
+            "beyond": abs(gap) > GAP_SPREADS * spread, "too_short": False, "last": days[-1].strftime("%Y-%m-%d")}
 
 
 def result(inp) -> dict:
     marks = inp.book.get("_marks") or []
     since = inp.card.get("since")
     if len(marks) < 2:
-        text = f"Started {day(since)}; too new to judge" if since else "No saved values yet; too new to judge"
+        text = f"Started {_on(since)}; too new to judge" if since else "No saved values yet; too new to judge"
         return item("result", "result", text, source=_src_saved(inp))
     eq, init = float(inp.card["equity"]), float(inp.card["initial"])
     chg = eq - init
     word = "Up" if chg > 0 else "Down" if chg < 0 else "Flat"
-    text = (f"{word} {money(abs(chg))} ({pct(chg / init, 2)}) since {day(since)}, "
-            f"as of {day(as_of(inp))}")
+    text = (f"{word} {money(abs(chg))} ({pct(chg / init, 2)}) since {_on(since)}, "
+            f"as of {_on(as_of(inp))}")
     caveat = None
     m = market(inp)
-    if m is not None:
+    if m is not None and m["too_short"]:
+        text += "; too early to compare with the market (needs about a month of values)"
+    elif m is not None:
         side = "ahead of" if m["gap"] > 0 else "behind"
         text += (f"; {points(m['gap'])} {side} the market, "
                  + ("more than its normal ups and downs" if m["beyond"]
@@ -158,7 +173,7 @@ def attention(inp) -> list[dict]:
                             source=_src_audit(inp), level="act"))
     if inp.book.get("near_breaker"):
         out.append(item("near-breaker", "attention",
-                        f"{pct(inp.card['off_peak'])} below its best; the safety breaker "
+                        f"{pct(abs(inp.card['off_peak']), signed=False)} below its best; the safety breaker "
                         f"pauses it at {pct(-inp.card['breaker'], 0)}",
                         source=_src_saved(inp), level="look"))
     fresh = inp.book.get("freshness")
@@ -197,9 +212,9 @@ def _sample_caveat(n: int, dates: int, excluded: int) -> str | None:
 def going_right(inp) -> list[dict]:
     out: list[dict] = []
     m = market(inp)
-    if m and m["beyond"] and m["gap"] > 0:
+    if m and not m["too_short"] and m["beyond"] and m["gap"] > 0:
         out.append(item("ahead-of-market", "right",
-                        f"Ahead of the market by {points(m['gap'])} since {day(inp.card['since'])}, "
+                        f"Ahead of the market by {points(m['gap'])} since {_on(inp.card.get('since'))}, "
                         "more than its normal ups and downs", source=_src_saved(inp),
                         caveat=DIVIDENDS))
     pos, won, lost, wins, dates = closed_stats(inp)

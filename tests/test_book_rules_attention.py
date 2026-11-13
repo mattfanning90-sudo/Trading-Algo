@@ -24,7 +24,8 @@ def test_an_audit_error_is_shown_in_plain_words():
 
 
 def test_near_breaker_follows_the_home_screen_flag():
-    assert ids(R.attention(make_inp(book={"near_breaker": True}, card={"off_peak": -0.16}))) == ["near-breaker"]
+    near = R.attention(make_inp(book={"near_breaker": True}, card={"off_peak": -0.16}))
+    assert ids(near) == ["near-breaker"] and near[0]["text"].startswith("16.0% below its best")
     assert R.attention(make_inp()) == []
 
 
@@ -95,3 +96,18 @@ def test_winners_pay_says_what_it_left_out():
     pos = [{"symbol": "A", "opened": "2026-07-01", "closed": "2026-08-01", "side": "LONG", "net": 5.0, "lots": 1}]
     out = R.going_right(make_inp(positions_closed=pos, excluded=16))
     assert "16" in out[0]["caveat"] and "since-fixed bug" in out[0]["caveat"]
+
+
+def test_an_empty_date_never_crashes_the_rules():
+    inp = make_inp(card={"since": ""})
+    assert "an unknown date" in R.result(inp)["text"]
+    pos = [{"symbol": "A", "opened": "2026-07-01", "closed": "2026-08-01", "side": "LONG", "net": 5.0, "lots": 1}]
+    R.going_right(make_inp(card={"since": ""}, positions_closed=pos))
+
+
+def test_no_market_verdict_before_a_month_of_values():
+    inp = _with_market([100_000.0] * 10, [100_000.0 * (1.001 ** i) for i in range(10)])
+    assert R.market(inp)["too_short"] is True
+    assert "too early to compare with the market" in R.result(inp)["text"]
+    assert R.result(inp)["caveat"] is None
+    assert R.going_right(inp) == []
