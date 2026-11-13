@@ -3,6 +3,7 @@ Screen order (docs/specs/book-screens.md): status · result · main problem ·
 summary · tiles · panel · chart · months · last closed positions."""
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from .. import metrics
@@ -115,7 +116,8 @@ def _chart(inp, m) -> dict:
         last = R.as_of(inp) or ""
         bench = [[r["date"], round(float(r["value"]) - init, 2)]
                  for r in inp.live.get("benchmark_curve") or []
-                 if r.get("value") is not None and r["date"] <= last]
+                 if r.get("value") is not None and math.isfinite(float(r["value"]))
+                 and r["date"] <= last]
     value_desc = below_desc = "Not enough history yet."
     if len(value) >= 2:
         lo = min(value, key=lambda p: p[1])
@@ -124,8 +126,9 @@ def _chart(inp, m) -> dict:
                       f"{money_move(lo[1])} on {day(lo[0])}, highest {money_move(hi[1])} on "
                       f"{day(hi[0])}, now {money_move(value[-1][1])}.")
         deep = min(below, key=lambda p: p[1])
-        below_desc = (f"Fall from the highest saved value: deepest {pct(deep[1])} on "
-                      f"{day(deep[0])}; now {pct(below[-1][1])}.")
+        below_desc = (f"Fall from the highest daily value: deepest {pct(deep[1])} on "
+                      f"{day(deep[0])}; now {pct(below[-1][1])}. The safety breaker measures from "
+                      f"its own recorded peak: {pct(float(inp.card.get('off_peak') or 0.0))} now.")
     return {"value": value, "below_best": below, "benchmark": bench,
             "value_desc": value_desc, "below_desc": below_desc}
 
@@ -134,8 +137,8 @@ def _months(inp) -> list[dict]:
     out = []
     for month, r in metrics.monthly_returns(R.daily_values(inp)).items():
         label = datetime.strptime(f"{month}-01", "%Y-%m-%d").strftime("%b %Y")
-        out.append({"month": month, "label": label, "text": pct(float(r)),
-                    "dir": direction(float(r))})
+        r3 = round(float(r), 3)
+        out.append({"month": month, "label": label, "text": pct(r3), "dir": direction(r3)})
     return out
 
 
@@ -149,7 +152,8 @@ def _closed(inp) -> list[dict]:
             sym = f"{sym} {p['side'].lower()}"
         held = (datetime.strptime(str(p["closed"])[:10], "%Y-%m-%d")
                 - datetime.strptime(str(p["opened"])[:10], "%Y-%m-%d")).days
-        out.append({"date": day(p["closed"]), "symbol": sym, "held": f"{held} days",
+        held_txt = "the same day" if held == 0 else "1 day" if held == 1 else f"{held} days"
+        out.append({"date": day(p["closed"]), "symbol": sym, "held": held_txt,
                     "net": money_move(p["net"]), "dir": direction(p["net"])})
     return out
 
@@ -162,6 +166,14 @@ def _number(items: list[dict]) -> None:
         it["uid"] = f"{it['id']}#{n}"
 
 
+def _soft(inp, name: str, fn, fallback):
+    try:
+        return fn()
+    except Exception as exc:            # one block failing leaves the rest of the screen intact
+        inp.errors[name] = repr(exc)
+        return fallback
+
+
 def summarise(inp) -> dict:
     res = _guard(inp, "the result", lambda i: [R.result(i)], "result")[0]
     att = _guard(inp, "warnings", R.attention, "attention")
@@ -171,7 +183,12 @@ def summarise(inp) -> dict:
     wrong = sorted(att + back, key=lambda i: (i["rank"] is None, i["rank"] or 0))
     _number([res] + wrong + right + model)
     ranked = [i for i in wrong if i["rank"] is not None]
-    if ranked:
+    failed = next((i for i in wrong if i["id"] == "couldnt-measure"), None)
+    if failed:                          # a failed check must never read as all clear
+        main = dict(failed)
+        main["text"] = "Couldn't check what's holding this book back right now"
+        ranked = [main]
+    elif ranked:
         main = dict(ranked[0])
     else:
         main = R.item("no-problem", "main", "No standout problem", source="the rules below")
@@ -189,10 +206,18 @@ def summarise(inp) -> dict:
         m = R.market(inp)
     except Exception as exc:
         inp.errors["the market comparison"] = repr(exc)
-    tiles = _tiles(inp, m)
-    order = [(res, "text"), (main, "text")] + [(s, "text") for s in summary]
+    tiles = _soft(inp, "the tiles", lambda: _tiles(inp, m), [])
+    chart = _soft(inp, "the chart", lambda: _chart(inp, m), {
+        "value": [], "below_best": [], "benchmark": None,
+        "value_desc": "Couldn't draw this chart right now.",
+        "below_desc": "Couldn't draw this chart right now."})
+    months = _soft(inp, "the monthly returns", lambda: _months(inp), [])
+    closed = _soft(inp, "the last closed positions", lambda: _closed(inp), [])
+    att_items = [i for i in wrong if i["column"] == "attention"]
+    order = [(i, k) for i in att_items for k in ("text", "caveat")]
+    order += [(res, "text"), (main, "text")] + [(x, "text") for x in summary]
     order += [(t, "caption") for t in tiles]
-    for it in right + wrong + model:
+    for it in right + [i for i in wrong if i["column"] != "attention"] + model:
         order += [(it, "text"), (it, "caveat")]
     for (obj, key), text in zip(order, glossary.gloss([o[k] or "" for o, k in order])):
         if obj[key]:
@@ -200,10 +225,10 @@ def summarise(inp) -> dict:
     return {
         "v": 1, "key": inp.entry["key"], "name": inp.card["name"], "kind": inp.kind,
         "as_of": R.as_of(inp), "status": status(inp), "result": res,
-        "main_problem": main, "attention": [i for i in wrong if i["column"] == "attention"],
+        "main_problem": main, "attention": att_items,
         "summary": summary, "tiles": tiles,
         "panel": {"right": right, "wrong": wrong, "model": model},
         "right_empty": None if right else "Nothing clearly going right yet.",
-        "chart": _chart(inp, m), "months": _months(inp), "closed": _closed(inp),
+        "chart": chart, "months": months, "closed": closed,
         "market": inp.market, "errors": sorted(inp.errors),
     }

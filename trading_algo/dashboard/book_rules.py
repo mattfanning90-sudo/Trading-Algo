@@ -121,11 +121,9 @@ def market(inp) -> dict | None:
     if inp.kind != "equity" or long_short(inp) or inp.market != "ready" or not inp.live:
         return None
     bench = {r["date"]: float(r["value"]) for r in inp.live.get("benchmark_curve") or []
-             if r.get("value") is not None}
+             if r.get("value") is not None and math.isfinite(float(r["value"]))}
     vals = daily_values(inp)
     days = [d for d in vals.index if d.strftime("%Y-%m-%d") in bench]
-    if len(days) < 3:
-        return None
     if len(days) < MIN_MARKET_DAYS:
         return {"too_short": True, "days": len(days)}
     s = vals.loc[days]
@@ -162,7 +160,7 @@ def result(inp) -> dict:
                     else "within its normal ups and downs"))
         caveat = DIVIDENDS
     elif inp.kind == "fx" or long_short(inp):
-        text += "; it aims to make money whichever way markets move, so it isn't compared with one"
+        text += "; it aims to make money whichever way markets move, so it isn't compared with a market index"
     else:
         text += f"; {MARKET_TEXT.get(inp.market, MARKET_TEXT['n/a'])}"
     return item("result", "result", text, source=_src_saved(inp), as_of=as_of(inp),
@@ -228,10 +226,10 @@ def going_right(inp) -> list[dict]:
                         caveat=DIVIDENDS))
     pos, won, lost, wins, dates = closed_stats(inp)
     if pos and won - lost > 0:
-        pf = f" (profit factor {won / lost:.1f})" if lost else ""
+        pf = f", a profit factor of {won / lost:.1f}," if lost else ""
         out.append(item("winners-pay", "right",
                         f"Closed positions made more than they lost: {money(won)} won against "
-                        f"{money(lost)} lost{pf}, over {len(pos)} positions",
+                        f"{money(lost)} lost{pf} over {len(pos)} positions",
                         source=f"trade record, {day(inp.now)}",
                         caveat=_sample_caveat(len(pos), dates, inp.excluded_forced)))
     return out
@@ -241,15 +239,15 @@ REGIME_CAVEAT = ("Holding cash below the trend gives up some growth but limits t
                  "falls (system review, section 15).")
 SHORT_WHY = {
     "paused": "paused by the safety breaker",
-    "data": "price data failed checks",
-    "fx": "no exchange rate",
+    "data": "kept in cash because its price data failed checks",
+    "fx": "kept in cash with no exchange rate",
     "below-min": "too small to trade",
-    "regime-off": "waiting: its market is below its long-term trend, by design",
-    "no-eligible": "nothing passed the tests",
-    "insufficient": "couldn't form both sides",
+    "regime-off": "waiting, by design, while its market is below its long-term trend",
+    "no-eligible": "holding nothing, as nothing passed the tests",
+    "insufficient": "holding nothing, as it couldn't form both sides",
     "pinned": "waiting for next month's rebalance",
     "empty": "holding nothing",
-    "invested": "sized down: volatility target and whole-share rounding",
+    "invested": "sized down by the volatility target and whole-share rounding",
 }
 
 
@@ -423,7 +421,7 @@ def mostly_idle(inp) -> list[dict]:
             continue
         code = sleeve_reason(inp, key, sleeve)[0]
         sized_down = sized_down or code == "invested"
-        parts.append(f"{_region_name(key)} {pct(cash_share, 0, signed=False)} ({SHORT_WHY[code]})")
+        parts.append(f"{_region_name(key)}: {pct(cash_share, 0, signed=False)}, {SHORT_WHY[code]}")
     text = f"Mostly idle: {pct(1 - share, 0, signed=False)} of the book is in cash; " + "; ".join(parts)
     return [item("mostly-idle", "wrong", text, source=_src_saved(inp),
                  backlog="F23" if sized_down else None,
@@ -487,7 +485,7 @@ def backtest_line(inp) -> list[dict]:
     m = bt.get("metrics") or {}
     if m.get("cagr") is None or m.get("sharpe") is None:
         return [item("backtest", "model", "Couldn't read the saved backtest", source=src)]
-    text = (f"Backtest ({str(bt.get('start'))[:4]}\u2013{str(bt.get('end'))[:4]}): "
+    text = (f"Backtest, {str(bt.get('start'))[:4]}\u2013{str(bt.get('end'))[:4]}: "
             f"{pct(m['cagr'])} a year, Sharpe {_num(m['sharpe'])}")
     caveats: list[str] = []
     age = _days_old(gen, inp.now) if gen else None
@@ -519,7 +517,9 @@ def luck_test(inp) -> list[dict]:
     if inp.kind != "fx" or not r or r.get("p_value") is None:
         return []
     p = float(r["p_value"])
-    if p >= 0.1:
+    if p >= 0.67:
+        how = "most of the time"
+    elif p >= 0.1:
         how = f"about 1 in {max(1, round(1 / p))} times"
     else:
         how = "only occasionally" if p >= 0.05 else "rarely"

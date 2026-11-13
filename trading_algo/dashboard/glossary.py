@@ -11,7 +11,7 @@ TERMS: list[tuple[str, str, str]] = [
     ("Deflated-Sharpe", r"\bDeflated-Sharpe\b",
      "a Sharpe score marked down for how many versions of the strategy were tried, so luck isn't mistaken for skill"),
     ("Sharpe", r"(?<![-\w])Sharpe\b",
-     "return per unit of ups and downs after the return on cash; above 1 is strong, below 0 did worse than cash"),
+     "a score of return per unit of ups and downs; higher is better, and around 1 is strong"),
     ("permutation test", r"\bpermutation test\b",
      "re-running the search on shuffled, patternless prices to see how often luck alone does as well"),
     ("p-value", r"\bp-values?\b", "the share of shuffled runs that did at least as well"),

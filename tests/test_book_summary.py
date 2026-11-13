@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -102,3 +103,97 @@ def test_summary_survives_an_unvaluable_mark(tmp_path, monkeypatch):
     s = S.summarise(book_inputs.load_inputs(registry.resolve("FULL"), NOW))
     json.dumps(s, allow_nan=False)                      # valid JSON, no NaN
     assert all(v is not None for _, v in s["chart"]["value"])
+
+
+def _marks(values, start=datetime(2026, 6, 1, tzinfo=timezone.utc)):
+    return [(start + timedelta(days=i), v) for i, v in enumerate(values)]
+
+
+def test_a_failed_check_never_reads_as_all_clear(monkeypatch):
+    monkeypatch.setattr(R, "holding_back", lambda inp: 1 / 0)
+    s = S.summarise(make_inp())
+    assert s["main_problem"]["text"].startswith("Couldn't check")
+    assert not any("No standout problem" in x["text"] for x in s["summary"])
+    assert s["summary"][1]["text"].startswith("Main problem: Couldn't check")
+
+
+def test_chart_text_reconciles_the_daily_drop_with_the_breakers_own_figure():
+    vals = [100_000.0, 102_000.0, 99_000.0]
+    s = S.summarise(make_inp(card={"equity": 99_000.0, "off_peak": -0.0512},
+                             book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()}))
+    d = s["chart"]["below_desc"]
+    assert "Fall from the highest daily value" in d
+    assert "The safety breaker measures from its own recorded peak: −5.1% now." in d
+
+
+def test_a_nan_in_the_benchmark_cannot_make_invalid_json():
+    vals = [100_000.0 + i * 10 for i in range(30)]
+    bench = [{"date": (datetime(2026, 6, 1) + timedelta(days=i)).strftime("%Y-%m-%d"),
+              "value": 100_000.0 + i * 5} for i in range(30)]
+    bench[10]["value"] = float("nan")
+    inp = make_inp(card={"equity": vals[-1]},
+                   book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()},
+                   live={"benchmark_curve": bench}, market="ready")
+    json.dumps(S.summarise(inp), allow_nan=False)
+    assert R.market(inp)["too_short"] is False
+
+
+def test_closed_rows_say_one_day_and_same_day():
+    rows = [{"symbol": "A", "opened": "2026-08-01", "closed": "2026-08-02", "side": "LONG", "net": 5.0, "lots": 1},
+            {"symbol": "B", "opened": "2026-08-03", "closed": "2026-08-03", "side": "LONG", "net": 5.0, "lots": 1},
+            {"symbol": "C", "opened": "2026-08-01", "closed": "2026-08-05", "side": "LONG", "net": 5.0, "lots": 1}]
+    held = {r["symbol"]: r["held"] for r in S.summarise(make_inp(positions_closed=rows))["closed"]}
+    assert held == {"A": "1 day", "B": "the same day", "C": "4 days"}
+
+
+def test_a_tiny_month_reads_zero_and_flat():
+    vals = [100_000.0, 100_000.01]
+    s = S.summarise(make_inp(card={"equity": vals[-1]},
+                             book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()}))
+    assert s["months"] and all(m["text"] == "0.0%" and m["dir"] == "flat" for m in s["months"])
+
+
+def test_one_blocks_failure_leaves_the_rest_of_the_screen():
+    bad = [{"symbol": "A", "opened": None, "closed": "2026-08-02", "side": "LONG", "net": 5.0, "lots": 1}]
+    s = S.summarise(make_inp(positions_closed=bad))
+    assert s["closed"] == [] and "the last closed positions" in s["errors"] and len(s["tiles"]) == 6
+
+
+def test_a_young_ready_market_is_too_short_not_missing():
+    vals = [100_000.0, 100_010.0]
+    bench = [{"date": "2026-06-01", "value": 100_000.0}, {"date": "2026-06-02", "value": 100_005.0}]
+    inp = make_inp(card={"equity": vals[-1]},
+                   book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()},
+                   live={"benchmark_curve": bench}, market="ready")
+    assert R.market(inp) == {"too_short": True, "days": 2}
+    vs = next(t for t in S.summarise(inp)["tiles"] if t["label"] == "vs the market")
+    assert "too early" in vs["caption"]
+
+
+def test_summarise_is_pure(monkeypatch):
+    import builtins
+    import copy
+    import socket
+    import time
+    from datetime import datetime as real_dt
+
+    inp = make_inp(card={"equity": 99_952.38}, costs=EQ_COSTS)
+    S.summarise(copy.deepcopy(inp))          # warm any lazy imports
+    before = copy.deepcopy({k: v for k, v in vars(inp).items() if k != "errors"})
+
+    def boom(*a, **k):
+        raise AssertionError("I/O or clock read during summarise")
+
+    class NoClock(real_dt):
+        now = utcnow = today = classmethod(lambda cls, *a, **k: boom())
+
+    import trading_algo.dashboard.book_rules as brm
+    import trading_algo.dashboard.book_summary as bsm
+    monkeypatch.setattr(builtins, "open", boom)
+    monkeypatch.setattr(socket, "socket", boom)
+    monkeypatch.setattr(time, "time", boom)
+    monkeypatch.setattr(bsm, "datetime", NoClock)
+    monkeypatch.setattr(brm, "datetime", NoClock)
+    S.summarise(inp)
+    monkeypatch.undo()
+    assert {k: v for k, v in vars(inp).items() if k != "errors"} == before

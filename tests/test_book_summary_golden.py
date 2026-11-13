@@ -3,6 +3,7 @@ established, plus every word pinned (AC-6). Regenerate the golden only on
 purpose: UPDATE_GOLDEN=1 pytest tests/test_book_summary_golden.py — then read
 the diff before committing."""
 import json
+import re
 import os
 from pathlib import Path
 
@@ -73,3 +74,16 @@ def test_pinned_summaries(summaries):
         GOLDEN.write_text(text + "\n")
     assert GOLDEN.exists(), "run once with UPDATE_GOLDEN=1, read it, then commit"
     assert json.loads(GOLDEN.read_text()) == json.loads(text)
+
+
+def test_attention_is_glossed_first_because_it_renders_first(summaries):
+    ultra = summaries["ULTRA"]
+    top = next(i for i in ultra["attention"] if i["id"] == "no-breaker")
+    assert "(a rule that pauses trading" in top["text"]
+
+
+def test_no_nested_or_doubled_brackets_and_no_ugly_numbers(summaries):
+    blob = json.dumps(summaries, ensure_ascii=False)
+    for bad in ("((", "))", ") (", "−0.0%", "+0.0%"):
+        assert bad not in blob, bad
+    assert not re.search(r"(?<!\d)[01] days", blob)

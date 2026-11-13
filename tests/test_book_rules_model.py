@@ -11,7 +11,7 @@ THIRDS = {"allocations": {"ASX": 1 / 3, "US": 1 / 3, "FTSE": 1 / 3}}
 
 def test_equity_backtest_line_and_its_caveats():
     out = R.backtest_line(make_inp(backtest=EQ_BT, state=THIRDS))[0]
-    assert out["text"] == ("Backtest (2012–2026): +6.1% a year, Sharpe 0.32, against the "
+    assert out["text"] == ("Backtest, 2012–2026: +6.1% a year, Sharpe 0.32, against the "
                            "benchmark at +9.6% and 0.50")
     c = out["caveat"]
     assert c.startswith("Saved 19 Sep 2026, 24 days ago; may not reflect changes since.")
@@ -82,3 +82,8 @@ def test_a_middling_p_reads_only_occasionally_and_still_looks_like_luck():
     out = R.luck_test(make_inp("fx", permtest=dict(PERM, p_value=0.07), roster=2))[0]
     assert "only occasionally" in out["text"] and "look like luck" in out["text"]
     assert "the p-value is 0.07" in out["text"]
+
+
+def test_a_large_p_never_reads_one_in_one():
+    out = R.luck_test(make_inp("fx", permtest=dict(PERM, p_value=0.8), roster=2))[0]
+    assert "most of the time" in out["text"] and "1 in 1" not in out["text"]

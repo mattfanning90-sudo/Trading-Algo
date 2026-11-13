@@ -68,7 +68,8 @@ def test_mostly_idle_splits_cash_by_cause_and_tracks_only_the_sized_down_part():
                          "FTSE": _sleeve(14_000.0, {"BP.L": 100})}}
     out = R.mostly_idle(make_inp(state=state))
     assert out[0]["text"].startswith("Mostly idle: 72% of the book is in cash")
-    assert "below its long-term trend, by design" in out[0]["text"]
+    assert "below its long-term trend" in out[0]["text"] and "by design" in out[0]["text"]
+    assert "((" not in out[0]["text"] and ": waiting" not in out[0]["text"]
     assert "sized down" in out[0]["text"] and out[0]["backlog"] == "F23"
 
 

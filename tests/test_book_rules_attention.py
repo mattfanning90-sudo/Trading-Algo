@@ -86,7 +86,7 @@ def test_winners_pay_needs_a_positive_closed_result():
     pos = [{"symbol": "A", "opened": "2026-07-01", "closed": "2026-08-01", "side": "LONG", "net": n, "lots": 1}
            for n in (100.0, -40.0, 10.0)]
     out = R.going_right(make_inp(positions_closed=pos))
-    assert ids(out) == ["winners-pay"] and "profit factor 2.8" in out[0]["text"]
+    assert ids(out) == ["winners-pay"] and "a profit factor of 2.8" in out[0]["text"]
     assert "small sample" in out[0]["caveat"].lower()
     lose = [dict(p, net=n) for p, n in zip(pos, (10.0, -40.0, 5.0))]
     assert R.going_right(make_inp(positions_closed=lose)) == []
