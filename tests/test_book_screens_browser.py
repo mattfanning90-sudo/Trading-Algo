@@ -88,3 +88,24 @@ def test_tabs_follow_the_keyboard_pattern(browser, app):
     page.keyboard.press("ArrowRight")
     page.wait_for_selector('[role="tab"][data-tab="positions"][aria-selected="true"]')
     assert page.evaluate("document.activeElement.dataset.focus") == "tab:positions"
+
+
+def test_main_problem_is_said_once(browser, app):
+    page, _ = open_book(browser, app, "FULL")
+    assert page.locator(".attn .main-problem").count() == 1
+    assert page.locator(".main-problem").count() == 1
+    text = page.locator(".attn .main-problem").inner_text()
+    body = text.replace("Main problem", "").strip().split(".")[0]
+    above = page.evaluate(
+        "[...document.querySelector('.result').parentElement.children]"
+        ".filter(e => e.compareDocumentPosition(document.querySelector('.story')) & 4)"
+        ".map(e => e.innerText).join(' ')")
+    assert above.count(body) == 1
+
+
+def test_chart_dates_read_day_month_year(browser, app):
+    import re
+    page, _ = open_book(browser, app, "FULL")
+    cap = page.locator(".chart .caption").first.inner_text()
+    assert "11 Jun 2026" in cap
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", cap)

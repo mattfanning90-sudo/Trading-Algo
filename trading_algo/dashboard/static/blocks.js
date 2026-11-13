@@ -31,6 +31,13 @@
     {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})
     : "never");
 
+  // One date format on every screen: "13 Oct 2026" (en-AU may say "Sept" or add a full stop).
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const dshow = (d) => {
+    const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+    return `${day} ${MONTHS[m - 1]} ${y}`;
+  };
+
   function chips(period) {
     return `<div class="chips" role="group" aria-label="Period">${PERIODS.map((p) =>
       `<button class="chip" data-period="${p}" data-focus="chip:${p}" aria-pressed="${p === period}">${p}</button>`).join("")}</div>`;
@@ -88,9 +95,9 @@
         ${benchLine}
         <polyline points="${line}" fill="none" stroke="var(--text)" stroke-width="1.4"/>
       </svg>
-      <div class="caption"><span>${esc(pts[0][0])}</span>
-        <span>low ${show(own[iLo])} (${esc(pts[iLo][0])}) · high ${show(own[iHi])} (${esc(pts[iHi][0])}) · dotted = break-even${legend}</span>
-        <span>${esc(pts[pts.length - 1][0])}</span></div></div>`;
+      <div class="caption"><span>${esc(dshow(pts[0][0]))}</span>
+        <span>low ${show(own[iLo])} (${esc(dshow(pts[iLo][0]))}) · high ${show(own[iHi])} (${esc(dshow(pts[iHi][0]))}) · dotted = break-even${legend}</span>
+        <span>${esc(dshow(pts[pts.length - 1][0]))}</span></div></div>`;
   }
 
   function list(items) {

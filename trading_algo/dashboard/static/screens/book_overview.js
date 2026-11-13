@@ -9,16 +9,17 @@
     return i.backlog ? ` <span class="fix">Tracked as fix ${esc(i.backlog)}</span>` : "";
   }
 
-  function item(i) {
+  function item(i, isMain) {
     const tag = i.level === "act" ? `<span class="tag act">■</span>`
       : i.level === "look" ? `<span class="tag look">▲</span>` : "";
     const cav = i.caveat ? `<div class="caveat">${esc(i.caveat)}</div>` : "";
-    return `<li data-item="${esc(i.uid)}">${tag}${esc(i.text)}.${fix(i)}${cav}<div class="src">Source: ${esc(i.source)}</div></li>`;
+    const mp = isMain ? `<span class="mp-label">Main problem</span> ` : "";
+    return `<li${isMain ? ` class="main-problem"` : ""} data-item="${esc(i.uid)}">${mp}${tag}${esc(i.text)}.${fix(i)}${cav}<div class="src">Source: ${esc(i.source)}</div></li>`;
   }
 
   function col(title, cls, items, empty) {
     return `<div class="vcol"><h4 class="${cls}">${title}</h4>${items.length
-      ? `<ul class="items">${items.map(item).join("")}</ul>` : `<p class="muted">${esc(empty)}</p>`}</div>`;
+      ? `<ul class="items">${items.map((i) => item(i)).join("")}</ul>` : `<p class="muted">${esc(empty)}</p>`}</div>`;
   }
 
   function tiles(ts) {
@@ -58,8 +59,9 @@
     let html = `<div class="result ${esc(s.result.dir || "")}">${arrowFor(s.result.dir)} ${esc(s.result.text)}</div>`;
     if (s.result.caveat) html += `<div class="caveat">${esc(s.result.caveat)}</div>`;
     const mp = s.main_problem;
-    html += `<div class="main-problem"><span class="mp-label">Main problem</span> ${esc(mp.text)}${fix(mp)}</div>`;
-    if (s.attention.length) html += `<ul class="items attn">${s.attention.map(item).join("")}</ul>`;
+    const dup = s.attention.some((i) => i.uid === mp.uid);
+    if (!dup) html += `<div class="main-problem"><span class="mp-label">Main problem</span> ${esc(mp.text)}${fix(mp)}</div>`;
+    if (s.attention.length) html += `<ul class="items attn">${s.attention.map((i) => item(i, dup && i.uid === mp.uid)).join("")}</ul>`;
     html += `<div class="story">${s.summary.map((x) =>
       `<span data-item="${esc(x.item_id)}">${esc(x.text)}</span>`).join(" ")}</div>`;
     html += tiles(s.tiles);
