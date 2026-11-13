@@ -53,3 +53,9 @@ def test_screen_files_only_use_server_text_for_money():
 def test_links_are_relative_never_root():
     for name in SCRIPTS:
         assert 'href="/' not in (STATIC / name).read_text(), name
+
+
+def test_chart_clip_ids_are_unique_per_chart():
+    js = (STATIC / "blocks.js").read_text()
+    assert 'id="above"' not in js and 'id="below"' not in js
+    assert "chartSeq" in js

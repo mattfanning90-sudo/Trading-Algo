@@ -15,6 +15,7 @@
     clear: {shape: "●", word: "All clear"},
     nodata: {shape: "◆", word: "No data yet"},
   };
+  let chartSeq = 0;
   const ARROWS = {up: "▲", down: "▼", flat: "▶"};
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -48,11 +49,12 @@
   // pattern as well as colour. opts.desc is the text alternative.
   function chart(series, title, period, opts = {}) {
     const pts = windowed(series || [], period);
+    const uid = ++chartSeq;
     if (pts.length < 2) {
       return `<div class="panel chart"><h3>${esc(title)}</h3><span class="muted">Not enough history yet.</span></div>`;
     }
     const first = pts[0][0];
-    const bench = opts.bench ? windowed(opts.bench, period).filter(([d]) => d >= first) : [];
+    const bench = opts.bench ? windowed(opts.bench, period).filter(([d]) => d >= first && d <= pts[pts.length - 1][0]) : [];
     const vals = pts.map(([, v]) => v).concat(bench.map(([, v]) => v));
     const lo = Math.min(0, ...vals);
     const hi = Math.max(0, ...vals);
@@ -78,10 +80,10 @@
     return `<div class="panel chart"><h3>${esc(title)}</h3>
       <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(desc)}">
         <desc>${esc(desc)}</desc>
-        <defs><clipPath id="above"><rect x="0" y="0" width="${W}" height="${zero.toFixed(1)}"/></clipPath>
-              <clipPath id="below"><rect x="0" y="${zero.toFixed(1)}" width="${W}" height="${(H - zero).toFixed(1)}"/></clipPath></defs>
-        <polygon points="${area}" fill="var(--up)" opacity=".18" clip-path="url(#above)"/>
-        <polygon points="${area}" fill="var(--down)" opacity=".18" clip-path="url(#below)"/>
+        <defs><clipPath id="above-${uid}"><rect x="0" y="0" width="${W}" height="${zero.toFixed(1)}"/></clipPath>
+              <clipPath id="below-${uid}"><rect x="0" y="${zero.toFixed(1)}" width="${W}" height="${(H - zero).toFixed(1)}"/></clipPath></defs>
+        <polygon points="${area}" fill="var(--up)" opacity=".18" clip-path="url(#above-${uid})"/>
+        <polygon points="${area}" fill="var(--down)" opacity=".18" clip-path="url(#below-${uid})"/>
         <line x1="0" x2="${W}" y1="${zero.toFixed(1)}" y2="${zero.toFixed(1)}" stroke="var(--muted)" stroke-dasharray="1 4" stroke-width="1"/>
         ${benchLine}
         <polyline points="${line}" fill="none" stroke="var(--text)" stroke-width="1.4"/>
