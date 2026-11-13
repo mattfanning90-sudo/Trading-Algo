@@ -59,3 +59,26 @@ def test_make_app_serves_a_home_payload_with_no_snapshot(tmp_path):
     """, tmp_path)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip().splitlines()[-1] == "nodata"
+
+
+def test_make_app_serves_book_summaries(tmp_path):
+    done = run_py(f"""
+        import json, shutil, threading, urllib.request
+        from pathlib import Path
+        from trading_algo.home import __main__ as launcher, jobs, sync
+        from trading_algo.home.paths import AppPaths
+        paths = AppPaths(Path({str(tmp_path / 'app')!r}))
+        paths.snapshots.mkdir(parents=True)
+        shutil.copytree({str(REPO_ROOT / 'tests/fixtures/books_20261013')!r}, paths.snapshots / "fx")
+        paths.current.symlink_to(paths.snapshots / "fx")
+        launcher.point_readers_at(paths)
+        jobs.fetch_runs = lambda *a, **k: []
+        first = sync.SyncResult("fx", "2026-10-13T06:45:11Z", False, True, "test")
+        httpd = launcher.make_app(paths, first, port=0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{{httpd.server_address[1]}}/api/summary/MATT"
+        print(json.load(urllib.request.urlopen(url, timeout=20))["key"])
+        httpd.shutdown()
+    """, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "MATT"

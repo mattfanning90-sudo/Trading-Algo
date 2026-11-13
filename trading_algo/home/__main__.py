@@ -24,10 +24,11 @@ def point_readers_at(paths: AppPaths) -> None:
     os.environ["FX_STATE_DIR"] = str(paths.current)
 
 
-def make_app(paths: AppPaths, first: sync.SyncResult, *, port: int = 0):
+def make_app(paths: AppPaths, first: sync.SyncResult, *, port: int = 0, live_build=None):
     """Build the server. Call only after `point_readers_at`."""
     from ..dashboard import home as home_api   # deliberately late (see module doc)
     from ..dashboard import server
+    from ..dashboard.book_service import BookService
 
     started = datetime.now(timezone.utc)
     previous = seen.begin_session(paths.seen, started)
@@ -47,7 +48,8 @@ def make_app(paths: AppPaths, first: sync.SyncResult, *, port: int = 0):
                 last_opened=previous, now=datetime.now(timezone.utc),
                 snapshot=asdict(state["sync"]))
 
-    return server.create_server("full", False, "127.0.0.1", port, home=build)
+    books = BookService(online=lambda: not state["sync"].offline, live_build=live_build)
+    return server.create_server("full", False, "127.0.0.1", port, home=build, books=books)
 
 
 def main(argv: list[str] | None = None) -> None:
