@@ -103,6 +103,10 @@ CONTENT = [
     dict(src="Concepts/12-1 Momentum.md", dst="Concepts/12-1 Momentum.md",
          title="12-1 Momentum", tags=["trading-algo", "concept", "momentum"], type_="concept",
          source="obsidian/Concepts/12-1 Momentum.md (signals.py)", trail="#trading-algo #momentum"),
+    dict(src="Concepts/Breadth.md", dst="Concepts/Breadth.md",
+         title="Breadth", tags=["trading-algo", "concept", "statistics"], type_="concept",
+         source="obsidian/Concepts/Breadth.md (docs/MEDALLION_CITADEL_RESEARCH.md, scripts/medallion_lens/)",
+         trail="#trading-algo #statistics"),
     dict(src="Concepts/No-Lookahead.md", dst="Concepts/No-Lookahead.md",
          title="No-Lookahead", tags=["trading-algo", "concept", "backtesting"], type_="concept",
          source="obsidian/Concepts/No-Lookahead.md (invariant #1)", trail="#trading-algo #backtesting"),
@@ -149,6 +153,7 @@ Map of content for the **Trading Algo** — a monthly-rebalanced **12-1 cross-se
 | Note | What's in it |
 |---|---|
 | [[12-1 Momentum]] | The signal: 12-month return skipping the last month, and why |
+| [[Breadth]] | How many truly separate bets we make, and why that, not skill per bet, is the gap to Medallion |
 | [[Regime & Trend Filters]] | Per-stock 200d MA + index-regime crash protection (risk-off → cash) |
 | [[Volatility Targeting]] | Inverse-vol weights, 15% cap, scale to a 12% vol target |
 | [[No-Lookahead]] | Signal at *t*, trade at *t+1* — the sacred backtest invariant |
