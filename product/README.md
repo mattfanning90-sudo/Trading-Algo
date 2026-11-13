@@ -17,7 +17,7 @@ governs what the trading code becomes.
 | [`PROCESS.md`](PROCESS.md) | The continuous backlog loop, state machine, Definition of Ready/Done, RICE, invariant mapping, rollout discipline, cadence |
 | [`backlog/backlog.json`](backlog/backlog.json) | The live backlog — every item researched, critiqued by all four roles, scored, with acceptance criteria and a rollout plan |
 | [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) | The Architect + Chief Engineer sustainability review: shared foundations, prerequisite refactors, phased build order, invariant guards |
-| [`backlog/build_plan.json`](backlog/build_plan.json) | Machine-readable build plan — the 19 items sequenced into 5 dependency-ordered phases behind 9 foundations |
+| [`backlog/build_plan.json`](backlog/build_plan.json) | Machine-readable build plan — every item sequenced into dependency-ordered phases behind 9 foundations |
 | [`schema/backlog_item.schema.json`](schema/backlog_item.schema.json) | JSON Schema (draft 2020-12) for one backlog item |
 | [`schema/rollout.schema.json`](schema/rollout.schema.json) | JSON Schema for a rollout plan |
 | [`schema/build_plan.schema.json`](schema/build_plan.schema.json) | JSON Schema for the build plan |
@@ -53,7 +53,10 @@ by `validate.py`.
 19 items across seven epics, seeded from the open roadmap in
 [`HANDOFF.md`](../HANDOFF.md), the bias research in
 [`docs/research/COMBATING_BACKTEST_BIAS.md`](../docs/research/COMBATING_BACKTEST_BIAS.md),
-and a file-grounded read of the codebase. Highest-RICE, ready-to-build items:
+and a file-grounded read of the codebase. Seven more (F20–F26, phase 5, all
+`proposed`) were added on 2026-10-13 from the live-book audit and what the new
+book screens show going wrong — see the phase list below. Highest-RICE,
+ready-to-build items from the original 19:
 
 | id | Title | Epic | RICE | Status |
 |---|---|---|---:|---|
@@ -87,6 +90,7 @@ Phase 1 — Statistical validity        F8  F2  F19
 Phase 2 — Data integrity              F1  F13 F14
 Phase 3 — Execution realism & capacity F6 F15 F11 F12 F9
 Phase 4 — Live readiness & reporting  F3  F10 F4  F5
+Phase 5 — Fixes found on the live books  F20 F21 F22 F23 F24 F25 F26   (added 2026-10-13)
 ```
 
 `validate.py` asserts every item is placed exactly once and no feature is

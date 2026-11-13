@@ -3,7 +3,7 @@
   "meta": {
     "product": "Trading-Algo",
     "description": "Continuous, evidence-graded feature backlog for the multi-region momentum platform. Every item is critiqued by all four roles (see ../roles.md) and carries acceptance criteria + a rollout plan. Generated with the four-lens process in ../PROCESS.md; validated by ../validate.py.",
-    "as_of": "2026-07-04",
+    "as_of": "2026-10-13",
     "invariants_reference": "../../CLAUDE.md#invariants---do-not-break-these"
   },
   "items": [
@@ -2037,6 +2037,767 @@
           }
         ],
         "rollback": "Remove the derived column. Additive reporting only."
+      }
+    },
+    {
+      "id": "F20",
+      "title": "FX books close trades about 5 bars into a 57-bar signal horizon",
+      "epic": "portfolio-mechanics",
+      "status": "proposed",
+      "owner_role": "data_scientist",
+      "problem": "Three FX books (matt, partner, multiasset) close a typical position after 5 bars, although the breakout/momentum signals that open it describe a ~57-bar horizon. Three in four round trips close before a quarter of that horizon, so the strategy the signals describe is never actually held, and every early exit pays spread.",
+      "hypothesis": "If exits are aligned with the signal horizon (a minimum hold or entry/exit hysteresis, both existing FXParams knobs set to 0 on every profile), then on the purged walk-forward hold-out, with the corrected cost model, net Sharpe after costs rises and turnover falls. If it does not, the signals carry no 57-bar edge and the signal windows, not the exits, are what to change (or the book pauses, F22).",
+      "evidence": [
+        {
+          "claim": "MEASURED 2026-10-13: median hold 5 bars against a 57-bar horizon on matt (59 of 77 round trips cut short), partner (58/77) and multiasset (79/93). daytrader (60m bars) holds a median 13 bars against a 22-bar horizon and is not flagged.",
+          "source": "trading_algo/verify.py:check_horizon via `python -m trading_algo.verify --json` on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        },
+        {
+          "claim": "MEASURED 2026-10-13: the trips that WERE held longer did not earn more. Contribution to equity, trips cut short vs trips given room: matt -3.79% vs -4.66%, partner -2.10% vs -3.90%, multiasset +3.01% vs +0.12%. Suggestive only, in both directions: a position survives longer when its signal keeps confirming, and the longer-hold samples are 14-19 trips each.",
+          "source": "verify.round_trips split at HORIZON_FRACTION=0.25 on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "medium"
+        },
+        {
+          "claim": "The knobs exist and are off on every profile (min_hold_bars=0, zero hysteresis), and a September sweep found no setting that helped out of sample.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 4.2; trading_algo/forex/fx_config.py:77-88",
+          "confidence": "high"
+        },
+        {
+          "claim": "Two known artefacts (a fixed-dollar crypto spread and a drawdown breaker whose high-water mark never resets) are still in the code and distort every FX backtest, so the September sweep ran with them. With both corrected the agents' gross Sharpe is near zero.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 12 items 3-4 and section 15",
+          "confidence": "medium"
+        },
+        {
+          "claim": "MEASURED 2026-10-13: costs paid against the result since inception: matt A$85.15 against a A$270.53 loss, partner A$49.89 against A$176.90 down, multiasset A$144.95 against a A$267.06 gain.",
+          "source": "trading_algo/dashboard/fx_api.py:build_fx_snapshot on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "This is the 'are we letting the plan play out?' question Matt asked on 2026-10-13, and the new book screens show it on every FX book. The outcome is a decision (hold longer, change the windows, or pause under F22), not a code change for its own sake.",
+          "concern": "A second sweep that finds nothing must close the question, not open a third."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Re-run forex/policy_sweep.py over min_hold_bars and hysteresis on the purged walk-forward hold-out after the crypto-spread and breaker artefacts are corrected, and judge it with DSR at the true trial count. Report the short-vs-long split with its selection caveat.",
+          "concern": "Winners run longer by construction, so an in-sample split cannot answer this; only a policy re-run can."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Knob-only: min_hold_bars and hysteresis already route through FXParams and the one compute_targets path, so there is no new weight logic. A profile change applies to new decisions only and needs no state migration.",
+          "concern": "Changing a live profile mid-book mixes two policies in one track record; stamp the switch date in state."
+        },
+        "algo_trader": {
+          "verdict": "maybe",
+          "notes": "Fewer, longer trades cut spread on books that pay about a third of their loss in costs. But a longer hold on a signal with no edge is just longer exposure to noise, so only switch it on with a hold-out improvement.",
+          "concern": "Longer holds raise weekend-gap risk on the crypto legs."
+        }
+      },
+      "scoring": {
+        "reach": 3,
+        "impact": 1,
+        "confidence": 0.5,
+        "effort": 1,
+        "score": 1.5
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A policy sweep over min_hold_bars and hysteresis runs on the purged walk-forward hold-out for matt, partner and multiasset with the corrected cost model, and its DSR at the true trial count is recorded.",
+          "measurable": true,
+          "metric": "results committed under docs/research/ with DSR per book"
+        },
+        {
+          "id": "AC2",
+          "statement": "A decision is recorded: enable a setting only if hold-out net Sharpe improves and DSR clears the existing gate; otherwise record that hold length is not the lever.",
+          "measurable": false
+        },
+        {
+          "id": "AC3",
+          "statement": "If a setting is enabled, the audit's hold-shorter-than-signal finding clears on that book within 60 trading days.",
+          "measurable": true,
+          "metric": "verify --json: no hold-shorter-than-signal WARN (median hold >= 25% of horizon)"
+        }
+      ],
+      "invariants_touched": [
+        "2-costs-always-on",
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "FXParams.min_hold_bars and the entry/exit hysteresis knobs, per profile (0 today)",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "sweep only; no live profile changes",
+            "exit_criteria": "AC1 recorded and AC2 decided"
+          },
+          {
+            "name": "paper",
+            "scope": "one FX paper book's profile changed, switch date stamped in its state",
+            "exit_criteria": "60 trading days with guardrails intact; AC3"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "net P&L after costs vs an unchanged sibling book",
+            "threshold": "not worse over 60 trading days"
+          },
+          {
+            "metric": "costs always on",
+            "threshold": "sweep and live both charge spread and swap; FX cost tests green"
+          }
+        ],
+        "rollback": "Set the profile's min_hold_bars and hysteresis back to 0; it takes effect on the next decision. No stored-format change, so no migration."
+      }
+    },
+    {
+      "id": "F21",
+      "title": "FX books change positions at frozen (forward-filled) prices",
+      "epic": "execution-quality",
+      "status": "proposed",
+      "owner_role": "chief_engineer",
+      "problem": "When a symbol's feed does not print, fx_data._align forward-fills its last close and the books keep re-weighting it. Each such trade pays spread but cannot capture a price move, and it is booked at a price no venue quoted.",
+      "hypothesis": "If a book refuses to change a position on a bar where that symbol's price did not update (freezing it, as shut sessions already are), dead-price turnover falls to zero with no other change to decisions, and costs fall by the spread on those trades.",
+      "evidence": [
+        {
+          "claim": "MEASURED 2026-10-13 over each book's whole ledger: position changes at an unchanged price on daytrader 100 (10 symbols, EURUSD 39), multiasset 24, partner 4, matt 3.",
+          "source": "trading_algo/verify.py:check_dead_price on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        },
+        {
+          "claim": "Still happening: 17 of those 131 are from the last 30 days (daytrader 10, multiasset 4, matt 2, partner 1); the latest was daytrader EURUSD at 2026-10-13 03:00 UTC. The check is not age-graded, so its WARN alone does not show recency.",
+          "source": "the same ledgers split by trade date, 2026-10-13",
+          "confidence": "high"
+        },
+        {
+          "claim": "Shut sessions are already trimmed from the candidate universe before compute_targets and frozen, not flattened; a stale bar on an open session is not.",
+          "source": "trading_algo/forex/sessions.py; CLAUDE.md (forex/sessions.py)",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Paying spread for nothing is pure loss, and it recurs on daytrader every week. Small, clear and measurable."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "First measure how many of the 131 are true freezes (consecutive identical bars in the price cache) rather than coincidentally equal closes, and key the rule off bar staleness, not trade-price equality.",
+          "concern": "The staleness test must use only data known at t (invariant 1)."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Put the rule where the session freeze already lives, so there is one 'cannot trade this symbol now' path into compute_targets and no second weight path.",
+          "concern": "Hourly and daily bars need different staleness thresholds."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "You cannot get a fill on a price nobody is quoting; the paper book should not pretend it did.",
+          "concern": "A long-stale symbol held at full weight still carries risk; the audit should flag that separately."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 0.5,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 1.6
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A symbol whose latest bar did not update is excluded from position changes on that bar and held at its current weight.",
+          "measurable": true,
+          "metric": "unit test: stale bar gives no trade for that symbol and unchanged decisions for the others"
+        },
+        {
+          "id": "AC2",
+          "statement": "Backtest and paper apply the same freeze rule.",
+          "measurable": true,
+          "metric": "test asserts both paths call the same freeze helper"
+        },
+        {
+          "id": "AC3",
+          "statement": "The audit reports no new dead-price trades on any FX book in the 30 days after release.",
+          "measurable": true,
+          "metric": "verify --json: no dead-price trade dated after the release"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead",
+        "2-costs-always-on",
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "FXParams.freeze_stale_bars (off by default)",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "log the symbols that would be frozen; trade as today",
+            "exit_criteria": "two weeks in which the would-freeze log matches the audit's dead-price trades"
+          },
+          {
+            "name": "paper",
+            "scope": "enabled on daytrader, the heaviest offender",
+            "exit_criteria": "AC3 holds on daytrader for 30 days"
+          },
+          {
+            "name": "full-live",
+            "scope": "every FX paper book (no real capital exists)",
+            "exit_criteria": "AC1-AC3 met"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "decisions on non-stale symbols",
+            "threshold": "identical with the flag on and off on a replay"
+          },
+          {
+            "metric": "dead-price turnover",
+            "threshold": "0 new occurrences"
+          }
+        ],
+        "rollback": "Turn the flag off; the next decision trades as today. No stored-format change, so no migration."
+      }
+    },
+    {
+      "id": "F22",
+      "title": "Decide whether the FX books keep trading without a demonstrated edge",
+      "epic": "statistical-validity",
+      "status": "proposed",
+      "owner_role": "product_owner",
+      "problem": "The four FX books have no demonstrated edge (their agents' cost-corrected backtest Sharpe is near zero, and the search for better settings finds nothing beyond luck), yet they trade every day with no rule for when they would stop or what would justify continuing. daytrader in particular pays costs about equal to its whole loss and is not even run on its designed schedule. The money is paper, so the cost is a track record that cannot teach anything and numbers that are easy to misread.",
+      "hypothesis": "If each FX book gets an explicit keep/pause rule with a pre-registered re-entry test (corrected costs, hold-out net Sharpe > 0, DSR at the true trial count), books with no edge stop accruing paper losses while the learning goal continues on recorded decisions. The rule is falsified if a paused book's shadow decisions would have earned a positive net return over the pause.",
+      "evidence": [
+        {
+          "claim": "Permutation test of the swarm's SEARCH on matt (200 bar shuffles, data 2020-04-10 to 2026-09-19, run 2026-09-19): p = 0.47, so the search finds settings this good on patternless shuffled data about half the time and its best finds look like luck. It tests the search, not the live book: champions_matt.json has an empty roster, so matt trades none of the searched genomes.",
+          "source": "state/permtest_matt.json (statistic best_holdout_sharpe); state/champions_matt.json; trading_algo/forex/permtest.py docstring; docs/PERMUTATION_TESTING.md",
+          "confidence": "high"
+        },
+        {
+          "claim": "The DSR/PBO champion gate has promoted 0 of 424 bred genomes, and on multiasset the null scores higher than the best genome.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 4.2; product/backlog/backlog.json F2 evidence",
+          "confidence": "high"
+        },
+        {
+          "claim": "MEASURED 2026-10-13: daytrader has paid A$897.25 in costs and is down A$902.15 on A$10,000 (turnover 310x capital). matt is down A$270.53 (costs A$85.15), partner down A$176.90 (A$49.89), multiasset up A$267.06 (A$144.95).",
+          "source": "trading_algo/dashboard/fx_api.py:build_fx_snapshot on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        },
+        {
+          "claim": "Caveat carried with the backtests: the very negative FX backtest Sharpes (-2 to -6) are substantially a cost-model artefact. With both artefacts corrected the agents' gross Sharpe is near zero, meaning no edge rather than a large negative one.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 15; trading_algo/forex/fx_config.py REVIEW_NOTICE (feat/measurement-truth)",
+          "confidence": "high"
+        },
+        {
+          "claim": "daytrader's hourly job has run only 2-6 of its 23 scheduled weekday slots since September, because GitHub skips scheduled runs, so the book is not run as designed.",
+          "source": "GitHub Actions run history for .github/workflows/day-paper.yml (cron 7 0-22 * * 1-5), recorded 2026-10-10 in docs/superpowers/plans/2026-09-24-measurement-truth.md (feat/measurement-truth)",
+          "confidence": "high"
+        },
+        {
+          "claim": "The September review recommends pausing the FX, crypto and multi-asset books until a corrected-cost backtest shows positive net Sharpe over a hold-out, and stopping daytrader (its loss is 78% cost).",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 12 item 15",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "This is Matt's decision, and the book screens now put it in front of him daily ('no evidence of skill yet'). The item exists so it is decided once, on a rule, instead of re-argued every time a number moves.",
+          "concern": "Pausing must not stop the learning goal; keep recording decisions in shadow."
+        },
+        "data_scientist": {
+          "verdict": "strong_yes",
+          "notes": "Three independent tests agree there is no edge in these inputs. A pause rule with a pre-registered re-entry test is the honest position.",
+          "concern": "The re-entry test must count every trial since July, or the gate is passed by repetition."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Implement as a per-book 'paused' flag the engine honours: decisions computed and logged, no fills. The books keep their state and resume without migration.",
+          "concern": "A flag stored in state is a format change; ship it under the migration-and-rollback rule (absent means trading)."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "daytrader especially: its costs equal its loss and it runs 2-6 of 23 hours. Paper money, but a book that cannot run as designed tells us nothing.",
+          "concern": "Pause on the pre-registered rule only, never on a bad month."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 3.2
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A keep/pause rule with a re-entry test is written down for each FX book and agreed by Matt.",
+          "measurable": false
+        },
+        {
+          "id": "AC2",
+          "statement": "A paused book still computes and records its decisions but makes no fills.",
+          "measurable": true,
+          "metric": "test: paused book gives 0 new trades and a logged decision"
+        },
+        {
+          "id": "AC3",
+          "statement": "The home screen and the book screens show that a book is paused, and why.",
+          "measurable": true,
+          "metric": "UI test on a paused fixture"
+        }
+      ],
+      "invariants_touched": [
+        "2-costs-always-on"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "per-book 'paused' key in fx_state (absent = trading, as today)",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "rule evaluated and shown on screen; no book paused",
+            "exit_criteria": "Matt agrees the rule (AC1)"
+          },
+          {
+            "name": "paper",
+            "scope": "daytrader paused first",
+            "exit_criteria": "decisions still recorded for two weeks; resume tested end to end"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "state compatibility",
+            "threshold": "books without the key behave exactly as today (test)"
+          },
+          {
+            "metric": "decision log",
+            "threshold": "paused books still record every decision"
+          }
+        ],
+        "rollback": "Back up fx_state_*.json before the first write. Remove the key (or set it false) and the book resumes on its next run; restore the backup if the resume misbehaves."
+      }
+    },
+    {
+      "id": "F23",
+      "title": "Vol targeting assumes 0.6 pick correlation; measured is 0.18-0.36",
+      "epic": "portfolio-mechanics",
+      "status": "proposed",
+      "owner_role": "data_scientist",
+      "problem": "Vol targeting sizes each equity sleeve as if its picks were 0.6 correlated. Measured correlation is 0.18-0.36, so the sleeve's risk is over-estimated and it invests less than its own volatility target allows. FULL is 71% cash on 13 Oct: ASX entirely (the regime filter, by design) and the US and UK sleeves only partly invested.",
+      "hypothesis": "If avg_correlation is set to the measured value (~0.3) or estimated on a trailing window, the US sleeve's backtest CAGR rises (the review projects 9.6% to about 11.5%) at the same Sharpe, and realised sleeve volatility moves toward the 12% target.",
+      "evidence": [
+        {
+          "claim": "avg_correlation: float = 0.6 is the shared default.",
+          "source": "trading_algo/config.py:29",
+          "confidence": "high"
+        },
+        {
+          "claim": "Measured pick correlation is 0.18-0.36; US gross sits at 28-34% and realised vol at 8-10% against a 12% target, graded 'mis-calibrated'.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 4.2 and section 12 item 8",
+          "confidence": "medium"
+        },
+        {
+          "claim": "MEASURED 2026-10-13: FULL is 71% cash, has paid A$449.17 in costs against a +A$185.34 net result, and is about 3.6 points behind its benchmark since 11 June. The benchmark is price-only; a total-return benchmark would widen the gap (review section 12 item 6).",
+          "source": "trading_algo/dashboard/api.py:build_snapshot('full') on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        },
+        {
+          "claim": "The review's warning: do not raise the vol target or add leverage before this lands.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 12, 'What I would not do'",
+          "confidence": "high"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "The book screens say 'mostly idle' on FULL every day; this is the measured reason for the US and UK part of it."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Estimate it on a trailing window (no lookahead) rather than hard-coding 0.3; re-run the regression baseline and report DSR with this change counted as a trial.",
+          "concern": "It is one more knob tuned on the same 2012-2026 sample."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "One StrategyParams field routed through compute_targets, so backtest and paper pick it up together (invariant 3).",
+          "concern": "Existing books keep their param_overrides; a default change moves FULL and must be recorded."
+        },
+        "algo_trader": {
+          "verdict": "maybe",
+          "notes": "More gross means a deeper drawdown in a momentum crash; I want the crash-window check from review item 9 run alongside.",
+          "concern": "Higher exposure while the breaker's high-water-mark issue (review item 3) is still open."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 2,
+        "confidence": 0.5,
+        "effort": 1,
+        "score": 4.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A backtest with measured or trailing correlation reports US sleeve CAGR and Sharpe against the 0.6 baseline, costs on.",
+          "measurable": true,
+          "metric": "results committed under docs/research/; ci_regression baseline updated deliberately"
+        },
+        {
+          "id": "AC2",
+          "statement": "Realised sleeve volatility in that backtest is within 2 points of target_vol.",
+          "measurable": true,
+          "metric": "|realised vol - target_vol| <= 2pp"
+        },
+        {
+          "id": "AC3",
+          "statement": "Paper and backtest use the same value.",
+          "measurable": true,
+          "metric": "tests/test_consistency.py green"
+        }
+      ],
+      "invariants_touched": [
+        "1-no-lookahead",
+        "2-costs-always-on",
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "StrategyParams.avg_correlation (0.6 today), or a trailing estimate behind a flag",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "backtest only",
+            "exit_criteria": "AC1 and AC2"
+          },
+          {
+            "name": "paper",
+            "scope": "one equity book through its profile param_overrides",
+            "exit_criteria": "60 trading days with drawdown inside the breaker"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "backtest max drawdown",
+            "threshold": "no more than 2pp worse than the 0.6 baseline"
+          },
+          {
+            "metric": "invariant 3",
+            "threshold": "tests/test_consistency.py green"
+          }
+        ],
+        "rollback": "Revert the knob to 0.6 (or drop the override); the next rebalance sizes as today. No stored-format change."
+      }
+    },
+    {
+      "id": "F24",
+      "title": "Order sizing always rounds share counts down",
+      "epic": "portfolio-mechanics",
+      "status": "proposed",
+      "owner_role": "algo_trader",
+      "problem": "paper_trade sizes every order with int(equity * w / price), which always rounds down. At these book sizes the US sleeve loses a large share of its target exposure each month, a silent gap between what the strategy asks for and what the book holds.",
+      "hypothesis": "If orders round to the nearest whole share, capped by available cash, most of the lost exposure comes back without breaking invariant 4, measured as the invested-to-target ratio at each rebalance.",
+      "evidence": [
+        {
+          "claim": "desired[t] = int((equity * w) / price) truncates every order.",
+          "source": "trading_algo/paper_trade.py:610",
+          "confidence": "high"
+        },
+        {
+          "claim": "Whole-share truncation loses 16 to 47% of the US sleeve's target every rebalance (graded 'throttle').",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 4.2 and section 12 item 11",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Cheap, and it closes a gap the new Positions screen will make visible (target vs held)."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Measure the invested/target ratio per rebalance before and after on a paper replay; nearest-share can overshoot, so report both directions.",
+          "concern": "Rounding up puts realised weight above target on expensive names."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "One sizing helper used by paper and execution_ibkr. Invariant 4 holds because orders stay whole shares; fractional shares would be an invariant change and are out of scope.",
+          "concern": "Several names rounding up at once can overdraw cash; cap by available cash."
+        },
+        "algo_trader": {
+          "verdict": "strong_yes",
+          "notes": "A broker fills whatever whole shares we send; rounding down every time is a systematic under-investment.",
+          "concern": "Small rounded-up lots can trade inefficiently against the commission floor."
+        }
+      },
+      "scoring": {
+        "reach": 4,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 3.2
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "Order sizing rounds to the nearest whole share and never exceeds available cash.",
+          "measurable": true,
+          "metric": "unit tests incl. the cash cap and SMALL micro mode"
+        },
+        {
+          "id": "AC2",
+          "statement": "The US sleeve's mean invested-to-target ratio on a paper replay of Jul-Oct 2026 rises to at least 0.90.",
+          "measurable": true,
+          "metric": ">= 0.90"
+        },
+        {
+          "id": "AC3",
+          "statement": "No fractional shares appear in any book.",
+          "measurable": true,
+          "metric": "verify check_whole_shares silent; whole-share tests green"
+        }
+      ],
+      "invariants_touched": [
+        "3-one-weight-function",
+        "4-whole-shares"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "feature_flag",
+        "flag": "config.ROUND_NEAREST_SHARE (off by default)",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "log both sizings at each rebalance; trade as today",
+            "exit_criteria": "one month-start of side-by-side comparisons"
+          },
+          {
+            "name": "paper",
+            "scope": "enabled on FULL",
+            "exit_criteria": "next rebalance: invested/target >= 0.90 and cash never negative"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "sleeve cash",
+            "threshold": ">= 0 after every rebalance"
+          },
+          {
+            "metric": "whole shares",
+            "threshold": "verify check_whole_shares silent"
+          }
+        ],
+        "rollback": "Flag off; the next rebalance rounds down as today. No stored-format change."
+      }
+    },
+    {
+      "id": "F25",
+      "title": "FTSE rebalances monthly though quarterly measured better and cheaper",
+      "epic": "portfolio-mechanics",
+      "status": "proposed",
+      "owner_role": "data_scientist",
+      "problem": "The FTSE sleeve pays 0.5% stamp duty on every buy and rebalances monthly. On FULL its trading has cost 45.5 bps of value traded against 16.9 bps in the US, and the book's costs (A$449) exceed its net result (+A$185).",
+      "hypothesis": "If FTSE rebalances quarterly (judged as the mean of the three phase offsets, or tranched) or holds names inside a buy/hold band, its net Sharpe rises from 0.110 toward 0.220 and its cost drag falls from 24.7% to about 11%, with no worse drawdown.",
+      "evidence": [
+        {
+          "claim": "MEASURED 2026-10-13: FULL's cost drag is 45.5 bps of value traded in FTSE against 16.9 bps in the US; costs A$449.17 against a +A$185.34 net result.",
+          "source": "trading_algo/dashboard/api.py:build_snapshot('full') attribution.cost_drag_by_region on state/fx_state_*.json and state/paper_state_*.json on main @ d573791 (2026-10-13)",
+          "confidence": "high"
+        },
+        {
+          "claim": "FTSE monthly Sharpe 0.110 against 0.220 for quarterly averaged across its three phases, with cost drag cut from 24.7% to about 11%: 'the strongest unexploited lead in the equity book'.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 15",
+          "confidence": "high"
+        },
+        {
+          "claim": "Caveat: annual rebalancing also beat quarterly in three of four sleeves, which no signal-decay story permits, so rebalance-timing luck is large and any single-phase result is unreliable.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 15",
+          "confidence": "high"
+        },
+        {
+          "claim": "The review also recommends a buy/hold band in compute_targets and tranching the rebalance across two to four dates; FTSE is the sleeve that pays for their absence.",
+          "source": "docs/FULL_SYSTEM_REVIEW_2026-09.md section 12 item 13",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "strong_yes",
+          "notes": "The review calls it the strongest unexploited lead, and it attacks the 'costs are eating the gains' line the FULL screen shows."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Judge on the mean across phase offsets, never one phase, with DSR counting every cadence and band width tried.",
+          "concern": "Annual beating quarterly in three of four sleeves says the sample is noisy; do not over-read 0.22."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "Cadence can be a per-region override so FTSE changes alone; a buy/hold band belongs inside compute_targets so backtest and paper share it.",
+          "concern": "Tranching changes the pinned-flat logic the audit already flags."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "Stamp duty is a certain cost and alpha is not; trading FTSE less is the cheapest edge we have.",
+          "concern": "A slower rebalance holds losers longer in a momentum crash."
+        }
+      },
+      "scoring": {
+        "reach": 2,
+        "impact": 1,
+        "confidence": 0.8,
+        "effort": 1,
+        "score": 1.6
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A backtest compares FTSE monthly, quarterly (all three phases) and a buy/hold band with costs on, reported with DSR.",
+          "measurable": true,
+          "metric": "results committed under docs/research/"
+        },
+        {
+          "id": "AC2",
+          "statement": "If adopted, FULL's FTSE cost drag falls below 25 bps of value traded over the next two quarters.",
+          "measurable": true,
+          "metric": "attribution cost_drag_by_region FTSE < 25 bps"
+        }
+      ],
+      "invariants_touched": [
+        "2-costs-always-on",
+        "3-one-weight-function"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "FTSE region override for rebalance cadence / hold band (monthly, no band today)",
+        "default_on": false,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "backtest only",
+            "exit_criteria": "AC1 recorded and a decision taken"
+          },
+          {
+            "name": "single-sleeve",
+            "scope": "FULL's FTSE sleeve only",
+            "exit_criteria": "two quarters; AC2"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "FTSE sleeve drawdown",
+            "threshold": "no more than 2pp worse than the monthly baseline in the backtest"
+          },
+          {
+            "metric": "stamp duty",
+            "threshold": "charged on every FTSE buy (fees tests green)"
+          }
+        ],
+        "rollback": "Restore the monthly cadence; the next month-start rebalances as today. last_rebalance_month is already stored, so no migration."
+      }
+    },
+    {
+      "id": "F26",
+      "title": "Four universe symbols return no data (MMC, AHT.L, BDEV.L, PHNX.L)",
+      "epic": "data-integrity",
+      "status": "proposed",
+      "owner_role": "chief_engineer",
+      "problem": "Four universe symbols return no data from Yahoo: MMC (US) and AHT.L, BDEV.L, PHNX.L (FTSE). Every US and FTSE run therefore ranks a smaller universe than intended; measurement truth's new dead_tickers alert says so on every load.",
+      "hypothesis": "If each dead symbol is mapped to its current listing (renamed) or removed (delisted or acquired), the dead_tickers alert stops firing and each sleeve again ranks its full intended universe.",
+      "evidence": [
+        {
+          "claim": "MEASURED 2026-10-13: the dead_tickers alert fires on every US and FTSE load: 'MMC: possibly delisted; no timezone found', and likewise AHT.L, BDEV.L and PHNX.L.",
+          "source": "Yahoo download errors on 2026-10-13, raised as the dead_tickers alert in trading_algo/data.py on feat/measurement-truth (not yet on main)",
+          "confidence": "high"
+        },
+        {
+          "claim": "Removing a name changes the backtest universe and its numbers; point-in-time membership (F1) is the proper long-run fix for names leaving an index.",
+          "source": "product/backlog/backlog.json F1; docs/research/COMBATING_BACKTEST_BIAS.md",
+          "confidence": "medium"
+        }
+      ],
+      "role_reviews": {
+        "product_owner": {
+          "verdict": "yes",
+          "notes": "Small hygiene with a visible alert attached; it should not wait for F1."
+        },
+        "data_scientist": {
+          "verdict": "yes",
+          "notes": "Classify each as renamed, delisted or acquired and record which: a delisting is survivorship information (F1, F13), not just a typo.",
+          "concern": "Dropping a delisted name from the static list makes the backtest more survivorship-biased, not less."
+        },
+        "chief_engineer": {
+          "verdict": "yes",
+          "notes": "A universes.py edit plus a test that every universe symbol loaded in the last run; no code path changes."
+        },
+        "algo_trader": {
+          "verdict": "yes",
+          "notes": "A smaller universe changes which names reach the top N; fix it before the next month-start.",
+          "concern": "Check that a renamed ticker maps to the same company."
+        }
+      },
+      "scoring": {
+        "reach": 3,
+        "impact": 0.5,
+        "confidence": 1.0,
+        "effort": 0.5,
+        "score": 3.0
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "statement": "A full US and FTSE load returns data for every universe symbol.",
+          "measurable": true,
+          "metric": "no symbol dropped by data.load_region (and no dead_tickers alert once that lands)"
+        },
+        {
+          "id": "AC2",
+          "statement": "Each change is recorded with its reason (renamed, delisted or acquired) in docs/DATA_FEEDS.md.",
+          "measurable": false
+        }
+      ],
+      "invariants_touched": [
+        "none"
+      ],
+      "dependencies": [],
+      "rollout": {
+        "mechanism": "config_knob",
+        "flag": "trading_algo/universes.py symbol lists",
+        "default_on": true,
+        "stages": [
+          {
+            "name": "shadow",
+            "scope": "load each replacement symbol and compare its history with the old series",
+            "exit_criteria": "prices continuous with the old symbol's history"
+          },
+          {
+            "name": "full-live",
+            "scope": "every book on its next scheduled run",
+            "exit_criteria": "AC1 on the next scheduled runs"
+          }
+        ],
+        "guardrail_metrics": [
+          {
+            "metric": "universe size",
+            "threshold": "equals the intended list length on every load"
+          }
+        ],
+        "rollback": "git revert the universes.py change; the next run loads the old list. No stored-format change."
       }
     }
   ]
