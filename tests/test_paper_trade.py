@@ -775,8 +775,9 @@ def test_a_profile_over_regions_with_different_defaults_is_refused(monkeypatch):
 
 
 def test_the_backtest_runs_the_books_own_regions_and_allocations(monkeypatch):
-    """config.ALLOCATIONS funds four sleeves since TSX was added; `full`
-    holds three at a third each. The comparison is the book's own split."""
+    """config.ALLOCATIONS funds four sleeves since TSX was added; a book opened
+    before that holds three at a third each. The comparison is the book's own
+    split."""
     state = _profiled_book(regions=("ASX", "US", "FTSE"))
     seen = _capture_backtest(monkeypatch)
     pt._backtest_for_book(state, synthetic=True)
