@@ -289,21 +289,29 @@ def check_market_hours(account: str, state: dict, kind: str,
     return found
 
 
-def check_dead_price(account: str, state: dict) -> list[Finding]:
+def check_dead_price(account: str, state: dict,
+                     today: datetime | None = None) -> list[Finding]:
     """Flag position changes made at a price identical to the previous change.
 
     `fx_data._align` forward-fills a symbol that did not print, so a frozen feed
     keeps serving its last close. If the book keeps re-weighting a symbol while
     its price never moves, it is paying spread on every turn for an exposure
-    change that cannot possibly capture a price move.
+    change that cannot possibly capture a price move. `detail["recent"]` counts
+    the ones inside HISTORICAL_CUTOFF_DAYS of `today`, so a reader can tell a
+    live defect from history without the finding itself changing.
     """
+    cutoff = (today - timedelta(days=HISTORICAL_CUTOFF_DAYS)
+              if today is not None else None)
     last_px: dict[str, float] = {}
     frozen: dict[str, int] = {}
+    recent = 0
     for t in sorted(state.get("trades") or [], key=lambda x: _parse(x["date"])):
         sym, px = t.get("pair"), float(t.get("price", 0.0))
         if sym in last_px and px == last_px[sym] and abs(float(
                 t.get("delta_weight", 0.0))) > 1e-9:
             frozen[sym] = frozen.get(sym, 0) + 1
+            if cutoff is None or _parse(t["date"]) >= cutoff:
+                recent += 1
         last_px[sym] = px
     if not frozen:
         return []
@@ -312,7 +320,8 @@ def check_dead_price(account: str, state: dict) -> list[Finding]:
         WARN, account, "dead-price-turnover",
         f"{total} position changes made at an unchanged (forward-filled) price "
         f"across {len(frozen)} symbols — spread paid, no price exposure gained",
-        {"by_symbol": dict(sorted(frozen.items(), key=lambda x: -x[1]))})]
+        {"by_symbol": dict(sorted(frozen.items(), key=lambda x: -x[1])),
+         "recent": recent})]
 
 
 def check_whole_shares(account: str, state: dict) -> list[Finding]:
@@ -648,7 +657,7 @@ def verify_book(kind: str, account: str, state: dict,
         found += check_costs_charged(account, state)
     else:
         found += reconcile_fx(account, state)
-        found += check_dead_price(account, state)
+        found += check_dead_price(account, state, today)
         found += check_horizon(account, state)
         found += check_turnover(account, state)
     return sorted(found, key=lambda f: _RANK[f.level])

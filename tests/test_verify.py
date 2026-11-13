@@ -660,3 +660,18 @@ def test_every_never_traded_grade_names_its_sleeve(extra):
     sleeve = {"cash": 1.0, "currency": "AUD", **extra}
     found = verify._never_traded_finding("full", "ASX", sleeve, 0.33)
     assert found.detail["subject"] == "ASX"
+
+
+def test_dead_price_counts_recent_changes_without_changing_the_finding():
+    trades = [
+        {"date": "2026-08-01", "pair": "EURUSD", "price": 1.1, "delta_weight": 0.1},
+        {"date": "2026-08-02", "pair": "EURUSD", "price": 1.1, "delta_weight": 0.1},   # old
+        {"date": "2026-10-10", "pair": "EURUSD", "price": 1.2, "delta_weight": 0.1},
+        {"date": "2026-10-11", "pair": "EURUSD", "price": 1.2, "delta_weight": -0.1},  # recent
+    ]
+    found = verify.check_dead_price("t", {"trades": trades}, datetime(2026, 10, 13))
+    assert len(found) == 1
+    f = found[0]
+    assert f.level == verify.WARN and f.code == "dead-price-turnover"
+    assert f.detail["by_symbol"] == {"EURUSD": 2} and f.detail["recent"] == 1
+    assert f.message.startswith("2 position changes")
