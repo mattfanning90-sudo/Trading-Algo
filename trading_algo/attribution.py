@@ -239,7 +239,7 @@ def _line_fill_convention(fills: list[tuple[dict, float]]) -> tuple[float, float
     stays in the residual."""
     excess = paid_total = 0.0
     for t, rate in fills:
-        bps = tca._modelled_bps(t.get("region"))
+        bps = tca._modelled_bps(t.get("region", ""))
         if not t.get("decision") or bps is None:
             continue
         shares, decision = float(t["shares"]), float(t["decision"])
@@ -426,12 +426,14 @@ def _sleeve_terms(paper_state: dict, bt: dict, key: str, values: dict,
             bt_flat += g_bt == 0 and g > 1e-6
     credits = [t for t in _through(paper_state.get("trades") or [], end)
                if t.get("region") == key and t.get("side") == pnl.INTEREST]
-    paper = None if credits and rate is None else 0.0
-    for t in credits if paper is not None else ():
-        on = pd.Timestamp(t["date"])
-        before = growth.loc[:on]
-        paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
-                  / (float(before.iloc[-1]) if len(before) else 1.0))
+    paper: float | None = None
+    if not (credits and rate is None):
+        paper = 0.0
+        for t in credits:
+            on = pd.Timestamp(t["date"])
+            before = growth.loc[:on]
+            paper += (pnl.cash_amount(t) * cash_rate(on) / v0 * b_end
+                      / (float(before.iloc[-1]) if len(before) else 1.0))
     return {"v0": v0, "gap": b_end - values[days[-1]] / v0,
             "commission": commission,
             "interest": interest - (paper or 0.0), "paper_interest": paper,
@@ -543,12 +545,11 @@ def reconcile(paper_state: dict, predicted_equity: pd.Series, *,
 
     fills = _window_fills(paper_state, end)
     unrated = sorted({str(t.get("currency")) for t, rate in fills if rate is None})
-    left_out = len(fills)
-    fills = [(t, rate) for t, rate in fills if rate is not None]
-    left_out -= len(fills)
-    slip_excess, slip_paid = _line_fill_convention(fills)
-    duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in fills)
-    commissions = sum(float(t.get("commission") or 0.0) * rate for t, rate in fills)
+    rated = [(t, rate) for t, rate in fills if rate is not None]
+    left_out = len(fills) - len(rated)
+    slip_excess, slip_paid = _line_fill_convention(rated)
+    duty = sum(float(t.get("stamp_duty") or 0.0) * rate for t, rate in rated)
+    commissions = sum(float(t.get("commission") or 0.0) * rate for t, rate in rated)
     credited, div_unrated = _window_cash(paper_state, pnl.DIVIDEND, end)
     earned, int_unrated = _window_cash(paper_state, pnl.INTEREST, end)
     lines = {name: 0.0 for name in BRIDGE_LINES}

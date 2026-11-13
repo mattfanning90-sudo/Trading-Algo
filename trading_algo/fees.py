@@ -99,6 +99,7 @@ def turnover_commission(region: Region, turnover: float, *,
     commission inside `round_trip_cost_rate`). The backtest records it per
     fill bar, so what it says it paid is what it charged."""
     if _sized(nav, orders):
+        assert nav is not None and orders is not None   # _sized checked both
         return sum(commission(region, abs(float(dw)) * float(nav))
                    for dw in orders) / float(nav)
     return turnover * region.commission_bps / 1e4

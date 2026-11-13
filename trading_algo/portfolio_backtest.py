@@ -76,8 +76,7 @@ def _total_return_proxies(regions: list[str], start: str, end: str | None,
     — the caller then falls back to the price index and SAYS SO."""
     if synthetic:
         return {}
-    want = {k: get_region(k).benchmark_ticker for k in regions
-            if get_region(k).benchmark_ticker}
+    want = {k: t for k in regions if (t := get_region(k).benchmark_ticker)}
     if not want:
         return {}
     tickers = sorted(set(want.values()))
