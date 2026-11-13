@@ -12,7 +12,7 @@ THIRDS = {"allocations": {"ASX": 1 / 3, "US": 1 / 3, "FTSE": 1 / 3}}
 def test_equity_backtest_line_and_its_caveats():
     out = R.backtest_line(make_inp(backtest=EQ_BT, state=THIRDS))[0]
     assert out["text"] == ("Backtest (2012–2026): +6.1% a year, Sharpe 0.32, against the "
-                           "benchmark's +9.6% and 0.50")
+                           "benchmark at +9.6% and 0.50")
     c = out["caveat"]
     assert c.startswith("Saved 19 Sep 2026, 24 days ago; may not reflect changes since.")
     assert "survivorship-biased" in c and "dividends" in c
@@ -68,3 +68,10 @@ def test_an_old_luck_test_says_so_and_equity_has_none():
 def test_not_measured_names_what_is_missing():
     assert "decision record" in R.not_measured(make_inp())[0]["text"]
     assert "agent scorecard" in R.not_measured(make_inp("fx"))[0]["text"]
+
+
+def test_negative_sharpe_uses_the_typographic_minus():
+    bt = {"available": True, "synthetic": False, "start": "2003", "end": "2026",
+          "generated_at": "2026-10-13T00:00:00Z", "metrics": {"cagr": -0.002, "sharpe": -6.56}}
+    out = R.model(make_inp(backtest=bt))[0]
+    assert "Sharpe \u22126.56" in out["text"] and "-6" not in out["text"]

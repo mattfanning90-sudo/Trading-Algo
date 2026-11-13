@@ -108,6 +108,11 @@ def plain_finding(f) -> str:
     return tmpl.format(subject=subject) if tmpl else f"Audit finding: {f.message}"
 
 
+def _num(v: float) -> str:
+    """A ratio to 2 dp with the typographic minus, never a bare hyphen."""
+    return f"{v:.2f}".replace("-", "\u2212")
+
+
 def market(inp) -> dict | None:
     """The book against its benchmark to the last SAVED date, and how far the
     two normally stray. None when there's nothing fair to compare; with fewer
@@ -483,7 +488,7 @@ def backtest_line(inp) -> list[dict]:
     if m.get("cagr") is None or m.get("sharpe") is None:
         return [item("backtest", "model", "Couldn't read the saved backtest", source=src)]
     text = (f"Backtest ({str(bt.get('start'))[:4]}\u2013{str(bt.get('end'))[:4]}): "
-            f"{pct(m['cagr'])} a year, Sharpe {m['sharpe']:.2f}")
+            f"{pct(m['cagr'])} a year, Sharpe {_num(m['sharpe'])}")
     caveats: list[str] = []
     age = _days_old(gen, inp.now) if gen else None
     if gen:
@@ -492,7 +497,7 @@ def backtest_line(inp) -> list[dict]:
     if inp.kind == "equity":
         bm = bt.get("benchmark_metrics") or {}
         if bm.get("cagr") is not None and bm.get("sharpe") is not None:
-            text += f", against the benchmark's {pct(bm['cagr'])} and {bm['sharpe']:.2f}"
+            text += f", against the benchmark at {pct(bm['cagr'])} and {_num(bm['sharpe'])}"
         caveats.append("It is survivorship-biased, so an upper bound; no sleeve passes a "
                        "standalone Deflated-Sharpe test.")
         caveats.append("The benchmark leaves out dividends, which flatters the strategy.")
