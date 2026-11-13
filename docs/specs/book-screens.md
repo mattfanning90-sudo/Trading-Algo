@@ -143,7 +143,7 @@ failed jobs.
 2. an audit ERROR for this book;
 3. near the breaker (the home screen's `NEAR_BREAKER`, one constant for both);
 4. stale data;
-5. costs flipped the result or ate more than half of it (costs-flip);
+5. costs flipped the result, took more than half of a gain, or are more than half of a loss (costs-flip);
 6. no safety breaker on a leveraged book;
 7. sells long before its signal resolves;
 8. loses more often than it wins;
@@ -185,7 +185,7 @@ If nothing qualifies: "Nothing clearly going right yet."
 **Holding it back**
 | Rule | Shows when | Caveat | Backlog |
 |---|---|---|---|
-| costs-flip | costs turned a gain into a loss, or costs are more than half the result before costs | Names what "costs" includes: equity = commission + stamp duty, with slippage inside the fill prices; FX = the spread and financing `fx_pnl` charges. Names the biggest contributor, e.g. "mostly UK stamp duty: A$292.51 of A$449.17". FX adds a note when `fx_pnl`'s unexplained residual is over 10% of the result. | F25 when the FTSE share of costs > 50% |
+| costs-flip | costs turned a gain into a loss, took more than half of a gain (or all of it), or are more than half of a loss; the line states the share | Names what "costs" includes: equity = commission + stamp duty, with slippage inside the fill prices; FX = the spread and financing `fx_pnl` charges. Names the biggest contributor, e.g. "mostly UK stamp duty: A$292.51 of A$449.17". FX adds a note when `fx_pnl`'s unexplained residual is over 10% of the result. | F25 when the FTSE share of costs > 50% |
 | holds-too-short | the audit raises `hold-shorter-than-signal` | "Holding longer has not been shown to earn more"; units stated exactly ("5 days against a signal of 57 trading days, about 11 weeks") | F20 |
 | loses-more-often | the 95% interval for the share of winning positions (after costs) is entirely below 50% | the interval is shown | — |
 | behind-market | the result rule finds the book behind by more than its normal spread | price-only benchmark, as above | — |
