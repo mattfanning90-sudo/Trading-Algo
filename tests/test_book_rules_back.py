@@ -29,7 +29,7 @@ def test_fx_costs_near_the_whole_loss_and_the_residual_note():
     inp = make_inp("fx", card={"equity": 9_097.85, "initial": 10_000.0},
                    costs={"total": 897.25, "includes": "the spread paid on trades"}, fx_book=fxb)
     out = R.costs_flip(inp)
-    assert "are most of the A$902.15 loss" in out[0]["text"]
+    assert "are 99% of the A$902.15 loss" in out[0]["text"]
     assert "unexplained" in out[0]["caveat"] and out[0]["backlog"] is None
 
 
@@ -129,3 +129,21 @@ def test_a_too_short_market_gives_no_behind_market_verdict():
     from unittest import mock
     with mock.patch.object(R, "market", return_value={"too_short": True, "days": 5}):
         assert R.behind_market(inp) == []
+
+
+def _usd(x):
+    return {"total": x, "by_ccy": {"USD": x}, "stamp": {}, "includes": "commission and stamp duty"}
+
+
+def test_a_loss_where_costs_are_under_half_does_not_fire():
+    assert R.costs_flip(make_inp(card={"equity": 99_840.0}, costs=_usd(60.0))) == []
+
+
+def test_a_result_of_exactly_zero_says_costs_took_everything():
+    out = R.costs_flip(make_inp(card={"equity": 100_000.0}, costs=_usd(50.0)))
+    assert "took everything the book made before costs" in out[0]["text"]
+
+
+def test_a_gain_where_costs_take_over_half_states_the_share():
+    out = R.costs_flip(make_inp(card={"equity": 100_040.0}, costs=_usd(60.0)))
+    assert "took 60% of the A$100.00 made before costs" in out[0]["text"]

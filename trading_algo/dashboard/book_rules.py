@@ -320,15 +320,26 @@ def costs_flip(inp) -> list[dict]:
     else:
         res = float(inp.card["equity"]) - float(inp.card["initial"])
     before = res + costs
-    if not ((before > 0 > res) or costs > COSTS_HALF * abs(before)):
-        return []
-    if before > 0 > res:
-        text = f"Costs ({money(costs)}) turned a {money(before)} gain into a {money(-res)} loss"
-    elif res >= 0:
-        text = f"Costs ({money(costs)}) took more than half of the {money(before)} made before costs"
+    res_c = round(res, 2)
+    gain_to_loss = before > 0 > res_c
+    if res_c > 0:
+        fires = costs > COSTS_HALF * before
+    elif res_c == 0:
+        fires = True
     else:
-        text = (f"Costs ({money(costs)}) are most of the {money(-res)} loss; before costs "
-                f"the book was {money(before, signed=True)}")
+        fires = gain_to_loss or costs > COSTS_HALF * (-res)
+    if not fires:
+        return []
+    if gain_to_loss:
+        text = f"Costs ({money(costs)}) turned a {money(before)} gain into a {money(-res)} loss"
+    elif res_c > 0:
+        text = (f"Costs ({money(costs)}) took {pct(costs / before, 0, signed=False)} "
+                f"of the {money(before)} made before costs")
+    elif res_c == 0:
+        text = f"Costs ({money(costs)}) took everything the book made before costs"
+    else:
+        text = (f"Costs ({money(costs)}) are {pct(costs / -res, 0, signed=False)} of the "
+                f"{money(-res)} loss; before costs the book was {money(before, signed=True)}")
     backlog = None
     if inp.kind == "equity":
         caveat = f"Costs here are {inp.costs['includes']}; slippage is already inside the fill prices."
