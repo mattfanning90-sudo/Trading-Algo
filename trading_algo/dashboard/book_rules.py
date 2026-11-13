@@ -4,11 +4,13 @@ clock. Thresholds are the spec's, named once here."""
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 import pandas as pd
 
 from .. import config as cfg
 from .. import fx, metrics, pnl
+from ..forex import fx_config
 from ..regions import get_region
 from .textfmt import day, direction, money, pct, points
 
@@ -444,3 +446,95 @@ def holding_back(inp) -> list[dict]:
         if f.level == "WARN" and COVERED_BY.get(f.code) not in fired:
             out.append(item("audit-warn", "wrong", plain_finding(f), source=_src_audit(inp)))
     return out
+
+
+_N = fx_config.REVIEW_NOTICE
+_i, _j = _N.find("One known"), _N.find("Paper money only.")
+FX_ARTEFACTS = _N[_i:_j].strip() if _i >= 0 and _j > _i else ""
+
+
+def _days_old(stamp, now: datetime) -> int | None:
+    try:
+        t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (now - t).days
+
+
+def _settings_differ(inp, bt: dict) -> bool:
+    mine = {k: round(float(v), 2) for k, v in (inp.state.get("allocations") or {}).items()}
+    theirs = {k: round(float(v), 2) for k, v in (bt.get("allocations") or {}).items()}
+    return mine != theirs or bool(inp.state.get("param_overrides")) or bool(inp.entry.get("micro"))
+
+
+def backtest_line(inp) -> list[dict]:
+    bt = inp.backtest or {}
+    if not bt.get("available"):
+        return [item("backtest", "model", "No saved backtest for this book yet",
+                     source="backtest store")]
+    gen = bt.get("generated_at")
+    src = f"saved backtest, {_on(gen)}" if gen else "saved backtest"
+    if bt.get("synthetic"):
+        return [item("backtest", "model", "The saved backtest ran on made-up test data, so it "
+                     "says nothing about real performance", source=src)]
+    m = bt.get("metrics") or {}
+    if m.get("cagr") is None or m.get("sharpe") is None:
+        return [item("backtest", "model", "Couldn't read the saved backtest", source=src)]
+    text = (f"Backtest ({str(bt.get('start'))[:4]}\u2013{str(bt.get('end'))[:4]}): "
+            f"{pct(m['cagr'])} a year, Sharpe {m['sharpe']:.2f}")
+    caveats: list[str] = []
+    age = _days_old(gen, inp.now) if gen else None
+    if gen:
+        caveats.append(f"Saved {_on(gen)}" + (f", {age} days ago; may not reflect changes since."
+                                              if age is not None and age > BACKTEST_STALE_DAYS else "."))
+    if inp.kind == "equity":
+        bm = bt.get("benchmark_metrics") or {}
+        if bm.get("cagr") is not None and bm.get("sharpe") is not None:
+            text += f", against the benchmark's {pct(bm['cagr'])} and {bm['sharpe']:.2f}"
+        caveats.append("It is survivorship-biased, so an upper bound; no sleeve passes a "
+                       "standalone Deflated-Sharpe test.")
+        caveats.append("The benchmark leaves out dividends, which flatters the strategy.")
+        if _settings_differ(inp, bt):
+            caveats.append("This is the standard strategy, not this book's settings.")
+    elif FX_ARTEFACTS:
+        caveats.append(FX_ARTEFACTS)
+    return [item("backtest", "model", text, source=src, as_of=str(gen)[:10] if gen else None,
+                 caveat=" ".join(caveats) or None)]
+
+
+def luck_test(inp) -> list[dict]:
+    r = inp.permtest
+    if inp.kind != "fx" or not r or r.get("p_value") is None:
+        return []
+    p = float(r["p_value"])
+    how = f"about 1 in {max(1, round(1 / p))} times" if p >= 0.1 else "rarely"
+    verdict = ("so its best finds look like luck" if p >= 0.05
+               else "so its best finds are unlikely to be luck alone")
+    text = (f"A permutation test of the search for better agent settings: on shuffled, "
+            f"patternless prices it finds results this good {how} (p-value {p:.2f}), {verdict}")
+    used = "none" if inp.roster == 0 else (str(inp.roster) if inp.roster is not None else "an unknown number")
+    w = r.get("window") or {}
+    span = f" of {_on(w['start'])}\u2013{_on(w['end'])} data" if w.get("start") and w.get("end") else ""
+    created = r.get("created")
+    caveat = (f"This tests the settings search, not this book's trades: the book uses {used} "
+              f"of the search's finds. Null: {r.get('n_permutations')} bar shuffles{span}; "
+              f"run {_on(created)}.")
+    age = _days_old(created, inp.now) if created else None
+    if age is not None and age > LUCK_STALE_DAYS:
+        caveat += f" Over {LUCK_STALE_DAYS} days old."
+    return [item("luck-test", "model", text,
+                 source=f"permutation report, {_on(created)}" if created else "permutation report",
+                 as_of=str(created)[:10] if created else None, caveat=caveat, backlog="F22")]
+
+
+def not_measured(inp) -> list[dict]:
+    text = ("Does the ranking pick winners? Not measured yet; it needs the decision record"
+            if inp.kind == "equity" else
+            "Which agents are right? Not measured yet; it needs the agent scorecard")
+    return [item("not-measured", "model", text, source="not yet built")]
+
+
+def model(inp) -> list[dict]:
+    return backtest_line(inp) + luck_test(inp) + not_measured(inp)
