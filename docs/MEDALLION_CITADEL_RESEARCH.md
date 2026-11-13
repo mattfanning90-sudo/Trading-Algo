@@ -2,6 +2,25 @@
 
 *Research report, 13 October 2026, for Matt Fanning. Built from six research notes in [`docs/research/medallion-citadel/`](research/medallion-citadel/), the repo's own docs, and measurements taken on the system's real 2012–2026 price panel.*
 
+> **Re-measured 2026-11-13, after the measurement-truth block merged.** The **[measured]** tables below were taken on
+> 2026-10-13, before that block changed how fills, minimum commissions and dividends are computed (most relevant here:
+> London dividends had been applied at 1/100, so FTSE prices were missing them). Every script was re-run on the merged
+> code (`main` @ `f386c88`, real data to 12–13 November 2026). **Every conclusion holds**; FTSE's signal is weaker once its
+> dividends are counted, and ASX and FTSE pass the stricter test with less margin:
+>
+> | | 2026-10-13 | 2026-11-13 |
+> |---|---|---|
+> | Mean IC, US / ASX / FTSE / TSX | 0.021 / 0.031 / 0.040 / 0.030 | 0.020 / 0.028 / 0.026 / 0.026 |
+> | Top-10 hit rate, range across sleeves | 50.9–52.3% | 50.8–51.5% |
+> | Effective independent bets a year per sleeve | 154–224 | 149–221 |
+> | Time-pairing null p (IC), US / ASX / FTSE / TSX | 0.35 / 0.012 / <0.002 / 0.058 | 0.38 / 0.030 / 0.014 / 0.080 |
+> | US single stocks only: IC (t) | 0.006 (0.35) | 0.005 (0.29) |
+> | Alpha vs own universe, best sleeve | TSX +3.1%/yr, t 1.72 | TSX +3.1%/yr, t 1.72 |
+> | US–ASX correlation, daily vs lead-lag corrected | 0.06 vs 0.42 | 0.06 vs 0.42 |
+> | Risk budgets vs equal capital, ΔSharpe [95% interval] | −0.030 [−0.110, +0.046] | −0.019 [−0.099, +0.064] |
+>
+> Raw output of the re-run: `scripts/medallion_lens/lens_results_2026-11-13.json`.
+
 *Plain-English companion: [`obsidian/Concepts/Breadth.md`](../obsidian/Concepts/Breadth.md). Full research notes behind every external claim: `docs/research/medallion-citadel/`.*
 
 **The short answer.** Renaissance Technologies' Medallion fund and Citadel make money in ways a small monthly momentum book mostly cannot copy. On the public record Medallion works like a casino. It makes tens of millions of trades a year **[primary]**, and each is right only slightly more than half the time: Robert Mercer's "50.75%" **[second-hand]**. Those trades are spread across thousands of instruments, mostly held for days, hedged long against short, and multiplied by borrowed money of up to 20 dollars of positions per dollar of capital **[primary]**. Citadel's hedge fund gives each portfolio manager a yearly budget of allowed volatility, requires its stock books to cancel out the market's ups and downs, and runs a 50-plus-person risk group that hunts for hidden shared bets **[primary]**. Citadel Securities is a different business altogether. It is a market maker that earns fractions of a cent a share on a huge stream of orders from people who mostly know no more than it does **[primary regulator data; revenue second-hand]**.
@@ -506,7 +525,7 @@ The most transferable thing from both firms is how they *measure*, more than any
 
 ## How to reproduce
 
-Every **[measured]** number comes from the repo's own loader and signal on live Yahoo data, so a re-run on a later date will differ slightly at the end of the sample. The scripts never touch paper-book state; the only file any of them writes is `measure_lens.py`'s own `scripts/medallion_lens/lens_results.json` (the committed copy is the 2026-10-13 run). Run from the repo root with no alert webhook set, so the loader's dead-ticker alert stays local:
+Every **[measured]** number comes from the repo's own loader and signal on live Yahoo data, so a re-run on a later date will differ slightly at the end of the sample. The scripts never touch paper-book state; the only file any of them writes is `measure_lens.py`'s own `scripts/medallion_lens/lens_results.json` (the committed `lens_results.json` is the 2026-10-13 run; `lens_results_2026-11-13.json` is the re-run on the post-block code). Run from the repo root with no alert webhook set, so the loader's dead-ticker alert stays local:
 
 ```bash
 D="scripts/medallion_lens"

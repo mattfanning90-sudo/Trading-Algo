@@ -272,11 +272,12 @@ positive result as the same "edge": momentum *timing*, and fixed differences in
 average return between names (which, on a list of today's survivors, are partly
 known with hindsight). A second null that pairs each month's ranking with a
 random *other* month's returns (≥12 months away, same names) separates them.
-Under it the US scores **p = 0.09** on the top-10-minus-universe spread (the
-closest analogue to the market-relative statistic above) and **p = 0.35** on the
-rank IC (robust at 24- and 36-month gaps), while ASX (p ≈ 0.01) and FTSE
-(p < 0.002 IC, 0.014 spread) survive and TSX is borderline. Among the 89
-US single stocks alone the 12-1 ranking's IC is 0.006 (t 0.35); most of the US
+Under it the US scores **p = 0.15** on the top-10-minus-universe spread (the
+closest analogue to the market-relative statistic above) and **p = 0.38** on the
+rank IC (re-measured 2026-11-13 on the post-block code; robust at 24- and 36-month
+gaps on the first run), while ASX (p = 0.03) and FTSE (p = 0.014 IC, 0.028
+spread) survive and TSX is borderline (0.08). Among the 89 US single stocks
+alone the 12-1 ranking's IC is 0.005 (t 0.29); most of the US
 IC comes from ranking the sleeve's 36 ETFs across asset classes. Read the
 "real, but marginal" verdict above as "real for the US list as constructed — not
 evidence of single-stock momentum timing". Details:

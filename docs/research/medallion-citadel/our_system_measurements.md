@@ -1,5 +1,7 @@
 # Our system, measured through the Medallion / Citadel lens
 
+> Re-measured 2026-11-13 on the post-measurement-truth code; every conclusion holds. Before/after table at the top of `docs/MEDALLION_CITADEL_RESEARCH.md`. The figures below are the 2026-10-13 run.
+
 Measured 2026-10-13 by the coordinating session on the REAL equity panel (Yahoo,
 `auto_adjust=True` total-return prices, 2012-01-03 → 2026-10-12, the repo's own
 loader `data.load_region` and signal `signals.momentum_score`). Scripts:

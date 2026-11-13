@@ -391,8 +391,8 @@ calendar day and a same-day daily correlation misses it. Measured on the same
 sleeve returns (2013-05 → 2026-09, local currency), US–ASX is 0.06 daily but
 0.42 with a lead-lag (Dimson) correction, 0.38 weekly and 0.38 monthly; ASX is
 about 0.4 correlated with every sleeve. Mean pairwise ρ ≈ **0.41**, not 0.260.
-So the portfolio does not diversify "because ASX–US correlation is 0.058"; the
-frictionless benchmark is ≈ 0.674 × √(4/(1+3×0.41)) ≈ **0.90**, and the
+So the portfolio does not diversify "because ASX–US correlation is 0.058"; on
+§6's own (pre-block) sleeve figures the frictionless benchmark is ≈ 0.674 × √(4/(1+3×0.41)) ≈ **0.90**, and the
 portfolio-layer leak is ≈ **0.10**, not 0.204 — about half of it was the
 correlation estimate. US–TSX ≈ 0.50 holds on three of four estimators. Track the
 efficiency metric above on weekly or Dimson-corrected correlations. Evidence and
