@@ -37,7 +37,7 @@ A compacted session reads this first to find where execution stopped.
 | 2 — reconciliation bridge | 5-8 (+7b) | ✅ **done** 2026-10-10 (`b2624b2`) |
 | 3 — conventions | 9-13 (+12b, 13b-13e) | ✅ **done** 2026-10-13 (`6a904cd`) |
 | 4 — mechanism | 14-20 (17 superseded) | ✅ **done** 2026-10-14 — regression gate re-baselined once (Task 20) |
-| 5 — regeneration, deploy, restart | 21-26 (+4d, 21b, 21c) | 🟡 21-24 **done** (numbers regenerated 2026-10-15); **25 (merge) and 26 (restart) wait for Matt's go** |
+| 5 — regeneration, deploy, restart | 21-26 (+4d, 21b, 21c) | ✅ **done** — 21-24 (numbers regenerated 2026-10-15); 25 merged to `main` 2026-11-13 (`3e50f4a`, CI green); 26 archived (`62470c4`) and reopened every book (`44c695a`) |
 | W2 — survivorship (needs data) | 27 | 🟡 steps 1-4 **done**; 5-6 blocked on point-in-time membership data |
 
 **Execution log** — one line per task, appended as it completes:
@@ -156,7 +156,9 @@ A compacted session reads this first to find where execution stopped.
   dividend values the price contradicts in both engines (21c). Every headline re-measured on the final
   code (24): strategy 8.35% / Sharpe 0.59 / worst fall −10.0% (survivorship-biased upper bound) against
   an index-fund blend 12.50% / 0.72 / −29.3%. Final whole-branch review clean (72-case lookahead probe,
-  0 failures). **Next: Matt's go on Task 25 (merge) and Task 26 (restart).**
+  0 failures). **Tasks 25 and 26 done 2026-11-13 with Matt's go**: merged to `main` as a fast-forward,
+  all eight books archived (restore rehearsed against `1789e85`) and reopened clean. Remaining: Task 27
+  steps 5-6 (blocked on point-in-time data) and the decisions in the handoff's §12.
 
 ---
 
