@@ -35,6 +35,7 @@
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const dshow = (d) => {
     const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+    if (!y || !(m >= 1 && m <= 12) || !day) return String(d ?? "");
     return `${day} ${MONTHS[m - 1]} ${y}`;
   };
 
@@ -115,5 +116,5 @@
     `<span class="pill ${esc(level)}" role="status">${esc(shape)} ${esc(word)}</span>`;
 
   root.MB = {PERIODS, SINCE, CHART_DAYS, VERDICT, esc, fmt, dir, arrow, arrowFor, signed,
-             pct, when, chips, chart, list, pill, screens: {}};
+             pct, when, dshow, chips, chart, list, pill, screens: {}};
 })(window);

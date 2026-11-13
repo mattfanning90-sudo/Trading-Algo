@@ -56,12 +56,13 @@
   }
 
   function render(s, ctx) {
-    let html = `<div class="result ${esc(s.result.dir || "")}">${arrowFor(s.result.dir)} ${esc(s.result.text)}</div>`;
-    if (s.result.caveat) html += `<div class="caveat">${esc(s.result.caveat)}</div>`;
     const mp = s.main_problem;
     const dup = s.attention.some((i) => i.uid === mp.uid);
-    if (!dup) html += `<div class="main-problem"><span class="mp-label">Main problem</span> ${esc(mp.text)}${fix(mp)}</div>`;
+    let html = "";
     if (s.attention.length) html += `<ul class="items attn">${s.attention.map((i) => item(i, dup && i.uid === mp.uid)).join("")}</ul>`;
+    html += `<div class="result ${esc(s.result.dir || "")}">${arrowFor(s.result.dir)} ${esc(s.result.text)}</div>`;
+    if (s.result.caveat) html += `<div class="caveat">${esc(s.result.caveat)}</div>`;
+    if (!dup) html += `<div class="main-problem"><span class="mp-label">Main problem</span> ${esc(mp.text)}${fix(mp)}</div>`;
     html += `<div class="story">${s.summary.map((x) =>
       `<span data-item="${esc(x.item_id)}">${esc(x.text)}</span>`).join(" ")}</div>`;
     html += tiles(s.tiles);

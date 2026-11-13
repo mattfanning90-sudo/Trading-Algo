@@ -11,6 +11,8 @@ let tab = "overview";                     // the selected book's view
 let chartView = "value";                  // Overview chart: "value" | "below"
 const bookData = {};                      // key -> {summary, positions, error}
 let marksTimer = null;
+let marksGen = 0;                         // bumped per polling chain; stale chains stop
+const marksTries = {};                    // key -> polls spent; loadBook cannot reset it
 
 const books = () => (data ? data.books : []);
 const bookKeys = () => books().map((b) => b.key);
@@ -118,7 +120,7 @@ async function getJSON(url) {
   return res.json();
 }
 
-async function loadBook(key, force = false) {
+async function loadBook(key, force = false, pollDelay = 0) {
   const c = bookData[key] || (bookData[key] = {});
   try {
     if (force || !c.summary) c.summary = await getJSON(`/api/summary/${encodeURIComponent(key)}`);
@@ -130,27 +132,32 @@ async function loadBook(key, force = false) {
     c.error = err.message;
   }
   if (selected === key) render();
-  watchMarks(key);
+  watchMarks(key, pollDelay);
 }
 
-// Equity books: today's prices arrive from a background fetch (~1 min). Ask
-// once, poll every 5 s for up to ~3 min, then reload when they're ready.
-function watchMarks(key) {
+// Equity books: today's prices arrive from a background fetch (~1 min). Poll
+// every 5 s, at most 36 polls per book (budget reset only by picking another
+// book or ⌘R). One chain at a time: a new call retires the old one (marksGen).
+function watchMarks(key, delay = 0) {
   clearTimeout(marksTimer);
+  const gen = ++marksGen;
   const c = bookData[key];
   if (!c || !c.summary || !["idle", "pending"].includes(c.summary.market)) return;
-  let tries = 0;
+  const live = () => gen === marksGen && selected === key;
   const tick = async () => {
-    if (selected !== key || tries++ > 36) return;
+    if (!live() || (marksTries[key] || 0) >= 36) return;
+    marksTries[key] = (marksTries[key] || 0) + 1;
     try {
       const m = await getJSON(`/api/marks/${encodeURIComponent(key)}`);
-      if (["ready", "offline", "error"].includes(m.status)) { await loadBook(key, true); return; }
+      if (!live()) return;
+      if (["ready", "offline", "error"].includes(m.status)) { await loadBook(key, true, 5000); return; }
     } catch (err) {
       return;
     }
+    if (!live()) return;
     marksTimer = setTimeout(tick, 5000);
   };
-  tick();
+  if (delay) marksTimer = setTimeout(tick, delay); else tick();
 }
 
 function setTab(t) {
@@ -197,11 +204,13 @@ function render() {
 
 function select(key) {
   selected = key;
+  marksTries[key] = 0;
   render();
   if (key) loadBook(key);
 }
 
 async function refresh(syncNow = false) {
+  if (syncNow) for (const k of Object.keys(marksTries)) marksTries[k] = 0;
   try {
     const res = await fetch(`/api/home${syncNow ? "?sync=1" : ""}`, {cache: "no-store"});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
