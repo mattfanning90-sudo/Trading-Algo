@@ -7,6 +7,10 @@ const {SINCE, VERDICT, esc, fmt, dir, arrow, signed, pct, when} = window.MB;
 let data = null;
 let period = "ALL";
 let selected = null;                      // a book key, or null for the overview
+let tab = "overview";                     // the selected book's view
+let chartView = "value";                  // Overview chart: "value" | "below"
+const bookData = {};                      // key -> {summary, positions, error}
+let marksTimer = null;
 
 const books = () => (data ? data.books : []);
 const bookKeys = () => books().map((b) => b.key);
@@ -77,28 +81,86 @@ function changeText(p) {
   return `<span class="${dir(p.change)}">${arrow(p.change)} ${signed(p.change)} (${pct(p.pct)})</span>`;
 }
 
+function tabsBar(b) {
+  const t = (id, label) => `<button role="tab" class="tab" data-tab="${id}" data-focus="tab:${id}"
+    aria-selected="${tab === id}" tabindex="${tab === id ? 0 : -1}">${label}</button>`;
+  const k = encodeURIComponent(b.key);
+  const link = (id, label, t2) => `<a class="ext" data-link="${id}" data-focus="link:${id}"
+    href="index.html?account=${k}&tab=${t2}" target="_blank" rel="noopener">${label} ↗</a>`;
+  return `<div class="tabbar"><div role="tablist" aria-label="Book views">${t("overview", "Overview")}${t("positions", "Positions")}</div>
+    <div class="links">${link("backtest", "Backtest", "BACKTEST")}${link("method", "Method", "METHOD")}${
+      b.kind === "fx" ? link("swarm", "Swarm", "SWARM") : ""}${link("classic", "Classic view", "OVERVIEW")}</div></div>`;
+}
+
+function bookBody(b) {
+  const c = bookData[b.key] || {};
+  if (c.error) {
+    return `<div class="banner" role="alert">Couldn't load this book (${esc(c.error)}). ⌘R to retry.</div>`;
+  }
+  if (tab === "positions") {
+    return c.positions ? MB.screens.bookPositions.render(c.positions) : `<p class="muted">Loading positions…</p>`;
+  }
+  return c.summary ? MB.screens.bookOverview.render(c.summary, {period, chartView}) : `<p class="muted">Loading…</p>`;
+}
+
 function renderBook(b) {
-  const p = b.periods[period];
-  const state = b.halted ? ["act", "■ Halted by its safety breaker"]
-    : b.near_breaker ? ["look", "▲ Near its safety breaker"]
-    : b.freshness !== "fresh" ? ["look", `▲ Data ${b.freshness}`]
-    : ["clear", "● Running normally"];
-  const breaker = b.breaker != null ? ` · breaker trips at −${(b.breaker * 100).toFixed(0)}%` : " · no breaker";
-  const mine = data.attention.concat(data.known).filter((i) => i.book === b.key);
+  const st = (bookData[b.key] || {}).summary?.status;
   let html = banner();
-  html += `<span class="pill ${state[0]}" role="status">${esc(state[1])}</span>`;
-  html += `<h1 style="margin:10px 0 0;font-size:18px">${esc(b.name)}</h1>`;
-  html += hero(p, SINCE[period]);
-  html += `<div class="balance">Worth A$${fmt(b.equity)} of A$${fmt(b.initial)} put in · ${esc(b.status)}${breaker}</div>`;
-  html += MB.chips(period);
-  html += MB.chart(b.series, `${b.name} profit and loss (A$)`, period);
-  html += `<div class="panel"><h3>Problems in this book</h3>${mine.length ? MB.list(mine) : `<span class="muted">None.</span>`}</div>`;
-  html += `<p class="foot">Last update ${esc(when(b.as_of))} · <a href="index.html" target="_blank" rel="noopener">Open in terminal ↗</a></p>`;
-  return html;
+  html += st ? MB.pill(st.level, st.shape, st.word) : "";
+  html += `<h1 class="book-title">${esc(b.name)}</h1>`;
+  html += tabsBar(b) + `<div class="book-body">${bookBody(b)}</div>`;
+  return `${html}<p class="foot">Last update ${esc(when(b.as_of))}</p>`;
+}
+
+async function getJSON(url) {
+  const res = await fetch(url, {cache: "no-store"});
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function loadBook(key, force = false) {
+  const c = bookData[key] || (bookData[key] = {});
+  try {
+    if (force || !c.summary) c.summary = await getJSON(`/api/summary/${encodeURIComponent(key)}`);
+    if (tab === "positions" && (force || !c.positions)) {
+      c.positions = await getJSON(`/api/positions/${encodeURIComponent(key)}`);
+    }
+    c.error = null;
+  } catch (err) {
+    c.error = err.message;
+  }
+  if (selected === key) render();
+  watchMarks(key);
+}
+
+// Equity books: today's prices arrive from a background fetch (~1 min). Ask
+// once, poll every 5 s for up to ~3 min, then reload when they're ready.
+function watchMarks(key) {
+  clearTimeout(marksTimer);
+  const c = bookData[key];
+  if (!c || !c.summary || !["idle", "pending"].includes(c.summary.market)) return;
+  let tries = 0;
+  const tick = async () => {
+    if (selected !== key || tries++ > 36) return;
+    try {
+      const m = await getJSON(`/api/marks/${encodeURIComponent(key)}`);
+      if (["ready", "offline", "error"].includes(m.status)) { await loadBook(key, true); return; }
+    } catch (err) {
+      return;
+    }
+    marksTimer = setTimeout(tick, 5000);
+  };
+  tick();
+}
+
+function setTab(t) {
+  tab = t;
+  render();
+  if (selected) loadBook(selected);
 }
 
 function renderSidebar() {
-  let html = `<button class="row" data-key="" aria-current="${selected === null}">Overview</button>`;
+  let html = `<button class="row" data-key="" data-focus="row:" aria-current="${selected === null}">Overview</button>`;
   for (const g of data.groups) {
     html += `<h2>${esc(g.name === "CORE" ? "Core books" : `${g.name} (separate)`)}</h2>`;
     for (const b of books().filter((x) => x.group === g.name)) {
@@ -107,7 +169,7 @@ function renderSidebar() {
       const chg = p && p.measurable
         ? `<span class="chg ${dir(p.change)}">${arrow(p.change)} ${signed(p.change)}</span>`
         : `<span class="chg muted">—</span>`;
-      html += `<button class="row" data-key="${esc(b.key)}" aria-current="${selected === b.key}">${esc(b.name)} ${flag}${chg}</button>`;
+      html += `<button class="row" data-key="${esc(b.key)}" data-focus="row:${esc(b.key)}" aria-current="${selected === b.key}">${esc(b.name)} ${flag}${chg}</button>`;
     }
   }
   html += `<h2>Detail</h2><a class="row" href="index.html" target="_blank" rel="noopener">Open terminal ↗</a>`;
@@ -119,17 +181,24 @@ function renderSidebar() {
 
 function render() {
   if (!data) return;
+  const focus = document.activeElement?.dataset?.focus;
   renderSidebar();
   const b = books().find((x) => x.key === selected);
   const main = document.getElementById("main");
   main.innerHTML = b ? renderBook(b) : renderOverview();
   main.querySelectorAll("[data-period]").forEach((el) =>
     el.addEventListener("click", () => { period = el.dataset.period; render(); }));
+  main.querySelectorAll("[data-view]").forEach((el) =>
+    el.addEventListener("click", () => { chartView = el.dataset.view; render(); }));
+  main.querySelectorAll('[role="tab"]').forEach((el) =>
+    el.addEventListener("click", () => setTab(el.dataset.tab)));
+  if (focus) document.querySelector(`[data-focus="${CSS.escape(focus)}"]`)?.focus();
 }
 
 function select(key) {
   selected = key;
   render();
+  if (key) loadBook(key);
 }
 
 async function refresh(syncNow = false) {
@@ -138,6 +207,7 @@ async function refresh(syncNow = false) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     data = await res.json();
     render();
+    if (selected) loadBook(selected, true);
   } catch (err) {
     document.getElementById("main").innerHTML =
       `<div class="banner" role="alert">The home screen couldn't load its data (${esc(err.message)}). ⌘R to retry.</div>`;
@@ -151,6 +221,13 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     const n = Number(e.key);
     select(n === 0 ? null : bookKeys()[n - 1] ?? selected);
+    return;
+  }
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight")
+      && document.activeElement?.getAttribute("role") === "tab") {
+    e.preventDefault();
+    setTab(tab === "overview" ? "positions" : "overview");
+    document.querySelector(`[data-focus="tab:${tab}"]`)?.focus();
     return;
   }
   if (e.key === "Escape") { select(null); return; }
