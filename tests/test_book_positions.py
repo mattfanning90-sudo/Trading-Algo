@@ -73,6 +73,7 @@ def test_fx_positions_group_by_asset_class_and_say_when_the_market_is_shut():
     assert set(by) == {"fx", "crypto"}
     assert "Market shut" in by["fx"]["why"] and "Market shut" not in by["crypto"]["why"]
     assert by["crypto"]["rows"][0]["side"] == "SHORT"
+    assert "at risk" in by["fx"]["rows"][0]["worth"]
     assert by["fx"]["rows"][0]["gain"] == "▲ +A$19.00"            # after the entry spread
 
 
@@ -82,7 +83,7 @@ def test_a_non_finite_live_value_reads_as_unpriced():
         live["sleeves"][0]["positions"][0]["value_base"] = bad
         v = P.positions_view(make_inp(state=_equity_state(), live=live, market="ready"))
         row = v["groups"][0]["rows"][0]
-        assert row["note"] == "No price today; held at cost." and row["worth"] is None
+        assert row["note"] == "No price today; held at cost." and row["worth"].endswith("at cost")
         assert "nan" not in str(v).lower() and "inf" not in str(v).lower()
 
 
@@ -108,3 +109,49 @@ def test_one_share_is_singular_and_thousands_have_a_comma():
     for n, want in ((1, "1 share"), (1302, "1,302 shares")):
         v = P.positions_view(make_inp(state=_equity_state(n)))
         assert v["groups"][0]["rows"][0]["qty"] == want
+
+
+def test_fx_unpriced_row_invents_no_loss():
+    fxb = {"open_rows": [{"pair": "EURUSD", "weight": 0.2, "avg_entry": 1.1, "price": None,
+                          "priced": False, "notional": 1_000.0, "unrealized": 0.0,
+                          "entry_cost": 1.0}]}
+    row = P.positions_view(make_inp("fx", fx_book=fxb, state={"bar": "1d"}))["groups"][0]["rows"][0]
+    assert row["gain"] is None and row["gain_pct"] is None and row["dir"] == "flat"
+    assert row["note"] == "No price today; held at cost."
+
+
+def test_fx_prices_line_says_at_risk():
+    v = P.positions_view(make_inp("fx", fx_book={"open_rows": []}, state={"bar": "1d"}))
+    assert "at risk" in v["prices"]["text"] and "last saved prices" in v["prices"]["text"]
+
+
+def test_offline_equity_rows_show_cost_in_aud(tmp_path, monkeypatch):
+    use_snapshot(tmp_path, monkeypatch)
+    no_network(monkeypatch)
+    v = P.positions_view(book_inputs.load_inputs(registry.resolve("FULL"), NOW, market="offline"))
+    us = next(g for g in v["groups"] if g["key"] == "US")
+    assert us["rows"] and all(r["worth"].startswith("A$") and r["worth"].endswith("at cost")
+                              for r in us["rows"])
+
+
+def test_offline_without_a_rate_falls_back_to_local_currency():
+    state = _equity_state()
+    state["fx_snapshot"] = {}
+    row = P.positions_view(make_inp(state=state))["groups"][0]["rows"][0]
+    assert row["worth"] == "US$4,761.90 at cost"
+
+
+def test_a_live_short_shows_worth_as_short_not_negative():
+    live = _live()
+    live["sleeves"][0]["positions"][0]["value_base"] = -7_000.0
+    row = P.positions_view(make_inp(state=_equity_state(-10), live=live,
+                                    market="ready"))["groups"][0]["rows"][0]
+    assert row["worth"] == "A$7,000.00 short"
+
+
+def test_a_ticker_missing_from_a_ready_fetch_is_noted():
+    live = {"as_of": "2026-10-13", "sleeves": [{"key": "US", "positions": []}]}
+    row = P.positions_view(make_inp(state=_equity_state(), live=live,
+                                    market="ready"))["groups"][0]["rows"][0]
+    assert row["note"] == "No price in today's fetch; held at cost."
+    assert row["worth"].endswith("at cost")

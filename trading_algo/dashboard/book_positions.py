@@ -7,13 +7,14 @@ from __future__ import annotations
 import math
 from datetime import timezone
 
-from .. import pnl
+from .. import config as cfg
+from .. import fx, pnl
 from ..forex import sessions
 from ..forex.pairs import get_pair
 from ..regions import get_region
 from . import book_rules as R
 from . import glossary
-from .textfmt import day, direction, money, money_move, pct
+from .textfmt import direction, money, money_move, pct
 
 ASSET_GROUP = {"fx": "Currencies", "crypto": "Crypto", "equity": "Shares", "bond": "Bonds"}
 _PRICE_TEXT = {"pending": "Fetching today's prices…", "idle": "Fetching today's prices…",
@@ -29,9 +30,9 @@ def _ok(*vals) -> bool:
 
 def _prices(inp) -> dict:
     if inp.kind == "fx":
-        d = R.as_of(inp)
-        return {"status": "saved", "text": f"Valued at the book's last saved prices ({day(d)})." if d
-                else "Valued at the book's last saved prices."}
+        return {"status": "saved",
+                "text": (f"Gains use the book's last saved prices ({R._on(R.as_of(inp))}); "
+                         "\"at risk\" is the money in each position when it opened.")}
     if inp.market == "ready" and inp.live:
         return {"status": "ready", "text": f"Prices as of {R._on(inp.live.get('as_of'))}."}
     return {"status": inp.market, "text": _PRICE_TEXT.get(inp.market, _PRICE_TEXT["n/a"])}
@@ -48,6 +49,8 @@ def _equity_groups(inp) -> list[dict]:
         ccy = sleeve.get("currency") or get_region(key).currency
         code, why, level = R.sleeve_reason(inp, key, sleeve)
         marks = {p["ticker"]: p for p in (live.get(key) or {}).get("positions") or []}
+        base = state.get("base_currency", cfg.BASE_CURRENCY)
+        rate = fx.base_per_local(state.get("fx_snapshot") or {}, ccy, base)
         rows = []
         for ticker, shares in (sleeve.get("positions") or {}).items():
             short = shares < 0
@@ -59,17 +62,25 @@ def _equity_groups(inp) -> list[dict]:
                               if avg else "Cost unknown"),
                    "now": None, "worth": None, "gain": None, "gain_pct": None,
                    "dir": "flat", "note": None}
+            if avg:
+                cost = abs(shares) * avg
+                row["worth"] = (f"{money(cost * rate)} at cost" if rate
+                                else f"{money(cost, ccy)} at cost")
             lp = marks.get(ticker)
             if lp and lp.get("priced") and _ok(lp.get("price"), lp.get("value_base"),
                                                   lp.get("unrealized_base")):
                 row.update({"now": f"now {money(lp['price'], ccy)}",
-                            "worth": money(lp["value_base"]),
+                            "worth": (f"{money(abs(lp['value_base']))} short" if short
+                                      else money(lp["value_base"])),
                             "gain": money_move(lp["unrealized_base"]),
                             "gain_pct": (pct(lp["unrealized_pct"]) if _ok(lp.get("unrealized_pct"))
                                          else None),
                             "dir": direction(lp["unrealized_base"])})
             elif lp:
                 row.update({"now": "no price today", "note": "No price today; held at cost."})
+            elif inp.market == "ready" and inp.live:
+                row.update({"now": "no price today",
+                            "note": "No price in today's fetch; held at cost."})
             rows.append(row)
         groups.append({"key": key, "name": get_region(key).name, "currency": ccy,
                        "level": level, "why": why,
@@ -83,9 +94,10 @@ def _fx_groups(inp) -> list[dict]:
     by_class: dict[str, list[dict]] = {}
     for r in (inp.fx_book or {}).get("open_rows") or []:
         short = r["weight"] < 0
-        usable = _ok(r.get("unrealized"), r.get("entry_cost"), r.get("notional"))
+        usable = (bool(r.get("priced")) and _ok(r.get("price"), r.get("unrealized"),
+                                                r.get("entry_cost")) and _ok(r.get("notional")))
         net = float(r["unrealized"]) - float(r["entry_cost"]) if usable else 0.0
-        notional = float(r["notional"]) if usable else 0.0
+        notional = float(r["notional"]) if _ok(r.get("notional")) else None
         avg = r.get("avg_entry") if _ok(r.get("avg_entry")) else None
         now = r.get("price") if _ok(r.get("price")) else None
         by_class.setdefault(get_pair(r["pair"]).asset_class, []).append({
@@ -93,7 +105,7 @@ def _fx_groups(inp) -> list[dict]:
             "qty": f"{pct(abs(r['weight']), 0, signed=False)} of the book {'short' if short else 'long'}",
             "bought": f"{'Sold' if short else 'Bought'} at {avg:.5g}" if avg else "Cost unknown",
             "now": f"now {now:.5g}" if r.get("priced") and now else "no price today",
-            "worth": money(notional) if usable else None,
+            "worth": f"{money(notional)} at risk" if notional is not None else None,
             "gain": money_move(net) if usable else None,
             "gain_pct": pct(net / notional) if usable and notional else None,
             "dir": direction(net) if usable else "flat",
