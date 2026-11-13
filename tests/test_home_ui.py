@@ -1,4 +1,5 @@
-"""The page's assets exist, parse, and never do money arithmetic of their own."""
+"""The page's assets exist, load in order, parse, never collide, and never do
+money arithmetic of their own."""
 import re
 import shutil
 import subprocess
@@ -7,25 +8,48 @@ from pathlib import Path
 import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / "trading_algo" / "dashboard" / "static"
+SCRIPTS = ["blocks.js", "screens/book_overview.js", "screens/book_positions.js", "home.js"]
 
 
-def test_assets_exist_and_are_linked():
+def test_assets_exist_and_load_in_order():
     html = (STATIC / "home.html").read_text()
-    assert 'href="home.css"' in html and 'src="home.js"' in html
-    assert (STATIC / "home.css").stat().st_size > 0
+    srcs = re.findall(r'<script src="([^"]+)"></script>', html)
+    assert srcs == SCRIPTS
+    assert 'href="home.css"' in html and (STATIC / "home.css").stat().st_size > 0
+    assert "aria-live" not in html.split("<main", 1)[1].split(">", 1)[0]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_home_js_parses():
-    done = subprocess.run(["node", "--check", str(STATIC / "home.js")],
-                          capture_output=True, text=True)
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_every_script_parses(name):
+    done = subprocess.run(["node", "--check", str(STATIC / name)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
 
 
+def test_no_two_scripts_declare_the_same_top_level_name():
+    seen = {}
+    for name in SCRIPTS:
+        for m in re.finditer(r"^(?:const|let|var|function|async function|class)\s+([A-Za-z_$][\w$]*)",
+                             (STATIC / name).read_text(), re.M):
+            assert m.group(1) not in seen, f"{m.group(1)} in {name} and {seen.get(m.group(1))}"
+            seen[m.group(1)] = name
+
+
 def test_js_takes_numbers_from_the_api_not_its_own_maths():
-    """G-4: one source per number. The page may format and slice, but must not
-    total or divide money (that lives in dashboard/home.py)."""
-    js = (STATIC / "home.js").read_text()
-    assert not re.search(r"\.reduce\(", js)
-    assert "/ start" not in js and "- start" not in js
-    assert "- b.initial" not in js and "- g.initial" not in js
+    """No script totals or divides money (the server does, G-4 / AC-14)."""
+    for name in SCRIPTS:
+        js = (STATIC / name).read_text()
+        assert not re.search(r"\.reduce\(", js), name
+        assert "/ start" not in js and "- start" not in js, name
+        assert "- b.initial" not in js and "- g.initial" not in js, name
+
+
+def test_screen_files_only_use_server_text_for_money():
+    for name in SCRIPTS[1:3]:
+        js = (STATIC / name).read_text()
+        assert not re.search(r"\.(equity|initial|net_pnl|value_base|unrealized\w*|costs)\b", js), name
+
+
+def test_links_are_relative_never_root():
+    for name in SCRIPTS:
+        assert 'href="/' not in (STATIC / name).read_text(), name
