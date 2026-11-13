@@ -38,7 +38,7 @@ def _sentence(it: dict, prefix: str = "") -> str:
     cav = it.get("caveat")
     if cav:
         first = cav.split(". ")[0].rstrip(".")
-        text += f" ({first}.)"
+        text += f" {first}."
     return text
 
 

@@ -491,20 +491,25 @@ def backtest_line(inp) -> list[dict]:
             f"{pct(m['cagr'])} a year, Sharpe {_num(m['sharpe'])}")
     caveats: list[str] = []
     age = _days_old(gen, inp.now) if gen else None
-    if gen:
-        caveats.append(f"Saved {_on(gen)}" + (f", {age} days ago; may not reflect changes since."
-                                              if age is not None and age > BACKTEST_STALE_DAYS else "."))
+    saved = (f"Saved {_on(gen)}" + (f", {age} days ago; may not reflect changes since."
+                                    if age is not None and age > BACKTEST_STALE_DAYS else ".")
+             if gen else None)
     if inp.kind == "equity":
         bm = bt.get("benchmark_metrics") or {}
         if bm.get("cagr") is not None and bm.get("sharpe") is not None:
             text += f", against the benchmark at {pct(bm['cagr'])} and {_num(bm['sharpe'])}"
+        if _settings_differ(inp, bt):
+            caveats.append("This is the standard strategy, not this book's settings.")
+        if saved:
+            caveats.append(saved)
         caveats.append("It is survivorship-biased, so an upper bound; no sleeve passes a "
                        "standalone Deflated-Sharpe test.")
         caveats.append("The benchmark leaves out dividends, which flatters the strategy.")
-        if _settings_differ(inp, bt):
-            caveats.append("This is the standard strategy, not this book's settings.")
-    elif FX_ARTEFACTS:
-        caveats.append(FX_ARTEFACTS)
+    else:
+        if FX_ARTEFACTS:
+            caveats.append(FX_ARTEFACTS)
+        if saved:
+            caveats.append(saved)
     return [item("backtest", "model", text, source=src, as_of=str(gen)[:10] if gen else None,
                  caveat=" ".join(caveats) or None)]
 
@@ -514,11 +519,18 @@ def luck_test(inp) -> list[dict]:
     if inp.kind != "fx" or not r or r.get("p_value") is None:
         return []
     p = float(r["p_value"])
-    how = f"about 1 in {max(1, round(1 / p))} times" if p >= 0.1 else "rarely"
-    verdict = ("so its best finds look like luck" if p >= 0.05
-               else "so its best finds are unlikely to be luck alone")
-    text = (f"A permutation test of the search for better agent settings: on shuffled, "
-            f"patternless prices it finds results this good {how} (p-value {p:.2f}), {verdict}")
+    if p >= 0.1:
+        how = f"about 1 in {max(1, round(1 / p))} times"
+    else:
+        how = "only occasionally" if p >= 0.05 else "rarely"
+    if p >= 0.05:
+        text = (f"Re-run on shuffled, patternless prices, the search for better agent settings "
+                f"finds results this good {how}, so its best finds look like luck; "
+                f"the p-value is {p:.2f}")
+    else:
+        text = (f"Re-run on shuffled, patternless prices, the search for better agent settings "
+                f"{how} finds results this good, so its best finds are unlikely to be luck "
+                f"alone; the p-value is {p:.2f}")
     used = "none" if inp.roster == 0 else (str(inp.roster) if inp.roster is not None else "an unknown number")
     w = r.get("window") or {}
     span = f" of {_on(w['start'])}\u2013{_on(w['end'])} data" if w.get("start") and w.get("end") else ""
