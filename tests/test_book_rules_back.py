@@ -15,7 +15,7 @@ def ids(items):
 def test_costs_that_flip_a_gain_into_a_loss_name_the_uk():
     out = R.costs_flip(make_inp(card={"equity": 99_952.38}, costs=EQ_COSTS))
     assert out[0]["text"].startswith("Costs (A$449.17) turned a A$401.55 gain into a A$47.62 loss")
-    assert "mostly UK trading (A$396.16, of which A$292.51 stamp duty)" in out[0]["text"]
+    assert "mostly from UK trading: A$396.16, of which A$292.51 was stamp duty" in out[0]["text"]
     assert out[0]["backlog"] == "F25" and "slippage" in out[0]["caveat"]
 
 

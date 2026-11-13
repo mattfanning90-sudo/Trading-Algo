@@ -352,8 +352,8 @@ def costs_flip(inp) -> list[dict]:
         caveat = f"Costs here are {inp.costs['includes']}; slippage is already inside the fill prices."
         gbp = float((inp.costs.get("by_ccy") or {}).get("GBP") or 0.0)
         if gbp > FTSE_SHARE * costs:
-            text += (f", mostly UK trading ({money(gbp)}, of which "
-                     f"{money(float((inp.costs.get('stamp') or {}).get('GBP') or 0.0))} stamp duty)")
+            text += (f", mostly from UK trading: {money(gbp)}, of which "
+                     f"{money(float((inp.costs.get('stamp') or {}).get('GBP') or 0.0))} was stamp duty")
             backlog = "F25"
     else:
         caveat = f"Costs here are {inp.costs['includes']}; financing is counted separately."
