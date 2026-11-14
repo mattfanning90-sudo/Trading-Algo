@@ -133,13 +133,11 @@ def test_overview_order_matches_the_spec(browser, app, key):
 
 def test_marks_polling_does_not_stack(browser, app):
     page = browser.new_page(viewport={"width": 1280, "height": 900})
-    hits = []
-
-    def stub(route):
-        hits.append(route.request.url)
-        route.fulfill(content_type="application/json", body='{"status": "pending"}')
-
-    page.route("**/api/marks/*", stub)
+    # The fixture app is offline, so its summary says "offline" and nothing would
+    # poll at all; the summary must say "idle" for this test to measure anything.
+    calls = {"summary": [], "marks": [], "positions": []}
+    _stub_market(page, {"market": "idle", "marks": "pending"}, calls)
+    hits = calls["marks"]
     page.goto(f"{app}/home")
     page.wait_for_selector("#sidebar button.row")
     page.click('#sidebar button.row[data-key="FULL"]')
@@ -150,6 +148,7 @@ def test_marks_polling_does_not_stack(browser, app):
         page.click('[role="tab"][data-tab="overview"]')
     page.wait_for_timeout(300)
     n = len(hits)
+    assert n >= 1, "nothing polled, so this test measures nothing"
     page.wait_for_timeout(6000)
     # one live chain => at most 2 more polls in 6 s (5 s spacing); stacked chains => >= 4
     assert len(hits) - n <= 2, (n, len(hits))
