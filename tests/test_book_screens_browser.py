@@ -155,6 +155,91 @@ def test_marks_polling_does_not_stack(browser, app):
     assert len(hits) - n <= 2, (n, len(hits))
 
 
+def _stub_market(page, st, hits):
+    """The summary reports st["market"]; /api/marks reports st["marks"]; every
+    request is counted in hits[route-name]."""
+    def summary(route):
+        hits["summary"].append(1)
+        resp = route.fetch()
+        body = resp.json()
+        body["market"] = st["market"]
+        route.fulfill(response=resp, json=body)
+
+    def marks(route):
+        hits["marks"].append(1)
+        route.fulfill(content_type="application/json", body='{"status": "%s"}' % st["marks"])
+
+    def positions(route):
+        hits["positions"].append(1)
+        route.continue_()
+
+    page.route("**/api/summary/*", summary)
+    page.route("**/api/marks/*", marks)
+    page.route("**/api/positions/*", positions)
+
+
+def _until(page, cond, ms=3000):
+    for _ in range(ms // 50):
+        if cond():
+            return True
+        page.wait_for_timeout(50)
+    return cond()
+
+
+def test_a_new_price_fetch_gets_a_new_poll_budget(browser, app):
+    """The poll budget is per fetch: one spent on an earlier fetch must not stop
+    the 5-minute refresh from polling a new one (the screen read "market
+    comparison loading" forever), and tab switches during one fetch must not
+    refill it."""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    st, hits = {"market": "idle", "marks": "pending"}, {"summary": [], "marks": [], "positions": []}
+    _stub_market(page, st, hits)
+    page.goto(f"{app}/home")
+    page.wait_for_selector("#sidebar button.row")
+    page.click('#sidebar button.row[data-key="FULL"]')
+    page.wait_for_selector(".result")
+    assert _until(page, lambda: len(hits["marks"]) >= 1)
+    page.evaluate("marksTries.FULL = 1000")              # the first fetch spent its budget
+    n = len(hits["marks"])
+    page.click('[role="tab"][data-tab="positions"]')
+    page.click('[role="tab"][data-tab="overview"]')
+    page.wait_for_timeout(500)
+    assert len(hits["marks"]) == n, "a tab switch refilled the budget mid-fetch"
+    page.evaluate("refresh(false)")                      # the 5-minute refresh; the server is idle again
+    assert _until(page, lambda: len(hits["marks"]) > n), "the new fetch was never polled"
+
+
+def test_positions_refetch_after_prices_arrive_on_the_overview(browser, app):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    st, hits = {"market": "idle", "marks": "pending"}, {"summary": [], "marks": [], "positions": []}
+    _stub_market(page, st, hits)
+    page.goto(f"{app}/home")
+    page.wait_for_selector("#sidebar button.row")
+    page.click('#sidebar button.row[data-key="FULL"]')
+    page.wait_for_selector(".result")
+    page.click('[role="tab"][data-tab="positions"]')
+    page.wait_for_selector(".group")
+    assert len(hits["positions"]) == 1
+    st.update(market="ready", marks="ready")             # today's prices land...
+    n = len(hits["summary"])
+    page.click('[role="tab"][data-tab="overview"]')      # ...while the Overview is showing
+    assert _until(page, lambda: len(hits["summary"]) > n)
+    page.wait_for_timeout(200)
+    page.click('[role="tab"][data-tab="positions"]')
+    assert _until(page, lambda: len(hits["positions"]) == 2), "Positions kept the pre-price holdings"
+
+
+def test_the_poll_budget_outlasts_a_hung_fetch():
+    """A chain must see a hung fetch turn to "error" (HANG_AFTER), not give up first."""
+    import re
+    from pathlib import Path
+    from trading_algo.dashboard.live_marks import HANG_AFTER
+    js = (Path(__file__).parents[1] / "trading_algo/dashboard/static/home.js").read_text()
+    polls = int(re.search(r"const MARKS_POLLS = (\d+);", js).group(1))
+    every = int(re.search(r"const MARKS_EVERY_MS = (\d+);", js).group(1))
+    assert polls * every / 1000 > HANG_AFTER
+
+
 def test_polling_code_guards_generation_and_budget():
     from pathlib import Path
     js = (Path(__file__).parents[1] / "trading_algo/dashboard/static/home.js").read_text()

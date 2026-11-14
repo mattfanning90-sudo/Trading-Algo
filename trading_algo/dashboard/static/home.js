@@ -12,7 +12,9 @@ let chartView = "value";                  // Overview chart: "value" | "below"
 const bookData = {};                      // key -> {summary, positions, error}
 let marksTimer = null;
 let marksGen = 0;                         // bumped per polling chain; stale chains stop
-const marksTries = {};                    // key -> polls spent; loadBook cannot reset it
+const marksTries = {};                    // key -> polls spent on the current price fetch
+const MARKS_POLLS = 70;                   // per fetch: 350 s outlasts live_marks.HANG_AFTER (300 s)
+const MARKS_EVERY_MS = 5000;
 
 const books = () => (data ? data.books : []);
 const bookKeys = () => books().map((b) => b.key);
@@ -123,9 +125,14 @@ async function getJSON(url) {
 async function loadBook(key, force = false, pollDelay = 0) {
   const c = bookData[key] || (bookData[key] = {});
   try {
-    if (force || !c.summary) c.summary = await getJSON(`/api/summary/${encodeURIComponent(key)}`);
+    if (force || !c.summary) {
+      c.summary = await getJSON(`/api/summary/${encodeURIComponent(key)}`);
+      if (c.summary.market === "idle") marksTries[key] = 0;   // a new fetch: a new poll budget
+    }
     if (tab === "positions" && (force || !c.positions)) {
       c.positions = await getJSON(`/api/positions/${encodeURIComponent(key)}`);
+    } else if (force) {
+      delete c.positions;               // stale once the book reloads; Positions refetches
     }
     c.error = null;
   } catch (err) {
@@ -136,8 +143,10 @@ async function loadBook(key, force = false, pollDelay = 0) {
 }
 
 // Equity books: today's prices arrive from a background fetch (~1 min). Poll
-// every 5 s, at most 36 polls per book (budget reset only by picking another
-// book or ⌘R). One chain at a time: a new call retires the old one (marksGen).
+// every MARKS_EVERY_MS, at most MARKS_POLLS polls per fetch: the budget resets
+// when a freshly loaded summary says "idle" (the server has no fetch, so the
+// next poll starts one), on picking a book and on ⌘R — never on a tab switch.
+// One chain at a time: a new call retires the old one (marksGen).
 function watchMarks(key, delay = 0) {
   clearTimeout(marksTimer);
   const gen = ++marksGen;
@@ -145,17 +154,17 @@ function watchMarks(key, delay = 0) {
   if (!c || !c.summary || !["idle", "pending"].includes(c.summary.market)) return;
   const live = () => gen === marksGen && selected === key;
   const tick = async () => {
-    if (!live() || (marksTries[key] || 0) >= 36) return;
+    if (!live() || (marksTries[key] || 0) >= MARKS_POLLS) return;
     marksTries[key] = (marksTries[key] || 0) + 1;
     try {
       const m = await getJSON(`/api/marks/${encodeURIComponent(key)}`);
       if (!live()) return;
-      if (["ready", "offline", "error"].includes(m.status)) { await loadBook(key, true, 5000); return; }
+      if (["ready", "offline", "error"].includes(m.status)) { await loadBook(key, true, MARKS_EVERY_MS); return; }
     } catch (err) {
       return;
     }
     if (!live()) return;
-    marksTimer = setTimeout(tick, 5000);
+    marksTimer = setTimeout(tick, MARKS_EVERY_MS);
   };
   if (delay) marksTimer = setTimeout(tick, delay); else tick();
 }
