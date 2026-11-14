@@ -3959,3 +3959,94 @@ git commit -m "test(home): accessibility checks and a CI browser job; docs for t
 - **Short-form caveat** means the caveat's first sentence. The spec was amended.
 - **`dead-price-turnover` gains `detail["recent"]`.** This is additive, the same pattern as B1's `subject`. Level, message and gating are unchanged, so NG-7 ("no change to verify behaviour") holds.
 - **No summary sentence for good news when there are no problems.** "Never more right sentences than problems" means none when there are no problems. The good news stays on the panel.
+
+## Execution record (2026-11-15)
+
+Run with subagent-driven development: 15 tasks, each passing its own review and fix loop. A final whole-branch review (Opus) found 1 Critical and 7 Important problems, all of them things the screens would have said falsely on the live books of 14 Nov. One fix wave and one scoped re-review followed, and the controller fixed the single residual. This section replaces the scratch ledger, which is deleted. Each line reads: what was decided — why — what it costs if wrong.
+
+### Rulings
+
+**Process**
+- Each task adds only the imports it uses — CI's lint runs per commit — none.
+- Between Tasks 13 and 14 the Positions tab threw a JS error once data loaded — only on an intermediate, unpushed commit — none now.
+- Suite output went to the session workspace, not `/tmp` — the scratch-file rule — none.
+- Rebased mid-plan onto merged measurement truth — the golden summaries and browser tests must reflect the code that merges — none. The backlog test's temporary xfail became moot and was removed.
+- After the Mac app was retired (2026-11-14), the plan continued unchanged and the Mac launcher was left in place — the screens and JSON routes are what the Railway website reuses — none.
+
+**Tasks 2–8**
+- The glossary also matches plurals (spreads, backtests, benchmarks, p-values), and keeps the "term (gloss)" order — rule texts already lead with plain words — none.
+- A closed position with no matching lot is "unmeasured", not net 0 — a false 0 would skew win rates — a rare position is left out of the count.
+- FX costs default to empty when the money layer fails — superseded: the final review showed this produced A$0.00 tiles, and fix I3 made them read "couldn't measure".
+- The market comparison needs at least 20 aligned trading days — 3 days let a new book be told it was "ahead of the market" — a slower first verdict.
+- The costs line states the real share ("took N%", "took everything", "are N% of the loss") — the plan's wording said "most of the loss" when costs were 37.5% — none.
+- The FX artefact caveat is sliced from the current review notice ("One known…"), not the plan's old "Two known…" — the old slice would have crashed at import — none.
+
+**Task 9 (Overview summary)**
+- A caveat travels as its own sentence, not in brackets. Backtest caveats run book-specific first, then saved/stale, survivorship, dividends — nested brackets once glossed — none.
+- A failed check never reads as all clear (R9-1) — refined in fix I6, so it no longer displaces halted, an audit ERROR, near-breaker or stale.
+- Two fall-from-best figures (the breaker's recorded peak vs one value a day) are both kept and reconciled in the chart text (R9-2) — they differ by definition — none. Refined in fix I2 for books with no breaker.
+- Non-finite benchmark values are filtered (R9-3) — NaN made invalid JSON — none.
+- The Sharpe gloss is neutral, with no claim about a cash rate (R9-4) — the saved backtests don't record one — none.
+- The UK costs clause is written without brackets — the stamp-duty gloss would nest — none.
+
+**Tasks 10–15 (Positions, service, shell, docs)**
+- FX "worth" reads "A$X at risk" — it is entry exposure, not market value — none.
+- An unpriced FX row shows no gain ("No price today; held at cost") — it showed the entry cost as a loss — none.
+- Offline equity rows read "A$X at cost", shorts read "A$X short" — "Valued at cost" must be true — none.
+- BookService's live-marks attribute is `_marks` — the plan's name shadowed the `marks()` method — none.
+- When the main problem is one of the warnings, that warning is labelled "Main problem" instead of being repeated. Chart dates read "13 Oct 2026" — none.
+- Overview order follows the spec (warnings above the result), and polling uses a generation token so chains can't stack — none.
+- The spec's "Verified by" cells name real test files, and the AC-3/AC-9 tests were tightened so their ✅ is true — a spec must not cite files that don't exist — none.
+
+**Final review**
+- Two reviewer "minors" were treated as real: turnover printed "0×" below 0.5×, and the dashboard guide falsely said live prices never reach the result, tiles or chart — the Railway work reads that guide — none.
+- C1 was a spec defect: the why-list predated next-close fills. Code and spec now say "Opening positions at the next close (decided D)". There is no count because micro mode narrows the names when the buy fills — none.
+- A flat sleeve with a staged buy counts as about to invest when testing "mostly idle". The fix wave's weight-based estimate was overturned because micro mode invests ~97%, not the staged 43% — a normal book whose fill stays under 50% invested isn't flagged idle for one session.
+- The golden file was regenerated in each fix's commit so every commit stays green. Seven lines changed in total: six first months (I1) and ULTRA's chart text (I2) — none.
+- FX: a failed money layer also marks closed positions and turnover "couldn't measure" — they come from the same run — none.
+- Backtest and luck-test load failures are not treated as problem inputs — they feed only the model column — see the deferred list.
+- The polling budget resets on a freshly loaded "idle" summary, not on tab switches — none.
+- `money_move` keeps its arrow from the unrounded value, so "▼ A$0.00" can appear — one character.
+- ULTRA's no-breaker chart sentence cites the stored-peak figure that its tile shows — none.
+- Set aside as out of scope:
+  - verify grading a never-rebalanced sleeve as ERROR (verify behaviour; it clears on the book's first daily run);
+  - paper_trade's fill lag (trading code);
+  - B1 carry-overs;
+  - phase 1c concerns (superseded by Railway's nightly export);
+  - `api.build_snapshot` thread safety (pre-existing; no write found in its body, callees not audited);
+  - `GET /api/marks` starting a download, and glosses baked into text (both Railway design questions);
+  - the threshold values (agreed in the spec).
+
+### Deferred minors still open
+- **Product call:** on a brand-new book the main problem can be "Costs (A$1.20) are 100% of the A$1.20 loss". Should costs wait for a minimum age, like the market comparison?
+- **Wording:**
+  - "Up A$0.00" when a gain rounds to zero;
+  - a gap of exactly 0 reads "behind";
+  - "1 trading days";
+  - 2.5× shown as "2×";
+  - "100%" for a 99.5%+ share;
+  - the luck-test band p 0.05–0.1 reads contradictorily, and "look like luck" is firmer than p = 0.47 supports;
+  - "▼ A$0.00" / "▼ 0.0 points" on near-zero values;
+  - the frozen-price warning has no count or date;
+  - an unmapped audit ERROR reads "Audit finding: …";
+  - "the rest is in cash" would be false above 100% invested.
+- **Failure paths:**
+  - a failed backtest load reads "No saved backtest for this book yet" (and can reach the summary), and a failed luck test disappears;
+  - the "Last closed positions" panel says "No closed positions yet" when they failed to load;
+  - an empty or short benchmark on an old book reads "too early" instead of "couldn't load";
+  - the missing-rate caveat doesn't reach the Invested/Costs tiles;
+  - a retired region key would 500 Positions;
+  - a corrupt champions file is swallowed without an error entry;
+  - a truly hung fetch is never retried until restart;
+  - the pill "Couldn't run its audit" can sit beside a near-breaker/stale main problem.
+- **Code and tests:**
+  - loose typing in `closed_positions`;
+  - `day(None)` unguarded (every caller guards);
+  - `expected_gap` and `wilson_interval` bounds unchecked;
+  - test-only `LiveMarks.wait` in production code;
+  - assorted weak or prefix-only test asserts;
+  - the AC-9 scan hard-codes three modules;
+  - the home.js `MARKS_POLLS` comment and test docstring give the wrong reason for 70 (a hung run is replaced and reads "pending", never "error");
+  - unanchored `.gitignore` state rules;
+  - duplicate CSS, multi-line template.
+- **Accessibility:** loading and error states aren't announced to screen readers; tabs lack `aria-controls`/tabpanel; gain/loss rows rely on colour plus sign text.
