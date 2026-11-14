@@ -209,3 +209,57 @@ def test_classic_view_opens_the_old_terminal_on_the_same_book_and_tab(browser, a
     page.goto(f"{app}/index.html?account=SMALL&tab={tab}")
     page.wait_for_function("typeof S !== 'undefined' && S.account === 'SMALL'")
     assert page.evaluate("S.tab") == tab
+
+
+def _rgb(css):
+    import re
+    r, g, b = (int(x) for x in re.findall(r"\d+", css)[:3])
+    return r, g, b
+
+
+def _contrast(a, b):
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, b_ = (ch(x) for x in c)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b_
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+PANEL_BG = (19, 22, 30)      # --bg #0a0d14 under the 3.5% white panel, rounded up
+
+
+def test_text_contrast_in_tiles_and_month_grid(browser, app):
+    page, _ = open_book(browser, app, "FULL")
+    for sel in (".tile .tv", ".tile .tc", ".month .mv", ".month .ml"):
+        for colour in page.eval_on_selector_all(sel, "els => els.map(e => getComputedStyle(e).color)"):
+            assert _contrast(_rgb(colour), PANEL_BG) >= 4.5, (sel, colour)
+
+
+def test_every_money_move_has_an_arrow(browser, app):
+    page, _ = open_book(browser, app, "FULL")
+    # Worth and Costs are amounts; Since start and each closed result are moves.
+    moves = page.eval_on_selector_all(
+        ".tile", "els => els.filter(e => e.querySelector('.tl').innerText === 'Since start')"
+                 ".map(e => e.querySelector('.tv').innerText)")
+    moves += page.locator(".tbl td:last-child").all_inner_texts()
+    assert moves and all(t.strip()[0] in "▲▼▶" for t in moves), moves
+    assert page.inner_text(".result")[0] in "▲▼▶"
+
+
+def test_focus_survives_a_refresh_and_only_the_status_is_live(browser, app):
+    page, _ = open_book(browser, app, "FULL")
+    page.focus('[role="tab"][data-tab="overview"]')
+    page.evaluate("refresh(false)")
+    page.wait_for_timeout(500)
+    assert page.evaluate("document.activeElement.dataset.focus") == "tab:overview"
+    live = page.eval_on_selector_all("[aria-live], [role=status]", "els => els.map(e => e.className)")
+    assert all("pill" in c for c in live), live
+
+
+def test_the_chart_has_a_text_alternative_and_patterned_lines(browser, app):
+    page, _ = open_book(browser, app, "FULL")
+    assert len(page.text_content(".chart svg desc")) > 20
+    assert page.get_attribute(".chart svg line", "stroke-dasharray") == "1 4"

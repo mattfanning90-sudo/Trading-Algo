@@ -31,5 +31,8 @@ Design: `docs/superpowers/specs/2026-10-09-mac-dashboard-design.md`; spec:
 - `seen.py` — a WARN/ERROR finding is new in the session it is first seen (or
   becomes more severe) and known afterwards; identity is (book, code, subject),
   never the message. A lost or unreadable file never floods the screen.
+- `make_app` also wires a `BookService` (the book screens' server answers, shared
+  with the planned Railway website); its background prices run only when the last
+  sync was online.
 - `__main__.py` — the launcher (native window via optional `pywebview`, else the
   browser).

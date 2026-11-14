@@ -23,6 +23,35 @@ apply. Module map: `docs/ARCHITECTURE.md`.
 - `static/app.js` — the old terminal (one 3,816-line file). `static/home.*` — the
   Midnight home screen.
 
+## Book screens (Overview + Positions)
+Shared with the planned Railway website, not Mac-only: the screens and their
+server answers are the same ones the site will serve. The Mac launcher
+(`python -m trading_algo.home`) still works unchanged.
+
+| File | Job |
+|---|---|
+| `book_inputs.py` | Reads one book's SAVED files (state, backtest, audit, luck test) into one inputs record. All I/O lives here |
+| `book_rules.py` | The "Is it working?" rules, each a pure function with a threshold and its caveat |
+| `book_summary.py` | `summarise(inputs)`: pure; builds the result line, tiles, chart, panel and ranked main problem |
+| `book_positions.py` | Holdings grouped by region / asset class, each with a why-line |
+| `live_marks.py` | Background price fetch, cached; only runs when the last sync was online |
+| `book_service.py` | `BookService`: caches the above and answers the three routes |
+| `glossary.py`, `textfmt.py` | Plain-English glosses (first use only) and money / date / minus formats |
+| `static/blocks.js`, `static/screens/book_overview.js`, `static/screens/book_positions.js` | Screen blocks and the two tabs; the book shell is in `static/home.js` |
+
+- **Routes** (only when `create_server(books=...)` is passed; else 404):
+  `/api/summary/<KEY>`, `/api/positions/<KEY>`, `/api/marks/<KEY>`. An unknown key
+  is 404; a builder error is a generic 500 with no file path (logged).
+- **Saved values only.** The screens show the book's last saved value and date.
+  Live prices are an add-on to Positions, never to the result, tiles or chart.
+  The page never does money maths; it shows server-formatted text.
+- **Changing a rule:** change its unit test first, then run the golden test with
+  `UPDATE_GOLDEN=1` and read the diff before committing it
+  (`tests/test_book_summary_golden.py`).
+- **Browser tests:** `REQUIRE_BROWSER=1 python3 -m pytest tests/test_book_screens_browser.py`
+  (needs Playwright 1.62.0 + Chromium). Without the variable they skip; CI's `ui`
+  job sets it, so a skip can never hide a broken screen there.
+
 ## Rules
 - **One source per displayed number.** Sharpe, drawdown, CAGR and annualisation
   come from `trading_algo/metrics.py` only (`tests/test_metrics_single_source.py`).

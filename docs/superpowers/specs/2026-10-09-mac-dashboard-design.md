@@ -13,7 +13,15 @@ each decision, the expert review and what it changed, and how the work splits in
 projects. Each project gets its own spec in `docs/specs/` and its own plan before
 any code.
 
-## Resume here (updated 2026-10-13)
+## Resume here (updated 2026-11-14)
+- **2026-11-14:** Phase 1a + 1b built and reviewed (book Overview + Positions,
+  `docs/specs/book-screens.md`). Matt retired the Mac app as the delivery vehicle:
+  the planned Railway website (`docs/superpowers/specs/2026-11-14-railway-hosting-design.md`
+  on branch `feat/railway-hosting`) serves these same screens. The Mac launcher stays
+  as it is. **Still to do:** Matt's 5-second test (AC-19). Phase 1c (the phone / Pages
+  copy) is now covered by the Railway design's nightly public export, not a separate
+  plan here.
+- *(Older notes below, from 2026-10-13.)*
 - **Where:** worktree `~/Trading-Algo-mac-dashboard`, branch `feat/mac-dashboard`
   (on top of `feat/measurement-truth`, rebased 2026-10-13). Neither branch is on GitHub.
 - **Done:** B1 home screen (`python -m trading_algo.home`; spec
