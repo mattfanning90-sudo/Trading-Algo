@@ -252,8 +252,8 @@ def test_every_money_move_has_an_arrow(browser, app):
 def test_focus_survives_a_refresh_and_only_the_status_is_live(browser, app):
     page, _ = open_book(browser, app, "FULL")
     page.focus('[role="tab"][data-tab="overview"]')
-    page.evaluate("refresh(false)")
-    page.wait_for_function("document.activeElement && document.activeElement.dataset.focus === 'tab:overview'")
+    page.evaluate("async () => { await refresh(false); await loadBook(selected, true); }")
+    assert page.evaluate("document.activeElement.dataset.focus") == "tab:overview"
     live = page.eval_on_selector_all("[aria-live], [role=status]", "els => els.map(e => e.className)")
     assert live, "no live region found at all"
     assert all("pill" in c for c in live), live

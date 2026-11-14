@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from book_fixtures import NOW, no_network, use_snapshot
-from trading_algo.dashboard import book_inputs, book_rules as R, book_summary as S, registry
+from trading_algo.dashboard import book_inputs, book_positions, book_rules as R, book_summary as S, registry
 
 GOLDEN = Path(__file__).parent / "fixtures" / "book_summaries_20261013.json"
 
@@ -64,8 +64,8 @@ def test_every_audit_warning_or_error_appears(summaries):
 def test_backlog_ids_exist_and_are_open():
     """Every fix id the builder can name (a backlog= argument, or an F<n> in a rule
     text or caveat) must exist in the backlog and not be done or rejected."""
-    src = Path(R.__file__).read_text()
-    named = set(re.findall(r'backlog="(F\d+)"', src)) | set(re.findall(r"\bF\d{2}\b", src))
+    src = "".join(Path(m.__file__).read_text() for m in (R, S, book_positions))
+    named = set(re.findall(r'backlog="(F\d+)"', src)) | set(re.findall(r"\bF\d{1,3}\b", src))
     assert {"F20", "F24"} <= named, named        # the scan itself must not find nothing
     backlog = json.loads((Path(__file__).parents[1] / "product/backlog/backlog.json").read_text())
     status = {i["id"]: i["status"] for i in backlog["items"]}
