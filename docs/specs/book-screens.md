@@ -189,7 +189,7 @@ If nothing qualifies: "Nothing clearly going right yet."
 | holds-too-short | the audit raises `hold-shorter-than-signal` | "Holding longer has not been shown to earn more"; units stated exactly ("5 days against a signal of 57 trading days, about 11 weeks") | F20 |
 | loses-more-often | the 95% interval for the share of winning positions (after costs) is entirely below 50% | the interval is shown | — |
 | behind-market | the result rule finds the book behind by more than its normal spread | price-only benchmark, as above | — |
-| mostly-idle | long-only book with gross exposure < 50% | Split by cause: waiting below trend (by design), pinned until next month, micro mode, or sized down (volatility target / whole-share rounding) | F23 / F24 for the sized-down part only |
+| mostly-idle | long-only book with gross exposure < 50%, not counting cash a staged buy is about to invest at the next close | Split by cause: waiting below trend (by design), opening positions at the next close, pinned until next month, micro mode, or sized down (volatility target / whole-share rounding) | F23 / F24 for the sized-down part only |
 | frozen-prices | ≥ 10 position changes at a frozen price in the last 30 days | — | F21 |
 
 **Is the model any good?**
@@ -234,10 +234,13 @@ before the generic "waiting until next month", or they would never show):
    some growth but limits the worst falls;
 6. nothing passed the momentum and trend tests (`no-eligible-names`);
 7. a long/short book couldn't form both sides (`insufficient-names`);
-8. holding nothing until next month's rebalance (flat, already rebalanced this
+8. opening positions at the next close (flat, with a staged target that holds
+   something: the book decides at one close and fills at the next, which the
+   audit reads as `awaiting-fill`), with the decision date;
+9. holding nothing until next month's rebalance (flat, already rebalanced this
    month, no recorded reason);
-9. invested, with the share held in cash and why ("sized to a volatility target;
-   whole shares round down").
+10. invested, with the share held in cash and why ("sized to a volatility target;
+    whole shares round down").
 
 A flat region with a reason also says "next decision: the start of next month"
 when it has already been decided this month.
@@ -265,7 +268,7 @@ shares.
 | AC-9  | Backlog ids named by the builder all exist in `product/backlog/backlog.json` and are not `done` or `rejected`. PR #102 is merged and in this branch's base, so the test asserts directly. | `tests/test_book_summary_golden.py` | ✅ pass — `tests/test_book_summary_golden.py::test_backlog_ids_exist_and_are_open` (scans `book_rules.py`, `book_summary.py` and `book_positions.py` for every fix id the builder can name, `backlog=` values and F-numbers in texts; each must exist and be open; a plain test, no xfail needed) |
 | AC-10 | Every glossary term used in a screen's text carries its plain gloss on first use. | `tests/test_textfmt_glossary.py`, `tests/test_book_summary.py`, `tests/test_book_summary_golden.py` | ✅ pass — `tests/test_textfmt_glossary.py`, `tests/test_book_summary.py::test_glossary_explains_each_term_once_on_the_screen`, `tests/test_book_summary_golden.py::test_attention_is_glossed_first_because_it_renders_first` |
 | AC-11 | Month returns come from `metrics.monthly_returns` and the chart's fall-from-best from `metrics.drawdown`, proven by a spy test; the tile's fall-from-best equals the overview card's; the single-source guard stays green. | `tests/test_metrics_screens.py`, `tests/test_book_summary.py`, `tests/test_metrics_single_source.py` | ✅ pass — `tests/test_metrics_screens.py`, `tests/test_book_summary.py::test_tile_below_best_is_the_breaker_figure_and_months_come_from_metrics`, `tests/test_metrics_single_source.py` |
-| AC-12 | Positions why-lines: each reason in the list, the precedence order, shorts, cash > 100%, an unpriced holding, and the FX "market shut" line, each from a fixture. | `tests/test_book_positions.py` | ✅ pass — `tests/test_book_positions.py` and `tests/test_book_rules_back.py::test_sleeve_reason_precedence` |
+| AC-12 | Positions why-lines: each reason in the list, the precedence order, shorts, cash > 100%, an unpriced holding, and the FX "market shut" line, each from a fixture. | `tests/test_book_positions.py` | ✅ pass — `tests/test_book_positions.py`, `tests/test_book_rules_back.py::test_sleeve_reason_precedence` and `::test_a_flat_sleeve_with_a_staged_buy_says_it_buys_at_the_next_close` (a staged buy reads as opening positions, never "until next month") |
 | AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic backtest (never shown as performance; the saved books themselves carry no synthetic marker). | `tests/test_book_rules_attention.py`, `tests/test_book_summary.py`, `tests/test_book_rules_model.py` | ✅ pass — `tests/test_book_rules_attention.py::test_a_brand_new_book_is_too_new_to_judge`, `tests/test_book_summary.py` (throwing input, FX without closed positions), `tests/test_book_rules_model.py::test_missing_and_synthetic_backtests_are_never_performance` |
 
 **1b: the Mac screens**

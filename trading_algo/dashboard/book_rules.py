@@ -245,6 +245,7 @@ SHORT_WHY = {
     "regime-off": "waiting, by design, while its market is below its long-term trend",
     "no-eligible": "holding nothing, as nothing passed the tests",
     "insufficient": "holding nothing, as it couldn't form both sides",
+    "staged": "opening positions at the next close",
     "pinned": "waiting for next month's rebalance",
     "empty": "holding nothing",
     "invested": "sized down by the volatility target and whole-share rounding",
@@ -261,6 +262,13 @@ def _region_name(key: str) -> str:
         return get_region(key).name
     except Exception:          # a key the registry doesn't know (tests, a retired region)
         return key
+
+
+def staged_buy(sleeve: dict) -> dict:
+    """The weights of a staged target that holds something, else {}. Same test
+    as verify._staged_buy: paper_trade decides at one close and fills at the
+    next, so a flat sleeve with these weights is about to invest."""
+    return dict((sleeve.get("pending_target") or {}).get("weights") or {})
 
 
 def invested_share(inp) -> float | None:
@@ -306,6 +314,11 @@ def sleeve_reason(inp, key: str, sleeve: dict) -> tuple[str, str, str | None]:
         return "no-eligible", "Holding nothing: no share passed the momentum and trend tests at the last decision." + nxt, None
     if not holds and reason == "insufficient-names":
         return "insufficient", "Holding nothing: it couldn't form both the long and the short side." + nxt, None
+    staged = staged_buy(sleeve)
+    if not holds and staged:
+        n, when = len(staged), (sleeve.get("pending_target") or {}).get("date")
+        return ("staged", f"Opening {n} position{'s' if n != 1 else ''} at the next close "
+                f"(decided {_on(when)}).", None)
     if not holds and decided_this_month:
         return "pinned", "Holding nothing until next month's rebalance.", None
     if not holds:
@@ -411,9 +424,12 @@ def mostly_idle(inp) -> list[dict]:
     if inp.kind != "equity" or long_short(inp):
         return []
     share = invested_share(inp)
-    if share is None or share >= IDLE_BELOW:
+    eq = float(inp.card.get("equity") or 0.0)
+    soon = sum(float(s.get("cash") or 0.0) * _base_per_local(inp, s.get("currency"))
+               * min(1.0, sum(max(float(w), 0.0) for w in staged_buy(s).values()))
+               for s in (inp.state.get("sleeves") or {}).values() if not s.get("positions"))
+    if share is None or share + soon / eq >= IDLE_BELOW:   # cash about to be invested isn't idle
         return []
-    eq = float(inp.card["equity"])
     parts, sized_down = [], False
     for key, sleeve in (inp.state.get("sleeves") or {}).items():
         cash_share = float(sleeve.get("cash") or 0.0) * _base_per_local(inp, sleeve.get("currency")) / eq

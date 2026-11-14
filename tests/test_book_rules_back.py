@@ -109,6 +109,11 @@ def test_a_covered_warning_is_shown_once_by_its_rule():
     (_sleeve(1.0, last_flat_reason="regime-off", last_rebalance_month="2026-10"), {}, "regime-off"),
     (_sleeve(1.0, last_flat_reason="no-eligible-names", last_rebalance_month="2026-10"), {}, "no-eligible"),
     (_sleeve(1.0, last_flat_reason="insufficient-names"), {}, "insufficient"),
+    (_sleeve(1.0, last_rebalance_month="2026-10",
+             pending_target={"date": "2026-10-13", "weights": {"AAPL": 0.5}, "frozen": []}),
+     {}, "staged"),
+    (_sleeve(1.0, last_rebalance_month="2026-10",
+             pending_target={"date": "2026-10-13", "weights": {}, "frozen": []}), {}, "pinned"),
     (_sleeve(1.0, last_rebalance_month="2026-10"), {}, "pinned"),
     (_sleeve(1.0), {}, "empty"),
     (_sleeve(1.0, {"AAPL": 3}), {}, "invested"),
@@ -123,6 +128,38 @@ def test_regime_off_says_since_the_book_began_when_the_region_never_traded():
                                    last_rebalance_date="2026-10-06",
                                    last_rebalance_month="2026-10"))[1]
     assert "since the book began" in text and "6 Oct 2026" in text and "next month" in text
+
+
+def _staged(n, date="2026-10-13"):
+    return {"date": date, "weights": {f"T{i}": 0.9 / n for i in range(n)}, "frozen": []}
+
+
+def test_a_flat_sleeve_with_a_staged_buy_says_it_buys_at_the_next_close():
+    """paper_trade decides at one close and fills at the next (verify's
+    `awaiting-fill`), so a flat sleeve with a staged target is about to invest,
+    not waiting for next month."""
+    code, text, level = R.sleeve_reason(make_inp(), "US", _sleeve(
+        1.0, last_rebalance_month="2026-10", pending_target=_staged(2)))
+    assert (code, level) == ("staged", None)
+    assert text == "Opening 2 positions at the next close (decided 13 Oct 2026)."
+
+
+def test_cash_a_staged_buy_is_about_to_invest_does_not_make_the_book_mostly_idle():
+    state = {"fx_snapshot": {"AUD": 1.0},
+             "sleeves": {k: _sleeve(33_000.0, last_rebalance_month="2026-10",
+                                    pending_target=_staged(3)) for k in ("ASX", "US", "FTSE")}}
+    assert R.mostly_idle(make_inp(state=state, card={"equity": 99_000.0})) == []
+
+
+def test_a_staged_sleeve_inside_a_mostly_idle_book_is_named_as_buying():
+    state = {"fx_snapshot": {"AUD": 1.0},
+             "sleeves": {"ASX": _sleeve(70_000.0, last_flat_reason="regime-off",
+                                        last_rebalance_month="2026-10"),
+                         "US": _sleeve(30_000.0, last_rebalance_month="2026-10",
+                                       pending_target=_staged(3))}}
+    text = R.mostly_idle(make_inp(state=state))[0]["text"]
+    assert "United States: 30%, opening positions at the next close" in text
+    assert "next month" not in text
 
 
 def test_a_too_short_market_gives_no_behind_market_verdict():
