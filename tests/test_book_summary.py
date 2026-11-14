@@ -140,6 +140,19 @@ def test_chart_text_reconciles_the_daily_drop_with_the_breakers_own_figure():
     assert "The safety breaker measures from its own recorded peak: −5.1% now." in d
 
 
+def test_chart_text_on_a_book_without_a_breaker_never_cites_one():
+    """ULTRA has no safety breaker (its tile says so); the chart text must not
+    say the breaker measures anything."""
+    vals = [100_000.0, 102_000.0, 99_000.0]
+    s = S.summarise(make_inp(card={"equity": 99_000.0, "off_peak": -0.0512, "breaker": None},
+                             state={"param_overrides": {"max_gross": 3.0}},
+                             book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()}))
+    d = s["chart"]["below_desc"]
+    assert "safety breaker measures" not in d
+    assert d.endswith("The Below its best tile measures from the book's own recorded peak: "
+                      "\u22125.1% now; this book has no safety breaker.")
+
+
 def test_a_nan_in_the_benchmark_cannot_make_invalid_json():
     vals = [100_000.0 + i * 10 for i in range(30)]
     bench = [{"date": (datetime(2026, 6, 1) + timedelta(days=i)).strftime("%Y-%m-%d"),

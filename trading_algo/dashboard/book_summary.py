@@ -126,9 +126,13 @@ def _chart(inp, m) -> dict:
                       f"{money_move(lo[1])} on {day(lo[0])}, highest {money_move(hi[1])} on "
                       f"{day(hi[0])}, now {money_move(value[-1][1])}.")
         deep = min(below, key=lambda p: p[1])
+        peak = pct(float(inp.card.get("off_peak") or 0.0))
         below_desc = (f"Fall from the highest daily value: deepest {pct(deep[1])} on "
-                      f"{day(deep[0])}; now {pct(below[-1][1])}. The safety breaker measures from "
-                      f"its own recorded peak: {pct(float(inp.card.get('off_peak') or 0.0))} now.")
+                      f"{day(deep[0])}; now {pct(below[-1][1])}. "
+                      + (f"The safety breaker measures from its own recorded peak: {peak} now."
+                         if inp.card.get("breaker") is not None else
+                         f"The Below its best tile measures from the book's own recorded peak: "
+                         f"{peak} now; this book has no safety breaker."))
     return {"value": value, "below_best": below, "benchmark": bench,
             "value_desc": value_desc, "below_desc": below_desc}
 
