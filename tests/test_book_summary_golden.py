@@ -62,9 +62,15 @@ def test_every_audit_warning_or_error_appears(summaries):
 
 
 def test_backlog_ids_exist_and_are_open():
+    """Every fix id the builder can name (a backlog= argument, or an F<n> in a rule
+    text or caveat) must exist in the backlog and not be done or rejected."""
+    src = Path(R.__file__).read_text()
+    named = set(re.findall(r'backlog="(F\d+)"', src)) | set(re.findall(r"\bF\d{2}\b", src))
+    assert {"F20", "F24"} <= named, named        # the scan itself must not find nothing
     backlog = json.loads((Path(__file__).parents[1] / "product/backlog/backlog.json").read_text())
     status = {i["id"]: i["status"] for i in backlog["items"]}
-    for fid in ("F20", "F21", "F22", "F23", "F25"):
+    for fid in sorted(named):
+        assert fid in status, fid
         assert status[fid] not in ("done", "rejected"), fid
 
 

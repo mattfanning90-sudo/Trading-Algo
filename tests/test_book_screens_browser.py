@@ -253,13 +253,17 @@ def test_focus_survives_a_refresh_and_only_the_status_is_live(browser, app):
     page, _ = open_book(browser, app, "FULL")
     page.focus('[role="tab"][data-tab="overview"]')
     page.evaluate("refresh(false)")
-    page.wait_for_timeout(500)
-    assert page.evaluate("document.activeElement.dataset.focus") == "tab:overview"
+    page.wait_for_function("document.activeElement && document.activeElement.dataset.focus === 'tab:overview'")
     live = page.eval_on_selector_all("[aria-live], [role=status]", "els => els.map(e => e.className)")
+    assert live, "no live region found at all"
     assert all("pill" in c for c in live), live
 
 
 def test_the_chart_has_a_text_alternative_and_patterned_lines(browser, app):
     page, _ = open_book(browser, app, "FULL")
     assert len(page.text_content(".chart svg desc")) > 20
-    assert page.get_attribute(".chart svg line", "stroke-dasharray") == "1 4"
+    # the break-even line is the one dotted line; a benchmark, when drawn, is a long-dash polyline
+    assert page.locator('.chart svg line[stroke-dasharray="1 4"]').count() == 1
+    for d in page.eval_on_selector_all(".chart svg polyline[stroke-dasharray]",
+                                       "els => els.map(e => e.getAttribute('stroke-dasharray'))"):
+        assert d == "8 4"

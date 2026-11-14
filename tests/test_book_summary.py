@@ -197,3 +197,20 @@ def test_summarise_is_pure(monkeypatch):
     S.summarise(inp)
     monkeypatch.undo()
     assert {k: v for k, v in vars(inp).items() if k != "errors"} == before
+
+
+def test_all_chip_and_since_start_tile_equal_the_overview_card_on_the_real_book(tmp_path, monkeypatch):
+    use_snapshot(tmp_path, monkeypatch)
+    no_network(monkeypatch)
+    inp = book_inputs.load_inputs(registry.resolve("FULL"), NOW, market="offline")
+    chip = inp.book["periods"]["ALL"]["change"]
+    assert chip == pytest.approx(inp.card["equity"] - inp.card["initial"], abs=0.01)
+    since = next(t for t in S.summarise(inp)["tiles"] if t["label"] == "Since start")
+    amount = float(since["value"].replace("\u2212", "-").replace(",", "").split("A$")[1]) * (-1 if "\u2212" in since["value"] else 1)
+    assert amount == pytest.approx(chip, abs=0.01)
+
+
+def test_market_gap_is_measured_to_the_results_as_of_date():
+    from test_book_rules_attention import _with_market
+    inp = _with_market([100_000.0] * 60, [100_000.0 * (1.001 ** i) for i in range(60)])
+    assert R.market(inp)["last"] == R.as_of(inp)
