@@ -130,18 +130,19 @@ def test_regime_off_says_since_the_book_began_when_the_region_never_traded():
     assert "since the book began" in text and "6 Oct 2026" in text and "next month" in text
 
 
-def _staged(n, date="2026-10-13"):
-    return {"date": date, "weights": {f"T{i}": 0.9 / n for i in range(n)}, "frozen": []}
+def _staged(n, date="2026-10-13", total=0.9):
+    return {"date": date, "weights": {f"T{i}": total / n for i in range(n)}, "frozen": []}
 
 
 def test_a_flat_sleeve_with_a_staged_buy_says_it_buys_at_the_next_close():
     """paper_trade decides at one close and fills at the next (verify's
     `awaiting-fill`), so a flat sleeve with a staged target is about to invest,
-    not waiting for next month."""
+    not waiting for next month. No count: micro mode narrows the staged names
+    to at most three at fill time, so the staged count is not what opens."""
     code, text, level = R.sleeve_reason(make_inp(), "US", _sleeve(
-        1.0, last_rebalance_month="2026-10", pending_target=_staged(2)))
+        1.0, last_rebalance_month="2026-10", pending_target=_staged(10)))
     assert (code, level) == ("staged", None)
-    assert text == "Opening 2 positions at the next close (decided 13 Oct 2026)."
+    assert text == "Opening positions at the next close (decided 13 Oct 2026)."
 
 
 def test_cash_a_staged_buy_is_about_to_invest_does_not_make_the_book_mostly_idle():
@@ -149,6 +150,16 @@ def test_cash_a_staged_buy_is_about_to_invest_does_not_make_the_book_mostly_idle
              "sleeves": {k: _sleeve(33_000.0, last_rebalance_month="2026-10",
                                     pending_target=_staged(3)) for k in ("ASX", "US", "FTSE")}}
     assert R.mostly_idle(make_inp(state=state, card={"equity": 99_000.0})) == []
+
+
+def test_a_staged_buy_with_small_weights_is_still_not_idle():
+    """SMALL on 14 Nov: staged weights summed to 0.43, but micro mode invests
+    ~97% at fill time, so staged weights are no forecast of what fills. The next
+    daily run re-checks against real holdings, so nothing is hidden for long."""
+    state = {"fx_snapshot": {"AUD": 1.0},
+             "sleeves": {"US": _sleeve(1_000.0, last_rebalance_month="2026-11",
+                                       pending_target=_staged(10, total=0.43))}}
+    assert R.mostly_idle(make_inp(state=state, card={"equity": 1_000.0})) == []
 
 
 def test_a_staged_sleeve_inside_a_mostly_idle_book_is_named_as_buying():

@@ -315,10 +315,9 @@ def sleeve_reason(inp, key: str, sleeve: dict) -> tuple[str, str, str | None]:
     if not holds and reason == "insufficient-names":
         return "insufficient", "Holding nothing: it couldn't form both the long and the short side." + nxt, None
     staged = staged_buy(sleeve)
-    if not holds and staged:
-        n, when = len(staged), (sleeve.get("pending_target") or {}).get("date")
-        return ("staged", f"Opening {n} position{'s' if n != 1 else ''} at the next close "
-                f"(decided {_on(when)}).", None)
+    if not holds and staged:            # no count: micro mode narrows the names at fill
+        when = (sleeve.get("pending_target") or {}).get("date")
+        return "staged", f"Opening positions at the next close (decided {_on(when)}).", None
     if not holds and decided_this_month:
         return "pinned", "Holding nothing until next month's rebalance.", None
     if not holds:
@@ -425,9 +424,12 @@ def mostly_idle(inp) -> list[dict]:
         return []
     share = invested_share(inp)
     eq = float(inp.card.get("equity") or 0.0)
+    # A flat sleeve with a staged buy invests at the next close; its weights are
+    # no forecast of how much (micro mode concentrates them), and the next daily
+    # run re-checks real holdings, so count all of its cash as about to invest.
     soon = sum(float(s.get("cash") or 0.0) * _base_per_local(inp, s.get("currency"))
-               * min(1.0, sum(max(float(w), 0.0) for w in staged_buy(s).values()))
-               for s in (inp.state.get("sleeves") or {}).values() if not s.get("positions"))
+               for s in (inp.state.get("sleeves") or {}).values()
+               if not s.get("positions") and staged_buy(s))
     if share is None or share + soon / eq >= IDLE_BELOW:   # cash about to be invested isn't idle
         return []
     parts, sized_down = [], False
