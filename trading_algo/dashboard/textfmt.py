@@ -42,6 +42,11 @@ def pct(v: float, dp: int = 1, *, signed: bool = True) -> str:
     return f"{sgn}{abs(r):.{dp}f}%"
 
 
+def times(v: float) -> str:
+    """A multiple, e.g. turnover: one decimal below 10× ('0.3×'), whole above."""
+    return f"{v:.1f}×" if round(v, 1) < 10 else f"{v:.0f}×"
+
+
 def points(v: float) -> str:
     return f"{abs(v) * 100:.1f} points"
 

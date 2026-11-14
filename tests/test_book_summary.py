@@ -76,6 +76,16 @@ def test_six_tiles_and_fx_without_closed_positions():
     assert win["value"] == "—" and "No closed positions yet" in win["caption"]
 
 
+@pytest.mark.parametrize("turnover,value", [(0.3, "0.3×"), (9.96, "10×"), (12.4, "12×")])
+def test_turnover_shows_a_decimal_below_ten(turnover, value):
+    """0.3× read "0×" next to non-zero costs."""
+    fx = S.summarise(make_inp("fx", fx_book={"net_pnl": 0.0, "residual": 0.0, "costs": 1.0,
+                                             "turnover": turnover}))
+    tile = next(t for t in fx["tiles"] if t["label"] == "Turnover")
+    assert tile["value"] == value
+    assert tile["caption"] == f"traded {value} its capital since 11 Jun 2026"
+
+
 def test_one_valuation_point_across_result_tiles_and_chart():
     s = S.summarise(make_inp(card={"equity": 99_952.38}))
     since = next(t for t in s["tiles"] if t["label"] == "Since start")

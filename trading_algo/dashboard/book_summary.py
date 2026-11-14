@@ -9,7 +9,7 @@ from datetime import datetime
 from .. import metrics
 from . import book_rules as R
 from . import glossary
-from .textfmt import day, direction, money, money_move, pct, points
+from .textfmt import day, direction, money, money_move, pct, points, times
 
 # Inputs the "Holding it back" rules read (book_inputs._safe names). One that
 # failed to load leaves its rules silent, which must never read as all clear.
@@ -113,8 +113,8 @@ def _tiles(inp, m) -> list[dict]:
     money_tiles = [
         {"label": "Costs so far", "value": money(costs), "dir": None,
          "caption": "the spread paid on trades; financing is separate"},
-        {"label": "Turnover", "value": f"{turnover:.0f}×", "dir": None,
-         "caption": f"traded {turnover:.0f}× its capital since {R._on(since)}" if since else "—"},
+        {"label": "Turnover", "value": times(turnover), "dir": None,
+         "caption": f"traded {times(turnover)} its capital since {R._on(since)}" if since else "—"},
     ]
     if "costs" in inp.errors:           # costs and turnover both come from fx_pnl
         money_tiles = [_unmeasured("Costs so far", "costs"), _unmeasured("Turnover", "turnover")]
