@@ -178,3 +178,34 @@ def test_chart_dates_read_day_month_year(browser, app):
     cap = page.locator(".chart .caption").first.inner_text()
     assert "11 Jun 2026" in cap
     assert not re.search(r"\d{4}-\d{2}-\d{2}", cap)
+
+
+def open_positions(browser, base, key):
+    page, errors = open_book(browser, base, key)
+    page.click('[role="tab"][data-tab="positions"]')
+    page.wait_for_selector(".group")
+    return page, errors
+
+
+def test_full_positions_show_each_region_and_why_with_the_network_off(browser, app):
+    page, errors = open_positions(browser, app, "FULL")
+    assert page.locator(".group").count() == 3
+    assert page.locator(".group .why").count() == 3
+    assert "since the book began" in page.inner_text(".group:has-text('Australia')")
+    assert page.locator(".group tbody tr").count() > 0
+    assert "offline" in page.inner_text(".prices")
+    assert errors == []
+
+
+def test_fx_positions_group_by_asset_class(browser, app):
+    page, errors = open_positions(browser, app, "MATT")
+    names = page.locator(".group h3").all_inner_texts()
+    assert any(n.startswith("Currencies") for n in names) and errors == []
+
+
+@pytest.mark.parametrize("tab", ["OVERVIEW", "BACKTEST", "METHOD"])
+def test_classic_view_opens_the_old_terminal_on_the_same_book_and_tab(browser, app, tab):
+    page = browser.new_page()
+    page.goto(f"{app}/index.html?account=SMALL&tab={tab}")
+    page.wait_for_function("typeof S !== 'undefined' && S.account === 'SMALL'")
+    assert page.evaluate("S.tab") == tab

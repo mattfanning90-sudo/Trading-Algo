@@ -3816,6 +3816,15 @@ async function boot() {
   } else {
     S.account = 'ALL';
   }
+  // Classic view from the new screens: ?account=<KEY>&tab=<TAB> opens this
+  // book on that tab. Never in an export, whose book is baked in.
+  if (!S.isExport && !S.exportAll) {
+    const q = new URLSearchParams(location.search);
+    const want = (q.get('account') || '').toUpperCase();
+    if (accs.some(a => a.key === want)) S.account = want;
+    const t = (q.get('tab') || '').toUpperCase();
+    if (['OVERVIEW', 'POSITIONS', 'BACKTEST', 'METHOD', 'SWARM'].includes(t)) S.tab = t;
+  }
   await setAccount(S.account);
   setInterval(poll, POLL_MS);
 }
