@@ -35,15 +35,20 @@ server answers are the same ones the site will serve. The Mac launcher
 | `book_summary.py` | `summarise(inputs)`: pure; builds the result line, tiles, chart, panel and ranked main problem |
 | `book_positions.py` | Holdings grouped by region / asset class, each with a why-line |
 | `live_marks.py` | Background price fetch, cached; only runs when the last sync was online |
-| `book_service.py` | `BookService`: caches the above and answers the three routes |
+| `book_service.py` | `BookService`: answers the three routes. It rebuilds each summary and positions answer on every request (the saved state is read through `registry._peek`, cached by file time); the only thing BookService itself caches is live prices, through one `LiveMarks` (a finished fetch is reused for 15 minutes; a failed one reads as an error for 60 s before it can retry) |
 | `glossary.py`, `textfmt.py` | Plain-English glosses (first use only) and money / date / minus formats |
 | `static/blocks.js`, `static/screens/book_overview.js`, `static/screens/book_positions.js` | Screen blocks and the two tabs; the book shell is in `static/home.js` |
 
 - **Routes** (only when `create_server(books=...)` is passed; else 404):
   `/api/summary/<KEY>`, `/api/positions/<KEY>`, `/api/marks/<KEY>`. An unknown key
   is 404; a builder error is a generic 500 with no file path (logged).
-- **Saved values only.** The screens show the book's last saved value and date.
-  Live prices are an add-on to Positions, never to the result, tiles or chart.
+- **Saved values for the book itself.** The screens show the book's last saved
+  value and date; the book's own worth, gains and value line never use live prices.
+  Once the background fetch is ready, live data reaches two places: Positions
+  values holdings at today's prices, and the fetch's market index gives the
+  result line's market clause, the "vs the market" tile, the chart's market line
+  and the ahead/behind-the-market rules, each measured only up to the book's
+  last saved date.
   The page never does money maths; it shows server-formatted text.
 - **Changing a rule:** change its unit test first, then run the golden test with
   `UPDATE_GOLDEN=1` and read the diff before committing it
