@@ -16,6 +16,16 @@ def test_monthly_returns_month_end_against_previous_month_end():
     assert out["2026-08"] == pytest.approx(0.0)
 
 
+def test_monthly_returns_first_month_against_the_starting_capital():
+    """The book's first day (capital put in -> first mark) belongs to the first
+    month, or the months don't compound to the since-start return."""
+    idx = pd.to_datetime(["2026-06-11", "2026-06-30", "2026-07-31"])
+    eq = pd.Series([99.0, 101.0, 98.0], index=idx)
+    out = metrics.monthly_returns(eq, start=100.0)
+    assert out["2026-06"] == pytest.approx(0.01)
+    assert (1 + out).prod() - 1 == pytest.approx(98.0 / 100.0 - 1)
+
+
 def test_monthly_returns_skips_unvaluable_marks():
     idx = pd.to_datetime(["2026-06-11", "2026-06-20", "2026-06-30"])
     eq = pd.Series([100.0, float("nan"), 105.0], index=idx)

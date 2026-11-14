@@ -86,11 +86,25 @@ def test_one_valuation_point_across_result_tiles_and_chart():
 def test_tile_below_best_is_the_breaker_figure_and_months_come_from_metrics(monkeypatch):
     calls = {"m": 0, "d": 0}
     real_m, real_d = metrics.monthly_returns, metrics.drawdown
-    monkeypatch.setattr(metrics, "monthly_returns", lambda e: (calls.__setitem__("m", calls["m"] + 1), real_m(e))[1])
+    monkeypatch.setattr(metrics, "monthly_returns", lambda e, **kw: (calls.__setitem__("m", calls["m"] + 1), real_m(e, **kw))[1])
     monkeypatch.setattr(metrics, "drawdown", lambda e: (calls.__setitem__("d", calls["d"] + 1), real_d(e))[1])
     s = S.summarise(make_inp(card={"off_peak": -0.0112}))
     tile = next(t for t in s["tiles"] if t["label"] == "Below its best")
     assert tile["value"] == "−1.1%" and calls == {"m": 1, "d": 1}
+
+
+def test_months_compound_to_the_since_start_return_on_the_real_book(tmp_path, monkeypatch):
+    """FULL's first day (capital put in -> first mark) was dropped: its months
+    compounded to +0.12% while Since start read -0.05%."""
+    use_snapshot(tmp_path, monkeypatch)
+    no_network(monkeypatch)
+    seen, real = [], metrics.monthly_returns
+    monkeypatch.setattr(metrics, "monthly_returns",
+                        lambda e, **kw: (seen.append(real(e, **kw)), seen[-1])[1])
+    inp = book_inputs.load_inputs(registry.resolve("FULL"), NOW, market="offline")
+    S.summarise(inp)
+    since = inp.card["equity"] / inp.card["initial"] - 1
+    assert float((1 + seen[0]).prod() - 1) == pytest.approx(since, abs=1e-6)
 
 
 def test_summary_survives_an_unvaluable_mark(tmp_path, monkeypatch):

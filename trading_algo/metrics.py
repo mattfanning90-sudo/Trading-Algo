@@ -181,17 +181,18 @@ def max_drawdown(equity: pd.Series) -> Measure:
                    periods_per_year=float("nan"), n=len(equity))
 
 
-def monthly_returns(equity: pd.Series) -> pd.Series:
+def monthly_returns(equity: pd.Series, start: float | None = None) -> pd.Series:
     """Calendar-month return of an equity curve, keyed 'YYYY-MM': each month's
     last mark against the previous month's last mark, the first month against
-    the curve's first mark. THE month-by-month definition the book screens
-    show — one source, like `drawdown`."""
+    `start` (the capital put in) when given, else the curve's first mark. With
+    `start` the months compound to the since-start return. THE month-by-month
+    definition the book screens show — one source, like `drawdown`."""
     s = equity.dropna().sort_index()
     if s.empty:
         return pd.Series(dtype=float)
     month_end = s.groupby(s.index.to_period("M")).last()
     prev = month_end.shift(1)
-    prev.iloc[0] = s.iloc[0]
+    prev.iloc[0] = s.iloc[0] if start is None else float(start)
     out = month_end / prev - 1.0
     out.index = [str(p) for p in out.index]
     return out
