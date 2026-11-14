@@ -26,8 +26,9 @@ def arrow(v: float) -> str:
 
 def money(v: float, ccy: str = "AUD", *, signed: bool = False) -> str:
     sym = CCY.get(ccy, f"{ccy} ")
-    sgn = sign_char(v) if signed else (MINUS if v < 0 else "")
-    return f"{sgn}{sym}{abs(v):,.2f}"
+    r = round(v, 2)                     # sign the value as shown: never "−A$0.00"
+    sgn = sign_char(r) if signed else (MINUS if r < 0 else "")
+    return f"{sgn}{sym}{abs(r):,.2f}"
 
 
 def money_move(v: float, ccy: str = "AUD") -> str:
@@ -36,8 +37,9 @@ def money_move(v: float, ccy: str = "AUD") -> str:
 
 
 def pct(v: float, dp: int = 1, *, signed: bool = True) -> str:
-    sgn = sign_char(v) if signed else (MINUS if v < 0 else "")
-    return f"{sgn}{abs(v) * 100:.{dp}f}%"
+    r = round(v * 100, dp)              # sign the value as shown: never "−0.0%"
+    sgn = sign_char(r) if signed else (MINUS if r < 0 else "")
+    return f"{sgn}{abs(r):.{dp}f}%"
 
 
 def points(v: float) -> str:

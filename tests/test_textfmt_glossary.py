@@ -21,6 +21,19 @@ def test_percent_points_and_days():
     assert t.direction(None) == "flat" and t.direction(-1) == "down"
 
 
+def test_a_value_that_rounds_to_zero_carries_no_sign():
+    """The sign is chosen from the value as displayed, so nothing reads "−0.0%"."""
+    assert t.pct(-0.0004) == "0.0%"
+    assert t.pct(0.0004) == "0.0%"
+    assert t.pct(-0.004, 0) == "0%"
+    assert t.pct(-0.0004, signed=False) == "0.0%"
+    assert t.money(-0.004) == "A$0.00"
+    assert t.money(-0.004, signed=True) == "A$0.00"
+    assert t.money(0.004, signed=True) == "A$0.00"
+    assert t.money(-0.005) == "\u2212A$0.01"             # rounds away from zero: keeps its sign
+    assert t.money_move(-0.004) == "\u25bc A$0.00"       # direction stays the caller's
+
+
 def test_first_use_is_glossed_once_and_only_once():
     out = glossary.gloss(["Backtest Sharpe 0.32", "Sharpe again", "no terms"])
     assert out[0].startswith("Backtest (")                    # backtest glossed
