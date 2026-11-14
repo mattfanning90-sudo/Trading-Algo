@@ -49,7 +49,7 @@ PLAIN = {
     "missing-position": "The saved position in {subject} doesn't match its trade record",
     "weight-mismatch": "The saved position in {subject} doesn't match its trade record",
     "closed-market-trade": "Some trades were booked while their market was shut",
-    "never-traded": "{subject} has never traded and its price data looks broken",
+    "never-traded": "{subject} is funded but has never traded",
     "idle-sleeve": "{subject} has been sitting in cash for a long time",
     "pinned-flat": "{subject} holds nothing until next month's rebalance",
     "dead-price-turnover": "Some trades changed a position at a frozen price, paying costs for nothing",

@@ -4,7 +4,7 @@ import pytest
 
 from book_fixtures import make_inp
 from trading_algo.dashboard import book_rules as R
-from trading_algo.verify import ERROR, Finding
+from trading_algo.verify import ERROR, WARN, Finding
 
 
 def ids(items):
@@ -21,6 +21,18 @@ def test_an_audit_error_is_shown_in_plain_words():
     f = Finding(ERROR, "t", "position-mismatch", "sleeve US: ledger replay …", {"subject": "US"})
     out = R.attention(make_inp(findings=[f]))
     assert ids(out) == ["audit-error"] and "US" in out[0]["text"] and "ledger replay" not in out[0]["text"]
+
+
+@pytest.mark.parametrize("level,message", [
+    (ERROR, "sleeve US is funded … every candidate was frozen by the data-quality gate"),
+    (ERROR, "sleeve US is funded … has never been through a rebalance at all"),
+    (WARN, "sleeve US is funded … It was evaluated 2026-10-01 and chose cash"),
+])
+def test_never_traded_is_worded_for_all_three_of_its_causes(level, message):
+    """verify emits never-traded for a broken feed, a sleeve never evaluated, and
+    an unrecorded reason; only the first is about price data."""
+    f = Finding(level, "t", "never-traded", message, {"subject": "US"})
+    assert R.plain_finding(f) == "US is funded but has never traded"
 
 
 def test_near_breaker_follows_the_home_screen_flag():
