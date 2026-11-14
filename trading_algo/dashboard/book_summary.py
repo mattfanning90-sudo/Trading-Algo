@@ -210,7 +210,8 @@ def summarise(inp) -> dict:
     _number([res] + wrong + right + model)
     ranked = [i for i in wrong if i["rank"] is not None]
     failed = next((i for i in wrong if i["id"] == "couldnt-measure"), None)
-    if failed:                          # a failed check must never read as all clear
+    urgent = bool(ranked) and ranked[0]["rank"] <= R.RANK["stale"]   # halted, ERROR, near-breaker, stale
+    if failed and not urgent:           # a failed check must never read as all clear
         main = dict(failed)
         main["text"] = "Couldn't check what's holding this book back right now"
         ranked = [main]

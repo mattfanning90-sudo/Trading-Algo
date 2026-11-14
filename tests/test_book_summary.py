@@ -152,6 +152,16 @@ def test_inputs_that_fail_to_load_never_read_as_all_clear(tmp_path, monkeypatch)
         assert tiles[label]["caption"].startswith("couldn't measure"), label
 
 
+def test_a_failed_check_never_displaces_an_urgent_item(monkeypatch):
+    """Halted, an audit ERROR, near-breaker and stale always lead (G-3); a
+    rule that throws is still listed, but below them."""
+    monkeypatch.setattr(R, "holding_back", lambda inp: 1 / 0)
+    s = S.summarise(make_inp(card={"halted": True}))
+    assert s["main_problem"]["id"] == "halted"
+    assert s["summary"][1]["text"].startswith("Main problem: Paused by its safety breaker")
+    assert "couldnt-measure" in [i["id"] for i in s["panel"]["wrong"]]
+
+
 def test_chart_text_reconciles_the_daily_drop_with_the_breakers_own_figure():
     vals = [100_000.0, 102_000.0, 99_000.0]
     s = S.summarise(make_inp(card={"equity": 99_000.0, "off_peak": -0.0512},
