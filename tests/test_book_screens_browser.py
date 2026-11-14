@@ -2,7 +2,6 @@
 Skipped where Playwright/Chromium are missing — unless REQUIRE_BROWSER=1, which
 CI's `ui` job sets, so a skip can never hide a broken screen there."""
 import os
-import shutil
 import threading
 
 import pytest
@@ -15,7 +14,6 @@ except ImportError:
     pytest.skip("Playwright not installed (REQUIRE_BROWSER=1 makes this fail)",
                 allow_module_level=True)
 
-from book_fixtures import FIXTURE
 
 BOOKS = ["FULL", "MATT", "EXPERIMENTAL", "SMALL"]
 
