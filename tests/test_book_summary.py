@@ -131,6 +131,27 @@ def test_a_failed_check_never_reads_as_all_clear(monkeypatch):
     assert s["summary"][1]["text"].startswith("Main problem: Couldn't check")
 
 
+def test_inputs_that_fail_to_load_never_read_as_all_clear(tmp_path, monkeypatch):
+    """The audit and the FX money layer both throw: the screen must say so in
+    the pill, the main problem and the tiles, never a clean zero."""
+    use_snapshot(tmp_path, monkeypatch)
+    no_network(monkeypatch)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("input failed")
+
+    monkeypatch.setattr(book_inputs.verify, "verify_book", boom)
+    monkeypatch.setattr(book_inputs.fx_pnl, "book_pnl", boom)
+    s = S.summarise(book_inputs.load_inputs(registry.resolve("MATT"), NOW))
+    assert s["status"] == {"level": "look", "shape": "\u25b2", "word": "Couldn't run its audit"}
+    assert s["main_problem"]["text"].startswith("Couldn't check")
+    assert not any("No standout problem" in x["text"] for x in s["summary"])
+    tiles = {t["label"]: t for t in s["tiles"]}
+    for label in ("Costs so far", "Win rate", "Turnover"):
+        assert tiles[label]["value"] == "\u2014", label
+        assert tiles[label]["caption"].startswith("couldn't measure"), label
+
+
 def test_chart_text_reconciles_the_daily_drop_with_the_breakers_own_figure():
     vals = [100_000.0, 102_000.0, 99_000.0]
     s = S.summarise(make_inp(card={"equity": 99_000.0, "off_peak": -0.0512},

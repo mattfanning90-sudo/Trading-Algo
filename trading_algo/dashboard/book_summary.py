@@ -11,12 +11,18 @@ from . import book_rules as R
 from . import glossary
 from .textfmt import day, direction, money, money_move, pct, points
 
+# Inputs the "Holding it back" rules read (book_inputs._safe names). One that
+# failed to load leaves its rules silent, which must never read as all clear.
+PROBLEM_INPUTS = ("audit", "costs", "closed trades", "closed positions")
+
 
 def status(inp) -> dict:
     if inp.book.get("halted"):
         return {"level": "act", "shape": "■", "word": "Halted by its safety breaker"}
     if any(f.level == "ERROR" for f in inp.findings):
         return {"level": "act", "shape": "■", "word": "Audit problem"}
+    if "audit" in inp.errors:           # an unrun audit may be hiding an ERROR
+        return {"level": "look", "shape": "▲", "word": "Couldn't run its audit"}
     if inp.book.get("near_breaker"):
         return {"level": "look", "shape": "▲", "word": "Near its safety breaker"}
     fresh = inp.book.get("freshness")
@@ -41,6 +47,10 @@ def _sentence(it: dict, prefix: str = "") -> str:
         first = cav.split(". ")[0].rstrip(".")
         text += f" {first}."
     return text
+
+
+def _unmeasured(label: str, what: str) -> dict:
+    return {"label": label, "value": "—", "dir": None, "caption": f"couldn't measure {what} right now"}
 
 
 def _tiles(inp, m) -> list[dict]:
@@ -86,6 +96,8 @@ def _tiles(inp, m) -> list[dict]:
                    "dir": None, "caption": "the rest is in cash; Positions says why"}
         cost = {"label": "Costs so far", "value": money(costs), "dir": None,
                 "caption": f"{(inp.costs or {}).get('includes', 'costs')}; slippage is inside the fill prices"}
+        if "costs" in inp.errors:
+            cost = _unmeasured("Costs so far", "costs")
         return tiles + [vs, below, cost, inv]
     pos, _, _, wins, _ = R.closed_stats(inp)
     if pos:
@@ -95,14 +107,18 @@ def _tiles(inp, m) -> list[dict]:
                            f"{pct(lo, 0, signed=False)} to {pct(hi, 0, signed=False)}")}
     else:
         win = {"label": "Win rate", "value": "—", "dir": None, "caption": "No closed positions yet"}
+    if "closed positions" in inp.errors:
+        win = _unmeasured("Win rate", "closed positions")
     turnover = float((inp.fx_book or {}).get("turnover") or 0.0)
-    return tiles + [
-        below, win,
+    money_tiles = [
         {"label": "Costs so far", "value": money(costs), "dir": None,
          "caption": "the spread paid on trades; financing is separate"},
         {"label": "Turnover", "value": f"{turnover:.0f}×", "dir": None,
          "caption": f"traded {turnover:.0f}× its capital since {R._on(since)}" if since else "—"},
     ]
+    if "costs" in inp.errors:           # costs and turnover both come from fx_pnl
+        money_tiles = [_unmeasured("Costs so far", "costs"), _unmeasured("Turnover", "turnover")]
+    return tiles + [below, win] + money_tiles
 
 
 def _chart(inp, m) -> dict:
@@ -185,6 +201,11 @@ def summarise(inp) -> dict:
     right = _guard(inp, "what's going right", R.going_right, "right")
     back = _guard(inp, "what's holding it back", R.holding_back, "wrong")
     model = _guard(inp, "the model", R.model, "model")
+    lost = [n for n in PROBLEM_INPUTS if n in inp.errors]
+    if lost:
+        names = lost[0] if len(lost) == 1 else ", ".join(lost[:-1]) + " and " + lost[-1]
+        back = back + [R.item("couldnt-measure", "wrong", f"Couldn't load this book's {names} "
+                              "right now", source="—")]
     wrong = sorted(att + back, key=lambda i: (i["rank"] is None, i["rank"] or 0))
     _number([res] + wrong + right + model)
     ranked = [i for i in wrong if i["rank"] is not None]

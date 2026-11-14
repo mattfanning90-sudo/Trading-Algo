@@ -107,6 +107,8 @@ def load_inputs(entry: dict, now: datetime, *, live: dict | None = None,
                     episodes.fx_events(trades), inp.closed_rows,
                     symbol_of=lambda r: r["pair"], net_of=lambda r: r["net"],
                     exclude_dates=forced), ([], 0))
+        else:                           # closed positions come from the same fx_pnl run
+            errors["closed positions"] = errors["costs"]
     else:
         inp.costs = _safe(errors, "costs", lambda: _equity_costs(state), {})
         base = state.get("base_currency", cfg.BASE_CURRENCY)

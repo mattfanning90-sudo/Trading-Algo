@@ -109,9 +109,10 @@ items F20–F26 (PR #102), and the panel names the item that tracks each problem
   parameters.
 
 ## How a book's Overview reads, top to bottom
-1. **Status pill** (shape + word, kept from B1): ■ Halted · ▲ Near its safety
-   breaker · ▲ Data stale · ● Running normally. Then the book's urgent and warning
-   audit items, if any (B1's "Problems in this book").
+1. **Status pill** (shape + word, kept from B1): ■ Halted · ■ Audit problem ·
+   ▲ Couldn't run its audit · ▲ Near its safety breaker · ▲ Data stale ·
+   ● Running normally, first match in that order. Then the book's urgent and
+   warning audit items, if any (B1's "Problems in this book").
 2. **Result line**, always present. It is built from the last saved value and gives
    that value's date. Example: "▲ Up A$X since 11 Jun 2026 · as of 13 Oct · about
    n points behind the market (within its normal ups and downs)". Long/short books
@@ -269,7 +270,7 @@ shares.
 | AC-10 | Every glossary term used in a screen's text carries its plain gloss on first use. | `tests/test_textfmt_glossary.py`, `tests/test_book_summary.py`, `tests/test_book_summary_golden.py` | ✅ pass — `tests/test_textfmt_glossary.py`, `tests/test_book_summary.py::test_glossary_explains_each_term_once_on_the_screen`, `tests/test_book_summary_golden.py::test_attention_is_glossed_first_because_it_renders_first` |
 | AC-11 | Month returns come from `metrics.monthly_returns` and the chart's fall-from-best from `metrics.drawdown`, proven by a spy test; the tile's fall-from-best equals the overview card's; the single-source guard stays green. | `tests/test_metrics_screens.py`, `tests/test_book_summary.py`, `tests/test_metrics_single_source.py` | ✅ pass — `tests/test_metrics_screens.py`, `tests/test_book_summary.py::test_tile_below_best_is_the_breaker_figure_and_months_come_from_metrics`, `tests/test_metrics_single_source.py` |
 | AC-12 | Positions why-lines: each reason in the list, the precedence order, shorts, cash > 100%, an unpriced holding, and the FX "market shut" line, each from a fixture. | `tests/test_book_positions.py` | ✅ pass — `tests/test_book_positions.py`, `tests/test_book_rules_back.py::test_sleeve_reason_precedence` and `::test_a_flat_sleeve_with_a_staged_buy_says_it_buys_at_the_next_close` (a staged buy reads as opening positions, never "until next month") |
-| AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic backtest (never shown as performance; the saved books themselves carry no synthetic marker). | `tests/test_book_rules_attention.py`, `tests/test_book_summary.py`, `tests/test_book_rules_model.py` | ✅ pass — `tests/test_book_rules_attention.py::test_a_brand_new_book_is_too_new_to_judge`, `tests/test_book_summary.py` (throwing input, FX without closed positions), `tests/test_book_rules_model.py::test_missing_and_synthetic_backtests_are_never_performance` |
+| AC-13 | States: a brand-new book ("too new to judge"), no closed positions, one input that throws ("couldn't measure", rest of the screen intact), a synthetic backtest (never shown as performance; the saved books themselves carry no synthetic marker). | `tests/test_book_rules_attention.py`, `tests/test_book_summary.py`, `tests/test_book_rules_model.py` | ✅ pass — `tests/test_book_rules_attention.py::test_a_brand_new_book_is_too_new_to_judge`, `tests/test_book_summary.py::test_inputs_that_fail_to_load_never_read_as_all_clear` (audit and FX money layer throw: pill "Couldn't run its audit", main problem "Couldn't check…", costs / win-rate / turnover tiles "couldn't measure", never a zero), `::test_a_rule_that_throws_becomes_one_couldnt_measure_line`, `::test_six_tiles_and_fx_without_closed_positions`, `tests/test_book_rules_model.py::test_missing_and_synthetic_backtests_are_never_performance` |
 
 **1b: the Mac screens**
 | ID    | Criterion (observable behaviour) | Verified by | Status |
