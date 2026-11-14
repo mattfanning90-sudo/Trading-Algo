@@ -156,7 +156,7 @@ def _chart(inp, m) -> dict:
 def _months(inp) -> list[dict]:
     out = []
     for month, r in metrics.monthly_returns(R.daily_values(inp),
-                                            start=float(inp.card["initial"])).items():
+                                            start=float(inp.card["initial"]) or None).items():
         label = datetime.strptime(f"{month}-01", "%Y-%m-%d").strftime("%b %Y")
         r3 = round(float(r), 3)
         out.append({"month": month, "label": label, "text": pct(r3), "dir": direction(r3)})

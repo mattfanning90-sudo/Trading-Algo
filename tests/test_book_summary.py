@@ -117,6 +117,15 @@ def test_months_compound_to_the_since_start_return_on_the_real_book(tmp_path, mo
     assert float((1 + seen[0]).prod() - 1) == pytest.approx(since, abs=1e-6)
 
 
+def test_months_fall_back_to_the_first_mark_when_no_capital_is_recorded():
+    """overview reads a missing initial_capital(_base) as 0.0; a zero base must
+    not turn the first month into "+inf%"."""
+    vals = [100_000.0, 101_000.0]
+    s = S.summarise(make_inp(card={"initial": 0.0, "equity": vals[-1]},
+                             book={"_marks": _marks(vals), "as_of": _marks(vals)[-1][0].isoformat()}))
+    assert [m["text"] for m in s["months"]] == ["+1.0%"]
+
+
 def test_summary_survives_an_unvaluable_mark(tmp_path, monkeypatch):
     dst = use_snapshot(tmp_path, monkeypatch)
     no_network(monkeypatch)
