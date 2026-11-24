@@ -150,7 +150,8 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
             found.append(Finding(
                 WARN, account, "no-fx-rate",
                 f"sleeve {key}: no {sleeve.get('currency')} rate in fx_snapshot — "
-                "cannot reconcile its funding in base currency"))
+                "cannot reconcile its funding in base currency",
+                {"subject": key}))
             continue
         # Funded amount, converted into the sleeve's local currency.
         funded = initial * float(allocations.get(key, 0.0)) / float(rate)
@@ -181,7 +182,7 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
             found.append(Finding(
                 ERROR, account, "position-mismatch",
                 f"sleeve {key}: ledger replay does not reproduce stored positions",
-                {"replayed": pos, "stored": stored_pos}))
+                {"replayed": pos, "stored": stored_pos, "subject": key}))
 
         # Cash drift beyond the FX-conversion ambiguity means an unledgered write.
         drift = abs(cash - stored_cash)
@@ -192,7 +193,8 @@ def reconcile_equity(account: str, state: dict) -> list[Finding]:
                 f"{stored_cash:,.2f} {sleeve.get('currency')} "
                 f"(drift {drift:,.2f}); inception-vs-current FX explains some of "
                 "this, a large gap does not",
-                {"replayed": round(cash, 2), "stored": round(stored_cash, 2)}))
+                {"replayed": round(cash, 2), "stored": round(stored_cash, 2),
+                 "subject": key}))
     return found
 
 
@@ -210,13 +212,14 @@ def reconcile_fx(account: str, state: dict) -> list[Finding]:
             found.append(Finding(
                 ERROR, account, "missing-position",
                 f"{pair}: ledger ends at weight {w:+.4f} but the pair is absent "
-                "from stored positions"))
+                "from stored positions",
+                {"subject": pair}))
         elif abs(stored[pair] - w) > 1e-4:
             found.append(Finding(
                 ERROR, account, "weight-mismatch",
                 f"{pair}: last ledger weight {w:+.4f} != stored position "
                 f"{stored[pair]:+.4f}",
-                {"ledger": w, "stored": stored[pair]}))
+                {"ledger": w, "stored": stored[pair], "subject": pair}))
     return found
 
 
@@ -286,21 +289,29 @@ def check_market_hours(account: str, state: dict, kind: str,
     return found
 
 
-def check_dead_price(account: str, state: dict) -> list[Finding]:
+def check_dead_price(account: str, state: dict,
+                     today: datetime | None = None) -> list[Finding]:
     """Flag position changes made at a price identical to the previous change.
 
     `fx_data._align` forward-fills a symbol that did not print, so a frozen feed
     keeps serving its last close. If the book keeps re-weighting a symbol while
     its price never moves, it is paying spread on every turn for an exposure
-    change that cannot possibly capture a price move.
+    change that cannot possibly capture a price move. `detail["recent"]` counts
+    the ones inside HISTORICAL_CUTOFF_DAYS of `today`, so a reader can tell a
+    live defect from history without the finding itself changing.
     """
+    cutoff = (today - timedelta(days=HISTORICAL_CUTOFF_DAYS)
+              if today is not None else None)
     last_px: dict[str, float] = {}
     frozen: dict[str, int] = {}
+    recent = 0
     for t in sorted(state.get("trades") or [], key=lambda x: _parse(x["date"])):
         sym, px = t.get("pair"), float(t.get("price", 0.0))
         if sym in last_px and px == last_px[sym] and abs(float(
                 t.get("delta_weight", 0.0))) > 1e-9:
             frozen[sym] = frozen.get(sym, 0) + 1
+            if cutoff is None or _parse(t["date"]) >= cutoff:
+                recent += 1
         last_px[sym] = px
     if not frozen:
         return []
@@ -309,7 +320,8 @@ def check_dead_price(account: str, state: dict) -> list[Finding]:
         WARN, account, "dead-price-turnover",
         f"{total} position changes made at an unchanged (forward-filled) price "
         f"across {len(frozen)} symbols — spread paid, no price exposure gained",
-        {"by_symbol": dict(sorted(frozen.items(), key=lambda x: -x[1]))})]
+        {"by_symbol": dict(sorted(frozen.items(), key=lambda x: -x[1])),
+         "recent": recent})]
 
 
 def check_whole_shares(account: str, state: dict) -> list[Finding]:
@@ -404,22 +416,26 @@ def _never_traded_finding(account: str, key: str, sleeve: dict,
             INFO, account, "flat-by-design",
             f"{what} — last evaluated {evaluated} and came back flat "
             f"({reason}). Holding cash is the designed behaviour here, not a "
-            "fault; the capital is idle by choice")
+            "fault; the capital is idle by choice",
+            {"subject": key})
     if reason in _BROKEN_FLAT:
         return Finding(
             ERROR, account, "never-traded",
             f"{what}: every candidate was frozen by the data-quality gate, so "
-            "this sleeve is parked on a feed that cannot be trusted")
+            "this sleeve is parked on a feed that cannot be trusted",
+            {"subject": key})
     if not evaluated:
         return Finding(
             ERROR, account, "never-traded",
             f"{what}, and has never been through a rebalance at all — the "
-            "sleeve is not being evaluated, which is broken plumbing")
+            "sleeve is not being evaluated, which is broken plumbing",
+            {"subject": key})
     return Finding(
         WARN, account, "never-traded",
         f"{what}. It was evaluated {evaluated} and chose cash"
         f"{f' ({reason})' if reason else ''}, so the machinery is running — but "
-        "no reason was recorded, so this cannot be confirmed as by design")
+        "no reason was recorded, so this cannot be confirmed as by design",
+        {"subject": key})
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +470,8 @@ def check_liveness(account: str, state: dict, kind: str,
                     WARN, account, "idle-sleeve",
                     f"sleeve {key} has been in cash since {flat_since} "
                     f"({days} days, status {status.get('status')!r}) — its "
-                    "capital is earning nothing and nothing alerts on it"))
+                    "capital is earning nothing and nothing alerts on it",
+                    {"subject": key}))
 
         # A funded sleeve that has never held anything at all. `_should_rebalance`
         # fires once per calendar month, so a sleeve that reaches month-end still
@@ -477,7 +494,8 @@ def check_liveness(account: str, state: dict, kind: str,
                 f"sleeve {key} holds nothing and is already stamped for "
                 f"{stamped} — _should_rebalance() is False until the next "
                 f"calendar month, so it stays in cash regardless of signal "
-                f"(status {status.get('status')!r})"))
+                f"(status {status.get('status')!r})",
+                {"subject": key}))
     return found
 
 
@@ -639,7 +657,7 @@ def verify_book(kind: str, account: str, state: dict,
         found += check_costs_charged(account, state)
     else:
         found += reconcile_fx(account, state)
-        found += check_dead_price(account, state)
+        found += check_dead_price(account, state, today)
         found += check_horizon(account, state)
         found += check_turnover(account, state)
     return sorted(found, key=lambda f: _RANK[f.level])

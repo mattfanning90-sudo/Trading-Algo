@@ -19,6 +19,7 @@ import os
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import api, backtest_store, fx_api, meta, overview, registry, swarm
 
@@ -69,7 +70,7 @@ def _regime_hint(snapshot: dict) -> str | None:
     return f"{off[0]} RISK-OFF" if len(off) == 1 else f"{len(off)} SLEEVES RISK-OFF"
 
 
-def make_handler(account: str, synthetic: bool):
+def make_handler(account: str, synthetic: bool, home=None, books=None):
     regime_hints: dict[str, str] = {}      # account -> chip, shared across requests
 
     class Handler(BaseHTTPRequestHandler):
@@ -146,15 +147,51 @@ def make_handler(account: str, synthetic: bool):
                 regime_hints.pop(acct, None)
             return snapshot
 
+        def _book_api(self, path: str) -> None:
+            if books is None:
+                self._json(404, {"error": "book screens not enabled"})
+                return
+            what, _, key = path[len("/api/"):].partition("/")
+            key = unquote(key)
+            try:
+                out = {"summary": books.summary, "positions": books.positions,
+                       "marks": books.marks}[what](key)
+            except Exception as exc:  # surface server-side, never leak
+                print(f"[dashboard] error building {what} for {key!r}: {exc!r}", file=sys.stderr)
+                traceback.print_exc()
+                self._json(500, {"error": "internal server error"})
+                return
+            if out is None:
+                self._json(404, {"error": "no such book"})
+            else:
+                self._json(200, out)
+
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/home":
+                if home is None:
+                    self._json(404, {"error": "home screen not enabled"})
+                    return
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    self._json(200, home(sync_now=query.get("sync") == ["1"]))
+                except Exception as exc:  # surface server-side, never leak
+                    print(f"[dashboard] error building home: {exc!r}", file=sys.stderr)
+                    traceback.print_exc()
+                    self._json(500, {"error": "internal server error"})
+                return
+
+            if path.startswith(("/api/summary/", "/api/positions/", "/api/marks/")):
+                self._book_api(path)
+                return
 
             if path.startswith("/api/"):
                 self._api(path)
                 return
 
             # static files (path-traversal safe)
-            rel = "index.html" if path in ("/", "") else path.lstrip("/")
+            rel = ("index.html" if path in ("/", "")
+                   else "home.html" if path == "/home" else path.lstrip("/"))
             full = os.path.normpath(os.path.join(STATIC_DIR, rel))
             if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
                 self._send(404, b"not found", "text/plain; charset=utf-8")
@@ -175,11 +212,14 @@ def make_handler(account: str, synthetic: bool):
 
 
 def create_server(account: str = "main", synthetic: bool = False,
-                  host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
+                  host: str = "127.0.0.1", port: int = 8787,
+                  home=None, books=None) -> ThreadingHTTPServer:
     """Bind and return a (not-yet-serving) server. Pass port=0 for an OS-assigned
     free port (read it back from `.server_address[1]`). Used by the desktop app,
-    which serves it on a background thread."""
-    return ThreadingHTTPServer((host, port), make_handler(account, synthetic))
+    which serves it on a background thread. `home`, if given, is the Mac home
+    screen's payload builder, served at /api/home. `books`, if given, serves the
+    book screens' /api/summary, /api/positions and /api/marks."""
+    return ThreadingHTTPServer((host, port), make_handler(account, synthetic, home, books))
 
 
 def serve(account: str = "main", synthetic: bool = False,

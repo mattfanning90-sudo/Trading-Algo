@@ -121,8 +121,13 @@ python -m trading_algo.forex.engine --loop --interval 3600 --ml    # poll hourly
 
 Each book stores its own **bar cadence** and (optionally) a **locked universe** —
 `engine --once` runs every book at its own cadence. The day-trading book is
-advanced hourly on weekdays by `.github/workflows/day-paper.yml` (which also
-republishes the dashboards so the site tracks it through the day). The
+scheduled hourly on weekdays by `.github/workflows/day-paper.yml` (which also
+republishes the dashboards so the site tracks it through the day). **In practice
+GitHub skips most of those runs** (measured 2026-10-10): 23 are scheduled per
+weekday, but it has run 2–6 a day since early September, with same-day gaps up to
+796 minutes. Each run takes ~3 minutes, so this is GitHub's scheduler dropping
+runs, not a queue — the "60-minute" book is deciding a few times a day at
+irregular times. Not fixed yet; recorded in the measurement-truth plan. The
 multi-asset book trades the five liquid US equities, four treasury/aggregate
 bond ETFs (`TLT`/`IEF`/`AGG`/`SHY` — the honest, tradable bond vehicle) and an
 AUDUSD overlay that doubles as the AUD translation hub.

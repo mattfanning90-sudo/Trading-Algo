@@ -14,8 +14,8 @@ Each month, in each region (FTSE / US / ASX), rank every stock by its
 recent month). Buy the strongest names — but only those in an uptrend, and only
 while the regional index itself is in an uptrend; otherwise hold cash. Size the
 book by **inverse volatility** and scale the whole thing to a **target
-volatility**. Rebalance monthly. Run three such books in parallel, each in its
-own currency, and report the combined result in AUD. That's it — a classic,
+volatility**. Rebalance monthly. Run one such book per region — ASX, US, FTSE and TSX — each in
+its own currency, and report the combined result in AUD. That's it — a classic,
 heavily-researched **cross-sectional momentum** strategy with trend and
 crash-protection filters.
 
@@ -194,14 +194,15 @@ account must:
 
 ---
 
-## 4. Three sleeves → one AUD portfolio
+## 4. Regional sleeves → one AUD portfolio
 
 ```mermaid
 flowchart TD
     S1["FTSE sleeve · GBP"] --> FX["Convert to AUD<br/>incl. currency P&amp;L"]
     S2["US sleeve · USD"] --> FX
     S3["ASX sleeve · AUD"] --> FX
-    FX --> P["Combine — 1/3 each<br/>rebalance to target"]
+    S4["TSX sleeve · CAD"] --> FX
+    FX --> P["Combine — 25% each by default<br/>rebalance to target"]
     P --> EQ["Portfolio equity (AUD)"]
 ```
 
@@ -214,7 +215,8 @@ r_AUD = (1 + r_local) · (fx(t) / fx(t−1)) − 1      # fx = AUD per 1 local u
 ```
 
 So an AUD investor earns the strategy return **and** the FX return. Capital is
-split equally (1/3 FTSE, 1/3 US, 1/3 ASX) and trued back to target on a cadence,
+split by `config.ALLOCATIONS` — 25% each to ASX, US, FTSE and TSX by default — and
+trued back to target on a cadence,
 paying a small FX spread on the cash that crosses currencies.
 
 - LSE shares are quoted in pence; the FTSE sleeve scales them to pounds
@@ -267,7 +269,7 @@ python -m trading_algo.sweep --region US --synthetic
 python -m trading_algo.paper_trade --account demo --capital 100000 --init --synthetic
 python -m trading_algo.paper_trade --account demo --synthetic
 
-pytest -q     # 67 tests covering every invariant above
+pytest -q     # the full suite, covering every invariant above
 ```
 
 ---

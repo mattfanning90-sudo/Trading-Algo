@@ -207,6 +207,19 @@ def _safe_price(px, ticker: str) -> float:
     return v if v == v else 0.0  # NaN -> 0
 
 
+def fees_by_currency(trades: list[dict]) -> tuple[dict[str, float], dict[str, float]]:
+    """(commission + stamp duty, stamp duty alone) per currency, from the fills
+    ledger — the one place the screens' cost figures come from."""
+    fees: dict[str, float] = {}
+    stamp: dict[str, float] = {}
+    for t in trades:
+        fees[t["currency"]] = fees.get(t["currency"], 0.0) \
+            + t.get("commission", 0.0) + t.get("stamp_duty", 0.0)
+        if t.get("stamp_duty"):
+            stamp[t["currency"]] = stamp.get(t["currency"], 0.0) + t["stamp_duty"]
+    return fees, stamp
+
+
 def build_snapshot(account: str, synthetic: bool = False) -> dict:
     """Assemble the full dashboard state for one account."""
     if not os.path.exists(paper_trade._state_file(account)):
@@ -349,13 +362,7 @@ def build_snapshot(account: str, synthetic: bool = False) -> dict:
         s["positions"] = s.pop("_positions")
 
     # fees grouped by currency, and totalled into the base currency
-    fees: dict[str, float] = {}
-    stamp: dict[str, float] = {}
-    for t in state["trades"]:
-        fees[t["currency"]] = fees.get(t["currency"], 0.0) \
-            + t.get("commission", 0.0) + t.get("stamp_duty", 0.0)
-        if t.get("stamp_duty"):
-            stamp[t["currency"]] = stamp.get(t["currency"], 0.0) + t["stamp_duty"]
+    fees, stamp = fees_by_currency(state["trades"])
     fees_base = sum(v * (fx.base_per_local(snap_fx, c, base) or 0.0) for c, v in fees.items())
 
     eq_hist = state.get("equity_history", [])

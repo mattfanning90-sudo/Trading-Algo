@@ -1,144 +1,41 @@
 # Multi-Region Momentum Trading System
 
 ## What this is
-A monthly-rebalanced 12-1 cross-sectional momentum strategy run as three
-independent regional sleeves — FTSE (London), US (stocks + ETFs) and ASX
-(Australia) — with a portfolio layer that allocates capital (equal third each)
-and reports combined equity in a base currency (AUD). Includes a no-lookahead
-walk-forward backtester, a persistent multi-region paper-trading simulator, an
-IBKR (ib_insync) execution layer, and a timezone-aware background scheduler.
+A monthly-rebalanced 12-1 cross-sectional momentum strategy run as independent
+regional sleeves — ASX (Australia), US (stocks + ETFs), FTSE (London) and TSX
+(Canada), 25% each by default — with a portfolio layer that reports combined
+equity in AUD. Includes a no-lookahead walk-forward backtester, persistent paper
+books, an IBKR execution layer and a scheduler. Alongside it: a self-contained
+**FX subsystem** (`trading_algo/forex/`) and a **Mac home screen**
+(`trading_algo/home/`).
 
-Generalised from the original ASX-only sleeve — see `HANDOFF.md` for the design
-history and reasoning.
-
-There is also a **separate, self-contained FX subsystem** under
-`trading_algo/forex/` — a low-latency, multi-agent foreign-exchange trader
-(parallel technical agents → performance-weighted ensemble → vol-targeted
-long/short book → isolated multi-account paper books, e.g. you + your partner).
-It reuses this project's principles (no lookahead, costs always on, one shared
-`compute_targets`) but is otherwise independent of the equity sleeves. Full tour:
-`trading_algo/forex/README.md`.
-
-## Architecture (everything region-specific lives in one `Region` record)
-- `config.py` — `StrategyParams` (all strategy knobs, incl. `long_short` /
-  `short_n` for a dollar-neutral book) + portfolio settings (ALLOCATIONS,
-  BASE_CURRENCY, FX rebalance cadence/spread, START, capital) + risk controls
-  (drawdown circuit breaker, min-viable-size gate)
-- `profiles.py` — named paper-book presets (`ultra`, `experimental`): per-book
-  StrategyParams overrides (leverage, long/short), a drawdown-breaker override,
-  and a reporting `group`. A profile changes the KNOBS only — weights still route
-  through the one `strategy.compute_targets` (invariant #3). Books in a non-CORE
-  group (e.g. EXPERIMENTAL) get their OWN separate total on the dashboard and are
-  excluded from the headline AUM
-- `regions.py` — Region registry: universe, regime index, currency, fee
-  schedule, market calendar, Yahoo suffix, IBKR exchange, price_scale, per-region
-  param overrides
-- `universes.py` — the per-region ticker lists
-- `data.py` — `load_region()` (prices in local currency, LSE pence→pounds) +
-  `synthetic_region()` for offline testing
-- `signals.py` — momentum score, trend/regime filters, inverse-vol selection.
-  Region-agnostic; takes a `StrategyParams`
-- `strategy.py` — **`compute_targets()`: the single source of truth for target
-  weights** (selection + vol targeting). Both backtest and paper trading call it
-- `fees.py` — per-region commission floor + UK stamp duty (buys only)
-- `calendars.py` — per-region hours/timezones for the scheduler
-- `fx.py` — convert each sleeve into the base currency (incl. FX P&L)
-- `forex/sessions.py` — per-symbol market hours (crypto 24/7; FX Sun 22:00→Fri
-  22:00 UTC; equities/bonds a weekday cash session). Shut instruments are trimmed
-  from the candidate universe before `compute_targets` and **frozen, not
-  flattened** — you cannot liquidate on a closed venue
-- `backtest.py` — per-sleeve daily walk-forward sim
-- `portfolio_backtest.py` — combine sleeves in AUD, allocation rebalancing
-- `paper_trade.py` — persistent sub-books per region (`paper_state_{name}.json`)
-- `execution_ibkr.py` — per-region exchange/currency routing; paper port 7497
-- `engine.py` — background runner (`--once` for cron, `--loop` for a daemon)
-- `constituents.py` — point-in-time index membership (survivorship-bias fix)
-- `sweep.py` — walk-forward parameter robustness sweep (flat surface, not a peak)
-- `tax.py` — **after-tax reporting** (NOT tax advice, NOT a trading input):
-  Australian CGT over the FIFO round-trips plus the dividend-withholding drag
-  the `auto_adjust=True` total-return series hides. The finding that motivated
-  it: across all four equity books **0 of 50 realised round-trips cleared the 12
-  months a CGT discount needs** (median hold 19–33 days), and `full` is down
-  A$496 while still owing ~A$76 of tax — realised gains are taxed even when
-  unrealised losses leave the book underwater. Holding period is therefore a
-  STRATEGY parameter, not just a cost
-- `verify.py` — **end-to-end audit of the LIVE books**. The test suite proves the
-  maths on a clean price matrix; this re-derives each persisted book from its own
-  trade ledger and flags what a real broker statement would contradict:
-  reconciliation drift, fills on a closed market, turnover at a forward-filled
-  dead price, sleeves silently parked in cash, and holding period vs the signal
-  horizon that opened the position. Offline by design (the state IS the record).
-  Findings are **graded, not just detected**: realism findings older than
-  `HISTORICAL_CUTOFF_DAYS` age out to INFO (the audit re-reads the whole ledger,
-  so a fixed bug must not re-fire forever), and a funded sleeve that has never
-  traded is read off its own state — `regime-off` is INFO (the filter working),
-  `data-quality` is ERROR (a broken feed). It runs after every scheduled paper
-  run in two halves: a report step that can never fail the job, and a terminal
-  **strict gate** that gives the run its verdict after state is committed
-- `dashboard/` — zero-dependency terminal-style web dashboard (stdlib server +
-  vanilla SPA): every paper book (equity + FX) behind one account switcher,
-  OVERVIEW/POSITIONS/BACKTEST/METHOD tabs (+ SWARM on FX books), FIFO
-  closed-trades ledger,
-  agent-vote decision book, candlestick pair charts. Equity and FX books are at
-  **parity in money terms** — both show net P&L (realised/open), costs, a
-  drawdown chart, an open book at cost basis, a full fill blotter and a FIFO
-  closed-trades ledger; the FX money layer comes from `forex/fx_pnl.py`
+## Where things live
+- **Module map:** `docs/ARCHITECTURE.md` (the single home — don't copy it).
+- **Folder rules load on their own** when you work there:
+  `trading_algo/forex/CLAUDE.md`, `trading_algo/dashboard/CLAUDE.md`,
+  `trading_algo/home/CLAUDE.md`.
+- **Every other doc:** `docs/README.md` — the catalogue, with each doc's purpose
+  and whether it is current, active or an archive. Check it before reading a
+  long doc.
+- **The live books** run on GitHub Actions, which alone write `state/` and commit
+  it to `main`. A local checkout's `state/` is usually stale; never edit it by
+  hand or point a synthetic run at it.
+- **The one weight function** is `strategy.compute_targets` (invariant 3); the one
+  measurement layer is `metrics.py`.
 
 ## Commands
 ```bash
-python -m trading_algo.run_backtest                 # full AUD portfolio backtest
-python -m trading_algo.run_backtest --region US     # single sleeve
-python -m trading_algo.run_backtest --synthetic     # offline pipeline test
-python -m trading_algo.run_backtest --point-in-time # survivorship-bias corrected
-python -m trading_algo.sweep --region US            # parameter robustness sweep
-python -m trading_algo.paper_trade --account full --init --capital 100000
+pytest -q                                           # full suite
+python -m trading_algo.run_backtest [--region US] [--synthetic] [--point-in-time]
 python -m trading_algo.paper_trade --account full   # daily run (all sleeves)
-python -m trading_algo.paper_trade --account ultra --init --capital 10000 --profile ultra          # 3× leveraged momentum, breaker OFF
-python -m trading_algo.paper_trade --account experimental --init --capital 10000 --profile experimental  # market-neutral long/short (separate total)
 python -m trading_algo.engine --once --account full # one scheduler pass
-python -m trading_algo.dashboard --account full     # live web dashboard :8787
-python -m trading_algo.verify                       # audit every LIVE book end to end
-python -m trading_algo.verify --json --strict       # machine-readable; exit 1 on ERROR
-# --- FX subsystem (independent; see trading_algo/forex/README.md) ---
-python -m trading_algo.forex.run_backtest --synthetic   # offline FX pipeline test
-python -m trading_algo.forex.paper --init               # open matt + partner books
-python -m trading_algo.forex.paper --account matt --source auto  # per-symbol routing: real crypto (ccxt) + FX bars
-python -m trading_algo.forex.paper --account matt --source frankfurter  # ECB daily fixings — CLOSE-ONLY, refused for signals by default
-python -m trading_algo.forex.engine --once              # one FX decision cycle (all accts)
-python -m trading_algo.forex.engine --once --ml         # ...including the deep-learning agent
-python -m trading_algo.forex.engine --benchmark         # live cycle latency
-python -m trading_algo.forex.train --synthetic          # train DL models + walk-forward report
-python -m trading_algo.forex.dashboard --all --out-dir public  # candlestick dashboards + "why" callouts
-python -m trading_algo.forex.research --synthetic       # quant-research search + Deflated-Sharpe/PBO
-python -m trading_algo.forex.run_backtest --synthetic --bar 60m --profile intraday  # medium-freq
-python -m trading_algo.forex.evolve --all --synthetic       # breed the swarm (all books)
-python -m trading_algo.forex.champions --all --synthetic    # DSR/PBO gate + auto-promote
-python -m trading_algo.forex.permtest --account matt --permutations 200  # in-sample permutation test (~20 min)
-python scripts/measure_permutation_null.py --permutations 1000  # is a permutation null valid for OUR strategy?
-pytest -q                                           # full suite (equity + FX/ML)
+python -m trading_algo.verify [--json --strict]     # audit every live book
+python -m trading_algo.dashboard --account full     # terminal dashboard :8787
+python -m trading_algo.home [--browser]             # Mac home screen
+python -m trading_algo.forex.engine --once          # one FX cycle (all books)
 ```
-
-The FX subsystem also has a **deep-learning layer** (pure-NumPy MLP whose loss is
-the Sharpe of the portfolio return series net of turnover cost, `sharpe_net`,
-Hedge ensemble, meta-labeling, purged walk-forward,
-Deflated-Sharpe/PBO validation). Design + citations: `docs/FX_DEEP_RESEARCH.md`.
-It runs in the cloud via the **FX Deep-Learning Train & Evaluate** GitHub Action.
-
-**Data sourcing is per SYMBOL, not per book** (`--source auto`): the FX books
-hold majors *and* crypto, which no single provider serves, so crypto legs route
-to a real exchange via `ccxt` (keyless) and FX legs to a bar source. The ECB's
-keyless daily fixings (`frankfurter`) are real but **close-only** (one price per
-working day), which silently changes ADX/ATR/Donchian — so `bar_quality.py` makes
-the range indicators refuse range-less bars and each book declares a policy
-(`FXParams.close_only_signals`: `refuse` default / `exclude` / `allow`). Measured
-cost and the per-book source table: `docs/DATA_FEEDS.md`.
-
-A **quant-research agent** (`research.py`) systematically searches candidate
-edges (OU mean-reversion, trend/breakout variants, cross-sectional momentum,
-stat-arb pairs) and judges each with the Deflated Sharpe + PBO. An **intraday /
-medium-frequency mode** (`--bar 60m`, `intraday` profile) is supported — NOT HFT;
-live intraday needs a real-time broker feed. The honest case against HFT here:
-`docs/HFT_REALITY.md`.
+Full list with explanations: `README.md` → Quick start; FX:
+`trading_algo/forex/CLAUDE.md`.
 
 ## Invariants — do not break these
 1. **No lookahead**: signals at t use data ≤ t; trades execute t+1. Any change to
@@ -156,35 +53,18 @@ live intraday needs a real-time broker feed. The honest case against HFT here:
 
 ## Adding a region
 Add one entry to `REGIONS` in `regions.py` (universe in `universes.py`, plus
-index/currency/fees/calendar/routing). Everything else is parameterised.
-
-**Funded vs registered (the backtest gate).** Being in `REGIONS` makes a sleeve
-independently backtestable/sweepable (`run_backtest --region KEY`, `sweep
---region KEY`) and single-sleeve CLIs read the *registry*, not `ALLOCATIONS`. A
-sleeve receives live capital only once its key is added to `config.ALLOCATIONS`
-(portfolio/paper/engine key off that). So the flow is: register → backtest →
-*then* fund. **TSX (Canada, CAD)** was the worked example and has now been
-through the whole gate: registered, backtested 2026-09-19 and funded at 25%
-alongside ASX/US/FTSE. Its headline gate number (raw Sharpe 0.948, haircut 0.608)
-used the no-risk-free convention; restated accurately it is SR 0.742 / DSR 0.82
-at N=20, and **no sleeve passes a standalone DSR gate** — which is why TSX is now
-held on its measured portfolio contribution (+0.064 Sharpe, vol −0.52pp,
-P(Δ>0)=0.885) rather than on the gate. Still **survivorship-biased, so an upper
-bound**. See `docs/SHARPE_RESEARCH.md` §9b. The dashboard METHOD tab still tags any
-registered-but-unallocated sleeve `UNFUNDED`.
-
-`ALLOCATIONS` governs the portfolio backtest, the scheduler's wake calendar and
-any NEWLY initialised book. An EXISTING paper book keeps the allocations baked
-into its state at `--init` time, so adding a region here does **not** retrofit
-it into a running book — that means crossing cash between currencies and is a
-deliberate, separate act.
+index/currency/fees/calendar/routing). Flow: register → backtest → *then* fund by
+adding it to `config.ALLOCATIONS`. Existing paper books keep the allocations
+baked in at `--init`. The worked example (TSX) and the gate's numbers:
+`docs/ARCHITECTURE.md` → "Regions: registered vs funded".
 
 ## Specs (`/spec`)
 Goals and acceptance criteria for a piece of work live in
 `docs/specs/<slug>.md`, all on one schema (`.claude/skills/spec/template.md`).
 `/spec <topic>` drafts one collaboratively (Claude drafts, user confirms);
 `/spec check <slug>` audits its acceptance criteria against the code.
-`docs/specs/_example.md` is a worked example, not a real spec.
+`docs/specs/_example.md` is a worked example, not a real spec. Any spec that
+changes stored data includes a "Migration & rollback" section.
 
 ## Environment notes
 - Fresh containers do NOT ship numpy/pandas/yfinance — `pip install -r
@@ -215,6 +95,16 @@ doc, or a spec — it must survive these:
 
 On substantial work, review it adversarially before presenting it: argue the
 other side, then report what survives and what doesn't.
+
+## Keeping knowledge in shape
+- **One home per fact** — link to it; don't copy it. `docs/README.md` says which
+  doc owns what.
+- **Three layers:** this file stays short (< 150 lines) and holds only what every
+  session needs; area detail goes in that folder's `CLAUDE.md`; reference goes in
+  `docs/` and is listed in the catalogue.
+- When you change behaviour, update the doc that owns the fact in the same change.
+- Generated notes: `tools/build_obsidian_vault.py` writes several `obsidian/`
+  notes — edit the generator, not the note.
 
 ## Style
 Python 3.11+, pandas/numpy, type hints, small testable modules, no heavy

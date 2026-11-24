@@ -1,10 +1,15 @@
 # Trading-Algo — Multi-Region Cross-Sectional Momentum
 
-A monthly-rebalanced **12-1 cross-sectional momentum** system that runs three
-independent regional sleeves — **FTSE (London)**, **US (stocks + ETFs)** and
-**ASX (Australia)** — and reports combined performance in a single base currency
-(**AUD**). Built to run unattended in the background: a backtester, a persistent
-paper-trading simulator, an IBKR execution layer, and a timezone-aware scheduler.
+A monthly-rebalanced **12-1 cross-sectional momentum** system that runs
+independent regional sleeves — **ASX (Australia)**, **US (stocks + ETFs)**,
+**FTSE (London)** and **TSX (Canada)**, 25% each by default — and reports combined
+performance in a single base currency (**AUD**). Built to run unattended in the
+background: a backtester, a persistent paper-trading simulator, an IBKR execution
+layer, and a timezone-aware scheduler. A Mac home screen (`python -m
+trading_algo.home`) answers "am I up, and is anything wrong?".
+
+**Where to read what:** [`docs/README.md`](docs/README.md) is the catalogue of every
+doc; [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the module map.
 
 It started life as an ASX-only sleeve (see `HANDOFF.md`) and was generalised so
 every market-specific detail — universe, regime index, currency, fees, calendar,
@@ -41,7 +46,7 @@ broker routing — lives in one `Region` record.
   letting the hottest names dominate.
 - **Monthly rebalance** keeps turnover ~25–35%/month so the edge survives
   commissions, slippage and (in the UK) stamp duty.
-- **Three uncorrelated-ish regional books** diversify the single-market timing
+- **Several uncorrelated-ish regional books** diversify the single-market timing
   risk. In the synthetic smoke test the combined book's volatility sits *below*
   every individual sleeve — diversification doing its job.
 
@@ -49,28 +54,11 @@ broker routing — lives in one `Region` record.
 
 ## Architecture
 
-```
-trading_algo/
-  config.py            StrategyParams (the knobs) + portfolio settings (allocations, base ccy)
-  regions.py           Region registry: universe, index, currency, fees, calendar, IBKR routing
-  universes.py         the per-region ticker lists (FTSE 100 / S&P 500 + ETFs / ASX)
-  signals.py           12-1 momentum, trend & regime filters, inverse-vol selection
-  strategy.py          compute_targets() — THE single source of truth for weights
-  fees.py              per-region commission floors + UK stamp duty (buys only)
-  calendars.py         per-region market hours / timezones
-  fx.py                FX conversion of each sleeve into the base currency
-  metrics.py           CAGR / Sharpe / Sortino / MaxDD / Calmar
-  backtest.py          per-sleeve no-lookahead walk-forward sim
-  portfolio_backtest.py  combine sleeves in AUD (with FX P&L) + allocation rebalancing
-  paper_trade.py       persistent multi-region paper-trading simulator
-  execution_ibkr.py    ib_insync execution, per-region exchange/currency routing
-  engine.py            background scheduler — runs each sleeve after its market close
-  dashboard/           zero-dependency live web UI (stdlib server + vanilla SPA)
-  constituents.py      point-in-time index membership (survivorship-bias fix)
-  sweep.py             walk-forward parameter robustness sweep
-tests/                 79 tests: invariants, FX, fees, calendars, PIT, sweep,
-                       risk controls, benchmark, dashboard, end-to-end synthetic
-```
+The module map — what each file does, the reporting groups, the region gate and
+where the live books run — lives in one place: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+In short: everything market-specific is one `Region` record; `strategy.compute_targets()`
+is the single source of truth for weights; `metrics.py` owns every displayed
+number; `verify.py` audits the live books; `dashboard/` and `home/` are the UIs.
 
 ### Regional configuration
 
@@ -79,6 +67,7 @@ tests/                 79 tests: invariants, FX, fees, calendars, PIT, sweep,
 | ASX    | ^AXJO | AUD      | ASX       | 10:00–16:00   | 8 bps, min A$5 | – |
 | US     | ^GSPC | USD      | SMART     | 09:30–16:00   | 2 bps, min $1  | – |
 | FTSE   | ^FTSE | GBP      | LSE       | 08:00–16:30   | 5 bps, min £1  | **50 bps on buys** |
+| TSX    | ^GSPTSE | CAD    | TSE       | 09:30–16:00   | 3 bps, min C$1 | – |
 
 LSE shares are quoted in pence; the FTSE sleeve scales prices to pounds
 (`price_scale = 0.01`) so it is internally consistent in GBP.
@@ -186,25 +175,26 @@ python -m trading_algo.dashboard.export --account matt -o fx_matt.html   # FX bo
 python -m trading_algo.dashboard.export --site -o index.html   # EVERY book + ALL overview, switcher live
 ```
 
-## Run as a native Mac app
-
-The dashboard can be packaged as a native macOS `.app` — a thin launcher runs the
-stdlib server on a private loopback port and shows it in a real **WKWebView**
-window (via `pywebview`); no browser, no internet.
+## The Mac home screen
 
 ```bash
-# try the native window straight from source first
-pip install pywebview pyobjc-framework-WebKit
-python -m trading_algo.dashboard.desktop --account full --synthetic
-
-# build the double-clickable bundle (ON A MAC — py2app can't cross-compile)
-bash packaging/build_mac_app.sh        # → dist/Momentum Dashboard.app
-open "dist/Momentum Dashboard.app"
+python -m trading_algo.home              # native window (needs: pip install pywebview pyobjc-framework-WebKit)
+python -m trading_algo.home --browser    # or open it in your browser
+python -m trading_algo.home --no-sync    # show the last snapshot without fetching
 ```
 
-The bundle reads `MOMENTUM_ACCOUNT` (default `full`) and `MOMENTUM_SYNTHETIC`
-(`1` for an offline demo). Full recipe, signing/notarization and icon notes are
-in [`packaging/README.md`](packaging/README.md).
+It fetches `main`'s saved book state from GitHub into a private, read-only folder
+(`~/Library/Application Support/Momentum/`), so it always shows what the scheduled
+jobs last wrote — never your local checkout's copy. The screen answers "am I up,
+and is anything wrong?": the change for the chosen period (1D · 1W · 1M · ALL),
+then anything that needs you — a halted book, an audit ERROR, a scheduled job that
+failed or is overdue, a book behind its schedule, or a warning that's new since you
+last looked. Known warnings stay collapsed. Design:
+[`docs/superpowers/specs/2026-10-09-mac-dashboard-design.md`](docs/superpowers/specs/2026-10-09-mac-dashboard-design.md).
+
+The older terminal dashboard can still be wrapped as a native window
+(`python -m trading_algo.dashboard.desktop`) or a py2app bundle — see
+[`packaging/README.md`](packaging/README.md) (not built recently).
 
 ## Robustness sweep
 
@@ -300,9 +290,9 @@ also earns/loses the currency move, so sleeve returns are converted as:
 r_AUD = (1 + r_local) · (fx_t / fx_{t-1}) − 1      (fx = AUD per local unit)
 ```
 
-- The **portfolio backtest** trues the three sleeves back to the target
-  allocation (equal third) each period, charging an FX spread on cash that
-  crosses currencies.
+- The **portfolio backtest** trues the sleeves back to their target
+  allocation (`config.ALLOCATIONS`, 25% each by default) each period, charging an
+  FX spread on cash that crosses currencies.
 - The **paper simulator** funds each sleeve once and lets allocations drift
   (the realistic treasury model — periodic cross-border rebalancing is a manual
   operation). The two are intentionally different; both are documented.

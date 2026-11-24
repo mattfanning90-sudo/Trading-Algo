@@ -211,6 +211,28 @@ again; pass `--source` at run time only to override — note that a run-time
 to switch an existing book. `--close-only-signals` is `--init`-only on purpose: a
 risk policy should not be changeable by a stray flag on one run.
 
+## Known data issues (observed, not yet diagnosed)
+
+- **Four universe symbols return no data** (Yahoo, 2026-10-13): `MMC` (US) and
+  `BDEV.L`, `PHNX.L`, `AHT.L` (FTSE) — "possibly delisted; no timezone found".
+  `data.load_region` drops them and raises the `dead_tickers` alert; the fix is
+  to update `trading_algo/universes.py` (renamed or delisted names), not to
+  accept a smaller universe.
+- **US prices stopped advancing after 7 Oct 2026** (seen by the Mac home screen
+  on 2026-10-10, from `main` at 150b2c6). The FULL book's US and FTSE sleeves
+  last priced on 2026-10-07 while its ASX sleeve moved the date label on to
+  10-09, so FULL's 8–9 Oct values partly reuse old US/UK prices. The US-only books
+  stalled outright: EXPERIMENTAL's last saved value is 2026-10-06 (its run on
+  10-08 saved none), ULTRA's and SMALL's 2026-10-07. Cause not yet established —
+  candidates include the Yahoo feed lagging and a run firing before New York
+  has closed. Owner: the measurement-truth block.
+  *Update 2026-10-13 (EXPERIMENTAL's file on `main`):* the runs committed at 01:13
+  on 8 Oct and 01:22 on 9 Oct UTC saved no new value (latest still 10-06); the run
+  committed 01:10 on 10 Oct, after New York's 9 Oct close, saved one dated **10-08**,
+  a day behind; the run committed 02:42 on 13 Oct saved **10-12**, on time. So the
+  values caught up, with no value dated 7 or 9 Oct. That fits a feed running one to
+  two days behind rather than a broken run, but the cause is still not established.
+
 ## Notes & caveats
 
 * **AUD currency translation is on**: a pair settles in its quote currency (EURUSD

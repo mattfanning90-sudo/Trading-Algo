@@ -1,6 +1,6 @@
 # FX Swarm — Evolutionary Agent Population (Design)
 
-**Status:** Design agreed, pending implementation plan
+**Status:** Implemented — plan `docs/superpowers/plans/2026-07-24-fx-swarm.md`; code `trading_algo/forex/evolve.py`, `champions.py`, `swarm_view.py` (header updated 2026-10-11)
 **Date:** 2026-07-24
 **Scope:** FX subsystem only (`trading_algo/forex/`). No change to the equity sleeves.
 

@@ -38,7 +38,7 @@ up: ["[[Multi-Region Momentum]]"]
 | `vol_lookback` | 63 | realised-vol window (days) |
 | `stock_trend_ma` | 200 | per-stock trend MA ([[Regime & Trend Filters]]) |
 | `index_trend_ma` | 200 | index regime MA |
-| allocation | ASX 33% / US 33% / FTSE 33% | capital split |
+| allocation | ASX 25% / US 25% / FTSE 25% / TSX 25% | capital split |
 | base currency | AUD | reporting unit |
 
 ## Commands

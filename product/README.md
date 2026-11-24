@@ -60,16 +60,17 @@ ready-to-build items from the original 19:
 
 | id | Title | Epic | RICE | Status |
 |---|---|---|---:|---|
-| F10 | Paper→live promotion gate + min-account-size check | risk-and-guardrails | 19.2 | groomed |
-| F12 | Drawdown circuit-breaker telemetry & alerting | risk-and-guardrails | 18.0 | ready |
-| F16 | CI backtest regression gate | platform-and-ci | 16.0 | ready |
-| F2 | Deflated Sharpe + PBO gate (equity) | statistical-validity | 14.0 | ready |
-| F7 | Data-quality gate before signals | data-integrity | 10.0 | ready |
-| F15 | Pre-trade ADV / liquidity cap | execution-quality | 9.6 | groomed |
-| F1 | Point-in-time constituents (kill survivorship bias) | data-integrity | 9.0 | ready |
+| F10 | Paper→live promotion gate + min-account-size check | risk-and-guardrails | 19.2 | in_progress |
+| F12 | Drawdown circuit-breaker telemetry & alerting | risk-and-guardrails | 18.0 | in_progress |
+| F16 | CI backtest regression gate | platform-and-ci | 16.0 | in_progress |
+| F2 | Deflated Sharpe + PBO gate (equity) | statistical-validity | 14.0 | in_progress |
+| F7 | Data-quality gate before signals | data-integrity | 10.0 | in_progress |
+| F15 | Pre-trade ADV / liquidity cap | execution-quality | 9.6 | in_progress |
+| F1 | Point-in-time constituents (kill survivorship bias) | data-integrity | 9.0 | in_progress |
 
 The full list, evidence, four-role critiques, acceptance criteria and rollout
-plans are in [`backlog/backlog.json`](backlog/backlog.json). RICE is recomputed
+plans are in [`backlog/backlog.json`](backlog/backlog.json). **Statuses live there** — this table is a snapshot (all 19 items were
+`in_progress` on 2026-10-11). RICE is recomputed
 by the validator, so the ranking can't drift from its inputs.
 
 ## Are we building this sustainably?

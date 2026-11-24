@@ -14,7 +14,9 @@ system, committed inside the repo so notes are version-controlled with the code.
   repo's `.git` and lets you pull/push from inside Obsidian.
 
 ## Regenerate
-`Reference.md` is generated from `trading_algo/regions.py` and `config.py`:
+`Reference.md` is generated from `trading_algo/regions.py` and `config.py`; this
+README and the core notes are written by the same script — edit the script, not
+the note:
 
 ```bash
 make obsidian        # or: python tools/build_obsidian_vault.py

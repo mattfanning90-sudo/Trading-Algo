@@ -181,6 +181,44 @@ def max_drawdown(equity: pd.Series) -> Measure:
                    periods_per_year=float("nan"), n=len(equity))
 
 
+def monthly_returns(equity: pd.Series, start: float | None = None) -> pd.Series:
+    """Calendar-month return of an equity curve, keyed 'YYYY-MM': each month's
+    last mark against the previous month's last mark, the first month against
+    `start` (the capital put in) when given, else the curve's first mark. With
+    `start` the months compound to the since-start return. THE month-by-month
+    definition the book screens show — one source, like `drawdown`."""
+    s = equity.dropna().sort_index()
+    if s.empty:
+        return pd.Series(dtype=float)
+    month_end = s.groupby(s.index.to_period("M")).last()
+    prev = month_end.shift(1)
+    prev.iloc[0] = s.iloc[0] if start is None else float(start)
+    out = month_end / prev - 1.0
+    out.index = [str(p) for p in out.index]
+    return out
+
+
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a proportion (95% at z=1.96). Honest at small
+    n, where the plain ± formula runs outside [0, 1]. (0, 1) when n == 0."""
+    if n <= 0:
+        return 0.0, 1.0
+    p = successes / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * float(np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / denom
+    return float(max(0.0, centre - half)), float(min(1.0, centre + half))
+
+
+def expected_gap(tracking_error: float, years: float) -> float:
+    """How far a book's cumulative return normally strays from its benchmark
+    over `years`: annualised tracking error × √years (a random walk's spread).
+    A gap inside about twice this is ordinary noise, not a verdict."""
+    if not tracking_error or years <= 0:
+        return 0.0
+    return float(tracking_error * np.sqrt(years))
+
+
 def compute_metrics(rets: pd.Series, equity: pd.Series,
                     risk_free: float = RISK_FREE,
                     currency: str = "AUD",

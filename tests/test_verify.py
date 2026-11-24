@@ -600,3 +600,78 @@ def test_an_unusable_rate_is_reported_never_silently_reconciled(bad):
           "shares": 10, "fill": 100.0, "commission": 1.0, "stamp_duty": 0.0}],
         {"US": sleeve}, fx_snapshot={"USD": bad}))
     assert [(f.level, f.code) for f in out] == [(verify.WARN, "no-fx-rate")]
+
+
+def test_sleeve_findings_name_their_sleeve():
+    """The home screen tells a new problem from a known one by (book, code,
+    subject); a sleeve-level finding must say WHICH sleeve in data, not only in
+    its wording (which changes daily: "77 days" -> "78 days")."""
+    state = {
+        "allocations": {"ASX": 0.33}, "trades": [],
+        "equity_history": [["2026-10-09", 100_000.0]],
+        "sleeves": {"ASX": {
+            "cash": 33_333.33, "currency": "AUD", "positions": {},
+            "last_rebalance_month": "2026-10",
+            "last_status": {"date": "2026-10-09", "status": "cash:idle",
+                            "flat_since": "2026-07-24"}}},
+    }
+    found = verify.check_liveness("full", state, "equity", datetime(2026, 10, 9))
+    by_code = {f.code: f for f in found}
+    assert {"idle-sleeve", "pinned-flat", "never-traded"} <= set(by_code)
+    for code in ("idle-sleeve", "pinned-flat", "never-traded"):
+        assert by_code[code].detail["subject"] == "ASX"
+
+
+def test_pair_findings_name_their_pair():
+    state = {"trades": [{"date": "2026-10-09", "pair": "EURUSD",
+                         "target_weight": 0.2}], "positions": {}}
+    found = verify.reconcile_fx("matt", state)
+    assert [(f.code, f.detail["subject"]) for f in found] == [
+        ("missing-position", "EURUSD")]
+
+
+def test_weight_mismatch_names_its_pair():
+    state = {"trades": [{"date": "2026-10-09", "pair": "EURUSD",
+                         "target_weight": 0.2}], "positions": {"EURUSD": 0.1}}
+    found = verify.reconcile_fx("matt", state)
+    assert [(f.code, f.detail["subject"]) for f in found] == [
+        ("weight-mismatch", "EURUSD")]
+
+
+def test_two_sleeves_with_the_same_problem_have_distinct_subjects():
+    """Without a subject both would share the key `book|code|` and the second
+    could never show as new."""
+    state = {"sleeves": {"FTSE": {"currency": "GBP", "cash": 1.0, "positions": {}},
+                         "US": {"currency": "USD", "cash": 1.0, "positions": {}}},
+             "allocations": {"FTSE": 0.5, "US": 0.5}, "initial_capital_base": 1000.0,
+             "fx_snapshot": {}, "trades": []}
+    found = verify.reconcile_equity("full", state)
+    assert sorted((f.code, f.detail["subject"]) for f in found) == [
+        ("no-fx-rate", "FTSE"), ("no-fx-rate", "US")]
+
+
+@pytest.mark.parametrize("extra", [
+    {"last_flat_reason": "regime-off", "last_rebalance_date": "2026-10-01"},
+    {"last_flat_reason": "data-quality", "last_rebalance_date": "2026-10-01"},
+    {},                                           # never evaluated
+    {"last_rebalance_date": "2026-10-01"},        # evaluated, no reason recorded
+])
+def test_every_never_traded_grade_names_its_sleeve(extra):
+    sleeve = {"cash": 1.0, "currency": "AUD", **extra}
+    found = verify._never_traded_finding("full", "ASX", sleeve, 0.33)
+    assert found.detail["subject"] == "ASX"
+
+
+def test_dead_price_counts_recent_changes_without_changing_the_finding():
+    trades = [
+        {"date": "2026-08-01", "pair": "EURUSD", "price": 1.1, "delta_weight": 0.1},
+        {"date": "2026-08-02", "pair": "EURUSD", "price": 1.1, "delta_weight": 0.1},   # old
+        {"date": "2026-10-10", "pair": "EURUSD", "price": 1.2, "delta_weight": 0.1},
+        {"date": "2026-10-11", "pair": "EURUSD", "price": 1.2, "delta_weight": -0.1},  # recent
+    ]
+    found = verify.check_dead_price("t", {"trades": trades}, datetime(2026, 10, 13))
+    assert len(found) == 1
+    f = found[0]
+    assert f.level == verify.WARN and f.code == "dead-price-turnover"
+    assert f.detail["by_symbol"] == {"EURUSD": 2} and f.detail["recent"] == 1
+    assert f.message.startswith("2 position changes")
