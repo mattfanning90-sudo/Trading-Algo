@@ -132,6 +132,17 @@ def test_fetch_runs_verifies_https_with_a_real_certificate_list(monkeypatch):
     assert seen["context"].cert_store_stats()["x509_ca"] > 0
 
 
+def test_fetch_runs_refuses_anything_but_https(monkeypatch):
+    """`urlopen` will follow file:// or ftp:// too (bandit B310). A non-https
+    address raises ValueError, which check() already turns into "unknown"."""
+    def must_not_open(*a, **k):
+        raise AssertionError("urlopen reached with a non-https address")
+    monkeypatch.setattr(jobs.urllib.request, "urlopen", must_not_open)
+    monkeypatch.setattr(jobs, "API_RUNS", "file:///etc/passwd")
+    with pytest.raises(ValueError):
+        jobs.fetch_runs()
+
+
 def test_truncated_github_response_is_unknown_not_a_crash(fresh_cache):
     """IncompleteRead/BadStatusLine are HTTPException, not OSError: unhandled,
     they turned /api/home into a 500 and blanked the whole screen."""

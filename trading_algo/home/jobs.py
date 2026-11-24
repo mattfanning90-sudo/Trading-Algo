@@ -20,6 +20,7 @@ import json
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -132,11 +133,15 @@ def _ssl_context() -> ssl.SSLContext:
 
 
 def fetch_runs(timeout: float = 10.0) -> list[dict]:
+    url = f"{API_RUNS}?branch=main&event=schedule&per_page=100"
+    # Pin the scheme: `urlopen` will happily follow file:// or ftp:// (same
+    # guard as tiingo_data). check() reads the ValueError as "unknown".
+    if urllib.parse.urlparse(url).scheme != "https":
+        raise ValueError(f"refusing non-https address {url!r}")
     req = urllib.request.Request(
-        f"{API_RUNS}?branch=main&event=schedule&per_page=100",
-        headers={"Accept": "application/vnd.github+json",
-                 "User-Agent": "momentum-home"})
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+        url, headers={"Accept": "application/vnd.github+json",
+                      "User-Agent": "momentum-home"})
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:  # nosec B310 - scheme pinned to https above
         return json.load(resp)["workflow_runs"]
 
 
